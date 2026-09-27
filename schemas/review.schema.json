@@ -1,0 +1,177 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "2.0"
+      ]
+    },
+    "completion_status": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "PARTIAL",
+        "BLOCKED"
+      ]
+    },
+    "report_markdown": {
+      "type": "string"
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "task": {
+      "type": "string",
+      "enum": [
+        "architecture_review"
+      ]
+    },
+    "branch": {
+      "type": "string"
+    },
+    "source_commit": {
+      "type": "string"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "CHANGES_REQUIRED",
+        "INCONCLUSIVE"
+      ]
+    },
+    "claim_inventory_complete": {
+      "type": "boolean"
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "statement": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "SUPPORTED",
+              "CONTRADICTED",
+              "UNVERIFIABLE",
+              "NOT_CHECKED"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limitation": {
+            "type": "string"
+          },
+          "finding_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "location",
+          "statement",
+          "outcome",
+          "evidence",
+          "limitation",
+          "finding_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "HIGH",
+              "MEDIUM",
+              "LOW"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "FACTUAL_ERROR",
+              "UNSUPPORTED_ASSERTION",
+              "MATERIAL_OMISSION",
+              "SCOPE_MISMATCH",
+              "CONTRACT_VIOLATION"
+            ]
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "location": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "impact": {
+            "type": "string"
+          },
+          "proposed_correction": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "type",
+          "claim_ids",
+          "location",
+          "evidence",
+          "impact",
+          "proposed_correction"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "completion_status",
+    "report_markdown",
+    "limitations",
+    "task",
+    "branch",
+    "source_commit",
+    "verdict",
+    "claim_inventory_complete",
+    "claims",
+    "findings"
+  ],
+  "additionalProperties": false
+}

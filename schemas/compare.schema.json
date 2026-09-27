@@ -1,0 +1,116 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "2.0"
+      ]
+    },
+    "completion_status": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "PARTIAL",
+        "BLOCKED"
+      ]
+    },
+    "report_markdown": {
+      "type": "string"
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "task": {
+      "type": "string",
+      "enum": [
+        "architecture_comparison"
+      ]
+    },
+    "baseline_branch": {
+      "type": "string"
+    },
+    "baseline_commit": {
+      "type": "string"
+    },
+    "compared_branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unresolved_branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "differences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "CONFIRMED_DIFFERENCE",
+              "REPORTED_UNVERIFIED",
+              "INSUFFICIENT_EVIDENCE"
+            ]
+          },
+          "baseline_statement": {
+            "type": "string"
+          },
+          "branch_statement": {
+            "type": "string"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "explanation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "branch",
+          "category",
+          "classification",
+          "baseline_statement",
+          "branch_statement",
+          "evidence_refs",
+          "explanation"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "completion_status",
+    "report_markdown",
+    "limitations",
+    "task",
+    "baseline_branch",
+    "baseline_commit",
+    "compared_branches",
+    "unresolved_branches",
+    "differences"
+  ],
+  "additionalProperties": false
+}

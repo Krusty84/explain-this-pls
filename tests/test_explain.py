@@ -1,0 +1,450 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
+# SPDX-License-Identifier: MIT
+
+from __future__ import annotations
+import copy
+import io
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from explain import AuditError, Repository, Runner, UnsafeRepository, cli_env, load_config, process, repository_lock, slug
+from contracts import ContractError, parse_backend, review_verdict, strict_json, validate_result
+
+BASE = {'schema_version': '2.0', 'completion_status': 'COMPLETE',
+        'report_markdown': '# Report\nC-001\n', 'limitations': []}
+
+def doc(branch, commit):
+    return dict(BASE, task='architecture_documentation', branch=branch, source_commit=commit)
+
+def review(branch, commit):
+    return dict(BASE, task='architecture_review', branch=branch, source_commit=commit,
+        verdict='PASS', claim_inventory_complete=True,
+        claims=[{'id': 'C-001', 'location': 'overview', 'statement': 'Has an entry point',
+        'outcome': 'SUPPORTED', 'evidence': ['app.py:main'], 'limitation': '', 'finding_ids': []}], findings=[])
+
+class ContractTests(unittest.TestCase):
+    def test_duplicate_keys_rejected(self):
+        with self.assertRaises(ContractError):
+            strict_json('{"x":1,"x":2}')
+    def test_nonfinite_rejected(self):
+        with self.assertRaises(ContractError):
+            strict_json('{"x":NaN}')
+    def test_codex_native_json(self):
+        self.assertEqual(parse_backend('codex', json.dumps(doc('master', 'abc')))[0]['branch'], 'master')
+    def test_fenced_output_rejected(self):
+        with self.assertRaises(ContractError):
+            parse_backend('codex', '```json\n{}\n```')
+    def test_claude_structured_output(self):
+        transport = {'is_error': False, 'structured_output': doc('master', 'abc'), 'session_id': 's'}
+        data, meta = parse_backend('claude-code', json.dumps(transport))
+        self.assertEqual(data['branch'], 'master')
+        self.assertEqual(meta['session_id'], 's')
+    def test_claude_error_is_not_success(self):
+        with self.assertRaises(ContractError):
+            parse_backend('claude-code', '{"is_error":true,"result":"error"}')
+    def test_opencode_uses_last_completed_message_not_planning(self):
+        events = [
+            {'type':'text','sessionID':'s','part':{'id':'p1','messageID':'m1','text':'Planning prose'}},
+            {'type':'step_finish','part':{'messageID':'m1','reason':'tool-calls'}},
+            {'type':'text','sessionID':'s','part':{'id':'p2','messageID':'m2','text':json.dumps(doc('test01','abc'))}},
+            {'type':'step_finish','part':{'messageID':'m2','reason':'stop'}}]
+        data, _ = parse_backend('opencode', '\n'.join(map(json.dumps,events)))
+        self.assertEqual(data['branch'],'test01')
+    def test_opencode_truncation_rejected(self):
+        with self.assertRaises(ContractError):
+            parse_backend('opencode', json.dumps({'type':'text','part':{'id':'p','messageID':'m','text':'{}'}}))
+    def test_wrong_commit_rejected(self):
+        with self.assertRaises(ContractError):
+            validate_result('document',doc('master','wrong'),{'branch':'master','source_commit':'abc'})
+    def test_partial_review_cannot_pass(self):
+        data = review('master','abc')
+        data.update(completion_status='PARTIAL',limitations=['coverage incomplete'])
+        with self.assertRaises(ContractError):
+            validate_result('review',data,{'branch':'master','source_commit':'abc'})
+        self.assertEqual(review_verdict(data),'INCONCLUSIVE')
+    def test_complete_review_cannot_have_unchecked_claim(self):
+        data=review('master','abc')
+        data['claims'][0].update(outcome='NOT_CHECKED',limitation='not inspected')
+        with self.assertRaises(ContractError):
+            validate_result('review',data,{'branch':'master','source_commit':'abc'})
+    def test_slugs_do_not_collide(self):
+        self.assertNotEqual(slug('customer/a'),slug('customer_a'))
+        self.assertNotIn('/',slug('../../customer/a'))
+
+class RepoFixture(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory()
+        self.base=Path(self.tmp.name).resolve()
+        self.repo_path=self.base/'repo'; self.repo_path.mkdir()
+        self.git('init','-b','master')
+        self.git('config','user.email','test@example.invalid')
+        self.git('config','user.name','Fixture')
+        (self.repo_path/'app.py').write_text('def main(): return "master"\n')
+        self.git('add','app.py'); self.git('commit','-m','base')
+        self.master=self.git('rev-parse','HEAD').strip()
+        for b in ('test01','dev_01_customerA'):
+            self.git('switch','-c',b,'master')
+            (self.repo_path/'app.py').write_text(f'def main(): return "{b}"\n')
+            self.git('add','app.py'); self.git('commit','-m',b)
+        self.git('switch','master')
+        self.repo=Repository(self.repo_path)
+    def tearDown(self):
+        self.tmp.cleanup()
+    def git(self,*args):
+        r=subprocess.run(['git','-C',str(self.repo_path),*args],stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE,check=True)
+        return r.stdout.decode()
+    def config(self):
+        reports=self.base/'reports'; reports.mkdir(exist_ok=True)
+        agent={'backend':'codex','executable':str(Path(sys.executable).resolve()),
+               'model':None}
+        return {'repository':str(self.repo_path),'reports_dir':str(reports),
+            'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master',
+            'output_language':'Russian','project_description':'ERP-система 1995 года.',
+            'priority_scenarios':[],'continue_on_error':True,
+            'timeout_seconds':30,'max_input_bytes':800000,'max_output_bytes':1000000,
+            '_agents':{s:dict(agent) for s in ('document','review','compare')},
+            '_prompt_paths':{s:str(Path(__file__).resolve().parents[1]/'prompts'/f'{s}.md') for s in ('document','review','compare')}}
+    def test_pins_and_restore(self):
+        pins=self.repo.preflight(['master','test01'])
+        self.repo.checkout(pins['test01'])
+        self.assertIsNone(self.repo.symbolic())
+        self.repo.restore('master',self.master)
+        self.assertEqual(self.repo.symbolic(),'master')
+    def test_dirty_worktree_rejected(self):
+        (self.repo_path/'app.py').write_text('changed')
+        with self.assertRaises(UnsafeRepository):self.repo.clean()
+    def test_untracked_rejected(self):
+        (self.repo_path/'old-report.md').write_text('must not affect next run')
+        with self.assertRaises(UnsafeRepository):self.repo.clean()
+    def test_ignored_files_rejected(self):
+        (self.repo_path/'.gitignore').write_text('cache.tmp\n')
+        self.git('add','.gitignore');self.git('commit','-m','ignore')
+        (self.repo_path/'cache.tmp').write_text('stale data')
+        with self.assertRaises(UnsafeRepository):self.repo.clean()
+    def test_filter_rejected(self):
+        self.git('config','filter.danger.smudge','echo bad')
+        with self.assertRaises(AuditError):self.repo.preflight(['master','test01'])
+    def test_git_delta_orientation(self):
+        pin=self.repo.text('rev-parse','test01')
+        delta=self.repo.delta(self.master,pin)
+        self.assertEqual(delta['changes'][0]['path'],'app.py')
+        self.assertEqual(delta['changes'][0]['status'],'M')
+        self.assertFalse(delta['identical_trees'])
+    def test_changed_original_branch_is_not_reset(self):
+        self.repo.checkout(self.master)
+        pin=self.repo.text('rev-parse','test01')
+        self.git('update-ref','refs/heads/master',pin)
+        with self.assertRaises(UnsafeRepository):self.repo.restore('master',self.master)
+        self.assertEqual(self.repo.text('rev-parse','master'),pin)
+    def test_symlink_repository_is_canonicalized_and_uses_same_lock(self):
+        alias=self.base/'alias';alias.symlink_to(self.repo_path, target_is_directory=True)
+        repo=Repository(alias)
+        self.assertEqual(repo.preflight(['master','test01'])['master'],self.master)
+        with repository_lock(self.repo_path):
+            with self.assertRaises(AuditError):
+                with repository_lock(alias):pass
+    def test_all_three_branches_pipeline_and_context_separation(self):
+        config=self.config(); dest=self.base/'reports'/'run';dest.mkdir()
+        fake=FakeRunner(config,dest)
+        result,code=fake.run()
+        self.assertEqual(code,0)
+        self.assertEqual(result['status'],'COMPLETE')
+        self.assertEqual(len(fake.calls),7)
+        for stage,context in fake.calls:
+            self.assertEqual(context['project_description'],config['project_description'],stage)
+        self.assertEqual(result['isolation'],'cli-native-permissions')
+        self.assertNotIn('isolation_probe',result)
+        self.assertEqual(self.repo.symbolic(),'master')
+        self.assertEqual(self.repo.head(),self.master)
+        self.assertTrue((dest/'comparison'/'inputs.json').exists())
+    def test_one_branch_failure_does_not_pollute_or_stop_next_branch(self):
+        config=self.config();dest=self.base/'reports'/'run';dest.mkdir()
+        fake=FakeRunner(config,dest);fake.fail_branch='test01'
+        result,code=fake.run()
+        self.assertEqual(code,1)
+        self.assertEqual(result['status'],'PARTIAL')
+        self.assertIn('test01',result['comparison']['unresolved_branches'])
+        self.assertTrue(result['branches'][2]['accepted'])
+        self.assertEqual(self.repo.symbolic(),'master')
+    def test_fail_fast_restores(self):
+        config=self.config();config['continue_on_error']=False
+        dest=self.base/'reports'/'run';dest.mkdir()
+        fake=FakeRunner(config,dest);fake.fail_branch='test01'
+        result,code=fake.run()
+        self.assertEqual(code,1);self.assertEqual(result['status'],'FAILED')
+        self.assertEqual(self.repo.symbolic(),'master')
+    def test_check_only_does_not_invoke_model_or_switch(self):
+        config=self.config();dest=self.base/'reports'/'run';dest.mkdir()
+        fake=FakeRunner(config,dest)
+        result,code=fake.run(check_only=True)
+        self.assertEqual(code,0);self.assertEqual(result['status'],'PREFLIGHT_OK')
+        self.assertEqual(fake.calls,[]);self.assertEqual(self.repo.symbolic(),'master')
+    def test_missing_description_warns_once_and_does_not_change_status(self):
+        for check_only in (False,True):
+            with self.subTest(check_only=check_only):
+                config=self.config();config['project_description']=''
+                dest=self.base/'reports'/str(check_only);dest.mkdir()
+                with patch('sys.stderr',new_callable=io.StringIO) as output:
+                    result,code=FakeRunner(config,dest).run(check_only=check_only)
+                self.assertEqual(code,0)
+                self.assertEqual(output.getvalue().count('Описание проекта не указано.'),1)
+                self.assertIn('Рекомендуем заполнить project_description',output.getvalue())
+    def test_compare_modifications_are_detected_and_preserved(self):
+        config=self.config();dest=self.base/'reports'/'run';dest.mkdir()
+        fake=FakeRunner(config,dest)
+        invoke=fake.invoke
+        def modify_during_compare(stage,context,destination):
+            result=invoke(stage,context,destination)
+            if stage=='compare':(self.repo_path/'app.py').write_text('external change\n')
+            return result
+        fake.invoke=modify_during_compare
+        result,code=fake.run()
+        self.assertEqual(code,1)
+        self.assertEqual(result['status'],'FAILED')
+        self.assertFalse(result['restoration']['restored'])
+        self.assertEqual((self.repo_path/'app.py').read_text(),'external change\n')
+
+class FakeRunner(Runner):
+    fail_branch=None
+    def __init__(self,*args):
+        super().__init__(*args);self.calls=[]
+    def check_cli(self):return {'TEST_ONLY':'mocked agents'}
+    def invoke(self,stage,context,destination):
+        self.calls.append((stage,copy.deepcopy(context)))
+        if stage=='document':
+            assert 'architecture_document' not in context and 'branches' not in context
+            assert self.repo.symbolic() is None and self.repo.head()==context['source_commit']
+            assert context['branch'] in (self.repo.path/'app.py').read_text()
+            if context['branch']==self.fail_branch:raise AuditError('simulated CLI failure')
+            data=doc(context['branch'],context['source_commit'])
+        elif stage=='review':
+            assert 'branches' not in context
+            assert context['architecture_document']['branch']==context['branch']
+            data=review(context['branch'],context['source_commit'])
+        else:
+            unresolved=[b['branch'] for b in context['branches'] if not b['document'] or not b['review']]
+            data=dict(BASE,task='architecture_comparison',baseline_branch=context['baseline_branch'],
+                baseline_commit=context['baseline_commit'],
+                compared_branches=[b for b in context['requested_branches'] if b!=context['baseline_branch']],
+                unresolved_branches=unresolved,differences=[])
+            if unresolved:data.update(completion_status='PARTIAL',limitations=['missing input'])
+        validate_result(stage,data,context)
+        return data,{'TEST_ONLY':'mock invocation'}
+
+class ProcessTests(unittest.TestCase):
+    def test_pipe_capture(self):
+        with tempfile.TemporaryDirectory() as raw:
+            state=Path(raw)
+            r=process([sys.executable,'-c','import sys; print(sys.stdin.read());print("err",file=sys.stderr)'],
+                      state,cli_env(state),b'hello',5)
+            self.assertEqual(r['returncode'],0)
+            self.assertIn(b'hello',r['stdout']);self.assertIn(b'err',r['stderr'])
+    def test_timeout(self):
+        with tempfile.TemporaryDirectory() as raw:
+            state=Path(raw)
+            r=process([sys.executable,'-c','import time;time.sleep(10)'],state,cli_env(state),timeout=1)
+            self.assertIsNotNone(r['error']);self.assertNotEqual(r['returncode'],0)
+    def test_output_limit(self):
+        with tempfile.TemporaryDirectory() as raw:
+            state=Path(raw)
+            r=process([sys.executable,'-c','print("x"*100000)'],state,cli_env(state),max_output=1000)
+            self.assertIn('exceeds',r['error'])
+
+class ConfigTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base=Path(self.tmp.name).resolve()
+        self.path=self.base/'config.json'
+        self.value={'repository':'repo','reports_dir':'reports',
+            'branches':['master','test01'],'baseline_branch':'master',
+            'agent':{'backend':'codex','executable':sys.executable}}
+    def load(self):
+        self.path.write_text(json.dumps(self.value))
+        # No credential variable is needed, even with an otherwise empty environment.
+        with patch.dict(os.environ,{},clear=True):
+            return load_config(self.path)
+    def test_description_normalization_and_paths_without_api_keys(self):
+        for raw,expected in [('', ''),(' \n\t',''),('  ERP-система 1995 года.  ','ERP-система 1995 года.')]:
+            with self.subTest(raw=raw):
+                self.value['project_description']=raw
+                cfg=self.load()
+                self.assertEqual(cfg['project_description'],expected)
+                self.assertEqual(cfg['repository'],str(self.base/'repo'))
+                self.assertEqual(cfg['reports_dir'],str(self.base/'reports'))
+        del self.value['project_description']
+        self.assertEqual(self.load()['project_description'],'')
+    def test_description_rejects_non_strings(self):
+        for raw in (None,42,False,[],{}):
+            with self.subTest(raw=raw):
+                self.value['project_description']=raw
+                with self.assertRaisesRegex(AuditError,'project_description must be a string'):
+                    self.load()
+    def test_removed_fields_have_migration_errors(self):
+        for name in ('api_key_env','provider_key_env'):
+            for location in ('agent','stage_agents'):
+                with self.subTest(name=name,location=location):
+                    original=copy.deepcopy(self.value)
+                    if location=='agent':self.value['agent'][name]='OLD_KEY'
+                    else:self.value['stage_agents']={'review':{name:'OLD_KEY'}}
+                    with self.assertRaisesRegex(AuditError,'Remove '+name):self.load()
+                    self.value=original
+        self.value['additional_runtime_read_paths']=[]
+        with self.assertRaisesRegex(AuditError,'Remove additional_runtime_read_paths'):self.load()
+    def test_stage_overrides_preserve_explicit_model_and_version(self):
+        self.value['agent'].update(model='base-model',expected_version='test-version')
+        self.value['stage_agents']={'review':{'backend':'opencode','model':None}}
+        cfg=self.load()
+        self.assertEqual(cfg['_agents']['document']['model'],'base-model')
+        self.assertIsNone(cfg['_agents']['review']['model'])
+        self.assertEqual(cfg['_agents']['review']['expected_version'],'test-version')
+    def test_executable_can_be_relative_to_config(self):
+        (self.base/'cli').symlink_to(sys.executable)
+        self.value['agent']['executable']='./cli'
+        self.assertEqual(self.load()['_agents']['document']['executable'],str(Path(sys.executable).resolve()))
+    def test_all_examples_load_without_credentials(self):
+        root=Path(__file__).resolve().parents[1]
+        for path in root.glob('config*.example.json'):
+            with self.subTest(path=path.name), patch.dict(os.environ,{},clear=True), \
+                 patch('explain.shutil.which',return_value=sys.executable):
+                cfg=load_config(path)
+                self.assertTrue(cfg['project_description'])
+                self.assertIsNone(cfg['_agents']['document']['model'])
+
+class AdapterCommandTests(unittest.TestCase):
+    setUp=RepoFixture.setUp
+    tearDown=RepoFixture.tearDown
+    git=RepoFixture.git
+    config=RepoFixture.config
+    def command(self,backend,stage='document',env=None,model=None):
+        cfg=self.config();runner=Runner(cfg,self.base/'reports'/'run')
+        agent=cfg['_agents'][stage];agent.update(backend=backend,model=model)
+        return runner.command(stage,self.base,agent,self.base/'schema.json',env if env is not None else {})
+    def test_codex_uses_native_read_only_and_existing_config(self):
+        cmd=self.command('codex')
+        self.assertEqual(cmd[cmd.index('--sandbox')+1],'read-only')
+        self.assertIn('--ephemeral',cmd);self.assertIn('--output-schema',cmd)
+        self.assertIn('approval_policy="never"',cmd)
+        self.assertNotIn('--model',cmd)
+        self.assertFalse(any('project_doc_max_bytes' in arg or 'trust_level' in arg for arg in cmd))
+        self.assertNotIn('--ignore-user-config',cmd)
+        self.assertNotIn('resume',cmd)
+        self.assertIn('--skip-git-repo-check',self.command('codex','compare'))
+    def test_claude_tools_and_mcp_are_restricted_with_profile_loaded(self):
+        for stage in ('document','review','compare'):
+            with self.subTest(stage=stage):
+                cmd=self.command('claude-code',stage)
+                self.assertNotIn('--bare',cmd);self.assertNotIn('--setting-sources',cmd)
+                self.assertIn('--no-session-persistence',cmd)
+                self.assertEqual(cmd[cmd.index('--tools')+1],'' if stage=='compare' else 'Read,Glob,Grep')
+                self.assertEqual(cmd[cmd.index('--disallowedTools')+1],'mcp__*')
+                self.assertEqual(cmd[cmd.index('--permission-mode')+1],'dontAsk')
+    def test_opencode_overlay_preserves_settings_and_scopes_permissions(self):
+        original={'provider':{'custom':{'options':{'baseURL':'https://example.invalid'}}},
+            'model':'custom/model','plugin':['auth-plugin'],'instructions':['rules.md'],
+            'agent':{'custom':{'mode':'primary','permission':{'*':'allow'}}},'default_agent':'custom'}
+        for stage in ('document','review','compare'):
+            with self.subTest(stage=stage):
+                env={'HOME':str(self.base),'OPENCODE_CONFIG':'/custom/config.json',
+                     'OPENCODE_CONFIG_CONTENT':json.dumps(original)}
+                cmd=self.command('opencode',stage,env)
+                merged=json.loads(env['OPENCODE_CONFIG_CONTENT'])
+                name=cmd[cmd.index('--agent')+1]
+                runtime_agent=merged['agent'].pop(name)
+                self.assertEqual(merged,original)
+                self.assertEqual(runtime_agent['mode'],'primary')
+                expected={'*':'deny'}
+                if stage!='compare':expected.update(read='allow',glob='allow',grep='allow',list='allow')
+                self.assertEqual(runtime_agent['permission'],expected)
+                self.assertEqual(env['OPENCODE_CONFIG'],'/custom/config.json')
+                self.assertNotIn('--pure',cmd);self.assertNotIn('--model',cmd)
+                self.assertFalse(any(key.startswith('OPENCODE_DISABLE') for key in env))
+                for flag in ('--attach','--session','--continue'):self.assertNotIn(flag,cmd)
+    def test_invalid_opencode_overlay_does_not_discard_configuration(self):
+        for raw in ('not json','[]','{"agent": []}'):
+            env={'OPENCODE_CONFIG_CONTENT':raw}
+            with self.subTest(raw=raw),self.assertRaisesRegex(AuditError,'OPENCODE_CONFIG_CONTENT'):
+                self.command('opencode',env=env)
+            self.assertEqual(env['OPENCODE_CONFIG_CONTENT'],raw)
+    def test_explicit_models_override_cli_default_for_all_backends(self):
+        for backend in ('codex','claude-code','opencode'):
+            cmd=self.command(backend,model='chosen-model')
+            self.assertEqual(cmd[cmd.index('--model')+1],'chosen-model')
+    def test_environment_preserves_profiles_path_and_credentials(self):
+        inherited={'HOME':str(self.base),'PATH':'/opt/homebrew/bin:/custom/bin',
+            'XDG_CONFIG_HOME':'/custom/config','XDG_DATA_HOME':'/custom/data',
+            'XDG_CACHE_HOME':'/custom/cache','XDG_STATE_HOME':'/custom/state',
+            'XDG_RUNTIME_DIR':'/custom/runtime','TMPDIR':'/custom/tmp',
+            'CODEX_HOME':'/custom/codex','CLAUDE_CONFIG_DIR':'/custom/claude',
+            'OPENCODE_CONFIG_DIR':'/custom/opencode','HTTPS_PROXY':'http://proxy.invalid',
+            'OPENAI_API_KEY':'test-existing-key'}
+        with patch.dict(os.environ,inherited,clear=True):
+            env=cli_env(self.repo_path)
+            for backend in ('codex','claude-code','opencode'):
+                self.command(backend,env=env)
+            for key,value in inherited.items():self.assertEqual(env[key],value)
+            self.assertNotIn('CODEX_API_KEY',env)
+            self.assertEqual(dict(os.environ),inherited)
+
+@unittest.skipIf(os.geteuid()==0,'The command-line runner requires a non-root user.')
+class ConfiguredCLIIntegrationTests(unittest.TestCase):
+    setUp=RepoFixture.setUp
+    tearDown=RepoFixture.tearDown
+    git=RepoFixture.git
+    def test_check_and_full_pipeline_with_configured_cli_without_api_key(self):
+        root=Path(__file__).resolve().parents[1]
+        home=self.base/'configured-home';home.mkdir()
+        (home/'audit-profile.json').write_text(json.dumps({'model':'configured-model'}))
+        cli=self.base/'fake-cli'
+        cli.write_text('#!'+sys.executable+'\n'+(root/'tests/fixtures/fake_cli.py').read_text())
+        cli.chmod(0o700)
+        calls_path=self.base/'calls.jsonl'
+        env={'HOME':str(home),'PATH':os.environ.get('PATH',os.defpath),
+             'AUDIT_TEST_CALL_LOG':str(calls_path),'PYTHONIOENCODING':'utf-8',
+             'OPENCODE_CONFIG_CONTENT':json.dumps({'provider':{'custom':{'options':{
+                 'baseURL':'https://example.invalid'}}},'plugin':['auth-plugin']})}
+        for backend in ('codex','claude-code','opencode'):
+            for check_only in (True,False):
+                with self.subTest(backend=backend,check_only=check_only):
+                    calls_path.write_text('')
+                    cfg={'repository':str(self.repo_path),'reports_dir':str(self.base/'reports'),
+                         'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master',
+                         'agent':{'backend':backend,'executable':str(cli),'expected_version':'fixture-cli 1.0'}}
+                    # Cover both startup warning and non-ASCII description propagation.
+                    if not check_only:cfg['project_description']='ERP-система 1995 года.'
+                    config_path=self.base/'config.json';config_path.write_text(json.dumps(cfg))
+                    cmd=[sys.executable,'-B',str(root/'explain.py'),'--config',str(config_path)]
+                    if check_only:cmd.append('--check')
+                    result=subprocess.run(cmd,cwd=self.base,env=env,capture_output=True,text=True,timeout=30)
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    output=json.loads(result.stdout)
+                    self.assertEqual(output['status'],'PREFLIGHT_OK' if check_only else 'COMPLETE')
+                    run_dir=Path(output['manifest']).parent
+                    snapshot=json.loads((run_dir/'config.snapshot.json').read_text())
+                    self.assertEqual(snapshot['project_description'],cfg.get('project_description',''))
+                    self.assertEqual(result.stderr.count('Описание проекта не указано.'),int(check_only))
+                    calls=[json.loads(line) for line in calls_path.read_text().splitlines()]
+                    invocations=[call for call in calls if 'context' in call]
+                    self.assertEqual(len(calls),2 if check_only else 9)
+                    self.assertEqual(len(invocations),0 if check_only else 7)
+                    for call in invocations:
+                        self.assertEqual(call['home'],str(home))
+                        self.assertEqual(call['context']['project_description'],cfg['project_description'])
+                        compare='baseline_branch' in call['context']
+                        self.assertEqual(Path(call['cwd'])==self.repo_path,not compare)
+                        if backend=='opencode':
+                            self.assertEqual(call['permissions']['*'],'deny')
+                            self.assertEqual(call['permissions'].get('read'),None if compare else 'allow')
+                    self.assertEqual(self.repo.symbolic(),'master')
+                    self.assertEqual(self.repo.head(),self.master)
+                    self.repo.clean()
+                    self.assertEqual(json.loads((home/'audit-profile.json').read_text()),{'model':'configured-model'})
+
+if __name__=='__main__':unittest.main()

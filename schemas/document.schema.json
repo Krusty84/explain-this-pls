@@ -1,0 +1,50 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "2.0"
+      ]
+    },
+    "completion_status": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "PARTIAL",
+        "BLOCKED"
+      ]
+    },
+    "report_markdown": {
+      "type": "string"
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "task": {
+      "type": "string",
+      "enum": [
+        "architecture_documentation"
+      ]
+    },
+    "branch": {
+      "type": "string"
+    },
+    "source_commit": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "completion_status",
+    "report_markdown",
+    "limitations",
+    "task",
+    "branch",
+    "source_commit"
+  ],
+  "additionalProperties": false
+}
