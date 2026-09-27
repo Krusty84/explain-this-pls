@@ -1,7 +1,12 @@
-# Independently audit one branch's architecture document
+# Independently audit the supplied source tree's architecture document
 
 The supplied architecture_document is the subject of this review, not the source
-of truth. Independently inspect the repository at the supplied pinned commit.
+of truth. Independently inspect the source identified by the orchestration context.
+In git mode, use the repository at the supplied branch/source_commit. In folder mode,
+use source_directory and source_fingerprint; inspect hidden files too, do not follow
+symbolic links, and do not use Git. Folder fingerprints check stage boundaries, not
+continuous immutability. Missing Git history alone is not a documentation defect
+and does not require PARTIAL or BLOCKED.
 Do not rely on the author's confidence, earlier dialogue, or evidence IDs alone.
 Use cited locations as starting points and actively search for counterexamples.
 This is a documentation audit, not a formal proof of software correctness.
@@ -13,7 +18,7 @@ defect and does not require PARTIAL or BLOCKED.
 
 ## Scope and permissions
 
-Review only this branch/snapshot and the explicitly supplied document. It is passed
+Review only this source tree and the explicitly supplied document. It is passed
 as input; do not search the reports directory. Do not inspect other branches, shared
 memory, old reports, unrelated files, or external services. Never switch Git state.
 Do not edit the architecture document, source, tests, configuration, or other files.
@@ -61,7 +66,7 @@ An unsuccessful search is not a contradiction. A missing citation is not proof o
 falsehood: independently check the claim and assess traceability separately.
 An unqualified material UNVERIFIABLE assertion requires an associated correction
 finding; it must not pass silently as a fact. Correctly declared unknowns are not
-errors merely because repository-only review cannot resolve them.
+errors merely because source-only review cannot resolve them.
 
 Finding IDs: F-001 etc. Types: FACTUAL_ERROR, UNSUPPORTED_ASSERTION, MATERIAL_OMISSION,
 SCOPE_MISMATCH, CONTRACT_VIOLATION. Severity:
@@ -76,10 +81,11 @@ limitations, not fabricated architecture defects. Severity rates documentation i
 
 ## Required Markdown report
 
-1. Verdict and baseline: branch, pinned commit, reviewed document identity supplied
-   by the orchestrator, execution mode, scope, exclusions, and completion status.
+1. Verdict and baseline: source mode and identity (branch/commit for git,
+   directory/fingerprint for folder), reviewed document identity supplied by the
+   orchestrator, execution mode, scope, exclusions, and completion status.
 2. Coverage: inventory completeness, inspected/partial/uninspected/out-of-scope areas,
-   outcome counts, and what remains. Counts are not repository coverage percentages.
+   outcome counts, and what remains. Counts are not source-tree coverage percentages.
 3. Claim ledger: claim ID, location/quotation, outcome, independent evidence,
    limitations, and related findings. Match the structured claims array exactly.
 4. Findings: ID, severity/type, affected claims, exact wording or missing subject,
@@ -97,7 +103,8 @@ limitations, not fabricated architecture defects. Severity rates documentation i
 
 Return one JSON object conforming to the appended schema, no Markdown fences or
 extra prose. Include complete report_markdown, a structured claims ledger and
-structured findings. Echo the exact supplied branch/source_commit. The orchestrator
+structured findings. Echo branch/source_commit using schema version 2.0 in git mode,
+or source_directory/source_fingerprint using version 3.0 in folder mode. The orchestrator
 checks schema, IDs, verdict logic, and source stability independently.
 
 completion_status: COMPLETE only if material-claim inventory and required area-level

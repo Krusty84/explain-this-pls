@@ -1,0 +1,81 @@
+{
+  // Briefly describe the system's purpose and history. Empty/missing means a warning.
+  "project_description": "An ERP system originally developed in 1995",
+
+  // Choose "git" or "folder". Only the selected section is used.
+  "mode": "git",
+
+  // A clean standalone checkout and at least two existing local branches.
+  "git_mode": {
+    "repository": "../legacy-app",
+    "branches": ["master", "lockheed_ver10.2a.0", "general_ver10.0"],
+    "baseline_branch": "master"
+  },
+
+  // An existing directory; Git is not required. Runs document and review only.
+  "folder_mode": {
+    "path": "../legacy-app"
+  },
+
+  // All relative paths are relative to this configuration file; ~ is supported.
+  // Keep reports and this package outside the inspected source directory.
+  "reports_dir": "../architecture-reports/legacy-app",
+  "output_language": "Russian",
+
+  // Shared CLI settings. Authenticate/configure the CLI before starting the runner.
+  "agent": {
+    // Supported backends: "codex", "claude-code", "opencode".
+    "backend": "opencode",
+    // Command on PATH or executable path. Defaults: codex / claude / opencode.
+    "executable": "opencode",
+    // null uses the model selected by the configured CLI.
+    "model": null,
+    // null disables version pinning; otherwise use the exact --version output.
+    "expected_version": null
+  },
+
+  // Uncomment only the fields you want to override; omitted fields inherit agent.
+  // When changing backend, also override executable and any inherited model/version.
+  // model: null selects the CLI's model; expected_version: null clears version pinning.
+  "stage_agents": {
+    "document": {
+      // "backend": "opencode",
+      // "executable": "opencode",
+      // "model": null,
+      // "expected_version": null,
+    },
+    "review": {
+      // "backend": "opencode",
+      // "executable": "opencode",
+      // "model": null,
+      // "expected_version": null,
+    },
+    // Used only in git mode; ignored in folder mode.
+    "compare": {
+      // "backend": "opencode",
+      // "executable": "opencode",
+      // "model": null,
+      // "expected_version": null,
+    }
+  },
+
+  // Business flows or areas to prioritize, e.g. ["Order creation", "Inventory updates"].
+  "priority_scenarios": [],
+  // Positive integer; maximum seconds per model call (CLI checks have a 30s limit).
+  "timeout_seconds": 1800,
+  // Positive integer; UTF-8 bytes of prompt + context + schema, not source-tree size.
+  "max_input_bytes": 800000,
+  // Positive integer; combined stdout/stderr bytes per CLI call.
+  "max_output_bytes": 16000000,
+  // Git only: continue with other branches after an operational failure.
+  // Source integrity failures always stop; folder mode stops on any stage failure.
+  "continue_on_error": true,
+
+  // Omitted entries use bundled prompts, even if this config is moved elsewhere.
+  // Custom prompts must be outside the source directory and match the output schema.
+  "prompts": {
+    // "document": "./custom-prompts/document.md",
+    // "review": "./custom-prompts/review.md",
+    // "compare": "./custom-prompts/compare.md", // Used only in git mode.
+  }
+}

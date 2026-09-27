@@ -4,6 +4,7 @@
 """Output schemas and deterministic semantic gates (stdlib only)."""
 from __future__ import annotations
 import json
+import math
 import re
 from typing import Any
 
@@ -53,6 +54,14 @@ SCHEMAS = {
             evidence_refs=STRINGS, explanation=string())))
 }
 
+FOLDER_SCHEMAS = {
+    stage: obj(**({key: spec for key, spec in SCHEMAS[stage]['properties'].items()
+                  if key not in ('branch', 'source_commit')} |
+                 {'schema_version': string('3.0'), 'source_directory': string(),
+                  'source_fingerprint': string()}))
+    for stage in ('document', 'review')
+}
+
 def strict_json(text: str) -> Any:
     def pairs(items):
         result = {}
@@ -63,10 +72,60 @@ def strict_json(text: str) -> Any:
         return result
     def reject(value):
         raise ContractError(f'Non-finite JSON value: {value}')
+    def finite_float(value):
+        number = float(value)
+        if not math.isfinite(number):
+            reject(value)
+        return number
     try:
-        return json.loads(text, object_pairs_hook=pairs, parse_constant=reject)
+        return json.loads(text, object_pairs_hook=pairs, parse_constant=reject, parse_float=finite_float)
     except (json.JSONDecodeError, UnicodeError) as exc:
         raise ContractError(f'Invalid JSON: {exc}') from exc
+
+def jsonc(text: str) -> Any:
+    """Replace comments/trailing commas with spaces, preserving error positions."""
+    chars = list(text)
+    tokens: list[tuple[str, int]] = []
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char == '"':
+            tokens.append(('string', i))
+            i += 1
+            while i < len(text):
+                if text[i] == '\\':
+                    i += 2
+                elif text[i] == '"':
+                    i += 1
+                    break
+                else:
+                    i += 1
+            continue
+        if text.startswith('//', i) or text.startswith('/*', i):
+            start = i
+            if text[i + 1] == '/':
+                while i < len(text) and text[i] not in '\r\n':
+                    i += 1
+            else:
+                end = text.find('*/', i + 2)
+                if end == -1:
+                    error = json.JSONDecodeError('Unterminated block comment', text, start)
+                    raise ContractError(f'Invalid JSONC: {error}')
+                i = end + 2
+            for pos in range(start, i):
+                if chars[pos] not in '\r\n':
+                    chars[pos] = ' '
+            continue
+        if not char.isspace():
+            tokens.append((char, i))
+        i += 1
+    for index in range(1, len(tokens) - 1):
+        token, pos = tokens[index]
+        if token == ',' and tokens[index + 1][0] in (']', '}'):
+            # Do not accidentally accept an empty array/object containing a comma.
+            if tokens[index - 1][0] not in ('[', '{', ',', ':'):
+                chars[pos] = ' '
+    return strict_json(''.join(chars))
 
 def validate_schema(value: Any, schema: dict, where: str = '$') -> None:
     types = {'object': dict, 'array': list, 'string': str, 'boolean': bool}
@@ -101,14 +160,15 @@ def accepted(item: dict) -> bool:
     return bool(doc and rev and doc['completion_status'] == 'COMPLETE'
                 and rev['completion_status'] == 'COMPLETE' and rev['verdict'] == 'PASS')
 
-def validate_result(stage: str, value: dict, context: dict) -> None:
-    validate_schema(value, SCHEMAS[stage])
+def validate_result(stage: str, value: dict, context: dict, mode: str = 'git') -> None:
+    validate_schema(value, (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage])
     if not value['report_markdown'].strip():
         raise ContractError('Empty Markdown report')
     if value['completion_status'] != 'COMPLETE' and not value['limitations']:
         raise ContractError('PARTIAL/BLOCKED requires explicit limitations')
     if stage in ('document', 'review'):
-        for key in ('branch', 'source_commit'):
+        identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
+        for key in identity:
             if value[key] != context[key]:
                 raise ContractError(f'{key} does not match the pinned input')
     if stage == 'review':

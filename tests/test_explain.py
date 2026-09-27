@@ -111,6 +111,19 @@ class RepoFixture(unittest.TestCase):
             'timeout_seconds':30,'max_input_bytes':800000,'max_output_bytes':1000000,
             '_agents':{s:dict(agent) for s in ('document','review','compare')},
             '_prompt_paths':{s:str(Path(__file__).resolve().parents[1]/'prompts'/f'{s}.md') for s in ('document','review','compare')}}
+    def test_grouped_git_configuration_runs_and_restores(self):
+        cfg=self.config()
+        cfg['mode']='git'
+        cfg['git_mode']={key:cfg.pop(key) for key in ('repository','branches','baseline_branch')}
+        cfg['folder_mode']={'path':'/missing/inactive/folder'}
+        result,code=FakeRunner(cfg,self.base/'grouped-run').run()
+        self.assertEqual(code,0)
+        self.assertEqual(result['status'],'COMPLETE')
+        self.assertEqual(result['schema_version'],'2.0')
+        self.assertEqual(result['comparison']['compared_branches'],['test01','dev_01_customerA'])
+        self.assertEqual(self.repo.symbolic(),'master')
+        self.assertEqual(self.repo.head(),self.master)
+        self.repo.clean()
     def test_pins_and_restore(self):
         pins=self.repo.preflight(['master','test01'])
         self.repo.checkout(pins['test01'])
@@ -311,7 +324,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(self.load()['_agents']['document']['executable'],str(Path(sys.executable).resolve()))
     def test_all_examples_load_without_credentials(self):
         root=Path(__file__).resolve().parents[1]
-        for path in root.glob('config*.example.json'):
+        paths = list(root.glob('config*.example.json*'))
+        self.assertEqual(len(paths), 3)
+        for path in paths:
             with self.subTest(path=path.name), patch.dict(os.environ,{},clear=True), \
                  patch('explain.shutil.which',return_value=sys.executable):
                 cfg=load_config(path)

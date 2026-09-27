@@ -4,7 +4,8 @@
 
 """Sequential architecture auditing with configured coding-agent CLIs.
 
-macOS or Linux, Python 3.11+, Git, and one or more authenticated coding-agent CLIs.
+macOS or Linux, Python 3.11+, and one or more authenticated coding-agent CLIs.
+Git is required only for git mode; folder mode inspects an existing directory.
 No third-party Python packages, worktrees, or source copies.
 The parent is the only artifact writer. The agent receives stdin and returns JSON.
 """
@@ -21,13 +22,14 @@ import re
 import selectors
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
 from typing import Any
-from contracts import SCHEMAS, ContractError, accepted, parse_backend, strict_json, validate_result
+from contracts import FOLDER_SCHEMAS, SCHEMAS, ContractError, accepted, jsonc, parse_backend, strict_json, validate_result
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ('document', 'review', 'compare')
@@ -260,6 +262,74 @@ class Repository:
             'limitations': ['Path/mode/blob changes only; no patch, runtime evidence, or historical rationale.',
                             'Rename detection disabled: renames appear as deletion plus addition.']}
 
+class Folder:
+    def __init__(self, path: Path):
+        self.path = path.resolve()
+
+    def snapshot(self) -> dict:
+        """Inventory without following links; stream file contents through SHA-256."""
+        entries = []
+
+        def identity(info):
+            return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+                    info.st_mtime_ns, info.st_ctime_ns)
+
+        def unchanged(before, after, name):
+            if identity(before) != identity(after):
+                raise AuditError(f'Source changed while fingerprinting: {name}')
+
+        def directory(fd, relative):
+            before = os.fstat(fd)
+            entries.append({'path': relative, 'type': 'directory',
+                            'mode': format(stat.S_IMODE(before.st_mode), '04o')})
+            for name in sorted(os.listdir(fd)):
+                child = name if relative == '.' else relative + '/' + name
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                entry = {'path': child, 'mode': format(stat.S_IMODE(info.st_mode), '04o')}
+                if stat.S_ISLNK(info.st_mode):
+                    entry.update(type='symlink', target=os.readlink(name, dir_fd=fd))
+                    entries.append(entry)
+                elif stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode):
+                    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                    if stat.S_ISDIR(info.st_mode):
+                        flags |= os.O_DIRECTORY
+                    child_fd = os.open(name, flags, dir_fd=fd)
+                    try:
+                        unchanged(info, os.fstat(child_fd), child)
+                        if stat.S_ISDIR(info.st_mode):
+                            directory(child_fd, child)
+                        else:
+                            sha = hashlib.sha256()
+                            while block := os.read(child_fd, 1024 * 1024):
+                                sha.update(block)
+                            entry.update(type='file', size=info.st_size, sha256=sha.hexdigest())
+                            entries.append(entry)
+                        unchanged(info, os.fstat(child_fd), child)
+                    finally:
+                        os.close(child_fd)
+                else:
+                    raise AuditError(f'Unsupported special file in source folder: {child}')
+                unchanged(info, os.stat(name, dir_fd=fd, follow_symlinks=False), child)
+            unchanged(before, os.fstat(fd), relative)
+
+        try:
+            fd = os.open(self.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                before = os.fstat(fd)
+                directory(fd, '.')
+                unchanged(before, self.path.lstat(), str(self.path))
+            finally:
+                os.close(fd)
+        except OSError as exc:
+            raise AuditError(f'Cannot read source folder {self.path}: {exc}') from exc
+        fingerprint = digest(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode())
+        return {'source_directory': str(self.path), 'source_fingerprint': fingerprint,
+                'algorithm': 'sha256', 'entries': entries}
+
+    def assert_snapshot(self, fingerprint: str) -> None:
+        if self.snapshot()['source_fingerprint'] != fingerprint:
+            raise AuditError('Source folder changed during the run; files will not be restored.')
+
 @contextlib.contextmanager
 def repository_lock(repo: Path):
     repo = repo.resolve()
@@ -280,30 +350,57 @@ def repository_lock(repo: Path):
 
 def load_config(path: Path) -> dict:
     path = path.resolve()
-    value = strict_json(path.read_text())
+    value = (jsonc if path.suffix.lower() == '.jsonc' else strict_json)(path.read_text())
     if type(value) is not dict:
         raise AuditError('Configuration must be a JSON object.')
     allowed = {'repository', 'reports_dir', 'branches', 'baseline_branch', 'agent', 'stage_agents',
         'output_language', 'priority_scenarios', 'timeout_seconds', 'max_input_bytes',
-        'max_output_bytes', 'continue_on_error', 'project_description', 'prompts'}
+        'max_output_bytes', 'continue_on_error', 'project_description', 'prompts',
+        'mode', 'git_mode', 'folder_mode'}
     if 'additional_runtime_read_paths' in value:
         raise AuditError('Remove additional_runtime_read_paths from configuration: the runner now uses native CLI permissions.')
     if set(value) - allowed:
         raise AuditError(f'Unknown configuration keys: {set(value) - allowed}')
-    for key in ('repository', 'reports_dir', 'branches', 'baseline_branch', 'agent'):
+    for key in ('reports_dir', 'agent'):
         if key not in value:
             raise AuditError(f'Missing configuration key: {key}')
-    for key in ('repository', 'reports_dir'):
-        p = Path(value[key]).expanduser()
-        value[key] = str((path.parent / p if not p.is_absolute() else p).resolve())
-    repo, reports = Path(value['repository']), Path(value['reports_dir'])
+    grouped = bool(set(value) & {'mode', 'git_mode', 'folder_mode'})
+    if grouped:
+        if set(value) & {'repository', 'branches', 'baseline_branch'}:
+            raise AuditError('Do not mix legacy repository/branches/baseline_branch with mode sections.')
+        if value.get('mode') not in ('git', 'folder'):
+            raise AuditError('Grouped configuration requires mode: "git" or "folder".')
+        for section in ('git_mode', 'folder_mode'):
+            if section in value and type(value[section]) is not dict:
+                raise AuditError(f'{section} must be a JSON object, even when inactive.')
+        section = value['mode'] + '_mode'
+        if section not in value:
+            raise AuditError(f'Missing configuration section: {section}')
+        source = value[section]
+    else:
+        source = value
+    mode = value.get('mode', 'git')
+    required = ('repository', 'branches', 'baseline_branch') if mode == 'git' else ('path',)
+    if grouped and set(source) - set(required):
+        raise AuditError(f'Unknown {mode}_mode keys: {set(source) - set(required)}')
+    for key in required:
+        if key not in source:
+            raise AuditError(f'Missing configuration key: {key}')
+    source_key = 'repository' if mode == 'git' else 'path'
+    for obj, key in ((source, source_key), (value, 'reports_dir')):
+        if not isinstance(obj[key], str) or not obj[key].strip():
+            raise AuditError(f'{key} must be a nonempty path string.')
+        p = Path(obj[key]).expanduser()
+        obj[key] = str((path.parent / p if not p.is_absolute() else p).resolve())
+    repo, reports = Path(source[source_key]), Path(value['reports_dir'])
     if overlap(repo, reports):
-        raise AuditError('Repository and reports_dir must be disjoint, not ancestors of each other.')
-    branches = value['branches']
-    if not isinstance(branches, list) or len(branches) < 2 or any(not isinstance(b, str) or not b for b in branches):
-        raise AuditError('At least two nonempty local branch names are required.')
-    if len(set(branches)) != len(branches) or value['baseline_branch'] not in branches:
-        raise AuditError('Branches must be unique and include baseline_branch.')
+        raise AuditError('Source directory and reports_dir must be disjoint, not ancestors of each other.')
+    if mode == 'git':
+        branches = source['branches']
+        if not isinstance(branches, list) or len(branches) < 2 or any(not isinstance(b, str) or not b for b in branches):
+            raise AuditError('At least two nonempty local branch names are required.')
+        if len(set(branches)) != len(branches) or source['baseline_branch'] not in branches:
+            raise AuditError('Branches must be unique and include baseline_branch.')
     defaults = {'output_language': 'Russian', 'project_description': '', 'priority_scenarios': [], 'timeout_seconds': 1800,
         'max_input_bytes': 800_000, 'max_output_bytes': 16_000_000, 'continue_on_error': True,
         'stage_agents': {}, 'prompts': {}}
@@ -322,13 +419,14 @@ def load_config(path: Path) -> dict:
         raise AuditError('continue_on_error must be boolean.')
     if not isinstance(value['priority_scenarios'], list) or any(not isinstance(s, str) for s in value['priority_scenarios']):
         raise AuditError('priority_scenarios must be an array of strings.')
+    stages = STAGES if mode == 'git' else STAGES[:2]
     for stage in value['stage_agents']:
         if stage not in STAGES:
             raise AuditError(f'Unknown stage override: {stage}')
-        if type(value['stage_agents'][stage]) is not dict:
+        if stage in stages and type(value['stage_agents'][stage]) is not dict:
             raise AuditError(f'stage_agents.{stage} must be a JSON object.')
     value['_agents'] = {}
-    for stage in STAGES:
+    for stage in stages:
         agent = dict(value['agent'])
         agent.update(value['stage_agents'].get(stage, {}))
         obsolete = set(agent) & {'api_key_env', 'provider_key_env'}
@@ -354,8 +452,13 @@ def load_config(path: Path) -> dict:
                 raise AuditError(f'agent.{key} must be a string or null.')
         value['_agents'][stage] = agent
     value['_prompt_paths'] = {}
-    for stage in STAGES:
-        p = Path(value['prompts'].get(stage, str(ROOT / 'prompts' / (stage + '.md')))).expanduser()
+    if set(value['prompts']) - set(STAGES):
+        raise AuditError('Unknown prompt stage.')
+    for stage in stages:
+        prompt_path = value['prompts'].get(stage, str(ROOT / 'prompts' / (stage + '.md')))
+        if not isinstance(prompt_path, str) or not prompt_path.strip():
+            raise AuditError(f'prompts.{stage} must be a nonempty path string.')
+        p = Path(prompt_path).expanduser()
         p = (path.parent / p if not p.is_absolute() else p).resolve()
         if inside(p, repo):
             raise AuditError('Prompt templates must be outside the inspected repository.')
@@ -367,7 +470,12 @@ def load_config(path: Path) -> dict:
 class Runner:
     def __init__(self, config: dict, run_dir: Path):
         self.cfg, self.run_dir = config, run_dir.resolve()
-        self.repo = Repository(Path(config['repository']))
+        self.mode = config.get('mode', 'git')
+        self.source = config.get(self.mode + '_mode', config)
+        self.source_path = Path(self.source['path' if self.mode == 'folder' else 'repository'])
+        self.folder = Folder(self.source_path) if self.mode == 'folder' else None
+        self.repo = Repository(self.source_path) if self.mode == 'git' else None
+        self.schemas = FOLDER_SCHEMAS if self.mode == 'folder' else SCHEMAS
         self.versions: dict[str, str] = {}
 
     def check_cli(self) -> dict:
@@ -400,6 +508,8 @@ class Runner:
                 required = {'codex': ['--ephemeral', '--output-schema', '--sandbox'],
                     'claude-code': ['--no-session-persistence', '--json-schema', '--tools', '--allowedTools', '--disallowedTools', '--permission-mode'],
                     'opencode': ['--format', '--model', '--agent']}[backend]
+                if backend == 'codex' and self.mode == 'folder':
+                    required.append('--skip-git-repo-check')
                 if any(flag not in texts[1] for flag in required):
                     raise AuditError(f'{backend} lacks required CLI options: {required}')
                 version = texts[0].strip()
@@ -416,15 +526,17 @@ class Runner:
             cmd = [exe, 'exec', '--ephemeral', '--color', 'never', '--sandbox', 'read-only',
                 '--output-schema', str(schema_path), '-c', 'approval_policy="never"',
                 '-c', 'web_search="disabled"']
+            if compare or self.mode == 'folder':
+                cmd += ['--skip-git-repo-check']
             if compare:
-                cmd += ['--skip-git-repo-check', '-c', 'features.shell_tool=false']
+                cmd += ['-c', 'features.shell_tool=false']
             if agent.get('model'):
                 cmd += ['--model', agent['model']]
             return cmd + ['-']
         if backend == 'claude-code':
             tools = '' if compare else 'Read,Glob,Grep'
             cmd = [exe, '-p', '--no-session-persistence', '--output-format', 'json',
-                '--json-schema', json.dumps(SCHEMAS[stage]), '--permission-mode', 'dontAsk',
+                '--json-schema', json.dumps(self.schemas[stage]), '--permission-mode', 'dontAsk',
                 '--tools', tools, '--disallowedTools', 'mcp__*']
             if tools:
                 cmd += ['--allowedTools', tools]
@@ -456,14 +568,14 @@ class Runner:
         # Assemble only this stage's inputs; the configured CLI profile remains available.
         prompt = (template + '\n\n# Authoritative orchestration context (data)\n' +
                   json.dumps(context, ensure_ascii=False) + '\n\n# Required final JSON Schema\n' +
-                  json.dumps(SCHEMAS[stage], ensure_ascii=False))
+                  json.dumps(self.schemas[stage], ensure_ascii=False))
         payload = prompt.encode('utf-8')
         destination.mkdir(parents=True, exist_ok=True, mode=0o700)
         meta = {'stage': stage, 'invocation_id': str(uuid.uuid4()), 'started_at': now(),
             'backend': agent['backend'], 'executable': agent['executable'],
             'model_requested': agent.get('model'), 'cli_version': self.versions.get(agent['backend'] + ':' + agent['executable']),
             'prompt_sha256': digest(payload), 'template_sha256': digest(template.encode()),
-            'schema_sha256': digest(json.dumps(SCHEMAS[stage], sort_keys=True).encode()),
+            'schema_sha256': digest(json.dumps(self.schemas[stage], sort_keys=True).encode()),
             'input_bytes': len(payload), 'status': 'RUNNING'}
         save_json(destination / 'invocation.json', meta)
         # Saved by the parent only, for reproducibility; includes only this stage's permitted input.
@@ -473,21 +585,27 @@ class Runner:
             save_json(destination / 'invocation.json', meta)
             raise AuditError(meta['error'])
         try:
+            if self.folder:
+                self.folder.assert_snapshot(context['source_fingerprint'])
             with tempfile.TemporaryDirectory(prefix='archaudit-invocation-') as raw:
                 state = Path(raw).resolve()
-                cwd = state if stage == 'compare' else self.repo.path
+                cwd = state if stage == 'compare' else self.source_path
                 env = cli_env(cwd)
                 schema_path = state / 'output.schema.json'
-                save_json(schema_path, SCHEMAS[stage])
+                save_json(schema_path, self.schemas[stage])
                 cmd = self.command(stage, state, agent, schema_path, env)
-                r = process(cmd, cwd, env, payload, self.cfg['timeout_seconds'], self.cfg['max_output_bytes'])
-                atomic(destination / 'stdout.log', r['stdout'])
-                atomic(destination / 'stderr.log', r['stderr'])
-                meta.update(returncode=r['returncode'], duration_seconds=r['duration_seconds'])
+                try:
+                    r = process(cmd, cwd, env, payload, self.cfg['timeout_seconds'], self.cfg['max_output_bytes'])
+                    atomic(destination / 'stdout.log', r['stdout'])
+                    atomic(destination / 'stderr.log', r['stderr'])
+                    meta.update(returncode=r['returncode'], duration_seconds=r['duration_seconds'])
+                finally:
+                    if self.folder:
+                        self.folder.assert_snapshot(context['source_fingerprint'])
                 if r['returncode'] or r['error']:
                     raise AuditError(r['error'] or f'{agent["backend"]} exited with {r["returncode"]}; see stderr.log')
                 data, provider_meta = parse_backend(agent['backend'], r['stdout'].decode('utf-8'))
-                validate_result(stage, data, context)
+                validate_result(stage, data, context, self.mode)
                 meta['provider_metadata'] = provider_meta
             # Publish after the CLI exits and temporary invocation files are removed.
             report = data['report_markdown'].rstrip() + '\n'
@@ -502,9 +620,11 @@ class Runner:
             raise
 
     def run(self, check_only: bool = False) -> tuple[dict, int]:
+        if self.folder:
+            return self.run_folder(check_only)
         manifest = {'schema_version': '2.0', 'run_id': self.run_dir.name,
             'started_at': now(), 'repository': str(self.repo.path),
-            'baseline_branch': self.cfg['baseline_branch'], 'status': 'RUNNING',
+            'baseline_branch': self.source['baseline_branch'], 'status': 'RUNNING',
             'isolation': 'cli-native-permissions', 'platform': sys.platform,
             'branches': [], 'errors': []}
         def persist():
@@ -516,7 +636,7 @@ class Runner:
             if not self.cfg['project_description']:
                 log('Описание проекта не указано. Рекомендуем заполнить project_description: '
                     'кратко расскажите о назначении и истории системы')
-            pins = self.repo.preflight(self.cfg['branches'])
+            pins = self.repo.preflight(self.source['branches'])
             manifest['pins'] = pins
             original_branch, original_commit = self.repo.symbolic(), self.repo.head()
             manifest['original_checkout'] = {'branch': original_branch, 'commit': original_commit}
@@ -527,7 +647,7 @@ class Runner:
                 persist()
                 return manifest, 0
             try:
-                for branch in self.cfg['branches']:
+                for branch in self.source['branches']:
                     commit = pins[branch]
                     log(f'Analyzing {branch} at {commit[:12]}')
                     branch_dir = self.run_dir / 'branches' / slug(branch)
@@ -537,7 +657,7 @@ class Runner:
                     manifest['branches'].append(item)
                     persist()
                     self.repo.checkout(commit)
-                    context = {'branch': branch, 'source_commit': commit,
+                    context = {'source_mode': 'git', 'branch': branch, 'source_commit': commit,
                         'repository': str(self.repo.path), 'output_language': self.cfg['output_language'],
                         'project_description': self.cfg['project_description'],
                         'priority_scenarios': self.cfg['priority_scenarios'],
@@ -574,14 +694,14 @@ class Runner:
             # Include all requested branches even if future policies skip one; missing inputs stay visible.
             existing = {b['branch']: b for b in manifest['branches']}
             entries = [existing.get(b, {'branch': b, 'source_commit': pins[b], 'document': None,
-                       'review': None, 'errors': ['Branch was not analyzed.']}) for b in self.cfg['branches']]
-            baseline = self.cfg['baseline_branch']
+                       'review': None, 'errors': ['Branch was not analyzed.']}) for b in self.source['branches']]
+            baseline = self.source['baseline_branch']
             bundle = {'baseline_branch': baseline, 'baseline_commit': pins[baseline],
-                'requested_branches': self.cfg['branches'], 'output_language': self.cfg['output_language'],
+                'requested_branches': self.source['branches'], 'output_language': self.cfg['output_language'],
                 'project_description': self.cfg['project_description'],
                 'scope': 'reports-only comparison; source inspection is outside task scope',
                 'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'document', 'review', 'errors')} for b in entries],
-                'git_deltas': {b: self.repo.delta(pins[baseline], pins[b]) for b in self.cfg['branches'] if b != baseline}}
+                'git_deltas': {b: self.repo.delta(pins[baseline], pins[b]) for b in self.source['branches'] if b != baseline}}
             comp_dir = self.run_dir / 'comparison'
             save_json(comp_dir / 'inputs.json', bundle)
             log('Comparing all branch reports in a new session outside the repository')
@@ -620,10 +740,64 @@ class Runner:
         persist()
         return manifest, code
 
+    def run_folder(self, check_only: bool = False) -> tuple[dict, int]:
+        manifest = {'schema_version': '3.0', 'mode': 'folder', 'run_id': self.run_dir.name,
+            'started_at': now(), 'source_directory': str(self.source_path), 'status': 'RUNNING',
+            'isolation': 'cli-native-permissions', 'platform': sys.platform,
+            'integrity': 'Fingerprints at stage boundaries; not a backup or continuous immutability guarantee.',
+            'document': None, 'review': None, 'accepted': False, 'errors': []}
+        def persist():
+            save_json(self.run_dir / 'manifest.json', manifest)
+        persist()
+        try:
+            if not self.cfg['project_description']:
+                log('Описание проекта не указано. Рекомендуем заполнить project_description: '
+                    'кратко расскажите о назначении и истории системы')
+            inventory = self.folder.snapshot()
+            save_json(self.run_dir / 'source.inventory.json', inventory)
+            fingerprint = inventory['source_fingerprint']
+            manifest.update(source_fingerprint=fingerprint, inventory='source.inventory.json')
+            manifest['cli_checks'] = self.check_cli()
+            self.folder.assert_snapshot(fingerprint)
+            persist()
+            if check_only:
+                manifest['status'], code = 'PREFLIGHT_OK', 0
+            else:
+                context = {'source_mode': 'folder', 'source_directory': str(self.source_path),
+                    'source_fingerprint': fingerprint, 'output_language': self.cfg['output_language'],
+                    'project_description': self.cfg['project_description'],
+                    'priority_scenarios': self.cfg['priority_scenarios'], 'execution_mode': 'static-only',
+                    'source_access': 'Current directory tree, including hidden files; do not follow symlinks or use Git. '
+                                     'Native CLI permissions; fingerprints verify stage boundaries only.'}
+                for stage in ('document', 'review'):
+                    stage_context = dict(context)
+                    if stage == 'review':
+                        doc = manifest['document']
+                        if doc['completion_status'] == 'BLOCKED':
+                            manifest['review_skipped'] = 'No usable architecture document.'
+                            break
+                        stage_context.update(architecture_document=doc,
+                            document_sha256=digest((doc['report_markdown'].rstrip() + '\n').encode()))
+                    log(f'  {stage}: {self.cfg["_agents"][stage]["backend"]}')
+                    data, meta = self.invoke(stage, stage_context, self.run_dir / (stage + '.logs'))
+                    manifest[stage], manifest[stage + '_invocation'] = data, meta
+                    persist()
+                manifest['accepted'] = accepted(manifest)
+                manifest['status'] = 'COMPLETE' if manifest['accepted'] else 'PARTIAL'
+                code = 0 if manifest['accepted'] else 2
+        except BaseException as exc:
+            manifest['errors'].append(str(exc) or type(exc).__name__)
+            manifest['status'] = 'FAILED'
+            code = 130 if isinstance(exc, KeyboardInterrupt) else 1
+            log(f'Run failed: {exc}')
+        manifest.update(finished_at=now(), exit_code=code)
+        persist()
+        return manifest, code
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', required=True, type=Path)
-    parser.add_argument('--check', action='store_true', help='Check configuration, Git state, and CLI capabilities; no branch switch or model calls.')
+    parser.add_argument('--config', required=True, type=Path, help='Path to a JSON or JSONC configuration.')
+    parser.add_argument('--check', action='store_true', help='Check configuration, source state, and CLI capabilities; no branch switch or model calls.')
     args = parser.parse_args()
     if sys.platform not in ('darwin', 'linux') or sys.version_info < (3, 11):
         raise AuditError('This implementation requires macOS or Linux and Python 3.11+.')
@@ -641,8 +815,9 @@ def main() -> int:
     run_dir.mkdir(mode=0o700)
     snapshot = {k: v for k, v in config.items() if not k.startswith('_')}
     save_json(run_dir / 'config.snapshot.json', snapshot)
-    with repository_lock(Path(config['repository'])):
-        manifest, code = Runner(config, run_dir).run(check_only=args.check)
+    runner = Runner(config, run_dir)
+    with repository_lock(runner.source_path):
+        manifest, code = runner.run(check_only=args.check)
     print(json.dumps({'run_id': run_id, 'status': manifest['status'],
                       'manifest': str(run_dir / 'manifest.json'), 'exit_code': code}, ensure_ascii=False))
     return code
@@ -650,6 +825,6 @@ def main() -> int:
 if __name__ == '__main__':
     try:
         raise SystemExit(main())
-    except (AuditError, OSError, ValueError) as exc:
+    except (AuditError, ContractError, OSError, ValueError) as exc:
         print(f'ERROR: {exc}', file=sys.stderr)
         raise SystemExit(1)

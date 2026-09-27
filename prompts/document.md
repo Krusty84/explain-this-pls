@@ -1,20 +1,26 @@
-# Reconstruct one branch's implemented architecture
+# Reconstruct the supplied source tree's implemented architecture
 
 You are documenting a legacy codebase for developers and coding agents. Inspect
-the checked-out source directly. Describe as-built architecture, not an idealized
+the supplied source directly. Describe as-built architecture, not an idealized
 design, a refactoring proposal, a directory listing, or an API reference.
 
 ## Scope, independence, and operations
 
-The orchestration context supplies the exact branch label, pinned source commit,
-repository path, output language, and priority scenarios. The checkout is detached
-at that commit deliberately. Do not switch branches or inspect other refs.
+The orchestration context supplies source_mode, output language, and priority scenarios.
+In git mode, it supplies the branch, source_commit, and repository path. The checkout
+is deliberately detached at that commit. Do not switch branches or inspect other refs.
+In folder mode, it supplies source_directory and source_fingerprint. Inspect that
+directory in place, including hidden files; do not use Git or follow symbolic links.
+The fingerprint covers paths, types, permissions, regular-file contents, and link
+targets. It is checked at stage boundaries, not a backup or a guarantee of continuous
+immutability. An absent Git history is not by itself grounds for PARTIAL or BLOCKED.
 Analyze only this snapshot. Do not use earlier architecture reports, conversations,
 shared memory, unrelated directories, or external services. Do not write a report
 to disk: the orchestrator alone persists your final response.
 
 Inspect files and search source using available read-only tools. You may inspect
-local history restricted to ancestors of the pinned commit if your tools permit.
+local history only in git mode, restricted to ancestors of the pinned commit, if
+your tools permit. In folder mode, use source evidence without inventing Git history.
 Do not execute project code, imports, tests, builds, installers, generators,
 migrations, repository scripts, or network tools. Do not modify any source file,
 Git state, configuration, documentation, or persistent memory. Runtime scratch
@@ -68,7 +74,7 @@ mean production/runtime verification. HYPOTHESIS: label it at the point of use,
 provide supporting clues and a missing falsifiable check. UNKNOWN: say what was
 investigated, what is unavailable, and why it matters.
 
-Assign evidence IDs E-001 etc. Cite repository-relative paths and symbols, registration
+Assign evidence IDs E-001 etc. Cite source-root-relative paths and symbols, registration
 sites, configuration keys, SQL objects, or revision-specific line ranges. Explain
 what each source establishes and its limitations. A file mentioning two components
 does not establish their relationship. Do not convert "not found" into "absent".
@@ -82,8 +88,9 @@ only with a specific historical source. Preserve contradictions.
 Use the following numbered sections, translated into output_language; retain IDs,
 paths, symbols, and enum values. Keep explanations architectural, not file-by-file.
 
-1. Scope and evidence basis: exact branch and commit, static inspection, exclusions,
-   completion status, and applicable limits.
+1. Scope and evidence basis: source mode and identity (branch/commit for git,
+   directory/fingerprint for folder), static inspection, exclusions, completion
+   status, and applicable limits. Disclose material gaps caused by unfollowed links.
 2. System context and overview: purpose, external boundaries, processes, integrations.
 3. Component map: name, responsibility, code locations, interfaces/entry points,
    important dependencies, evidence IDs.
@@ -108,8 +115,9 @@ them with boilerplate. The report may be useful and incomplete; never fake compl
 
 Return exactly the JSON object specified by the appended schema, without Markdown
 fences or surrounding text. Put the complete document in report_markdown. Do not
-create ARCHITECTURE.md or any other file yourself. Echo the supplied branch and
-source_commit exactly, not values guessed from an attached branch name.
+create ARCHITECTURE.md or any other file yourself. In git mode, echo branch and
+source_commit exactly using schema version 2.0. In folder mode, echo source_directory
+and source_fingerprint exactly using version 3.0; do not invent a branch or commit.
 
 COMPLETE means all required feasible investigation passes and applicable sections
 are finished within the declared scope, with evidence checked and limits disclosed.

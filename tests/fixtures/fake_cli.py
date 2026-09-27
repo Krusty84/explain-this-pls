@@ -16,7 +16,7 @@ if '--version' in args:
     print('Fixture startup warning', file=sys.stderr)
     print('fixture-cli 1.0')
 elif '--help' in args:
-    print('--ephemeral --output-schema --sandbox --no-session-persistence --json-schema '
+    print('--ephemeral --output-schema --sandbox --skip-git-repo-check --no-session-persistence --json-schema '
           '--tools --allowedTools --disallowedTools --permission-mode --format --model --agent')
 else:
     prompt = sys.stdin.read()
@@ -30,7 +30,14 @@ else:
                     baseline_commit=context['baseline_commit'], unresolved_branches=[], differences=[],
                     compared_branches=[b for b in context['requested_branches'] if b != context['baseline_branch']])
     else:
-        data.update(branch=context['branch'], source_commit=context['source_commit'])
+        if context.get('source_mode') == 'folder':
+            data.update(schema_version='3.0', source_directory=context['source_directory'],
+                        source_fingerprint=context['source_fingerprint'])
+            # Exercise rejection of a changed tree using an actual subprocess.
+            if os.environ.get('AUDIT_TEST_MUTATE_SOURCE'):
+                (Path(context['source_directory']) / 'modified.txt').write_text('agent modification')
+        else:
+            data.update(branch=context['branch'], source_commit=context['source_commit'])
         if 'architecture_document' in context:
             data.update(task='architecture_review', verdict='PASS', claim_inventory_complete=True,
                         claims=[{'id': 'C-001', 'location': 'overview', 'statement': 'Has an entry point',
