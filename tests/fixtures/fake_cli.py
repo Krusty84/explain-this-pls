@@ -11,7 +11,9 @@ args = sys.argv[1:]
 profile = json.loads((Path(os.environ['HOME']) / 'audit-profile.json').read_text())
 assert profile['model'] == 'configured-model'
 assert not any(key.endswith('_API_KEY') for key in os.environ)
-call = {'args': args, 'cwd': str(Path.cwd()), 'home': os.environ['HOME']}
+call = {'args': args, 'cwd': str(Path.cwd()), 'home': os.environ['HOME'],
+        'euid': os.geteuid(),
+        'git_config_env': {k: v for k, v in os.environ.items() if k.startswith('GIT_CONFIG')}}
 if '--version' in args:
     print('Fixture startup warning', file=sys.stderr)
     print('fixture-cli 1.0')

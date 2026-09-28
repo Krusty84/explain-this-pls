@@ -308,7 +308,6 @@ class FolderPipelineTests(FolderFixture):
             process.assert_not_called()
 
 
-@unittest.skipIf(os.geteuid() == 0, 'The command-line runner requires a non-root user.')
 class FolderCLIIntegrationTests(FolderFixture):
     def setUp(self):
         super().setUp()

@@ -408,7 +408,6 @@ class AdapterCommandTests(unittest.TestCase):
             self.assertNotIn('CODEX_API_KEY',env)
             self.assertEqual(dict(os.environ),inherited)
 
-@unittest.skipIf(os.geteuid()==0,'The command-line runner requires a non-root user.')
 class ConfiguredCLIIntegrationTests(unittest.TestCase):
     setUp=RepoFixture.setUp
     tearDown=RepoFixture.tearDown

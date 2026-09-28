@@ -157,7 +157,7 @@ def process(command: list[str], cwd: Path, env: dict[str, str], input_data: byte
             'error': problem, 'duration_seconds': round(time.monotonic() - start, 3)}
 
 class Repository:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, trust_repository: bool = False):
         self.path = path.resolve()
         self.env = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL') if k in os.environ}
         self.env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
@@ -165,12 +165,19 @@ class Repository:
         self.prefix = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
             '-c', 'core.untrackedCache=false', '-c', 'submodule.recurse=false',
             '-c', 'core.pager=cat', '-C', str(self.path)]
+        if trust_repository:
+            self.prefix += ['-c', 'safe.directory=', '-c', f'safe.directory={self.path}']
 
     def git(self, *args: str, allowed: tuple[int, ...] = (0,)) -> bytes:
         r = subprocess.run(self.prefix + list(args), env=self.env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
         if r.returncode not in allowed:
-            raise AuditError(f'git {args[0]} failed: {r.stderr.decode(errors="replace").strip()}')
+            error = r.stderr.decode(errors='replace').strip()
+            if any(line.startswith('fatal: detected dubious ownership in repository') for line in error.splitlines()):
+                error += ('\nGit rejected the repository because of an ownership mismatch.\n'
+                          'Run with the checkout owner\'s UID, or use --trust-repository\n'
+                          'only if you trust this specific checkout.')
+            raise AuditError(f'git {args[0]} failed: {error}')
         return r.stdout
 
     def text(self, *args: str, **kwargs) -> str:
@@ -468,13 +475,15 @@ def load_config(path: Path) -> dict:
     return value
 
 class Runner:
-    def __init__(self, config: dict, run_dir: Path):
+    def __init__(self, config: dict, run_dir: Path, trust_repository: bool = False):
         self.cfg, self.run_dir = config, run_dir.resolve()
         self.mode = config.get('mode', 'git')
+        if trust_repository and self.mode != 'git':
+            raise AuditError('--trust-repository requires git mode; it cannot be used in folder mode.')
         self.source = config.get(self.mode + '_mode', config)
         self.source_path = Path(self.source['path' if self.mode == 'folder' else 'repository'])
         self.folder = Folder(self.source_path) if self.mode == 'folder' else None
-        self.repo = Repository(self.source_path) if self.mode == 'git' else None
+        self.repo = Repository(self.source_path, trust_repository=trust_repository) if self.mode == 'git' else None
         self.schemas = FOLDER_SCHEMAS if self.mode == 'folder' else SCHEMAS
         self.versions: dict[str, str] = {}
 
@@ -798,24 +807,25 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True, type=Path, help='Path to a JSON or JSONC configuration.')
     parser.add_argument('--check', action='store_true', help='Check configuration, source state, and CLI capabilities; no branch switch or model calls.')
+    parser.add_argument('--trust-repository', action='store_true', help='Trust only the configured Git checkout despite an ownership mismatch (Git 2.38+).')
     args = parser.parse_args()
     if sys.platform not in ('darwin', 'linux') or sys.version_info < (3, 11):
         raise AuditError('This implementation requires macOS or Linux and Python 3.11+.')
     if os.geteuid() == 0:
-        raise AuditError('Run as a normal user, not root.')
+        print('WARNING: Running as root; child CLIs inherit root privileges.', file=sys.stderr)
     os.umask(0o077)
     def interrupted(signum, frame):
         raise KeyboardInterrupt(f'Received signal {signum}')
     signal.signal(signal.SIGTERM, interrupted)
     config = load_config(args.config.resolve())
     reports = Path(config['reports_dir'])
-    reports.mkdir(parents=True, exist_ok=True, mode=0o700)
     run_id = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:10]
     run_dir = reports / run_id
+    runner = Runner(config, run_dir, trust_repository=args.trust_repository)
+    reports.mkdir(parents=True, exist_ok=True, mode=0o700)
     run_dir.mkdir(mode=0o700)
     snapshot = {k: v for k, v in config.items() if not k.startswith('_')}
     save_json(run_dir / 'config.snapshot.json', snapshot)
-    runner = Runner(config, run_dir)
     with repository_lock(runner.source_path):
         manifest, code = runner.run(check_only=args.check)
     print(json.dumps({'run_id': run_id, 'status': manifest['status'],

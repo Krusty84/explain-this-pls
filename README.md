@@ -48,6 +48,9 @@ branches before planning changes.
 - macOS or Linux.
 - Python 3.11 or newer.
 - Git with support for `git switch`, only when using git mode.
+  `--trust-repository` requires Git 2.38 or newer, which supports `safe.directory`
+  in command-line protected configuration (see the
+  [Git 2.38 configuration documentation](https://git-scm.com/docs/git-config/2.38.0)).
 - At least one installed and authenticated coding-agent CLI: Codex CLI, Claude Code,
   or OpenCode.
 
@@ -232,6 +235,15 @@ Custom document/review prompts must handle the chosen source mode. See the
 
 ### Run explain-this-pls
 
+Root and ordinary users use the same commands in both git and folder modes,
+inside or outside containers. Root needs no extra option, environment variable,
+or confirmation. When the effective UID is 0, the runner prints this warning once
+to stderr, without changing the exit status or the JSON summary on stdout:
+
+```text
+WARNING: Running as root; child CLIs inherit root privileges.
+```
+
 First, validate the configuration, source state, and CLI capabilities:
 
 ```sh
@@ -248,6 +260,41 @@ Then start the investigation:
 ```sh
 python3 explain.py --config config.jsonc
 ```
+
+Git ownership checks apply equally to root and ordinary users. If Git rejects a
+checkout owned by another UID, run with the checkout owner's UID, or explicitly
+trust that specific checkout for this run:
+
+```sh
+python3 explain.py \
+  --config config.jsonc \
+  --trust-repository
+```
+
+To check the same configuration and checkout without calling a model:
+
+```sh
+python3 explain.py \
+  --config config.jsonc \
+  --trust-repository \
+  --check
+```
+
+`--trust-repository` applies only to the checkout selected by the active Git
+configuration. Each runner Git command receives an empty `safe.directory` entry
+to reset the exception list, followed by the checkout's canonical absolute path
+(including symlink resolution). Paths with spaces are supported. The runner does
+not change system, user, or repository Git configuration, trust other checkouts,
+or pass this exception to external agents. Its Git processes continue to ignore
+system and global configuration, so a global Git exception is not a substitute.
+In folder mode, this option is a configuration error before results are created.
+
+Trust does not fix filesystem permissions, an inaccessible HOME, missing CLIs, or
+authentication errors. A trusted checkout must still pass all source integrity
+checks, including the clean working tree requirement. Root support in the runner
+also does not guarantee that Codex CLI, Claude Code, or OpenCode permits running
+as root. Their sandbox and tool restrictions remain in effect; the runner does
+not bypass their own startup policies or change the process user.
 
 In git mode, the runner locks the repository, pins the selected branch commits, and checks out
 each commit to run the `document` and `review` stages. It restores the original
