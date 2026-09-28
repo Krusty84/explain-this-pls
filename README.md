@@ -269,20 +269,25 @@ only generated reports. The console uses sequential lines with `[RUN]`, `[OK]`,
 `[WARN]`, `[FAIL]`, and `[SKIP]`; no terminal control sequences or third-party UI
 packages are needed.
 
-| Option | Behavior |
-| --- | --- |
-| `--output auto` | Default: readable text when **stdout** is a TTY, JSON otherwise. Selected once after argument parsing. |
+| Option          | Behavior                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `--output auto` | Default: readable text when **stdout** is a TTY, JSON otherwise. Selected once after argument parsing.                         |
 | `--output text` | One readable final summary on stdout, including duration, branch results, comparison, restoration and existing artifact paths. |
-| `--output json` | Exactly one final JSON document on stdout. |
-| `--verbose` | Additional technical event context on stderr. Never prints prompts, credentials or raw agent output. |
-| `--no-progress` | Suppresses only periodic waiting messages. Stage starts/completions, warnings, errors and the final result remain visible. |
+| `--output json` | Exactly one final JSON document on stdout.                                                                                     |
+| `--verbose`     | Additional technical event context on stderr. Never prints prompts, credentials or raw agent output.                           |
+| `--no-progress` | Suppresses only periodic waiting messages. Stage starts/completions, warnings, errors and the final result remain visible.     |
 
 In every mode, the header, progress, warnings and diagnostic explanations go to
 **stderr**. Explicit `--output text` or `--output json` overrides TTY detection.
 The JSON document retains these four keys:
 
 ```json
-{"run_id": "20260928T124632Z-a7408eb86f", "status": "PREFLIGHT_OK", "manifest": "/reports/20260928T124632Z-a7408eb86f/manifest.json", "exit_code": 0}
+{
+  "run_id": "20260928T124632Z-a7408eb86f",
+  "status": "PREFLIGHT_OK",
+  "manifest": "/reports/20260928T124632Z-a7408eb86f/manifest.json",
+  "exit_code": 0
+}
 ```
 
 Handled errors after argument parsing also produce a result. `manifest` is `null`
@@ -422,7 +427,7 @@ Each run creates a separate directory under `reports_dir`. Successful Git stages
 | `comparison/BRANCH_COMPARISON.md` and `compare.json`   | Baseline comparison in Markdown and JSON.                                                                                     |
 | `comparison/inputs.json`                               | The reports and Git metadata supplied to the comparison stage.                                                                |
 | `manifest.json`                                        | Run status, Git executable/version/compatibility mechanisms, pinned commits, stage results, and checkout restoration details. |
-| `run.log`                                              | UTC structured technical events, full commit IDs and sanitized exception chains; mode 0600. |
+| `run.log`                                              | UTC structured technical events, full commit IDs and sanitized exception chains; mode 0600.                                   |
 | `config.snapshot.json`                                 | The configuration used for this run.                                                                                          |
 
 Folder runs place `ARCHITECTURE.md`, `ARCHITECTURE_REVIEW.md`, `document.json`,
@@ -451,14 +456,3 @@ Exit codes are `0` for a passed check or an accepted complete result, `2` for
 incomplete/unaccepted results without an operational failure, `1` for an operational
 failure, and `130` for a handled interruption. Argument syntax errors keep
 argparse's exit behavior.
-
-Run the offline test suite with:
-
-```sh
-python3 -B -m unittest discover -s tests -v
-```
-
-Tests use real temporary repositories and fake CLIs; progress interval tests use
-injected monotonic clocks or short bounded subprocess waits. Actual root and
-foreign-owner tests require UID 0 and are otherwise explicitly skipped. The CI
-matrix also covers real Git 2.34.1 builds; version shims only test version parsing.

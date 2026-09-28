@@ -29,6 +29,7 @@ import tempfile
 import time
 import uuid
 from typing import Any
+from urllib.parse import urlsplit
 from contracts import FOLDER_SCHEMAS, SCHEMAS, ContractError, accepted, jsonc, parse_backend, strict_json, validate_result
 from reporting import Diagnostic, NullReporter, Reporter, existing_file, output_mode
 
@@ -291,6 +292,16 @@ class Repository:
 
     def text(self, *args: str, **kwargs) -> str:
         return self.git(*args, **kwargs).decode('utf-8').strip()
+
+    def display_name(self) -> str:
+        fallback = self.path.name or str(self.path)
+        try:
+            origin = self.text('config', '--get', 'remote.origin.url', allowed=(0, 1))
+            path = urlsplit(origin).path if '://' in origin else re.sub(r'^[^/]+:', '', origin)
+            return path.rstrip('/').rsplit('/', 1)[-1].removesuffix('.git') or fallback
+        except (AuditError, OSError, UnicodeError, ValueError):
+            # Naming is optional; preflight still diagnoses invalid Git metadata.
+            return fallback
 
     def head(self) -> str:
         return self.text('rev-parse', 'HEAD')
@@ -973,6 +984,7 @@ class Runner:
 
     def stage_context(self, stage, context):
         return {'branch': context.get('branch', 'all branches' if stage == 'compare' else 'folder'),
+                **({'source_name': self.source_path.name or str(self.source_path)} if self.mode == 'folder' else {}),
                 'commit': context.get('source_commit'), 'stage': stage,
                 'backend': self.cfg['_agents'][stage]['backend']}
 
@@ -1375,12 +1387,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, epilog=
         'After argument parsing, stdout contains one result. --help and argument syntax errors '
         'use standard argparse output without a run or manifest. Console messages are in English; '
-        'output_language only controls generated reports.')
+        'output_language only controls generated reports. Labels and statuses are colored automatically '
+        'when their output stream is a terminal, unless NO_COLOR is nonempty or TERM=dumb. '
+        'JSON is never colored. Disable color with NO_COLOR=1.')
     parser.add_argument('--config', required=True, type=Path, help='Path to a JSON or JSONC configuration.')
     parser.add_argument('--check', action='store_true', help='Check configuration, source state, and CLI capabilities; no branch switch or model calls.')
     parser.add_argument('--trust-repository', action='store_true', help='Trust only the configured Git checkout and verified submodules despite an ownership mismatch (Git >= 2.34.1).')
     parser.add_argument('--output', choices=('auto', 'text', 'json'), default='auto',
-                        help='Result format on stdout: auto selects text for a TTY, JSON otherwise (default: auto). Diagnostics use stderr.')
+                        help='Result format on stdout: text is human-readable; auto selects text for a TTY, JSON otherwise (default: auto). Diagnostics use stderr.')
     parser.add_argument('--verbose', action='store_true', help='Add technical event details to stderr; never print prompts, credentials or raw model output.')
     parser.add_argument('--no-progress', action='store_true', help='Disable periodic waiting messages; keep stage boundaries, warnings and errors.')
     args = parser.parse_args()
@@ -1425,11 +1439,17 @@ def main() -> int:
         header()
         mode = config.get('mode', 'git')
         source = config.get(mode + '_mode', config)
-        reporter.emit('configuration_loaded', branches=source.get('branches', []),
-                      agents={stage: agent['backend'] for stage, agent in config['_agents'].items()})
-        reporter.emit('preflight_completed', check='configuration')
+        source_path = Path(source['path' if mode == 'folder' else 'repository'])
+        repository_name = source_path.name or str(source_path)
         phase = 'preflight'
-        runner = Runner(config, run_dir, trust_repository=args.trust_repository, reporter=reporter)
+        try:
+            runner = Runner(config, run_dir, trust_repository=args.trust_repository, reporter=reporter)
+            if runner.repo:
+                repository_name = runner.repo.display_name()
+        finally:
+            reporter.emit('configuration_loaded', repository_name=repository_name, branches=source.get('branches', []),
+                          agents={stage: agent['backend'] for stage, agent in config['_agents'].items()})
+            reporter.emit('preflight_completed', check='configuration')
         reports.mkdir(parents=True, exist_ok=True, mode=0o700)
         run_dir.mkdir(mode=0o700)
         run_created = True

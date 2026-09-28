@@ -49,6 +49,139 @@ class ReporterTests(unittest.TestCase):
         self.assertEqual(safe_text('/source/深い folder\n\x1b[31m\r\u202e'), '/source/深い folder\\n\\x1b[31m\\r\\u202e')
         self.assertEqual([duration(x) for x in (0, 30, 120, 1800, 3661)], ['00:00', '00:30', '02:00', '30:00', '01:01:01'])
 
+    def test_colors_only_known_leading_labels_and_resets_before_text(self):
+        with patch.dict(os.environ, {'TERM': 'xterm'}, clear=True), \
+                patch.object(self.err, 'isatty', return_value=True):
+            reporter = Reporter(stdout=self.out, stderr=self.err)
+        self.addCleanup(reporter.close)
+        lines = [f'[{label}] /source/深い folder [OK]' for label in ('WARN', 'RUN', 'OK', 'FAIL', 'SKIP')]
+        lines += ['text [WARN]', '  [FAIL] indented', '[UNKNOWN] text', '[OK]suffix']
+        reporter.write(self.err, '\n'.join(lines))
+        expected = [f'\x1b[{color}m[{label}]\x1b[0m /source/深い folder [OK]'
+                    for label, color in (('WARN', 33), ('RUN', 36), ('OK', 32), ('FAIL', 31), ('SKIP', 90))]
+        self.assertEqual(self.err.getvalue(), '\n'.join(expected + lines[5:]) + '\n')
+        reporter.write(self.out, '[OK] stdout remains plain')
+        self.assertEqual(self.out.getvalue(), '[OK] stdout remains plain\n')
+
+    def test_color_detection_is_independent_per_stream_and_cached(self):
+        for out_tty, err_tty in ((False, False), (False, True), (True, False), (True, True)):
+            for no_color in (None, '', '1', '0'):
+                for term in (None, 'xterm', 'dumb'):
+                    with self.subTest(stdout=out_tty, stderr=err_tty, no_color=no_color, term=term):
+                        env = {} if term is None else {'TERM': term}
+                        if no_color is not None:
+                            env['NO_COLOR'] = no_color
+                        out, err = io.StringIO(), io.StringIO()
+                        with patch.dict(os.environ, env, clear=True), \
+                                patch.object(out, 'isatty', return_value=out_tty) as stdout_tty, \
+                                patch.object(err, 'isatty', return_value=err_tty) as stderr_tty:
+                            reporter = Reporter(stdout=out, stderr=err)
+                            # Changes after construction must not alter the selected policy.
+                            os.environ['NO_COLOR'] = '1' if not no_color else ''
+                            stdout_tty.return_value = not out_tty
+                            stderr_tty.return_value = not err_tty
+                            reporter.emit('root_warning')
+                            reporter.emit('root_warning')
+                            reporter.finish({'status': 'FAILED', 'exit_code': 1, 'manifest': None}, {},
+                                            check_only=True, config_path=Path('config.jsonc'))
+                            stderr_tty.assert_called_once_with()
+                            stdout_tty.assert_called_once_with()
+                        self.assertEqual('\x1b[' in out.getvalue(), out_tty and not no_color and term != 'dumb')
+                        self.assertEqual('\x1b[' in err.getvalue(), err_tty and not no_color and term != 'dumb')
+                        reporter.close()
+
+    def test_color_detection_failure_falls_back_to_plain_text(self):
+        for error in (OSError('unavailable'), ValueError('closed stream'), AttributeError('no isatty'),
+                      RuntimeError('custom stream failure')):
+            with self.subTest(error=error), patch.dict(os.environ, {}, clear=True), \
+                    patch.object(self.err, 'isatty', side_effect=error):
+                reporter = Reporter(stdout=self.out, stderr=self.err)
+                reporter.emit('root_warning')
+                self.assertNotIn('\x1b', self.err.getvalue())
+                reporter.close()
+
+    def test_stage_status_colors_do_not_color_names_or_logs(self):
+        with patch.dict(os.environ, {'TERM': 'xterm'}, clear=True), \
+                patch.object(self.err, 'isatty', return_value=True):
+            reporter = Reporter(stdout=self.out, stderr=self.err)
+        self.addCleanup(reporter.close)
+        reporter.attach_log(self.base)
+        for status, color, label in (('COMPLETE', 32, 'OK'), ('PARTIAL', 33, 'WARN'),
+                                     ('BLOCKED', 33, 'WARN'), ('FAILED', 31, 'FAIL')):
+            reporter.emit('stage_completed', branch='folder', source_name='COMPLETE 深い [FAIL]',
+                          stage='document', backend='codex', status=status, elapsed_seconds=1)
+            self.assertIn(f'[{label}]\x1b[0m COMPLETE 深い [FAIL] / document / codex — '
+                          f'\x1b[{color}m{status}\x1b[0m | Elapsed: 00:01', self.err.getvalue())
+        records = [json.loads(line) for line in (self.base / 'run.log').read_text().splitlines()]
+        self.assertEqual([r['status'] for r in records], ['COMPLETE', 'PARTIAL', 'BLOCKED', 'FAILED'])
+        self.assertTrue(all(r['branch'] == 'folder' for r in records))
+        self.assertNotIn('\x1b', (self.base / 'run.log').read_text())
+
+    def test_folder_name_in_all_stage_messages_and_git_labels_unchanged(self):
+        r = self.reporter
+        context = {'branch': 'folder', 'source_name': 'source 深い\n\x1b[31m',
+                   'stage': 'document', 'backend': 'codex'}
+        r.emit('stage_started', **context)
+        r.emit('process_waiting', **context, elapsed_seconds=30, last_output_seconds=None)
+        r.emit('stage_completed', **context, status='COMPLETE', elapsed_seconds=31)
+        r.emit('stage_skipped', **context)
+        r.error(AuditError('test failure'), phase='stage', **context)
+        text = self.err.getvalue()
+        self.assertEqual(text.count('source 深い\\n\\x1b[31m / document / codex'), 5)
+        self.assertNotIn('\x1b', text)
+        for branch, stage in (('folder', 'document'), ('all branches', 'compare')):
+            r.emit('stage_started', branch=branch, stage=stage, backend='codex')
+            self.assertIn(f'[RUN] {branch} / {stage} / codex', self.err.getvalue())
+
+    def test_final_summary_colors_only_status_values(self):
+        manifests = [
+            ({'status': 'PREFLIGHT_OK'}, {}, ['\x1b[32mPREFLIGHT PASSED\x1b[0m']),
+            ({'status': 'COMPLETE'}, {'mode': 'folder', 'accepted': True},
+             ['Source result: \x1b[32mCOMPLETE\x1b[0m', 'Comparison: \x1b[90mnot applicable\x1b[0m (folder mode)',
+              'Restoration: \x1b[90mnot applicable\x1b[0m (folder mode)']),
+            ({'status': 'PARTIAL'}, {'branches': [
+                {'branch': 'COMPLETE', 'accepted': True, 'errors': []},
+                {'branch': 'FAILED', 'accepted': False, 'errors': ['error']},
+                {'branch': 'PARTIAL', 'accepted': False, 'errors': []}], 'pins': {'BLOCKED': 'sha'},
+                'comparison': {'completion_status': 'BLOCKED'}, 'restoration': {'restored': True}},
+             ['\x1b[33mPARTIAL\x1b[0m', 'Branch COMPLETE: \x1b[32mCOMPLETE\x1b[0m',
+              'Branch FAILED: \x1b[31mFAILED\x1b[0m', 'Branch PARTIAL: \x1b[33mPARTIAL\x1b[0m',
+              'Branch BLOCKED: \x1b[90mnot started\x1b[0m', 'Comparison: \x1b[33mBLOCKED\x1b[0m',
+              'Restoration: \x1b[32mverified\x1b[0m']),
+            ({'status': 'FAILED'}, {}, ['\x1b[31mFAILED\x1b[0m', 'Comparison: \x1b[90mnot completed\x1b[0m',
+                                       'Restoration: \x1b[90mnot performed\x1b[0m']),
+            ({'status': 'FAILED'}, {'restoration': {'restored': False}}, ['Restoration: \x1b[31mFAILED\x1b[0m'])]
+        for result, manifest, expected in manifests:
+            with self.subTest(result=result, manifest=manifest):
+                out = io.StringIO()
+                with patch.dict(os.environ, {'TERM': 'xterm'}, clear=True), patch.object(out, 'isatty', return_value=True):
+                    r = Reporter(stdout=out, stderr=self.err)
+                self.addCleanup(r.close)
+                r.finish(result | {'manifest': None, 'exit_code': 0}, manifest,
+                         check_only=False, config_path=Path('config.jsonc'))
+                for line in expected:
+                    self.assertIn(line + '\n', out.getvalue())
+
+    def test_colored_verbose_and_log_warning_preserve_escaping_and_file_data(self):
+        with patch.dict(os.environ, {'TERM': 'xterm'}, clear=True), \
+                patch.object(self.out, 'isatty', return_value=True), \
+                patch.object(self.err, 'isatty', return_value=True):
+            reporter = Reporter(mode='json', verbose=True, stdout=self.out, stderr=self.err)
+        self.addCleanup(reporter.close)
+        reporter.attach_log(self.base)
+        reporter.emit('stage_started', branch='深い\x1b[31m\n[FAIL]', stage='document', backend='codex')
+        lines = self.err.getvalue().splitlines()
+        self.assertTrue(lines[0].startswith('\x1b[36m[RUN]\x1b[0m 深い\\x1b[31m\\n[FAIL]'))
+        self.assertTrue(lines[1].startswith('\x1b[36m[RUN]\x1b[0m Detail: '))
+        self.assertEqual(self.err.getvalue().count('\x1b'), 4)
+        self.assertNotIn('\x1b', (self.base / 'run.log').read_text())
+        reporter.disable_log()
+        self.assertIn('\x1b[33m[WARN]\x1b[0m Technical log', self.err.getvalue())
+        result = {'run_id': None, 'status': 'FAILED', 'manifest': None, 'exit_code': 1}
+        reporter.finish(result, {}, check_only=True, config_path=Path('config.jsonc'))
+        self.assertEqual(json.loads(self.out.getvalue()), result)
+        self.assertNotIn('\x1b', self.out.getvalue())
+
     def test_early_buffer_private_log_full_context_and_close(self):
         root_handlers = list(logging.getLogger().handlers)
         r = self.reporter
@@ -298,6 +431,55 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         return subprocess.run(command + args, cwd=self.base, env=self.env, stdout=stdout,
                               stderr=subprocess.PIPE, text=True, timeout=30)
 
+    def test_repository_names_from_origin_and_local_fallback(self):
+        cases = [(None, self.repo_path.name), ('', self.repo_path.name),
+                 ('https://user:private-password@example.test/org/remote-name.git/', 'remote-name'),
+                 ('ssh://git@example.test:2222/org/remote-name.git', 'remote-name'),
+                 ('git@example.test:org/remote-name.git', 'remote-name'),
+                 ('git@example.test:remote-name.git', 'remote-name'),
+                 ('/local/深い remote.git/', '深い remote'), ('../remote-name', 'remote-name'),
+                 ('https://example.test/', self.repo_path.name),
+                 ('ssh://[invalid/path', self.repo_path.name),
+                 ('/local/unsafe\n\x1b[31m.git', 'unsafe\n\x1b[31m')]
+        for origin, expected in cases:
+            with self.subTest(origin=origin):
+                if origin is not None:
+                    self.git('config', 'remote.origin.url', origin)
+                self.assertEqual(self.repo.display_name(), expected)
+
+    def test_headers_and_folder_stage_names_in_checks_and_analysis(self):
+        self.git('config', 'remote.origin.url', 'https://user:private-password@example.test/org/remote-name.git')
+        for mode in ('folder', 'git'):
+            for check in (True, False):
+                with self.subTest(mode=mode, check=check):
+                    result = self.run_cli(self.prepare(mode, check=check) + ['--output', 'text'])
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f'Mode:   human-readable / {mode}\n', result.stderr)
+                    repository = self.folder.name if mode == 'folder' else 'remote-name'
+                    branches = '(folder mode)' if mode == 'folder' else 'master, test01'
+                    self.assertIn(f'Repository: {repository}\nBranches: {branches}\nAgents:', result.stderr)
+                    self.assertNotIn('private-password', result.stdout + result.stderr)
+                    if not check:
+                        if mode == 'folder':
+                            for stage in ('document', 'review'):
+                                self.assertIn(f'[RUN] {self.folder.name} / {stage} / codex', result.stderr)
+                                self.assertIn(f'[OK] {self.folder.name} / {stage} / codex — COMPLETE', result.stderr)
+                        else:
+                            self.assertIn('[RUN] master / document / codex', result.stderr)
+                            self.assertIn('[RUN] all branches / compare / codex', result.stderr)
+
+    def test_missing_origin_falls_back_without_masking_preflight_errors(self):
+        args = self.prepare('git', check=True)
+        result = self.run_cli(args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f'Repository: {self.repo_path.name}\nBranches:', result.stderr)
+        (self.repo_path / '.git' / 'HEAD').write_text('invalid HEAD\n')
+        result = self.run_cli(args)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(f'Repository: {self.repo_path.name}\nBranches:', result.stderr)
+        self.assertIn('Invalid detached HEAD', result.stderr)
+        self.assertIsNotNone(json.loads(result.stdout)['manifest'])
+
     def test_modes_real_tty_and_redirection(self):
         args = self.prepare('folder', check=True)
         for mode in ('auto', 'text', 'json'):
@@ -319,11 +501,62 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     if mode == 'json' or mode == 'auto' and not tty:
                         self.assertEqual(json.loads(output)['status'], 'PREFLIGHT_OK')
+                        self.assertIn('Mode:   json / folder', result.stderr)
                     else:
                         self.assertIn('PREFLIGHT PASSED', output)
                         self.assertIn('No model calls were made.', output)
+                        self.assertIn('Mode:   human-readable / folder', result.stderr)
                     self.assertIn('Source inventory and fingerprint', result.stderr)
                     self.assertNotIn('authentication', result.stderr)
+                    self.assertNotIn('\x1b', result.stderr)
+
+    def test_real_stderr_tty_colors_labels_while_json_and_logs_stay_plain(self):
+        args = self.prepare('folder')
+        self.env['TERM'] = 'xterm'
+        self.env.pop('NO_COLOR', None)
+        master, slave = pty.openpty()
+        try:
+            result = subprocess.run([sys.executable, '-B', str(ROOT / 'explain.py'), *args, '--output', 'json'],
+                cwd=self.base, env=self.env, stdout=subprocess.PIPE, stderr=slave, text=True, timeout=30)
+            self.assertTrue(select.select([master], [], [], 2)[0])
+            console = os.read(master, 65536).decode()
+        finally:
+            os.close(master)
+            os.close(slave)
+        self.assertEqual(result.returncode, 0, console)
+        summary = json.loads(result.stdout)
+        self.assertEqual(summary['status'], 'COMPLETE')
+        self.assertNotIn('\x1b', result.stdout)
+        self.assertIn('\x1b[36m[RUN]\x1b[0m source folder / document / codex', console)
+        self.assertIn('— \x1b[32mCOMPLETE\x1b[0m | Elapsed:', console)
+        self.assertIn('\x1b[32m[OK]\x1b[0m Configuration', console)
+        run_dir = Path(summary['manifest']).parent
+        logs = [run_dir / 'run.log', *run_dir.glob('*.logs/stdout.log'), *run_dir.glob('*.logs/stderr.log')]
+        self.assertEqual(len(logs), 5)
+        for path in logs:
+            self.assertNotIn(b'\x1b', path.read_bytes(), str(path))
+
+    def test_real_stdout_tty_colors_text_summary_but_never_json(self):
+        args = self.prepare('folder', check=True)
+        self.env['TERM'] = 'xterm'
+        self.env.pop('NO_COLOR', None)
+        for mode in ('text', 'json'):
+            with self.subTest(mode=mode):
+                master, slave = pty.openpty()
+                try:
+                    result = self.run_cli(args + ['--output', mode], stdout=slave)
+                    self.assertTrue(select.select([master], [], [], 2)[0])
+                    output = os.read(master, 65536).decode()
+                finally:
+                    os.close(master)
+                    os.close(slave)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn('\x1b', result.stderr)
+                if mode == 'text':
+                    self.assertIn('\x1b[32mPREFLIGHT PASSED\x1b[0m', output)
+                else:
+                    self.assertEqual(json.loads(output)['status'], 'PREFLIGHT_OK')
+                    self.assertNotIn('\x1b', output)
 
     def test_early_errors_nullable_missing_git_and_unavailable_results(self):
         cases = []
@@ -334,6 +567,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         result = self.run_cli(args)
         self.assertEqual(result.returncode, 1)
         self.assertIn('git was not found', result.stderr)
+        self.assertIn(f'Repository: {self.repo_path.name}\nBranches:', result.stderr)
         self.assertIsNone(json.loads(result.stdout)['manifest'])
         self.assertNotIn('Details:', result.stderr)
         args = self.prepare('folder', check=True)
@@ -366,6 +600,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         result = self.run_cli(args + ['--output', 'text', '--verbose'])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(safe_text(target), result.stderr)
+        self.assertIn('Repository: ' + safe_text(target.name) + '\nBranches:', result.stderr)
         self.assertNotIn('\x1b', result.stdout + result.stderr)
         result = self.run_cli(args)
         data = json.loads(result.stdout)
@@ -444,6 +679,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     self.assertEqual('      Elapsed:' in result.stderr, not quiet)
                     if not quiet:
                         self.assertIn('Last CLI output:' if kind == 'active' else 'No CLI output received yet', result.stderr)
+                        self.assertIn('[RUN] source folder / document / codex\n      Elapsed:', result.stderr)
                     self.assertNotIn('private CLI activity', result.stderr)
                     self.assertNotIn('Timeout:', result.stderr)
                     log = Path(output['manifest']).parent / 'run.log'
@@ -452,7 +688,8 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     self.assertNotIn('timeout_seconds', log.read_text())
                     if kind == 'closed-pipes':
                         self.assertIn('CLI_FAILED', result.stderr)
-                        self.assertNotIn('[OK] folder / document', result.stderr)
+                        self.assertNotIn('[OK] source folder / document', result.stderr)
+                        self.assertIn('[FAIL] source folder / document / codex failed', result.stderr)
 
     def test_large_stage_input_reaches_cli_without_truncation(self):
         args = self.prepare('folder')
@@ -482,7 +719,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         result = self.run_cli(args + ['--output', 'text'])
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertTrue(result.stdout.startswith('PARTIAL\n'))
-        self.assertIn('[WARN] folder / document / codex — PARTIAL', result.stderr)
+        self.assertIn('[WARN] source folder / document / codex — PARTIAL', result.stderr)
         del self.env['AUDIT_TEST_PARTIAL']
         self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'document', 'kind': 'invalid', 'value': 'PRIVATE_MODEL_VALUE'})
         result = self.run_cli(args + ['--verbose'])
@@ -492,11 +729,12 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.assertNotIn('PRIVATE_MODEL_VALUE', result.stderr + (run / 'run.log').read_text())
         self.assertIn('PRIVATE_MODEL_VALUE', (run / 'document.logs/stdout.log').read_text())
         self.assertIn('INVALID_RESPONSE', result.stderr)
-        self.assertNotIn('[OK] folder / document', result.stderr)
+        self.assertNotIn('[OK] source folder / document', result.stderr)
         errors = [json.loads(line) for line in (run / 'run.log').read_text().splitlines()
                   if json.loads(line)['event'] == 'error']
         self.assertEqual((errors[0]['branch'], errors[0]['stage'], errors[0]['backend']),
                          ('folder', 'document', 'codex'))
+        self.assertEqual(errors[0]['source_name'], 'source folder')
 
     def test_interrupt_stops_process_before_verified_restoration(self):
         args = self.prepare('git')

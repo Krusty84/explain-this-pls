@@ -20,6 +20,13 @@ import unicodedata
 from typing import Any
 from contracts import ContractError
 
+LABEL_COLORS = {'[WARN]': '\x1b[33m', '[RUN]': '\x1b[36m', '[OK]': '\x1b[32m',
+                '[FAIL]': '\x1b[31m', '[SKIP]': '\x1b[90m'}
+STATUS_COLORS = {'COMPLETE': '\x1b[32m', 'PREFLIGHT PASSED': '\x1b[32m', 'verified': '\x1b[32m',
+                 'FAILED': '\x1b[31m', 'PARTIAL': '\x1b[33m', 'BLOCKED': '\x1b[33m',
+                 'not started': '\x1b[90m', 'not completed': '\x1b[90m', 'not performed': '\x1b[90m',
+                 'not applicable': '\x1b[90m'}
+
 
 @dataclass(frozen=True)
 class Diagnostic:
@@ -135,6 +142,12 @@ class Reporter(NullReporter):
         self.mode, self.verbose, self.progress = mode, verbose, progress
         self.stdout = sys.stdout if stdout is None else stdout
         self.stderr = sys.stderr if stderr is None else stderr
+        self.colors = {}
+        for stream in (self.stdout, self.stderr):
+            try:
+                self.colors[id(stream)] = bool(stream.isatty()) and not os.environ.get('NO_COLOR') and os.environ.get('TERM') != 'dumb'
+            except Exception:
+                self.colors[id(stream)] = False
         self.clock, self.progress_interval = clock, progress_interval
         self.started = clock()
         self.run_id = None
@@ -167,9 +180,19 @@ class Reporter(NullReporter):
     def display(self, value):
         return safe_text(self.redact(str(value)))
 
+    def status(self, value, stream):
+        text = self.display(value)
+        if self.colors.get(id(stream)) and value in STATUS_COLORS:
+            return STATUS_COLORS[value] + text + '\x1b[0m'
+        return text
+
     def write(self, stream, text):
         if id(stream) in self.failed_streams:
             return
+        if stream is self.stderr and self.colors.get(id(stream)):
+            text = re.sub(r'^\[(?:WARN|RUN|OK|FAIL|SKIP)\](?= |$)',
+                          lambda match: LABEL_COLORS[match[0]] + match[0] + '\x1b[0m',
+                          text, flags=re.MULTILINE)
         try:
             stream.write(text + '\n')
             stream.flush()
@@ -250,16 +273,19 @@ class Reporter(NullReporter):
     def render(self, item):
         c, name = item.context, item.event
         s = self.display
-        stage = ' / '.join(s(c[key]) for key in ('branch', 'stage', 'backend') if c.get(key))
+        stage = ' / '.join(s(value) for value in (c.get('source_name') or c.get('branch'),
+                                                c.get('stage'), c.get('backend')) if value)
         checks = {'configuration': 'Configuration', 'git': 'Git version and selected branches',
                   'submodules': 'Submodules and required local objects', 'integrity': 'Source integrity',
                   'inventory': 'Source inventory and fingerprint'}
         if name == 'run_started':
             return ['explain-this-pls — ' + ('preflight check' if c['check_only'] else 'source analysis'),
                     'Source: ' + s(c.get('source') or '(not loaded)'), 'Run:    ' + s(item.run_id or '(not assigned)'),
-                    'Mode:   ' + s(c['output']) + ' / ' + s(c.get('mode') or 'not loaded'), '']
+                    'Mode:   ' + ('human-readable' if c['output'] == 'text' else s(c['output'])) +
+                    ' / ' + s(c.get('mode') or 'not loaded'), '']
         if name == 'configuration_loaded':
-            return ['Branches: ' + (', '.join(map(s, c['branches'])) or '(folder mode)'),
+            return ['Repository: ' + s(c['repository_name']),
+                    'Branches: ' + (', '.join(map(s, c['branches'])) or '(folder mode)'),
                     'Agents: ' + ', '.join(s(k) + '=' + s(v) for k, v in c['agents'].items())]
         if name == 'root_warning':
             return ['[WARN] Running as root; child CLIs inherit root privileges.']
@@ -288,7 +314,8 @@ class Reporter(NullReporter):
                     ' | ' + last]
         if name == 'stage_completed':
             status = c['status']
-            return [('[OK] ' if status == 'COMPLETE' else '[WARN] ') + stage + ' — ' + s(status) +
+            label = '[OK] ' if status == 'COMPLETE' else '[FAIL] ' if status == 'FAILED' else '[WARN] '
+            return [label + stage + ' — ' + self.status(status, self.stderr) +
                     ' | Elapsed: ' + duration(c['elapsed_seconds'])]
         if name == 'stage_skipped':
             return ['[SKIP] ' + stage + ': No usable architecture document.']
@@ -326,7 +353,8 @@ class Reporter(NullReporter):
             self.write(self.stdout, json.dumps(result, ensure_ascii=True))
             return
         s = self.display
-        lines = ['PREFLIGHT PASSED' if result['status'] == 'PREFLIGHT_OK' else result['status'],
+        status = lambda value: self.status(value, self.stdout)
+        lines = [status('PREFLIGHT PASSED' if result['status'] == 'PREFLIGHT_OK' else result['status']),
                  'Elapsed: ' + duration(elapsed)]
         if result['status'] == 'PREFLIGHT_OK':
             command = ['python3', 'explain.py', '--config', str(config_path)]
@@ -337,18 +365,19 @@ class Reporter(NullReporter):
         elif not check_only:
             for branch in manifest.get('branches', []):
                 lines += ['Branch ' + s(branch['branch']) + ': ' +
-                          ('COMPLETE' if branch.get('accepted') else 'FAILED' if branch['errors'] else 'PARTIAL')]
+                          status('COMPLETE' if branch.get('accepted') else 'FAILED' if branch['errors'] else 'PARTIAL')]
             analyzed = {branch['branch'] for branch in manifest.get('branches', [])}
             for branch in manifest.get('pins', {}):
                 if branch not in analyzed:
-                    lines += ['Branch ' + s(branch) + ': not started']
+                    lines += ['Branch ' + s(branch) + ': ' + status('not started')]
             if manifest.get('mode') == 'folder':
-                lines += ['Source result: ' + ('COMPLETE' if manifest.get('accepted') else result['status']),
-                          'Comparison: not applicable (folder mode)', 'Restoration: not applicable (folder mode)']
+                lines += ['Source result: ' + status('COMPLETE' if manifest.get('accepted') else result['status']),
+                          'Comparison: ' + status('not applicable') + ' (folder mode)',
+                          'Restoration: ' + status('not applicable') + ' (folder mode)']
             else:
-                lines += ['Comparison: ' + s(manifest.get('comparison', {}).get('completion_status', 'not completed'))]
+                lines += ['Comparison: ' + status(manifest.get('comparison', {}).get('completion_status', 'not completed'))]
                 restoration = manifest.get('restoration')
-                lines += ['Restoration: ' + ('verified' if restoration and restoration['restored'] else
+                lines += ['Restoration: ' + status('verified' if restoration and restoration['restored'] else
                           'FAILED' if restoration else 'not performed')]
         paths = [('Manifest', Path(result['manifest']))] if result['manifest'] else []
         if self.log_path:
