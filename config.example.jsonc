@@ -61,12 +61,6 @@
 
   // Business flows or areas to prioritize, e.g. ["Order creation", "Inventory updates"].
   "priority_scenarios": [],
-  // Positive integer; maximum seconds per model call (CLI checks have a 30s limit).
-  "timeout_seconds": 1800,
-  // Positive integer; UTF-8 bytes of prompt + context + schema, not source-tree size.
-  "max_input_bytes": 800000,
-  // Positive integer; combined stdout/stderr bytes per CLI call.
-  "max_output_bytes": 16000000,
   // Git only: continue with other branches after an operational failure.
   // Source integrity failures always stop; folder mode stops on any stage failure.
   "continue_on_error": true,

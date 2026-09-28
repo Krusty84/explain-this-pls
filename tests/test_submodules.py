@@ -523,7 +523,7 @@ class RecursiveRootTests(RecursiveFixture, unittest.TestCase):
         for check in (True, False):
             result, manifest = self.execute(check=check)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('WARNING: Running as root', result.stderr)
+            self.assertIn('[WARN] Running as root', result.stderr)
 
     def test_foreign_owned_recursive_checkout_requires_scoped_trust(self):
         try:

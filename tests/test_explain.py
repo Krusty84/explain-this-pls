@@ -14,6 +14,7 @@ import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from explain import AuditError, Repository, Runner, UnsafeRepository, cli_env, load_config, process, repository_lock, slug
+from reporting import Reporter
 from contracts import ContractError, parse_backend, review_verdict, strict_json, validate_result
 
 BASE = {'completion_status': 'COMPLETE',
@@ -130,7 +131,6 @@ class RepoFixture(unittest.TestCase):
             'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master',
             'output_language':'Russian','project_description':'ERP-система 1995 года.',
             'priority_scenarios':[],'continue_on_error':True,
-            'timeout_seconds':30,'max_input_bytes':800000,'max_output_bytes':1000000,
             '_agents':{s:dict(agent) for s in ('document','review','compare')},
             '_prompt_paths':{s:str(Path(__file__).resolve().parents[1]/'prompts'/f'{s}.md') for s in ('document','review','compare')}}
     def test_grouped_git_configuration_runs_and_restores(self):
@@ -204,7 +204,7 @@ class RepoFixture(unittest.TestCase):
         fake=FakeRunner(config,dest);fake.fail_branch='test01'
         result,code=fake.run()
         self.assertEqual(code,1)
-        self.assertEqual(result['status'],'PARTIAL')
+        self.assertEqual(result['status'],'FAILED')
         self.assertIn('test01',result['comparison']['unresolved_branches'])
         self.assertTrue(result['branches'][2]['accepted'])
         self.assertEqual(self.repo.symbolic(),'master')
@@ -227,10 +227,10 @@ class RepoFixture(unittest.TestCase):
                 config=self.config();config['project_description']=''
                 dest=self.base/'reports'/str(check_only);dest.mkdir()
                 with patch('sys.stderr',new_callable=io.StringIO) as output:
-                    result,code=FakeRunner(config,dest).run(check_only=check_only)
+                    result,code=FakeRunner(config,dest,reporter=Reporter()).run(check_only=check_only)
                 self.assertEqual(code,0)
-                self.assertEqual(output.getvalue().count('Описание проекта не указано.'),1)
-                self.assertIn('Рекомендуем заполнить project_description',output.getvalue())
+                self.assertEqual(output.getvalue().count('Project description is missing.'),1)
+                self.assertIn('Set project_description',output.getvalue())
     def test_compare_modifications_are_detected_and_preserved(self):
         config=self.config();dest=self.base/'reports'/'run';dest.mkdir()
         fake=FakeRunner(config,dest)
@@ -248,8 +248,8 @@ class RepoFixture(unittest.TestCase):
 
 class FakeRunner(Runner):
     fail_branch=None
-    def __init__(self,*args):
-        super().__init__(*args);self.calls=[]
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs);self.calls=[]
     def check_cli(self):return {'TEST_ONLY':'mocked agents'}
     def invoke(self,stage,context,destination):
         self.calls.append((stage,copy.deepcopy(context)))
@@ -278,19 +278,27 @@ class ProcessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             state=Path(raw)
             r=process([sys.executable,'-c','import sys; print(sys.stdin.read());print("err",file=sys.stderr)'],
-                      state,cli_env(state),b'hello',5)
+                      state,cli_env(state),b'hello')
             self.assertEqual(r['returncode'],0)
             self.assertIn(b'hello',r['stdout']);self.assertIn(b'err',r['stderr'])
-    def test_timeout(self):
+            self.assertNotIn('error',r)
+    def test_nonzero_exit_is_preserved(self):
         with tempfile.TemporaryDirectory() as raw:
             state=Path(raw)
-            r=process([sys.executable,'-c','import time;time.sleep(10)'],state,cli_env(state),timeout=1)
-            self.assertIsNotNone(r['error']);self.assertNotEqual(r['returncode'],0)
-    def test_output_limit(self):
+            r=process([sys.executable,'-c','raise SystemExit(17)'],state,cli_env(state))
+            self.assertEqual(r['returncode'],17)
+    def test_large_input_and_output_are_not_truncated(self):
         with tempfile.TemporaryDirectory() as raw:
             state=Path(raw)
-            r=process([sys.executable,'-c','print("x"*100000)'],state,cli_env(state),max_output=1000)
-            self.assertIn('exceeds',r['error'])
+            payload='Контекст\n'.encode('utf-8')*100000
+            script='import sys; sys.stderr.buffer.write(b"x"*16000000); sys.stdout.buffer.write(sys.stdin.buffer.read())'
+            r=process([sys.executable,'-c',script],state,cli_env(state),payload,log_dir=state)
+            self.assertEqual(r['returncode'],0)
+            self.assertGreater(len(payload),800000)
+            self.assertEqual(r['stdout'],payload)
+            self.assertEqual(r['stderr'],b'x'*16000000)
+            self.assertEqual((state/'stdout.log').read_bytes(),r['stdout'])
+            self.assertEqual((state/'stderr.log').read_bytes(),r['stderr'])
 
 class ConfigTests(unittest.TestCase):
     def setUp(self):
@@ -322,6 +330,15 @@ class ConfigTests(unittest.TestCase):
                 self.value['project_description']=raw
                 with self.assertRaisesRegex(AuditError,'project_description must be a string'):
                     self.load()
+    def test_removed_limits_are_not_defaulted_and_are_rejected(self):
+        cfg=self.load()
+        for key in ('timeout_seconds','max_input_bytes','max_output_bytes'):
+            with self.subTest(key=key):
+                self.assertNotIn(key,cfg)
+                self.value[key]=1
+                with self.assertRaisesRegex(AuditError,'Unknown configuration keys:.*'+key):
+                    self.load()
+                del self.value[key]
     def test_removed_fields_have_migration_errors(self):
         for name in ('api_key_env','provider_key_env'):
             for location in ('agent','stage_agents'):
@@ -467,7 +484,7 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                     self.assertNotIn('schema_version',manifest)
                     snapshot=json.loads((run_dir/'config.snapshot.json').read_text())
                     self.assertEqual(snapshot['project_description'],cfg.get('project_description',''))
-                    self.assertEqual(result.stderr.count('Описание проекта не указано.'),int(check_only))
+                    self.assertEqual(result.stderr.count('Project description is missing.'),int(check_only))
                     calls=[json.loads(line) for line in calls_path.read_text().splitlines()]
                     invocations=[call for call in calls if 'context' in call]
                     self.assertEqual(len(calls),2 if check_only else 9)

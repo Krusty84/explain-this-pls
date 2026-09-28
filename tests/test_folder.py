@@ -244,13 +244,13 @@ class FolderPipelineTests(FolderFixture):
     def run_pipeline(self, doc_status='COMPLETE', fail_stage=None, mutate_review=False):
         runner = Runner(self.config(), self.base / 'run')
         stages = []
-        def response(command, cwd, env, payload, *limits):
+        def response(command, cwd, env, payload, **options):
             context = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n')[1]
                                  .split('\n\n# Required final JSON Schema')[0])
             stage = 'review' if 'architecture_document' in context else 'document'
             stages.append(stage)
             if stage == fail_stage:
-                return {'returncode': 1, 'error': None, 'duration_seconds': 0,
+                return {'returncode': 1, 'duration_seconds': 0,
                         'stdout': b'', 'stderr': b'failed'}
             data = review('unused', 'unused') if stage == 'review' else {
                 'task': 'architecture_documentation', 'completion_status': doc_status,
@@ -261,7 +261,7 @@ class FolderPipelineTests(FolderFixture):
                         source_fingerprint=context['source_fingerprint'])
             if stage == 'review' and mutate_review:
                 (self.source / 'app.py').unlink()
-            return {'returncode': 0, 'error': None, 'duration_seconds': 0,
+            return {'returncode': 0, 'duration_seconds': 0,
                     'stdout': json.dumps(data).encode(), 'stderr': b''}
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=response):
             manifest, code = runner.run()
@@ -346,7 +346,7 @@ class FolderCLIIntegrationTests(FolderFixture):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     output = json.loads(result.stdout)
                     self.assertEqual(output['status'], 'PREFLIGHT_OK' if check else 'COMPLETE')
-                    self.assertEqual(result.stderr.count('Описание проекта не указано.'), int(check))
+                    self.assertEqual(result.stderr.count('Project description is missing.'), int(check))
                     run = Path(output['manifest']).parent
                     manifest = json.loads((run / 'manifest.json').read_text())
                     self.assertNotIn('schema_version', manifest)

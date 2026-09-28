@@ -30,6 +30,7 @@ import time
 import uuid
 from typing import Any
 from contracts import FOLDER_SCHEMAS, SCHEMAS, ContractError, accepted, jsonc, parse_backend, strict_json, validate_result
+from reporting import Diagnostic, NullReporter, Reporter, existing_file, output_mode
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ('document', 'review', 'compare')
@@ -39,7 +40,34 @@ BACKENDS = {'codex': 'codex', 'claude-code': 'claude', 'opencode': 'opencode'}
 MIN_GIT_VERSION = (2, 34, 1)
 
 class AuditError(RuntimeError):
-    pass
+    def __init__(self, message: str = '', *, code=None, snapshot=None, node_path=None,
+                 required_commit=None, hint=None):
+        super().__init__(message)
+        self.message = message
+        self.code = code or ('UNSAFE_REPOSITORY' if isinstance(self, UnsafeRepository) else 'AUDIT_ERROR')
+        self.snapshot, self.node_path = snapshot, node_path
+        self.required_commit, self.hint = required_commit, hint
+
+    def diagnostic(self):
+        return Diagnostic(self.code, self.message, self.snapshot, self.node_path,
+                          self.required_commit, self.hint)
+
+    def with_context(self, **context):
+        fields = vars(self.diagnostic()).copy()
+        for key, value in context.items():
+            if fields.get(key) is None:
+                fields[key] = value
+        return type(self)(**fields)
+
+    def __str__(self):
+        details = []
+        if self.snapshot is not None:
+            details.append(f'Snapshot {self.snapshot!r}')
+        if self.node_path is not None:
+            details.append(f'path {self.node_path!r}')
+        if self.required_commit is not None:
+            details.append(f'required SHA {self.required_commit}')
+        return (', '.join(details) + ': ' if details else '') + self.message
 
 class UnsafeRepository(AuditError):
     pass
@@ -78,20 +106,36 @@ def slug(branch: str) -> str:
     text = re.sub(r'[^A-Za-z0-9._-]+', '_', branch).strip('._-')[:55] or 'branch'
     return f'{text}--{digest(branch.encode())[:12]}'
 
-def log(text: str) -> None:
-    print(f'[{now()}] {text}', file=sys.stderr, flush=True)
-
 def cli_env(cwd: Path) -> dict[str, str]:
     env = os.environ.copy()
     env.update(PWD=str(cwd.resolve()), NO_COLOR='1', GIT_TERMINAL_PROMPT='0')
     return env
 
 def process(command: list[str], cwd: Path, env: dict[str, str], input_data: bytes = b'',
-            timeout: int = 60, max_output: int = 16_000_000) -> dict:
+            *, reporter=None, context: dict | None = None, log_dir: Path | None = None,
+            clock=time.monotonic, progress_interval: float = 30.0) -> dict:
     """Nonblocking pipe I/O; do not pass artifact FDs into the CLI child."""
-    start = time.monotonic()
+    reporter = reporter or NullReporter()
+    context = context or {}
+    # ExitStack also closes the files if opening the second file or Popen fails.
+    with contextlib.ExitStack() as logs:
+        streams = {}
+        if log_dir is not None:
+            for name in ('stdout', 'stderr'):
+                fd = os.open(log_dir / (name + '.log'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                stream = logs.enter_context(os.fdopen(fd, 'wb', buffering=0))
+                os.fchmod(stream.fileno(), 0o600)
+                streams[name] = stream
+        return _process(command, cwd, env, input_data, reporter,
+                        context, clock, progress_interval, streams)
+
+
+def _process(command, cwd, env, input_data, reporter, context,
+             clock, progress_interval, logs):
+    start = clock()
+    last_output = None
+    next_progress = start + progress_interval
     out, err = bytearray(), bytearray()
-    problem = None
     p = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          start_new_session=True, close_fds=True)
@@ -106,10 +150,13 @@ def process(command: list[str], cwd: Path, env: dict[str, str], input_data: byte
             selector.register(p.stdin, selectors.EVENT_WRITE, 'stdin')
         else:
             p.stdin.close()
-        while selector.get_map():
-            if time.monotonic() - start > timeout:
-                problem = f'Timeout after {timeout} seconds'
-                break
+        while selector.get_map() or p.poll() is None:
+            current = clock()
+            if reporter.progress and current >= next_progress:
+                reporter.emit('process_waiting', **context, elapsed_seconds=current - start,
+                              last_output_seconds=None if last_output is None else current - last_output)
+                next_progress = current + progress_interval
+            # select() also bounds the wait after both output pipes have closed.
             for key, _ in selector.select(0.2):
                 stream, name = key.fileobj, key.data
                 if name == 'stdin':
@@ -131,23 +178,23 @@ def process(command: list[str], cwd: Path, env: dict[str, str], input_data: byte
                         selector.unregister(stream)
                         stream.close()
                     else:
+                        last_output = clock()
                         target = out if name == 'stdout' else err
                         target.extend(block)
-                        if len(out) + len(err) > max_output:
-                            problem = f'Combined CLI output exceeds {max_output} bytes'
-                            break
-            if problem:
-                break
-        # A child may close its pipes while still running. Bound that wait as well.
-        if not problem:
-            try:
-                p.wait(timeout=max(0.1, timeout - (time.monotonic() - start)))
-            except subprocess.TimeoutExpired:
-                problem = f'Timeout after {timeout} seconds'
+                        if name in logs:
+                            remaining = memoryview(block)
+                            while remaining:
+                                remaining = remaining[logs[name].write(remaining):]
+                            logs[name].flush()
+    except KeyboardInterrupt:
+        reporter.stop_requested()
+        raise
     finally:
         selector.close()
         # Kill ordinary descendants remaining in this invocation's process group,
         # including on errors/interrupts; detached hostile daemons are not supported.
+        if p.poll() is None:
+            reporter.emit('process_stopping', **context)
         with contextlib.suppress(ProcessLookupError):
             os.killpg(p.pid, signal.SIGKILL)
         p.wait()
@@ -155,7 +202,7 @@ def process(command: list[str], cwd: Path, env: dict[str, str], input_data: byte
             with contextlib.suppress(Exception):
                 stream.close()
     return {'stdout': bytes(out), 'stderr': bytes(err), 'returncode': p.returncode,
-            'error': problem, 'duration_seconds': round(time.monotonic() - start, 3)}
+            'duration_seconds': round(clock() - start, 3)}
 
 class GitRuntime:
     """One PATH resolution and version check for the entire repository hierarchy."""
@@ -170,11 +217,10 @@ class GitRuntime:
                         GIT_NO_LAZY_FETCH='1', GIT_ALLOW_PROTOCOL='', GIT_NO_REPLACE_OBJECTS='1')
         # Do not discover a repository or use an inherited TMPDIR in source files.
         with tempfile.TemporaryDirectory(prefix='archaudit-git-version-', dir='/tmp') as neutral:
-            result = process([self.executable, '--version'], Path(neutral), self.env,
-                             timeout=30, max_output=4096)
+            result = process([self.executable, '--version'], Path(neutral), self.env)
         self.version_string = result['stdout'].decode('utf-8', errors='replace').strip()
         match = re.fullmatch(r'git version (\d+)\.(\d+)\.(\d+)(?:[-+. ][^\r\n]*)?', self.version_string)
-        if result['returncode'] or result['error'] or not match:
+        if result['returncode'] or not match:
             raise AuditError(f'Cannot determine Git version at {self.executable}: '
                              f'{self.version_string!r}; Git >= 2.34.1 is required.')
         self.version = tuple(map(int, match.groups()))
@@ -206,7 +252,9 @@ class GitRuntime:
 
 
 class Repository:
-    def __init__(self, path: Path, trust_repository: bool = False, runtime: GitRuntime | None = None):
+    def __init__(self, path: Path, trust_repository: bool = False, runtime: GitRuntime | None = None,
+                 reporter=None):
+        self.reporter = reporter or NullReporter()
         self.runtime = runtime or GitRuntime()
         self.path = path.resolve()
         self.trust_repository = trust_repository
@@ -229,11 +277,8 @@ class Repository:
         if not hasattr(self, 'git_dir'):
             self.setup_paths(self)
         self.check_ownership()
-        try:
-            r = subprocess.run(self.prefix + list(args), env=self.env,
-                input=input_data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-        except subprocess.TimeoutExpired as exc:
-            raise AuditError(f'git {args[0]} timed out after 120 seconds') from exc
+        r = subprocess.run(self.prefix + list(args), env=self.env,
+            input=input_data, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if r.returncode not in allowed:
             error = r.stderr.decode(errors='replace').strip()
             if any(line.startswith(('fatal: detected dubious ownership in repository', 'fatal: unsafe repository'))
@@ -313,7 +358,7 @@ class Repository:
                 try:
                     node.clean(local=True)
                 except AuditError as exc:
-                    raise UnsafeRepository(f'{path}: {exc}') from exc
+                    raise UnsafeRepository(**vars(exc.with_context(node_path=path).diagnostic())) from exc
             return
         # Each child is checked directly. During a planned switch its HEAD can
         # temporarily differ from its parent's gitlink. Still check staged gitlinks.
@@ -378,8 +423,9 @@ class Repository:
             if target != expected:
                 raise UnsafeRepository(f'Unexpected external Git directory for {self.path}')
         else:
-            raise AuditError('Submodule is not initialized locally.' if parent else
-                             'A normal standalone checkout is required; no bare/linked worktree.')
+            if parent:
+                raise AuditError('The submodule is not initialized locally.', code='SUBMODULE_NOT_INITIALIZED')
+            raise AuditError('A normal standalone checkout is required; no bare/linked worktree.')
         boundary = root.path
         self.directory_chain(expected, boundary)
         self.git_dir = expected
@@ -498,6 +544,7 @@ class Repository:
         return self._trees[commit]
 
     def preflight(self, branches: list[str]) -> dict[str, str]:
+        self.reporter.emit('preflight_started', check='submodules')
         self.nodes, self.original, self.plans, self.expected, self.journal = {}, {}, {}, {}, []
         self.descriptions = {}
         used = set()
@@ -544,25 +591,36 @@ class Repository:
                         try:
                             self.directory_chain(child_path, self.path)
                         except OSError as exc:
-                            raise AuditError(f'Submodule {full!r}, required SHA {detail["commit"]}: not initialized locally.') from exc
-                    child_node = Repository(child_path, self.trust_repository, self.runtime) if discover else self.nodes[full]
+                            raise AuditError('The submodule is not initialized locally.',
+                                code='SUBMODULE_NOT_INITIALIZED', node_path=full, required_commit=detail['commit']) from exc
+                    child_node = Repository(child_path, self.trust_repository, self.runtime,
+                                            self.reporter) if discover else self.nodes[full]
                     visit(child_node, full, node, detail['name'], detail['commit'], label, plan, discover)
+                self.reporter.emit('snapshot_node_checked', snapshot=label, node_path=path, required_commit=required)
             except (AuditError, OSError) as exc:
-                kind = UnsafeRepository if isinstance(exc, UnsafeRepository) else AuditError
-                raise kind(f'Snapshot {label!r}, path {path!r}, required SHA {required or "HEAD"}: {exc}') from exc
+                error = exc if isinstance(exc, AuditError) else AuditError(str(exc), code='IO_ERROR')
+                raise error.with_context(snapshot=label, node_path=path, required_commit=required or 'HEAD') from exc
 
         initial = {}
+        self.reporter.emit('snapshot_started', snapshot='original')
         visit(self, '.', None, None, None, 'original', initial, True)
         self.plans[initial['.']] = initial
+        self.reporter.emit('snapshot_completed', snapshot='original', commit=initial['.'])
         result = {}
         for name in branches:
             self.git('check-ref-format', 'refs/heads/' + name)
             commit = self.text('rev-parse', '--verify', 'refs/heads/' + name + '^{commit}')
             plan = {}
+            self.reporter.emit('snapshot_started', snapshot=name, commit=commit)
             visit(self, '.', None, None, commit, name, plan)
             self.plans[commit] = plan
             result[name] = commit
+            self.reporter.emit('snapshot_completed', snapshot=name, commit=commit)
+        self.reporter.emit('preflight_completed', check='git', **self.runtime.manifest(), branches=result)
+        self.reporter.emit('preflight_completed', check='submodules')
+        self.reporter.emit('preflight_started', check='integrity')
         self.assert_expected()
+        self.reporter.emit('preflight_completed', check='integrity')
         return result
 
     def assert_expected(self) -> None:
@@ -579,7 +637,8 @@ class Repository:
                 node.policy()
                 node.clean(local=True)
             except (AuditError, OSError) as exc:
-                error = UnsafeRepository(f'{path}: {exc}')
+                detail = exc if isinstance(exc, AuditError) else AuditError(str(exc), code='IO_ERROR')
+                error = UnsafeRepository(**vars(detail.with_context(node_path=path).diagnostic()))
                 error.node = path
                 raise error from exc
 
@@ -774,8 +833,7 @@ def load_config(path: Path) -> dict:
     if type(value) is not dict:
         raise AuditError('Configuration must be a JSON object.')
     allowed = {'repository', 'reports_dir', 'branches', 'baseline_branch', 'agent', 'stage_agents',
-        'output_language', 'priority_scenarios', 'timeout_seconds', 'max_input_bytes',
-        'max_output_bytes', 'continue_on_error', 'project_description', 'prompts',
+        'output_language', 'priority_scenarios', 'continue_on_error', 'project_description', 'prompts',
         'mode', 'git_mode', 'folder_mode'}
     if 'additional_runtime_read_paths' in value:
         raise AuditError('Remove additional_runtime_read_paths from configuration: the runner now uses native CLI permissions.')
@@ -821,9 +879,8 @@ def load_config(path: Path) -> dict:
             raise AuditError('At least two nonempty local branch names are required.')
         if len(set(branches)) != len(branches) or source['baseline_branch'] not in branches:
             raise AuditError('Branches must be unique and include baseline_branch.')
-    defaults = {'output_language': 'Russian', 'project_description': '', 'priority_scenarios': [], 'timeout_seconds': 1800,
-        'max_input_bytes': 800_000, 'max_output_bytes': 16_000_000, 'continue_on_error': True,
-        'stage_agents': {}, 'prompts': {}}
+    defaults = {'output_language': 'Russian', 'project_description': '', 'priority_scenarios': [],
+        'continue_on_error': True, 'stage_agents': {}, 'prompts': {}}
     for key, default in defaults.items():
         value.setdefault(key, default)
     if not isinstance(value['project_description'], str):
@@ -832,9 +889,6 @@ def load_config(path: Path) -> dict:
     for key in ('agent', 'stage_agents', 'prompts'):
         if type(value[key]) is not dict:
             raise AuditError(f'{key} must be a JSON object.')
-    for key in ('timeout_seconds', 'max_input_bytes', 'max_output_bytes'):
-        if type(value[key]) is not int or value[key] <= 0:
-            raise AuditError(f'{key} must be a positive integer.')
     if type(value['continue_on_error']) is not bool:
         raise AuditError('continue_on_error must be boolean.')
     if not isinstance(value['priority_scenarios'], list) or any(not isinstance(s, str) for s in value['priority_scenarios']):
@@ -888,7 +942,11 @@ def load_config(path: Path) -> dict:
     return value
 
 class Runner:
-    def __init__(self, config: dict, run_dir: Path, trust_repository: bool = False):
+    def __init__(self, config: dict, run_dir: Path, trust_repository: bool = False, reporter=None):
+        self.reporter = reporter or NullReporter()
+        self.reported_errors = []
+        self.analysis_started = False
+        self.active_stage = {}
         self.cfg, self.run_dir = config, run_dir.resolve()
         self.mode = config.get('mode', 'git')
         if trust_repository and self.mode != 'git':
@@ -896,9 +954,41 @@ class Runner:
         self.source = config.get(self.mode + '_mode', config)
         self.source_path = Path(self.source['path' if self.mode == 'folder' else 'repository'])
         self.folder = Folder(self.source_path) if self.mode == 'folder' else None
-        self.repo = Repository(self.source_path, trust_repository=trust_repository) if self.mode == 'git' else None
+        self.repo = Repository(self.source_path, trust_repository=trust_repository,
+                               reporter=self.reporter) if self.mode == 'git' else None
         self.schemas = FOLDER_SCHEMAS if self.mode == 'folder' else SCHEMAS
         self.versions: dict[str, str] = {}
+
+    def record_error(self, manifest, exc, *, phase='run', **context):
+        if isinstance(exc, KeyboardInterrupt):
+            self.reporter.stop_requested()
+        if not any(exc is seen for seen in self.reported_errors):
+            self.reported_errors.append(exc)
+            if phase in ('run', 'stage') and self.active_stage:
+                phase = 'stage'
+                context = self.active_stage | context
+            detail = self.reporter.error(exc, phase=phase, analysis_started=self.analysis_started,
+                switches_performed=bool(getattr(self.repo, 'journal', [])), **context)
+            manifest.setdefault('diagnostics', []).append(detail)
+
+    def stage_context(self, stage, context):
+        return {'branch': context.get('branch', 'all branches' if stage == 'compare' else 'folder'),
+                'commit': context.get('source_commit'), 'stage': stage,
+                'backend': self.cfg['_agents'][stage]['backend']}
+
+    def stage_started(self, stage, context):
+        started = self.reporter.clock()
+        self.active_stage = self.stage_context(stage, context)
+        self.reporter.emit('stage_started', **self.active_stage)
+        return started
+
+    def stage_finished(self, stage, context, data, started):
+        status = data['completion_status']
+        if stage == 'review' and data['verdict'] != 'PASS':
+            status = 'PARTIAL'
+        self.reporter.emit('stage_completed', **self.stage_context(stage, context), status=status,
+                           elapsed_seconds=self.reporter.clock() - started)
+        self.active_stage = {}
 
     def check_cli(self) -> dict:
         result = {}
@@ -909,6 +999,7 @@ class Runner:
                     raise AuditError('Conflicting expected_version for the same executable.')
                 continue
             backend = agent['backend']
+            self.reporter.emit('preflight_started', check='cli', backend=backend)
             with tempfile.TemporaryDirectory(prefix='archaudit-cli-check-') as raw:
                 state = Path(raw).resolve()
                 env = cli_env(state)
@@ -916,10 +1007,12 @@ class Runner:
                         [agent['executable'], *(['exec'] if backend == 'codex' else ['run'] if backend == 'opencode' else []), '--help']]
                 texts = []
                 for cmd in cmds:
-                    r = process(cmd, state, env, timeout=30, max_output=self.cfg['max_output_bytes'])
-                    if r['returncode'] or r['error']:
-                        raise AuditError(f'{backend} failed its CLI check: '
-                                         + (r['error'] or r['stderr'].decode(errors='replace').strip()))
+                    r = process(cmd, state, env, reporter=self.reporter,
+                                context={'stage': 'preflight', 'backend': backend})
+                    if r['returncode']:
+                        raise AuditError(f'{backend} failed its CLI check: exit code {r["returncode"]}.',
+                                         code='CLI_CHECK_FAILED',
+                                         hint='Check the configured executable and its --version / --help locally.')
                     # Startup warnings are not part of the version identity.
                     output = r['stdout']
                     if cmd[-1] == '--help':
@@ -936,8 +1029,9 @@ class Runner:
                     raise AuditError(f'{backend} lacks required CLI options: {required}')
                 version = texts[0].strip()
                 if agent.get('expected_version') and agent['expected_version'] != version:
-                    raise AuditError(f'{backend} version differs from expected_version: {version}')
+                    raise AuditError(f'{backend} version differs from expected_version.', code='CLI_VERSION_MISMATCH')
                 result[key] = {'version': version, 'required_flags': required}
+                self.reporter.emit('preflight_completed', check='cli', backend=backend, required_flags=required)
         self.versions = {k: v['version'] for k, v in result.items()}
         return result
 
@@ -1004,10 +1098,6 @@ class Runner:
         save_json(destination / 'invocation.json', meta)
         # Saved by the parent only, for reproducibility; includes only this stage's permitted input.
         atomic(destination / 'input.prompt.txt', payload)
-        if len(payload) > self.cfg['max_input_bytes']:
-            meta.update(status='FAILED', error='Input exceeds max_input_bytes; no truncation or model call.', finished_at=now())
-            save_json(destination / 'invocation.json', meta)
-            raise AuditError(meta['error'])
         try:
             if self.folder:
                 self.folder.assert_snapshot(context['source_fingerprint'])
@@ -1021,17 +1111,18 @@ class Runner:
                 save_json(schema_path, self.schemas[stage])
                 cmd = self.command(stage, state, agent, schema_path, env)
                 try:
-                    r = process(cmd, cwd, env, payload, self.cfg['timeout_seconds'], self.cfg['max_output_bytes'])
-                    atomic(destination / 'stdout.log', r['stdout'])
-                    atomic(destination / 'stderr.log', r['stderr'])
+                    r = process(cmd, cwd, env, payload, reporter=self.reporter,
+                                context=self.stage_context(stage, context), log_dir=destination,
+                                clock=self.reporter.clock, progress_interval=self.reporter.progress_interval)
                     meta.update(returncode=r['returncode'], duration_seconds=r['duration_seconds'])
                 finally:
                     if self.folder:
                         self.folder.assert_snapshot(context['source_fingerprint'])
                     else:
                         self.repo.assert_expected()
-                if r['returncode'] or r['error']:
-                    raise AuditError(r['error'] or f'{agent["backend"]} exited with {r["returncode"]}; see stderr.log')
+                if r['returncode']:
+                    raise AuditError(f'{agent["backend"]} exited with {r["returncode"]}; see stderr.log',
+                                     code='CLI_FAILED', hint='Inspect this stage\'s stdout.log and stderr.log in the run directory.')
                 data, provider_meta = parse_backend(agent['backend'], r['stdout'].decode('utf-8'))
                 validate_result(stage, data, context, self.mode)
                 meta['provider_metadata'] = provider_meta
@@ -1062,6 +1153,7 @@ class Runner:
             'baseline_branch': self.source['baseline_branch'], 'status': 'RUNNING',
             'isolation': 'cli-native-permissions', 'platform': sys.platform,
             'branches': [], 'errors': []}
+        self.manifest = manifest
         def persist():
             if hasattr(self.repo, 'journal'):
                 manifest['switch_journal'] = self.repo.journal
@@ -1074,20 +1166,23 @@ class Runner:
         def restore():
             nonlocal restored, restoration_attempted
             restoration_attempted = True
+            self.active_stage = {}
+            self.reporter.emit('restoration_started')
             try:
                 manifest['restoration'] = self.repo.restore(original_branch, original_commit)
                 restored = True
+                self.reporter.emit('restoration_completed')
             except BaseException as exc:
                 manifest['restoration'] = {'restored': False, 'node': getattr(exc, 'node', None),
                                            'error': str(exc) or type(exc).__name__}
+                self.record_error(manifest, exc, phase='restoration')
                 raise
             finally:
                 persist()
 
         try:
             if not self.cfg['project_description']:
-                log('Описание проекта не указано. Рекомендуем заполнить project_description: '
-                    'кратко расскажите о назначении и истории системы')
+                self.reporter.emit('description_missing')
             pins = self.repo.preflight(self.source['branches'])
             manifest['pins'] = pins
             original_branch, original_commit = self.repo.symbolic(), self.repo.head()
@@ -1108,7 +1203,9 @@ class Runner:
             try:
                 for branch in self.source['branches']:
                     commit = pins[branch]
-                    log(f'Analyzing {branch} at {commit[:12]}')
+                    self.analysis_started = True
+                    self.active_stage = {}
+                    self.reporter.emit('branch_started', branch=branch, commit=commit)
                     branch_dir = self.run_dir / 'branches' / slug(branch)
                     item: dict[str, Any] = {'branch': branch, 'source_commit': commit,
                         'directory': str(branch_dir.relative_to(self.run_dir)),
@@ -1127,6 +1224,7 @@ class Runner:
                     for stage in ('document', 'review'):
                         if stage == 'review' and (not item['document'] or item['document']['completion_status'] == 'BLOCKED'):
                             item['errors'].append('Review skipped: no usable architecture document.')
+                            self.reporter.emit('stage_skipped', **self.stage_context(stage, context))
                             break
                         stage_context = dict(context)
                         if stage == 'review':
@@ -1134,23 +1232,27 @@ class Runner:
                             stage_context['architecture_document'] = doc
                             stage_context['document_sha256'] = digest((doc['report_markdown'].rstrip() + '\n').encode())
                         try:
-                            log(f'  {stage}: {self.cfg["_agents"][stage]["backend"]}')
+                            started = self.stage_started(stage, context)
                             self.repo.assert_snapshot(commit)
                             data, meta = self.invoke(stage, stage_context, branch_dir / (stage + '.logs'))
                             item[stage] = data
                             item[stage + '_invocation'] = meta
                         except (AuditError, ContractError, OSError, UnicodeError) as exc:
                             item['errors'].append(f'{stage}: {exc}')
+                            self.record_error(manifest, exc, phase='stage', **self.stage_context(stage, context))
                             if isinstance(exc, UnsafeRepository) or not self.cfg['continue_on_error']:
                                 raise
                         finally:
                             # Changed HEAD or working tree is always fatal, even with continue_on_error.
                             self.repo.assert_snapshot(commit)
                             persist()
+                        if item[stage] is not None:
+                            self.stage_finished(stage, context, item[stage], started)
                     item['accepted'] = accepted(item)
                     persist()
             except BaseException as exc:
                 analysis_error = exc
+                self.record_error(manifest, exc)
                 raise
             finally:
                 try:
@@ -1172,7 +1274,7 @@ class Runner:
                 'git_deltas': {b: self.repo.delta(pins[baseline], pins[b]) for b in self.source['branches'] if b != baseline}}
             comp_dir = self.run_dir / 'comparison'
             save_json(comp_dir / 'inputs.json', bundle)
-            log('Comparing all branch reports in a new session outside the repository')
+            started = self.stage_started('compare', bundle)
             try:
                 self.repo.assert_expected()
                 comparison, meta = self.invoke('compare', bundle, comp_dir / 'compare.logs')
@@ -1183,12 +1285,14 @@ class Runner:
                     self.repo.assert_expected()
                 except AuditError as exc:
                     manifest['restoration'] = {'restored': False, 'node': getattr(exc, 'node', None), 'error': str(exc)}
+                    self.record_error(manifest, exc, phase='restoration')
                     raise
             manifest['comparison'] = comparison
             manifest['comparison_invocation'] = meta
+            self.stage_finished('compare', bundle, comparison, started)
             failed = any(b['errors'] for b in entries)
             quality_ok = all(accepted(b) for b in entries) and comparison['completion_status'] == 'COMPLETE'
-            manifest['status'] = 'COMPLETE' if quality_ok else 'PARTIAL'
+            manifest['status'] = 'FAILED' if failed else 'COMPLETE' if quality_ok else 'PARTIAL'
             code = 1 if failed else 0 if quality_ok else 2
         except BaseException as exc:
             manifest['errors'].append(str(exc) or type(exc).__name__)
@@ -1201,7 +1305,7 @@ class Runner:
                     restore()
                 except BaseException as restore_error:
                     manifest['errors'].append('Restoration: ' + (str(restore_error) or type(restore_error).__name__))
-            log(f'Run failed: {exc}')
+            self.record_error(manifest, exc, phase='run' if self.analysis_started else 'preflight')
         manifest['finished_at'] = now()
         manifest['exit_code'] = code
         persist()
@@ -1213,23 +1317,27 @@ class Runner:
             'isolation': 'cli-native-permissions', 'platform': sys.platform,
             'integrity': 'Fingerprints at stage boundaries; not a backup or continuous immutability guarantee.',
             'document': None, 'review': None, 'accepted': False, 'errors': []}
+        self.manifest = manifest
         def persist():
             save_json(self.run_dir / 'manifest.json', manifest)
         persist()
         try:
             if not self.cfg['project_description']:
-                log('Описание проекта не указано. Рекомендуем заполнить project_description: '
-                    'кратко расскажите о назначении и истории системы')
+                self.reporter.emit('description_missing')
+            self.reporter.emit('preflight_started', check='inventory')
             inventory = self.folder.snapshot()
             save_json(self.run_dir / 'source.inventory.json', inventory)
             fingerprint = inventory['source_fingerprint']
             manifest.update(source_fingerprint=fingerprint, inventory='source.inventory.json')
+            self.reporter.emit('preflight_completed', check='inventory')
             manifest['cli_checks'] = self.check_cli()
             self.folder.assert_snapshot(fingerprint)
+            self.reporter.emit('preflight_completed', check='integrity')
             persist()
             if check_only:
                 manifest['status'], code = 'PREFLIGHT_OK', 0
             else:
+                self.analysis_started = True
                 context = {'source_mode': 'folder', 'source_directory': str(self.source_path),
                     'source_fingerprint': fingerprint, 'output_language': self.cfg['output_language'],
                     'project_description': self.cfg['project_description'],
@@ -1242,13 +1350,15 @@ class Runner:
                         doc = manifest['document']
                         if doc['completion_status'] == 'BLOCKED':
                             manifest['review_skipped'] = 'No usable architecture document.'
+                            self.reporter.emit('stage_skipped', **self.stage_context(stage, context))
                             break
                         stage_context.update(architecture_document=doc,
                             document_sha256=digest((doc['report_markdown'].rstrip() + '\n').encode()))
-                    log(f'  {stage}: {self.cfg["_agents"][stage]["backend"]}')
+                    started = self.stage_started(stage, context)
                     data, meta = self.invoke(stage, stage_context, self.run_dir / (stage + '.logs'))
                     manifest[stage], manifest[stage + '_invocation'] = data, meta
                     persist()
+                    self.stage_finished(stage, context, data, started)
                 manifest['accepted'] = accepted(manifest)
                 manifest['status'] = 'COMPLETE' if manifest['accepted'] else 'PARTIAL'
                 code = 0 if manifest['accepted'] else 2
@@ -1256,43 +1366,128 @@ class Runner:
             manifest['errors'].append(str(exc) or type(exc).__name__)
             manifest['status'] = 'FAILED'
             code = 130 if isinstance(exc, KeyboardInterrupt) else 1
-            log(f'Run failed: {exc}')
+            self.record_error(manifest, exc, phase='run' if self.analysis_started else 'preflight')
         manifest.update(finished_at=now(), exit_code=code)
         persist()
         return manifest, code
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, epilog=
+        'After argument parsing, stdout contains one result. --help and argument syntax errors '
+        'use standard argparse output without a run or manifest. Console messages are in English; '
+        'output_language only controls generated reports.')
     parser.add_argument('--config', required=True, type=Path, help='Path to a JSON or JSONC configuration.')
     parser.add_argument('--check', action='store_true', help='Check configuration, source state, and CLI capabilities; no branch switch or model calls.')
     parser.add_argument('--trust-repository', action='store_true', help='Trust only the configured Git checkout and verified submodules despite an ownership mismatch (Git >= 2.34.1).')
+    parser.add_argument('--output', choices=('auto', 'text', 'json'), default='auto',
+                        help='Result format on stdout: auto selects text for a TTY, JSON otherwise (default: auto). Diagnostics use stderr.')
+    parser.add_argument('--verbose', action='store_true', help='Add technical event details to stderr; never print prompts, credentials or raw model output.')
+    parser.add_argument('--no-progress', action='store_true', help='Disable periodic waiting messages; keep stage boundaries, warnings and errors.')
     args = parser.parse_args()
-    if sys.platform not in ('darwin', 'linux') or sys.version_info < (3, 11):
-        raise AuditError('This implementation requires macOS or Linux and Python 3.11+.')
-    if os.geteuid() == 0:
-        print('WARNING: Running as root; child CLIs inherit root privileges.', file=sys.stderr)
-    os.umask(0o077)
+    reporter = Reporter(mode=output_mode(args.output, sys.stdout), verbose=args.verbose, progress=not args.no_progress)
+    run_id = run_dir = runner = None
+    run_created = False
+    manifest, code = {}, 1
+    header_shown = False
+    config = None
+    phase = 'configuration'
+    old_umask = os.umask(0o077)
+    old_handler = signal.getsignal(signal.SIGTERM)
+
     def interrupted(signum, frame):
         raise KeyboardInterrupt(f'Received signal {signum}')
-    signal.signal(signal.SIGTERM, interrupted)
-    config = load_config(args.config.resolve())
-    reports = Path(config['reports_dir'])
-    run_id = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:10]
-    run_dir = reports / run_id
-    runner = Runner(config, run_dir, trust_repository=args.trust_repository)
-    reports.mkdir(parents=True, exist_ok=True, mode=0o700)
-    run_dir.mkdir(mode=0o700)
-    snapshot = {k: v for k, v in config.items() if not k.startswith('_')}
-    save_json(run_dir / 'config.snapshot.json', snapshot)
-    with repository_lock(runner.source_path):
-        manifest, code = runner.run(check_only=args.check)
-    print(json.dumps({'run_id': run_id, 'status': manifest['status'],
-                      'manifest': str(run_dir / 'manifest.json'), 'exit_code': code}, ensure_ascii=False))
+
+    def header():
+        nonlocal header_shown
+        if header_shown:
+            return
+        header_shown = True
+        mode = config.get('mode', 'git') if config else None
+        source = config.get(mode + '_mode', config) if config else {}
+        reporter.emit('run_started', check_only=args.check, output=reporter.mode, mode=mode,
+                      source=source.get('path' if mode == 'folder' else 'repository'))
+        if os.geteuid() == 0:
+            reporter.emit('root_warning')
+
+    try:
+        signal.signal(signal.SIGTERM, interrupted)
+        if sys.platform not in ('darwin', 'linux') or sys.version_info < (3, 11):
+            raise AuditError('This implementation requires macOS or Linux and Python 3.11+.')
+        try:
+            config = load_config(args.config.resolve())
+        except ContractError as exc:
+            raise AuditError('The configuration is not valid JSON/JSONC.', code='CONFIGURATION_ERROR',
+                             hint='Check the configuration syntax and run --check again.') from exc
+        reports = Path(config['reports_dir'])
+        run_id = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:10]
+        run_dir = reports / run_id
+        reporter.run_id = run_id
+        header()
+        mode = config.get('mode', 'git')
+        source = config.get(mode + '_mode', config)
+        reporter.emit('configuration_loaded', branches=source.get('branches', []),
+                      agents={stage: agent['backend'] for stage, agent in config['_agents'].items()})
+        reporter.emit('preflight_completed', check='configuration')
+        phase = 'preflight'
+        runner = Runner(config, run_dir, trust_repository=args.trust_repository, reporter=reporter)
+        reports.mkdir(parents=True, exist_ok=True, mode=0o700)
+        run_dir.mkdir(mode=0o700)
+        run_created = True
+        reporter.attach_log(run_dir)
+        snapshot = {k: v for k, v in config.items() if not k.startswith('_')}
+        save_json(run_dir / 'config.snapshot.json', snapshot)
+        with repository_lock(runner.source_path):
+            manifest, code = runner.run(check_only=args.check)
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            reporter.stop_requested()
+        if isinstance(exc, AuditError) and phase == 'configuration' and exc.code == 'AUDIT_ERROR':
+            exc.code = 'CONFIGURATION_ERROR'
+        header()
+        manifest = getattr(runner, 'manifest', manifest)
+        code = 130 if isinstance(exc, KeyboardInterrupt) or manifest.get('exit_code') == 130 else 1
+        manifest.update(run_id=run_id, status='FAILED', exit_code=code, finished_at=now())
+        manifest.setdefault('errors', []).append(str(exc) or type(exc).__name__)
+        if runner:
+            runner.record_error(manifest, exc, phase='run' if runner.analysis_started else 'preflight')
+        else:
+            manifest.setdefault('diagnostics', []).append(reporter.error(exc, phase='preflight',
+                analysis_started=False, switches_performed=False))
+        if run_created:
+            try:
+                save_json(run_dir / 'manifest.json', manifest)
+            except OSError as save_error:
+                reporter.error(save_error)
+    finally:
+        # Presentation failures never bypass source restoration or resource cleanup.
+        if runner and runner.repo:
+            try:
+                runner.repo.close()
+            except OSError as close_error:
+                reporter.error(close_error)
+                manifest['status'] = 'FAILED'
+                code = 130 if code == 130 else 1
+        signal.signal(signal.SIGTERM, old_handler)
+        os.umask(old_umask)
+        manifest_path = run_dir / 'manifest.json' if run_dir else None
+        result = {'run_id': run_id, 'status': manifest.get('status', 'FAILED'),
+                  'manifest': str(manifest_path) if existing_file(manifest_path) else None,
+                  'exit_code': code}
+        try:
+            reporter.finish(result, manifest, check_only=args.check, config_path=args.config,
+                            run_dir=run_dir, trust=args.trust_repository)
+        finally:
+            reporter.close()
     return code
 
+
 if __name__ == '__main__':
-    try:
-        raise SystemExit(main())
-    except (AuditError, ContractError, OSError, ValueError) as exc:
-        print(f'ERROR: {exc}', file=sys.stderr)
-        raise SystemExit(1)
+    code = main()
+    # Broken redirected streams must not change the exit code during interpreter shutdown.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (OSError, ValueError):
+            with contextlib.suppress(OSError, ValueError), open(os.devnull, 'w') as sink:
+                os.dup2(sink.fileno(), stream.fileno())
+    raise SystemExit(code)

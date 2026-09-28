@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 
 def inspect_sources(context):
@@ -47,7 +48,7 @@ def action(stage):
     spec = json.loads(os.environ.get('AUDIT_TEST_ACTION', '{}'))
     if spec.get('stage') != stage:
         return
-    path = Path(spec['path'])
+    path = Path(spec.get('path', '.'))
     kind = spec['kind']
     if kind == 'file':
         (path / 'app.py').write_text('external modification\n')
@@ -60,6 +61,18 @@ def action(stage):
         sys.exit(17)
     elif kind == 'interrupt':
         os.kill(os.getppid(), signal.SIGTERM)
+        # Keep the invocation alive until the parent stops its process group.
+        time.sleep(3)
+    elif kind in ('wait', 'active', 'closed-pipes'):
+        if kind == 'active':
+            print('private CLI activity', file=sys.stderr, flush=True)
+        if kind == 'closed-pipes':
+            os.close(1)
+            os.close(2)
+        time.sleep(spec.get('seconds', 0.5))
+    elif kind == 'invalid':
+        print('{"completion_status": "' + spec['value'] + '"}', flush=True)
+        sys.exit(0)
 
 args = sys.argv[1:]
 profile = json.loads((Path(os.environ['HOME']) / 'audit-profile.json').read_text())
@@ -92,6 +105,8 @@ else:
     action(stage)
     data = {'completion_status': 'COMPLETE',
             'report_markdown': '# Report: configured-model\nC-001\n', 'limitations': []}
+    if os.environ.get('AUDIT_TEST_PARTIAL') and stage == 'document':
+        data.update(completion_status='PARTIAL', limitations=['Fixture coverage is incomplete.'])
     if 'baseline_branch' in context:
         data.update(task='architecture_comparison', baseline_branch=context['baseline_branch'],
                     baseline_commit=context['baseline_commit'], unresolved_branches=[], differences=[],

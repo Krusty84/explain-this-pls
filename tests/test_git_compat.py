@@ -290,7 +290,7 @@ class RecursiveCompatibilityCLI(recursive.RecursiveFixture, unittest.TestCase):
                     result, manifest = self.execute(check=check)
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertIn(recursive.LEAF, result.stderr)
-                    self.assertIn('required SHA', result.stderr)
+                    self.assertIn('Required commit:', result.stderr)
                     if setting:
                         self.assertIn('Partial-clone/promisor', result.stderr)
                     self.assertFalse(sentinel.exists())

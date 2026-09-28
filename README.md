@@ -131,9 +131,6 @@ Change `mode` to `"folder"` to research `folder_mode.path` without a branch comp
   },
   "stage_agents": {},
   "priority_scenarios": ["Order creation", "Inventory updates"],
-  "timeout_seconds": 1800,
-  "max_input_bytes": 800000,
-  "max_output_bytes": 16000000,
   "continue_on_error": true,
   "prompts": {}
 }
@@ -158,9 +155,6 @@ Existing flat configurations with top-level `repository`, `branches`, and
 | `agent`                    | Required                   | Default CLI settings for all stages; see below.                                                                                                                                                                                                                                 |
 | `stage_agents`             | `{}`                       | Overrides of `agent` for `document`, `review`, or `compare`. Only active stages are resolved and checked.                                                                                                                                                                       |
 | `priority_scenarios`       | `[]`                       | An array of strings describing flows or areas to prioritize during documentation and review.                                                                                                                                                                                    |
-| `timeout_seconds`          | `1800`                     | Maximum duration of each document, review, or comparison CLI call, in seconds. Must be a positive integer. CLI version/help checks have a separate 30-second limit.                                                                                                             |
-| `max_input_bytes`          | `800000`                   | Maximum UTF-8 size of the complete prompt, context, and output schema sent to a stage. Must be a positive integer. Oversized input fails the stage before a model call; it is never silently truncated.                                                                         |
-| `max_output_bytes`         | `16000000`                 | Maximum combined stdout and stderr size per CLI call. Must be a positive integer. Exceeding it terminates the call.                                                                                                                                                             |
 | `continue_on_error`        | `true`                     | Git mode: continue with other branches after a stage fails. `false` stops on the first operational failure and attempts checkout restoration. Integrity failures always stop. Folder mode always stops on an operational failure; review findings are not operational failures. |
 | `prompts`                  | `{}`                       | Custom prompt paths for `document`, `review`, and `compare`. Unspecified active stages use bundled templates; `compare` is ignored in folder mode.                                                                                                                              |
 
@@ -244,10 +238,10 @@ Custom document/review prompts must handle the chosen source mode. See the
 Root and ordinary users use the same commands in both git and folder modes,
 inside or outside containers. Root needs no extra option, environment variable,
 or confirmation. When the effective UID is 0, the runner prints this warning once
-to stderr, without changing the exit status or the JSON summary on stdout:
+to stderr, without changing the exit status or the selected result format on stdout:
 
 ```text
-WARNING: Running as root; child CLIs inherit root privileges.
+[WARN] Running as root; child CLIs inherit root privileges.
 ```
 
 First, validate the configuration, source state, and CLI capabilities:
@@ -269,6 +263,76 @@ Then start the investigation:
 ```sh
 python3 explain.py --config config.jsonc
 ```
+
+Console output uses English independently of `output_language`, which controls
+only generated reports. The console uses sequential lines with `[RUN]`, `[OK]`,
+`[WARN]`, `[FAIL]`, and `[SKIP]`; no terminal control sequences or third-party UI
+packages are needed.
+
+| Option | Behavior |
+| --- | --- |
+| `--output auto` | Default: readable text when **stdout** is a TTY, JSON otherwise. Selected once after argument parsing. |
+| `--output text` | One readable final summary on stdout, including duration, branch results, comparison, restoration and existing artifact paths. |
+| `--output json` | Exactly one final JSON document on stdout. |
+| `--verbose` | Additional technical event context on stderr. Never prints prompts, credentials or raw agent output. |
+| `--no-progress` | Suppresses only periodic waiting messages. Stage starts/completions, warnings, errors and the final result remain visible. |
+
+In every mode, the header, progress, warnings and diagnostic explanations go to
+**stderr**. Explicit `--output text` or `--output json` overrides TTY detection.
+The JSON document retains these four keys:
+
+```json
+{"run_id": "20260928T124632Z-a7408eb86f", "status": "PREFLIGHT_OK", "manifest": "/reports/20260928T124632Z-a7408eb86f/manifest.json", "exit_code": 0}
+```
+
+Handled errors after argument parsing also produce a result. `manifest` is `null`
+when no manifest exists, and `run_id` is `null` if an ID has not yet been assigned.
+**Exception:** `--help` and argument syntax errors retain standard argparse
+help/usage behavior, without a result JSON, run directory or manifest.
+
+```sh
+# Automatic format selection
+python3 explain.py --config config.jsonc --check
+
+# Readable text, including Docker logs
+python3 explain.py --config config.jsonc --output text
+
+# Machine result separate from diagnostics
+python3 explain.py \
+  --config config.jsonc \
+  --output json \
+  > result.json 2> console.log
+
+# Technical details without periodic waiting messages
+python3 explain.py \
+  --config config.jsonc \
+  --output text \
+  --verbose \
+  --no-progress
+```
+
+Each agent stage identifies the branch (or folder), stage and backend.
+Approximately every 30 seconds while a CLI is running, stderr reports monotonic
+elapsed time and the time since the last observed CLI output, or that no output
+has arrived. This is activity information, not a completion percentage or an ETA.
+The runner imposes no time or input/output size limits on model calls, CLI checks,
+or Git commands. Processes are awaited until they exit or the run is interrupted,
+even if a child closes both output pipes. Limits imposed by the CLI or provider
+still apply.
+A stage is reported complete only after response parsing, contract and source
+integrity checks, and publication of its result. A successful CLI exit alone does
+not imply an accepted analysis.
+
+`PREFLIGHT_OK` means the local preflight passed; no model calls or analysis took
+place. It does not verify authentication, model availability or analysis quality.
+`COMPLETE` means the full analysis passed the existing acceptance checks;
+`PARTIAL` means an incomplete or unaccepted result without an operational error;
+`FAILED` means an operational error (including a continued stage failure).
+A handled interruption returns exit code 130. Stop and restoration messages reflect
+actual transitions; restoration is reported verified only after its integrity checks.
+Errors identify their cause and, when known, a safe next step; no automatic repair
+or submodule initialization is performed. The existing manifest `errors` arrays
+remain strings; additional `diagnostics` entries contain structured error context.
 
 The runner checks owners of each checkout root, `.git` entry, and actual Git
 directory before running Git there. All must belong to the runner's effective UID;
@@ -358,6 +422,7 @@ Each run creates a separate directory under `reports_dir`. Successful Git stages
 | `comparison/BRANCH_COMPARISON.md` and `compare.json`   | Baseline comparison in Markdown and JSON.                                                                                     |
 | `comparison/inputs.json`                               | The reports and Git metadata supplied to the comparison stage.                                                                |
 | `manifest.json`                                        | Run status, Git executable/version/compatibility mechanisms, pinned commits, stage results, and checkout restoration details. |
+| `run.log`                                              | UTC structured technical events, full commit IDs and sanitized exception chains; mode 0600. |
 | `config.snapshot.json`                                 | The configuration used for this run.                                                                                          |
 
 Folder runs place `ARCHITECTURE.md`, `ARCHITECTURE_REVIEW.md`, `document.json`,
@@ -367,7 +432,33 @@ the inventory is not automatically included in the model prompt. No comparison
 report is created. Missing Git history alone does not lower report completion status.
 
 Stage logs are stored in `document.logs`, `review.logs`, and `compare.logs` alongside
-their respective reports, for active stages only. The terminal prints a JSON summary
-with the run status and manifest path. Exit codes are `0` for success, `2` for
+their respective reports, for active stages only. The parent opens `stdout.log`
+and `stderr.log` before starting the CLI and flushes received blocks during the
+call, so these files can be inspected while it is running. Their bytes are also
+passed unchanged to the existing response parser. Raw agent output is never
+copied into the console or `run.log`, even with `--verbose`. Stage files may contain
+sensitive source/model content; result directories remain private (0700), with
+log files at 0600.
+
+`run.log` uses standard Python logging with one JSON record per line (UTC time,
+level, event name, run ID and applicable branch/stage/backend context). Exception
+chains include stack locations but omit arbitrary model-supplied exception values
+and known credentials. It does not contain full prompts, the process environment
+or full model responses. No file log is created in source directories or the working
+directory for early failures. Console/log write failures do not prevent cleanup.
+
+Exit codes are `0` for a passed check or an accepted complete result, `2` for
 incomplete/unaccepted results without an operational failure, `1` for an operational
-failure, and `130` for an interrupted run.
+failure, and `130` for a handled interruption. Argument syntax errors keep
+argparse's exit behavior.
+
+Run the offline test suite with:
+
+```sh
+python3 -B -m unittest discover -s tests -v
+```
+
+Tests use real temporary repositories and fake CLIs; progress interval tests use
+injected monotonic clocks or short bounded subprocess waits. Actual root and
+foreign-owner tests require UID 0 and are otherwise explicitly skipped. The CI
+matrix also covers real Git 2.34.1 builds; version shims only test version parsing.

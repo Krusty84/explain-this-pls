@@ -24,7 +24,7 @@ import test_explain as fixtures
 from explain import AuditError, Repository, main
 
 ROOT = Path(__file__).resolve().parents[1]
-ROOT_WARNING = 'WARNING: Running as root; child CLIs inherit root privileges.'
+ROOT_WARNING = '[WARN] Running as root; child CLIs inherit root privileges.'
 OWNERSHIP_HINT = ('Git rejected the repository because of an ownership mismatch.\n'
                   'Run with the checkout owner\'s UID, or use --trust-repository\n'
                   'only if you trust this specific checkout.')
@@ -210,9 +210,11 @@ class StartupCLIIntegrationTests(unittest.TestCase):
         self.cli.unlink()
         for mode in ('git', 'folder'):
             for check in (False, True):
-                with self.subTest(mode=mode, check=check), \
-                        self.assertRaisesRegex(AuditError, 'executable was not found'):
-                    self.execute_with_mocked_euid(0, mode, check)
+                with self.subTest(mode=mode, check=check):
+                    result = self.execute_with_mocked_euid(0, mode, check)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn('executable was not found', result.stderr)
+                    self.assertIsNone(json.loads(result.stdout)['manifest'])
                 self.assertFalse(self.reports.exists())
 
     def assert_actual_uid_matrix(self):
@@ -257,8 +259,10 @@ class StartupCLIIntegrationTests(unittest.TestCase):
         for euid in (0, 1000):
             for check in (False, True):
                 with self.subTest(mocked_euid=euid, check=check):
-                    with self.assertRaisesRegex(AuditError, '--trust-repository requires git mode'):
-                        self.execute_with_mocked_euid(euid, 'folder', check, trust=True)
+                    result = self.execute_with_mocked_euid(euid, 'folder', check, trust=True)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn('--trust-repository requires git mode', result.stderr)
+                    self.assertIsNone(json.loads(result.stdout)['manifest'])
                     self.assertFalse(self.reports.exists())
                     self.assertEqual(self.calls.read_text(), '')
         result = self.execute('folder', trust=True)
