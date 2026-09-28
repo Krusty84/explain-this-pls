@@ -153,10 +153,10 @@ Existing flat configurations with top-level `repository`, `branches`, and
 | `git_mode.baseline_branch` | Required in git mode       | Reference branch for comparison. Must be included in `git_mode.branches`.                                                                                                                                                                                                       |
 | `output_language`          | `"Russian"`                | Language of the generated reports. Set `"English"` for English output.                                                                                                                                                                                                          |
 | `agent`                    | Required                   | Default CLI settings for all stages; see below.                                                                                                                                                                                                                                 |
-| `stage_agents`             | `{}`                       | Overrides of `agent` for `document`, `review`, or `compare`. Only active stages are resolved and checked.                                                                                                                                                                       |
+| `stage_agents`             | `{}`                       | Overrides of `agent` for `study`, `review`, or `compare`. Only active stages are resolved and checked.                                                                                                                                                                       |
 | `priority_scenarios`       | `[]`                       | An array of strings describing flows or areas to prioritize during documentation and review.                                                                                                                                                                                    |
 | `continue_on_error`        | `true`                     | Git mode: continue with other branches after a stage fails. `false` stops on the first operational failure and attempts checkout restoration. Integrity failures always stop. Folder mode always stops on an operational failure; review findings are not operational failures. |
-| `prompts`                  | `{}`                       | Custom prompt paths for `document`, `review`, and `compare`. Unspecified active stages use bundled templates; `compare` is ignored in folder mode.                                                                                                                              |
+| `prompts`                  | `{}`                       | Custom prompt paths for `study`, `review`, and `compare`. Unspecified active stages use bundled templates; `compare` is ignored in folder mode.                                                                                                                              |
 
 Relative source, report, prompt, and explicit executable paths are resolved
 against the configuration file's directory. `~` is expanded. The source and
@@ -218,7 +218,7 @@ Use the `prompts` object to replace individual stage templates:
 ```json
 {
   "prompts": {
-    "document": "./custom-prompts/document.md",
+    "study": "./custom-prompts/study.md",
     "review": "./custom-prompts/review.md"
   }
 }
@@ -229,8 +229,8 @@ Custom prompts must follow the
 existing output contracts: the runner appends the stage context and required JSON
 Schema, and the agent must return the report in `report_markdown` rather than write
 files itself.
-Custom document/review prompts must handle the chosen source mode. See the
-[folder document schema](schemas/folder-document.schema.json) and
+Custom study/review prompts must handle the chosen source mode. See the
+[folder study schema](schemas/folder-study.schema.json) and
 [folder review schema](schemas/folder-review.schema.json).
 
 ### Run explain-this-pls
@@ -253,7 +253,7 @@ python3 explain.py --config config.jsonc --check
 The `--check` option checks CLI availability, versions, and required capabilities
 without calling a model or switching branches. It writes a manifest and configuration
 snapshot under `reports_dir`. In folder mode it also inventories and fingerprints
-the source tree, and checks only the CLIs used for document and review.
+the source tree, and checks only the CLIs used for study and review.
 In Git mode, it builds and validates the complete recursive plan for the original
 checkout and all selected branches. It does not change HEAD, refs, indexes, source
 files, or Git configuration, including when the last branch fails validation.
@@ -383,7 +383,7 @@ not bypass their own startup policies or change the process user.
 
 In git mode, the runner locks the repository, pins the selected commits and all
 recursive gitlinks, and switches the entire hierarchy to detached HEADs before
-`document` or `review` can inspect it. It verifies source and Git metadata integrity
+`study` or `review` can inspect it. It verifies source and Git metadata integrity
 before and after analysis, after CLI checks, and after `compare`. An integrity
 failure always stops the run, regardless of `continue_on_error`.
 
@@ -403,13 +403,13 @@ at stage and switch boundaries, not continuous immutability or a backup. Restora
 cannot be promised after SIGKILL, power loss, or termination that bypasses Python
 handlers.
 
-Submodule sources are part of the document/review scope. Their root-relative paths,
+Submodule sources are part of the study/review scope. Their root-relative paths,
 parent repositories, expected SHAs, and verified actual states are supplied in the
 stage contexts and manifest, with original restoration state stored separately.
 Comparison inputs include recursive SHA changes against the baseline. A gitlink
 change is commit metadata, not a complete file diff of the nested repository.
 
-In folder mode, the runner locks the source directory and runs document and review
+In folder mode, the runner locks the source directory and runs study and review
 in place, in separate sessions. It records relative paths, entry types, permissions,
 file hashes, and symlink targets, and checks the tree fingerprint before and after
 each stage. A detected change fails the run before publishing that stage's report;
@@ -423,20 +423,20 @@ Each run creates a separate directory under `reports_dir`. Successful Git stages
 | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
 | `branches/<branch-id>/ARCHITECTURE.md`                 | Architecture documentation for one branch.                                                                                    |
 | `branches/<branch-id>/ARCHITECTURE_REVIEW.md`          | Independent review of that document.                                                                                          |
-| `branches/<branch-id>/document.json` and `review.json` | Structured versions of the branch reports.                                                                                    |
+| `branches/<branch-id>/study.json` and `review.json` | Structured versions of the branch reports.                                                                                    |
 | `comparison/BRANCH_COMPARISON.md` and `compare.json`   | Baseline comparison in Markdown and JSON.                                                                                     |
 | `comparison/inputs.json`                               | The reports and Git metadata supplied to the comparison stage.                                                                |
 | `manifest.json`                                        | Run status, Git executable/version/compatibility mechanisms, pinned commits, stage results, and checkout restoration details. |
 | `run.log`                                              | UTC structured technical events, full commit IDs and sanitized exception chains; mode 0600.                                   |
 | `config.snapshot.json`                                 | The configuration used for this run.                                                                                          |
 
-Folder runs place `ARCHITECTURE.md`, `ARCHITECTURE_REVIEW.md`, `document.json`,
+Folder runs place `ARCHITECTURE.md`, `ARCHITECTURE_REVIEW.md`, `study.json`,
 `review.json`, `manifest.json`, and `config.snapshot.json` directly in the run
 directory. `source.inventory.json` records the complete inventory and fingerprint;
 the inventory is not automatically included in the model prompt. No comparison
 report is created. Missing Git history alone does not lower report completion status.
 
-Stage logs are stored in `document.logs`, `review.logs`, and `compare.logs` alongside
+Stage logs are stored in `study.logs`, `review.logs`, and `compare.logs` alongside
 their respective reports, for active stages only. The parent opens `stdout.log`
 and `stderr.log` before starting the CLI and flushes received blocks during the
 call, so these files can be inspected while it is running. Their bytes are also

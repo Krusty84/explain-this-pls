@@ -72,14 +72,43 @@ class FolderFixture(unittest.TestCase):
 
 
 class ModeConfigTests(FolderFixture):
+    def test_study_agent_and_custom_prompt_in_both_modes(self):
+        prompt = self.base / 'custom-study.md'
+        prompt.write_text('# Study the source architecture')
+        self.value.update(
+            git_mode={'repository': './source', 'branches': ['master', 'customer'], 'baseline_branch': 'master'},
+            stage_agents={'study': {'model': 'study-model'}},
+            prompts={'study': './custom-study.md'})
+        for mode in ('git', 'folder'):
+            with self.subTest(mode=mode):
+                self.value['mode'] = mode
+                cfg = self.config()
+                self.assertEqual(cfg['_agents']['study']['model'], 'study-model')
+                self.assertEqual(cfg['_prompt_paths']['study'], str(prompt))
+
+    def test_document_stage_configuration_is_rejected_in_both_modes(self):
+        self.value['git_mode'] = {
+            'repository': './source', 'branches': ['master', 'customer'], 'baseline_branch': 'master'}
+        for mode in ('git', 'folder'):
+            self.value['mode'] = mode
+            for key, value, error in (
+                ('stage_agents', {}, 'Unknown stage override: document'),
+                ('prompts', str(ROOT / 'prompts/study.md'), 'Unknown prompt stage'),
+            ):
+                with self.subTest(mode=mode, key=key):
+                    self.value[key] = {'document': value}
+                    with self.assertRaisesRegex(AuditError, error):
+                        self.config()
+                    del self.value[key]
+
     def test_folder_ignores_inactive_source_and_compare_settings(self):
         self.value.update(git_mode={'repository': None, 'branches': 'not checked'},
             stage_agents={'compare': {'backend': 'unavailable', 'executable': '/missing/cli'}},
             prompts={'compare': '/missing/prompt'})
         cfg = self.config()
         self.assertEqual(cfg['folder_mode']['path'], str(self.source))
-        self.assertEqual(set(cfg['_agents']), {'document', 'review'})
-        self.assertEqual(set(cfg['_prompt_paths']), {'document', 'review'})
+        self.assertEqual(set(cfg['_agents']), {'study', 'review'})
+        self.assertEqual(set(cfg['_prompt_paths']), {'study', 'review'})
 
     def test_git_grouped_and_legacy_formats(self):
         git = {'repository': './source', 'branches': ['master', 'customer'], 'baseline_branch': 'master'}
@@ -90,7 +119,7 @@ class ModeConfigTests(FolderFixture):
         self.value.update(git)
         legacy = self.config()
         self.assertEqual(legacy['repository'], str(self.source))
-        self.assertEqual(set(legacy['_agents']), {'document', 'review', 'compare'})
+        self.assertEqual(set(legacy['_agents']), {'study', 'review', 'compare'})
 
     def test_invalid_modes_sections_and_mixed_formats(self):
         original = copy.deepcopy(self.value)
@@ -98,7 +127,7 @@ class ModeConfigTests(FolderFixture):
                  dict(folder_mode={}), dict(git_mode=[]), dict(repository='./source'),
                  dict(folder_mode={'path': './source', 'branches': []}),
                  dict(folder_mode={'path': 42}), dict(reports_dir='./source/reports'),
-                 dict(prompts={'document': None})]
+                 dict(prompts={'study': None})]
         for changes in cases:
             with self.subTest(changes=changes), self.assertRaises(AuditError):
                 self.value = original | changes
@@ -131,7 +160,7 @@ class ModeConfigTests(FolderFixture):
                 self.value['mode'] = 'folder'
                 self.value['folder_mode']['path'] = str(self.source)
                 with patch('explain.shutil.which', return_value=sys.executable):
-                    self.assertEqual(set(self.config()['_agents']), {'document', 'review'})
+                    self.assertEqual(set(self.config()['_agents']), {'study', 'review'})
 
 
 class FolderInventoryTests(FolderFixture):
@@ -247,7 +276,7 @@ class FolderPipelineTests(FolderFixture):
         def response(command, cwd, env, payload, **options):
             context = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n')[1]
                                  .split('\n\n# Required final JSON Schema')[0])
-            stage = 'review' if 'architecture_document' in context else 'document'
+            stage = 'review' if 'architecture_document' in context else 'study'
             stages.append(stage)
             if stage == fail_stage:
                 return {'returncode': 1, 'duration_seconds': 0,
@@ -271,17 +300,17 @@ class FolderPipelineTests(FolderFixture):
         manifest, code, stages = self.run_pipeline(doc_status='BLOCKED')
         self.assertEqual(code, 2)
         self.assertEqual(manifest['status'], 'PARTIAL')
-        self.assertEqual(stages, ['document'])
+        self.assertEqual(stages, ['study'])
         self.assertEqual(manifest['errors'], [])
 
     def test_partial_document_is_reviewed_but_not_accepted(self):
         manifest, code, stages = self.run_pipeline(doc_status='PARTIAL')
         self.assertEqual(code, 2)
         self.assertFalse(manifest['accepted'])
-        self.assertEqual(stages, ['document', 'review'])
+        self.assertEqual(stages, ['study', 'review'])
 
     def test_stage_failure_stops_even_with_continue_on_error(self):
-        for stage in ('document', 'review'):
+        for stage in ('study', 'review'):
             with self.subTest(stage=stage):
                 manifest, code, stages = self.run_pipeline(fail_stage=stage)
                 self.assertEqual(code, 1)
@@ -292,7 +321,7 @@ class FolderPipelineTests(FolderFixture):
     def test_mutation_during_review_prevents_acceptance_and_review_publication(self):
         manifest, code, stages = self.run_pipeline(mutate_review=True)
         self.assertEqual(code, 1)
-        self.assertIsNotNone(manifest['document'])
+        self.assertIsNotNone(manifest['study'])
         self.assertIsNone(manifest['review'])
         self.assertFalse(manifest['accepted'])
         self.assertFalse((self.base / 'run/ARCHITECTURE_REVIEW.md').exists())
@@ -304,7 +333,7 @@ class FolderPipelineTests(FolderFixture):
         context = {'source_directory': str(self.source), 'source_fingerprint': fingerprint}
         with patch('explain.process') as process:
             with self.assertRaisesRegex(AuditError, 'Source folder changed'):
-                runner.invoke('document', context, self.base / 'run/document.logs')
+                runner.invoke('study', context, self.base / 'run/study.logs')
             process.assert_not_called()
 
 
@@ -378,11 +407,21 @@ class FolderCLIIntegrationTests(FolderFixture):
                                 'glob': 'allow', 'grep': 'allow', 'list': 'allow'})
                     if not check:
                         self.assertNotIn('architecture_document', invocations[0]['context'])
-                        self.assertIn('architecture_document', invocations[1]['context'])
+                        self.assertEqual(invocations[1]['context']['architecture_document'], manifest['study'])
+                        self.assertEqual(invocations[1]['context']['document_sha256'],
+                                         manifest['study_invocation']['report_sha256'])
+                        self.assertEqual(manifest['study_invocation']['stage'], 'study')
+                        self.assertNotIn('document', manifest)
+                        self.assertNotIn('document_invocation', manifest)
+                        self.assertFalse((run / 'document.json').exists())
+                        self.assertFalse((run / 'document.logs').exists())
                         self.assertTrue((run / 'ARCHITECTURE.md').is_file())
                         self.assertTrue((run / 'ARCHITECTURE_REVIEW.md').is_file())
-                        for stage in ('document', 'review'):
+                        for stage in ('study', 'review'):
                             data = json.loads((run / f'{stage}.json').read_text())
+                            self.assertEqual(data, manifest[stage])
+                            meta = json.loads((run / f'{stage}.logs/invocation.json').read_text())
+                            self.assertEqual(meta['stage'], stage)
                             self.assertNotIn('schema_version', data)
                             self.assertEqual(data['source_fingerprint'], before['source_fingerprint'])
                     self.assertEqual(Folder(self.source).snapshot(), before)
@@ -397,9 +436,9 @@ class FolderCLIIntegrationTests(FolderFixture):
         self.assertTrue((self.source / 'modified.txt').exists())
         self.assertFalse((run / 'ARCHITECTURE.md').exists())
         manifest = json.loads((run / 'manifest.json').read_text())
-        self.assertIsNone(manifest['document'])
+        self.assertIsNone(manifest['study'])
         self.assertIsNone(manifest['review'])
-        meta = json.loads((run / 'document.logs/invocation.json').read_text())
+        meta = json.loads((run / 'study.logs/invocation.json').read_text())
         self.assertEqual(meta['status'], 'FAILED')
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         self.assertEqual(len([c for c in calls if 'context' in c]), 1)

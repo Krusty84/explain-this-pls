@@ -39,7 +39,7 @@ class ContractTests(unittest.TestCase):
                               'requested_branches': ['master'], 'branches': []}
         cases = [('compare', comparison, comparison_context, 'git')]
         for mode, context in (('git', git_context), ('folder', folder_context)):
-            for stage, data in (('document', doc('master', 'abc')), ('review', review('master', 'abc'))):
+            for stage, data in (('study', doc('master', 'abc')), ('review', review('master', 'abc'))):
                 if mode == 'folder':
                     del data['branch']; del data['source_commit']
                     data.update(context)
@@ -83,7 +83,7 @@ class ContractTests(unittest.TestCase):
             parse_backend('opencode', json.dumps({'type':'text','part':{'id':'p','messageID':'m','text':'{}'}}))
     def test_wrong_commit_rejected(self):
         with self.assertRaises(ContractError):
-            validate_result('document',doc('master','wrong'),{'branch':'master','source_commit':'abc'})
+            validate_result('study',doc('master','wrong'),{'branch':'master','source_commit':'abc'})
     def test_partial_review_cannot_pass(self):
         data = review('master','abc')
         data.update(completion_status='PARTIAL',limitations=['coverage incomplete'])
@@ -131,8 +131,8 @@ class RepoFixture(unittest.TestCase):
             'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master',
             'output_language':'Russian','project_description':'ERP-система 1995 года.',
             'priority_scenarios':[],'continue_on_error':True,
-            '_agents':{s:dict(agent) for s in ('document','review','compare')},
-            '_prompt_paths':{s:str(Path(__file__).resolve().parents[1]/'prompts'/f'{s}.md') for s in ('document','review','compare')}}
+            '_agents':{s:dict(agent) for s in ('study','review','compare')},
+            '_prompt_paths':{s:str(Path(__file__).resolve().parents[1]/'prompts'/f'{s}.md') for s in ('study','review','compare')}}
     def test_grouped_git_configuration_runs_and_restores(self):
         cfg=self.config()
         cfg['mode']='git'
@@ -253,7 +253,7 @@ class FakeRunner(Runner):
     def check_cli(self):return {'TEST_ONLY':'mocked agents'}
     def invoke(self,stage,context,destination):
         self.calls.append((stage,copy.deepcopy(context)))
-        if stage=='document':
+        if stage=='study':
             assert 'architecture_document' not in context and 'branches' not in context
             assert self.repo.symbolic() is None and self.repo.head()==context['source_commit']
             assert context['branch'] in (self.repo.path/'app.py').read_text()
@@ -264,7 +264,7 @@ class FakeRunner(Runner):
             assert context['architecture_document']['branch']==context['branch']
             data=review(context['branch'],context['source_commit'])
         else:
-            unresolved=[b['branch'] for b in context['branches'] if not b['document'] or not b['review']]
+            unresolved=[b['branch'] for b in context['branches'] if not b['study'] or not b['review']]
             data=dict(BASE,task='architecture_comparison',baseline_branch=context['baseline_branch'],
                 baseline_commit=context['baseline_commit'],
                 compared_branches=[b for b in context['requested_branches'] if b!=context['baseline_branch']],
@@ -354,13 +354,13 @@ class ConfigTests(unittest.TestCase):
         self.value['agent'].update(model='base-model',expected_version='test-version')
         self.value['stage_agents']={'review':{'backend':'opencode','model':None}}
         cfg=self.load()
-        self.assertEqual(cfg['_agents']['document']['model'],'base-model')
+        self.assertEqual(cfg['_agents']['study']['model'],'base-model')
         self.assertIsNone(cfg['_agents']['review']['model'])
         self.assertEqual(cfg['_agents']['review']['expected_version'],'test-version')
     def test_executable_can_be_relative_to_config(self):
         (self.base/'cli').symlink_to(sys.executable)
         self.value['agent']['executable']='./cli'
-        self.assertEqual(self.load()['_agents']['document']['executable'],str(Path(sys.executable).resolve()))
+        self.assertEqual(self.load()['_agents']['study']['executable'],str(Path(sys.executable).resolve()))
     def test_all_examples_load_without_credentials(self):
         root=Path(__file__).resolve().parents[1]
         paths = list(root.glob('config*.example.json*'))
@@ -370,14 +370,14 @@ class ConfigTests(unittest.TestCase):
                  patch('explain.shutil.which',return_value=sys.executable):
                 cfg=load_config(path)
                 self.assertTrue(cfg['project_description'])
-                self.assertIsNone(cfg['_agents']['document']['model'])
+                self.assertIsNone(cfg['_agents']['study']['model'])
 
 class AdapterCommandTests(unittest.TestCase):
     setUp=RepoFixture.setUp
     tearDown=RepoFixture.tearDown
     git=RepoFixture.git
     config=RepoFixture.config
-    def command(self,backend,stage='document',env=None,model=None):
+    def command(self,backend,stage='study',env=None,model=None):
         cfg=self.config();runner=Runner(cfg,self.base/'reports'/'run')
         agent=cfg['_agents'][stage];agent.update(backend=backend,model=model)
         return runner.command(stage,self.base,agent,self.base/'schema.json',env if env is not None else {})
@@ -392,7 +392,7 @@ class AdapterCommandTests(unittest.TestCase):
         self.assertNotIn('resume',cmd)
         self.assertIn('--skip-git-repo-check',self.command('codex','compare'))
     def test_claude_tools_and_mcp_are_restricted_with_profile_loaded(self):
-        for stage in ('document','review','compare'):
+        for stage in ('study','review','compare'):
             with self.subTest(stage=stage):
                 cmd=self.command('claude-code',stage)
                 self.assertNotIn('--bare',cmd);self.assertNotIn('--setting-sources',cmd)
@@ -404,7 +404,7 @@ class AdapterCommandTests(unittest.TestCase):
         original={'provider':{'custom':{'options':{'baseURL':'https://example.invalid'}}},
             'model':'custom/model','plugin':['auth-plugin'],'instructions':['rules.md'],
             'agent':{'custom':{'mode':'primary','permission':{'*':'allow'}}},'default_agent':'custom'}
-        for stage in ('document','review','compare'):
+        for stage in ('study','review','compare'):
             with self.subTest(stage=stage):
                 env={'HOME':str(self.base),'OPENCODE_CONFIG':'/custom/config.json',
                      'OPENCODE_CONFIG_CONTENT':json.dumps(original)}
@@ -501,9 +501,26 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                             self.assertEqual(call['permissions'].get('read'),None if compare else 'allow')
                     if not check_only:
                         results=[run_dir/'comparison'/'compare.json']
-                        for branch in manifest['branches']:
+                        bundle=json.loads((run_dir/'comparison'/'inputs.json').read_text())
+                        self.assertEqual(invocations[-1]['context'],bundle)
+                        for index,branch in enumerate(manifest['branches']):
+                            self.assertNotIn('document',branch)
+                            self.assertNotIn('document_invocation',branch)
+                            self.assertEqual(branch['study_invocation']['stage'],'study')
+                            self.assertEqual(bundle['branches'][index]['study'],branch['study'])
+                            self.assertNotIn('document',bundle['branches'][index])
+                            self.assertNotIn('architecture_document',invocations[index*2]['context'])
+                            review_context=invocations[index*2+1]['context']
+                            self.assertEqual(review_context['architecture_document'],branch['study'])
+                            self.assertEqual(review_context['document_sha256'],branch['study_invocation']['report_sha256'])
+                            branch_dir=run_dir/branch['directory']
+                            self.assertEqual(json.loads((branch_dir/'study.json').read_text()),branch['study'])
+                            meta=json.loads((branch_dir/'study.logs/invocation.json').read_text())
+                            self.assertEqual(meta['stage'],'study')
+                            self.assertFalse((branch_dir/'document.json').exists())
+                            self.assertFalse((branch_dir/'document.logs').exists())
                             results.extend(run_dir/branch['directory']/f'{stage}.json'
-                                           for stage in ('document','review'))
+                                           for stage in ('study','review'))
                         for path in results:
                             self.assertNotIn('schema_version',json.loads(path.read_text()))
                     self.assertEqual(self.repo.symbolic(),'master')

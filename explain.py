@@ -34,8 +34,8 @@ from contracts import FOLDER_SCHEMAS, SCHEMAS, ContractError, accepted, jsonc, p
 from reporting import Diagnostic, NullReporter, Reporter, existing_file, output_mode
 
 ROOT = Path(__file__).resolve().parent
-STAGES = ('document', 'review', 'compare')
-ARTIFACTS = {'document': 'ARCHITECTURE.md', 'review': 'ARCHITECTURE_REVIEW.md',
+STAGES = ('study', 'review', 'compare')
+ARTIFACTS = {'study': 'ARCHITECTURE.md', 'review': 'ARCHITECTURE_REVIEW.md',
              'compare': 'BRANCH_COMPARISON.md'}
 BACKENDS = {'codex': 'codex', 'claude-code': 'claude', 'opencode': 'opencode'}
 MIN_GIT_VERSION = (2, 34, 1)
@@ -1221,7 +1221,7 @@ class Runner:
                     branch_dir = self.run_dir / 'branches' / slug(branch)
                     item: dict[str, Any] = {'branch': branch, 'source_commit': commit,
                         'directory': str(branch_dir.relative_to(self.run_dir)),
-                        'document': None, 'review': None, 'errors': []}
+                        'study': None, 'review': None, 'errors': []}
                     manifest['branches'].append(item)
                     persist()
                     self.repo.checkout(commit)
@@ -1233,14 +1233,14 @@ class Runner:
                         'priority_scenarios': self.cfg['priority_scenarios'],
                         'execution_mode': 'static-only', 'initial_working_tree': 'clean',
                         'source_access': 'current checkout; native CLI permissions; other branch reports are outside task scope'}
-                    for stage in ('document', 'review'):
-                        if stage == 'review' and (not item['document'] or item['document']['completion_status'] == 'BLOCKED'):
+                    for stage in ('study', 'review'):
+                        if stage == 'review' and (not item['study'] or item['study']['completion_status'] == 'BLOCKED'):
                             item['errors'].append('Review skipped: no usable architecture document.')
                             self.reporter.emit('stage_skipped', **self.stage_context(stage, context))
                             break
                         stage_context = dict(context)
                         if stage == 'review':
-                            doc = item['document']
+                            doc = item['study']
                             stage_context['architecture_document'] = doc
                             stage_context['document_sha256'] = digest((doc['report_markdown'].rstrip() + '\n').encode())
                         try:
@@ -1275,14 +1275,14 @@ class Runner:
                     manifest['errors'].append('Restoration: ' + (str(exc) or type(exc).__name__))
             # Include all requested branches even if future policies skip one; missing inputs stay visible.
             existing = {b['branch']: b for b in manifest['branches']}
-            entries = [existing.get(b, {'branch': b, 'source_commit': pins[b], 'document': None,
+            entries = [existing.get(b, {'branch': b, 'source_commit': pins[b], 'study': None,
                        'review': None, 'errors': ['Branch was not analyzed.']}) for b in self.source['branches']]
             baseline = self.source['baseline_branch']
             bundle = {'baseline_branch': baseline, 'baseline_commit': pins[baseline],
                 'requested_branches': self.source['branches'], 'output_language': self.cfg['output_language'],
                 'project_description': self.cfg['project_description'],
                 'scope': 'reports-only comparison; source inspection is outside task scope',
-                'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'submodules', 'document', 'review', 'errors')} for b in entries],
+                'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'submodules', 'study', 'review', 'errors')} for b in entries],
                 'git_deltas': {b: self.repo.delta(pins[baseline], pins[b]) for b in self.source['branches'] if b != baseline}}
             comp_dir = self.run_dir / 'comparison'
             save_json(comp_dir / 'inputs.json', bundle)
@@ -1328,7 +1328,7 @@ class Runner:
             'started_at': now(), 'source_directory': str(self.source_path), 'status': 'RUNNING',
             'isolation': 'cli-native-permissions', 'platform': sys.platform,
             'integrity': 'Fingerprints at stage boundaries; not a backup or continuous immutability guarantee.',
-            'document': None, 'review': None, 'accepted': False, 'errors': []}
+            'study': None, 'review': None, 'accepted': False, 'errors': []}
         self.manifest = manifest
         def persist():
             save_json(self.run_dir / 'manifest.json', manifest)
@@ -1356,10 +1356,10 @@ class Runner:
                     'priority_scenarios': self.cfg['priority_scenarios'], 'execution_mode': 'static-only',
                     'source_access': 'Current directory tree, including hidden files; do not follow symlinks or use Git. '
                                      'Native CLI permissions; fingerprints verify stage boundaries only.'}
-                for stage in ('document', 'review'):
+                for stage in ('study', 'review'):
                     stage_context = dict(context)
                     if stage == 'review':
-                        doc = manifest['document']
+                        doc = manifest['study']
                         if doc['completion_status'] == 'BLOCKED':
                             manifest['review_skipped'] = 'No usable architecture document.'
                             self.reporter.emit('stage_skipped', **self.stage_context(stage, context))

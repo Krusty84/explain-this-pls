@@ -183,7 +183,7 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
 
     def test_integrity_failure_is_fatal_even_with_continue_on_error(self):
         self.config['continue_on_error'] = True
-        self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'document', 'kind': 'file', 'path': str(self.paths[LEAF])})
+        self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': 'file', 'path': str(self.paths[LEAF])})
         result, manifest = self.execute()
         self.assertEqual(result.returncode, 1)
         self.assertEqual(manifest['status'], 'FAILED')

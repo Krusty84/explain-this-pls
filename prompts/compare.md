@@ -61,7 +61,7 @@ difference than two similar summaries, but does not establish identical deployme
 ## Required Markdown report
 
 1. Executive comparison: main supported differences and important limits.
-2. Inputs and comparability: every requested branch, commit, document/review status,
+2. Inputs and comparability: every requested branch, commit, study/review status,
    review verdict, missing artifacts and coverage limitations.
 3. Baseline architecture summary using valid cited claims only.
 4. One section for each other requested branch: unchanged aspects where supported,

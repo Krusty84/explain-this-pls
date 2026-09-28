@@ -30,7 +30,7 @@ BASE = dict(completion_status=STATUS,
             report_markdown=string(), limitations=STRINGS)
 
 SCHEMAS = {
-    'document': obj(**BASE, task=string('architecture_documentation'),
+    'study': obj(**BASE, task=string('architecture_documentation'),
                     branch=string(), source_commit=string()),
     'review': obj(**BASE, task=string('architecture_review'),
         branch=string(), source_commit=string(),
@@ -59,7 +59,7 @@ FOLDER_SCHEMAS = {
                   if key not in ('branch', 'source_commit')} |
                  {'source_directory': string(),
                   'source_fingerprint': string()}))
-    for stage in ('document', 'review')
+    for stage in ('study', 'review')
 }
 
 def strict_json(text: str) -> Any:
@@ -156,7 +156,7 @@ def unique_ids(records: list[dict], pattern: str) -> set[str]:
     return set(ids)
 
 def accepted(item: dict) -> bool:
-    doc, rev = item.get('document'), item.get('review')
+    doc, rev = item.get('study'), item.get('review')
     return bool(doc and rev and doc['completion_status'] == 'COMPLETE'
                 and rev['completion_status'] == 'COMPLETE' and rev['verdict'] == 'PASS')
 
@@ -166,7 +166,7 @@ def validate_result(stage: str, value: dict, context: dict, mode: str = 'git') -
         raise ContractError('Empty Markdown report')
     if value['completion_status'] != 'COMPLETE' and not value['limitations']:
         raise ContractError('PARTIAL/BLOCKED requires explicit limitations')
-    if stage in ('document', 'review'):
+    if stage in ('study', 'review'):
         identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
         for key in identity:
             if value[key] != context[key]:

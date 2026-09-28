@@ -99,13 +99,13 @@ else:
         assert json.loads(Path(args[args.index('--output-schema') + 1]).read_text()) == call['schema']
     elif '--json-schema' in args:
         assert json.loads(args[args.index('--json-schema') + 1]) == call['schema']
-    stage = 'compare' if 'baseline_branch' in context else 'review' if 'architecture_document' in context else 'document'
+    stage = 'compare' if 'baseline_branch' in context else 'review' if 'architecture_document' in context else 'study'
     if stage != 'compare' and context.get('source_mode') == 'git':
         inspect_sources(context)
     action(stage)
     data = {'completion_status': 'COMPLETE',
             'report_markdown': '# Report: configured-model\nC-001\n', 'limitations': []}
-    if os.environ.get('AUDIT_TEST_PARTIAL') and stage == 'document':
+    if os.environ.get('AUDIT_TEST_PARTIAL') and stage == 'study':
         data.update(completion_status='PARTIAL', limitations=['Fixture coverage is incomplete.'])
     if 'baseline_branch' in context:
         data.update(task='architecture_comparison', baseline_branch=context['baseline_branch'],

@@ -342,7 +342,7 @@ os.execv({real_git!r}, [{real_git!r}, *sys.argv[1:]])
         before = self.state()
         for failure in (False, True):
             if failure:
-                self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'document', 'kind': 'error', 'path': str(self.path)})
+                self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': 'error', 'path': str(self.path)})
             result, manifest = self.execute(trust=True)
             self.assertEqual(result.returncode, 1 if failure else 0, result.stderr)
             self.assert_original(before)

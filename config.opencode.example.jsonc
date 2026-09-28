@@ -12,7 +12,7 @@
     "baseline_branch": "master"
   },
 
-  // An existing directory; Git is not required. Runs document and review only.
+  // An existing directory; Git is not required. Runs study and review only.
   "folder_mode": {
     "path": "../legacy-app"
   },
@@ -38,7 +38,7 @@
   // When changing backend, also override executable and any inherited model/version.
   // model: null selects the CLI's model; expected_version: null clears version pinning.
   "stage_agents": {
-    "document": {
+    "study": {
       // "backend": "opencode",
       // "executable": "opencode",
       // "model": null,
@@ -68,7 +68,7 @@
   // Omitted entries use bundled prompts, even if this config is moved elsewhere.
   // Custom prompts must be outside the source directory and match the output schema.
   "prompts": {
-    // "document": "./custom-prompts/document.md",
+    // "study": "./custom-prompts/study.md",
     // "review": "./custom-prompts/review.md",
     // "compare": "./custom-prompts/compare.md", // Used only in git mode.
   }

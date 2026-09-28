@@ -109,8 +109,8 @@ class ReporterTests(unittest.TestCase):
         for status, color, label in (('COMPLETE', 32, 'OK'), ('PARTIAL', 33, 'WARN'),
                                      ('BLOCKED', 33, 'WARN'), ('FAILED', 31, 'FAIL')):
             reporter.emit('stage_completed', branch='folder', source_name='COMPLETE 深い [FAIL]',
-                          stage='document', backend='codex', status=status, elapsed_seconds=1)
-            self.assertIn(f'[{label}]\x1b[0m COMPLETE 深い [FAIL] / document / codex — '
+                          stage='study', backend='codex', status=status, elapsed_seconds=1)
+            self.assertIn(f'[{label}]\x1b[0m COMPLETE 深い [FAIL] / study / codex — '
                           f'\x1b[{color}m{status}\x1b[0m | Elapsed: 00:01', self.err.getvalue())
         records = [json.loads(line) for line in (self.base / 'run.log').read_text().splitlines()]
         self.assertEqual([r['status'] for r in records], ['COMPLETE', 'PARTIAL', 'BLOCKED', 'FAILED'])
@@ -120,16 +120,16 @@ class ReporterTests(unittest.TestCase):
     def test_folder_name_in_all_stage_messages_and_git_labels_unchanged(self):
         r = self.reporter
         context = {'branch': 'folder', 'source_name': 'source 深い\n\x1b[31m',
-                   'stage': 'document', 'backend': 'codex'}
+                   'stage': 'study', 'backend': 'codex'}
         r.emit('stage_started', **context)
         r.emit('process_waiting', **context, elapsed_seconds=30, last_output_seconds=None)
         r.emit('stage_completed', **context, status='COMPLETE', elapsed_seconds=31)
         r.emit('stage_skipped', **context)
         r.error(AuditError('test failure'), phase='stage', **context)
         text = self.err.getvalue()
-        self.assertEqual(text.count('source 深い\\n\\x1b[31m / document / codex'), 5)
+        self.assertEqual(text.count('source 深い\\n\\x1b[31m / study / codex'), 5)
         self.assertNotIn('\x1b', text)
-        for branch, stage in (('folder', 'document'), ('all branches', 'compare')):
+        for branch, stage in (('folder', 'study'), ('all branches', 'compare')):
             r.emit('stage_started', branch=branch, stage=stage, backend='codex')
             self.assertIn(f'[RUN] {branch} / {stage} / codex', self.err.getvalue())
 
@@ -169,7 +169,7 @@ class ReporterTests(unittest.TestCase):
             reporter = Reporter(mode='json', verbose=True, stdout=self.out, stderr=self.err)
         self.addCleanup(reporter.close)
         reporter.attach_log(self.base)
-        reporter.emit('stage_started', branch='深い\x1b[31m\n[FAIL]', stage='document', backend='codex')
+        reporter.emit('stage_started', branch='深い\x1b[31m\n[FAIL]', stage='study', backend='codex')
         lines = self.err.getvalue().splitlines()
         self.assertTrue(lines[0].startswith('\x1b[36m[RUN]\x1b[0m 深い\\x1b[31m\\n[FAIL]'))
         self.assertTrue(lines[1].startswith('\x1b[36m[RUN]\x1b[0m Detail: '))
@@ -191,7 +191,7 @@ class ReporterTests(unittest.TestCase):
         r.attach_log(self.base)
         self.assertEqual(self.err.getvalue(), before)
         sha = 'a' * 40
-        r.emit('stage_started', branch='深い branch', commit=sha, stage='document', backend='codex')
+        r.emit('stage_started', branch='深い branch', commit=sha, stage='study', backend='codex')
         self.assertNotIn(sha, self.err.getvalue())
         self.assertNotIn('Timeout:', self.err.getvalue())
         records = [json.loads(line) for line in (self.base / 'run.log').read_text().splitlines()]
@@ -309,7 +309,7 @@ class ProcessReportingTests(unittest.TestCase):
                 patch('explain.os.set_blocking'), patch('explain.os.read', side_effect=read), \
                 patch('explain.os.killpg') as kill:
             result = process(['fake'], Path('/tmp'), {}, reporter=r, clock=clock,
-                             context={'branch': 'master', 'stage': 'document', 'backend': 'opencode'})
+                             context={'branch': 'master', 'stage': 'study', 'backend': 'opencode'})
         self.assertTrue(spawn.call_args.kwargs['close_fds'])
         self.assertTrue(spawn.call_args.kwargs['start_new_session'])
         kill.assert_called_once_with(p.pid, signal.SIGKILL)
@@ -461,11 +461,11 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     self.assertNotIn('private-password', result.stdout + result.stderr)
                     if not check:
                         if mode == 'folder':
-                            for stage in ('document', 'review'):
+                            for stage in ('study', 'review'):
                                 self.assertIn(f'[RUN] {self.folder.name} / {stage} / codex', result.stderr)
                                 self.assertIn(f'[OK] {self.folder.name} / {stage} / codex — COMPLETE', result.stderr)
                         else:
-                            self.assertIn('[RUN] master / document / codex', result.stderr)
+                            self.assertIn('[RUN] master / study / codex', result.stderr)
                             self.assertIn('[RUN] all branches / compare / codex', result.stderr)
 
     def test_missing_origin_falls_back_without_masking_preflight_errors(self):
@@ -527,7 +527,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         summary = json.loads(result.stdout)
         self.assertEqual(summary['status'], 'COMPLETE')
         self.assertNotIn('\x1b', result.stdout)
-        self.assertIn('\x1b[36m[RUN]\x1b[0m source folder / document / codex', console)
+        self.assertIn('\x1b[36m[RUN]\x1b[0m source folder / study / codex', console)
         self.assertIn('— \x1b[32mCOMPLETE\x1b[0m | Elapsed:', console)
         self.assertIn('\x1b[32m[OK]\x1b[0m Configuration', console)
         run_dir = Path(summary['manifest']).parent
@@ -672,14 +672,14 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         for kind in ('wait', 'active', 'closed-pipes'):
             for quiet in (False, True):
                 with self.subTest(kind=kind, quiet=quiet):
-                    self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'document', 'kind': kind, 'seconds': 1.4 if kind == 'closed-pipes' else 0.4})
+                    self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': kind, 'seconds': 1.4 if kind == 'closed-pipes' else 0.4})
                     result = self.run_cli(args + ['--verbose'] + (['--no-progress'] if quiet else []), accelerated=True)
                     output = json.loads(result.stdout)
                     self.assertEqual(output['exit_code'], 1 if kind == 'closed-pipes' else 0, result.stderr)
                     self.assertEqual('      Elapsed:' in result.stderr, not quiet)
                     if not quiet:
                         self.assertIn('Last CLI output:' if kind == 'active' else 'No CLI output received yet', result.stderr)
-                        self.assertIn('[RUN] source folder / document / codex\n      Elapsed:', result.stderr)
+                        self.assertIn('[RUN] source folder / study / codex\n      Elapsed:', result.stderr)
                     self.assertNotIn('private CLI activity', result.stderr)
                     self.assertNotIn('Timeout:', result.stderr)
                     log = Path(output['manifest']).parent / 'run.log'
@@ -688,8 +688,8 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     self.assertNotIn('timeout_seconds', log.read_text())
                     if kind == 'closed-pipes':
                         self.assertIn('CLI_FAILED', result.stderr)
-                        self.assertNotIn('[OK] source folder / document', result.stderr)
-                        self.assertIn('[FAIL] source folder / document / codex failed', result.stderr)
+                        self.assertNotIn('[OK] source folder / study', result.stderr)
+                        self.assertIn('[FAIL] source folder / study / codex failed', result.stderr)
 
     def test_large_stage_input_reaches_cli_without_truncation(self):
         args = self.prepare('folder')
@@ -704,7 +704,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         model_calls = [call for call in calls if 'context' in call]
         self.assertEqual(len(model_calls), 2)
-        for call, stage in zip(model_calls, ('document', 'review')):
+        for call, stage in zip(model_calls, ('study', 'review')):
             self.assertEqual(call['context']['project_description'], description.strip())
             logs = run / (stage + '.logs')
             meta = json.loads((logs / 'invocation.json').read_text())
@@ -719,26 +719,26 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         result = self.run_cli(args + ['--output', 'text'])
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertTrue(result.stdout.startswith('PARTIAL\n'))
-        self.assertIn('[WARN] source folder / document / codex — PARTIAL', result.stderr)
+        self.assertIn('[WARN] source folder / study / codex — PARTIAL', result.stderr)
         del self.env['AUDIT_TEST_PARTIAL']
-        self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'document', 'kind': 'invalid', 'value': 'PRIVATE_MODEL_VALUE'})
+        self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': 'invalid', 'value': 'PRIVATE_MODEL_VALUE'})
         result = self.run_cli(args + ['--verbose'])
         self.assertEqual(result.returncode, 1)
         data = json.loads(result.stdout)
         run = Path(data['manifest']).parent
         self.assertNotIn('PRIVATE_MODEL_VALUE', result.stderr + (run / 'run.log').read_text())
-        self.assertIn('PRIVATE_MODEL_VALUE', (run / 'document.logs/stdout.log').read_text())
+        self.assertIn('PRIVATE_MODEL_VALUE', (run / 'study.logs/stdout.log').read_text())
         self.assertIn('INVALID_RESPONSE', result.stderr)
-        self.assertNotIn('[OK] source folder / document', result.stderr)
+        self.assertNotIn('[OK] source folder / study', result.stderr)
         errors = [json.loads(line) for line in (run / 'run.log').read_text().splitlines()
                   if json.loads(line)['event'] == 'error']
         self.assertEqual((errors[0]['branch'], errors[0]['stage'], errors[0]['backend']),
-                         ('folder', 'document', 'codex'))
+                         ('folder', 'study', 'codex'))
         self.assertEqual(errors[0]['source_name'], 'source folder')
 
     def test_interrupt_stops_process_before_verified_restoration(self):
         args = self.prepare('git')
-        self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'document', 'kind': 'interrupt'})
+        self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': 'interrupt'})
         result = self.run_cli(args)
         data = json.loads(result.stdout)
         self.assertEqual(result.returncode, 130, result.stderr)
