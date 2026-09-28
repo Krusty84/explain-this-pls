@@ -9,6 +9,11 @@ design, a refactoring proposal, a directory listing, or an API reference.
 The orchestration context supplies source_mode, output language, and priority scenarios.
 In git mode, it supplies the branch, source_commit, and repository path. The checkout
 is deliberately detached at that commit. Do not switch branches or inspect other refs.
+The context's submodules list is also in scope, recursively, at each expected_commit.
+Inspect those pinned sources. Never initialize, update, fetch, or switch a submodule.
+For submodule evidence cite the main branch/source_commit, root-relative file path,
+and the containing submodule's expected_commit so the snapshot is unambiguous.
+Never reproduce credentials or secret parameters from repository/submodule URLs.
 In folder mode, it supplies source_directory and source_fingerprint. Inspect that
 directory in place, including hidden files; do not use Git or follow symbolic links.
 The fingerprint covers paths, types, permissions, regular-file contents, and link

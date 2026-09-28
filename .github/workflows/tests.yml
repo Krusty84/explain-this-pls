@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python: ['3.11', '3.13']
+        python: ['3.11', '3.12', '3.13', '3.14']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -21,4 +21,14 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Git, folder, JSONC, and CLI integration tests
+        run: python -B -m unittest discover -s tests -v
+
+  root-ownership:
+    runs-on: ubuntu-latest
+    container: python:3.13-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Git for offline fixtures
+        run: apt-get update && apt-get install -y --no-install-recommends git
+      - name: Real root and foreign-owner integration tests in an isolated container
         run: python -B -m unittest discover -s tests -v

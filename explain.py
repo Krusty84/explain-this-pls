@@ -159,18 +159,23 @@ def process(command: list[str], cwd: Path, env: dict[str, str], input_data: byte
 class Repository:
     def __init__(self, path: Path, trust_repository: bool = False):
         self.path = path.resolve()
+        self.trust_repository = trust_repository
         self.env = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL') if k in os.environ}
         self.env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
-                        GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0', GIT_PAGER='cat')
+                        GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0', GIT_PAGER='cat',
+                        GIT_NO_LAZY_FETCH='1', GIT_ALLOW_PROTOCOL='', GIT_NO_REPLACE_OBJECTS='1')
         self.prefix = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
             '-c', 'core.untrackedCache=false', '-c', 'submodule.recurse=false',
             '-c', 'core.pager=cat', '-C', str(self.path)]
         if trust_repository:
             self.prefix += ['-c', 'safe.directory=', '-c', f'safe.directory={self.path}']
 
-    def git(self, *args: str, allowed: tuple[int, ...] = (0,)) -> bytes:
-        r = subprocess.run(self.prefix + list(args), env=self.env,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    def git(self, *args: str, allowed: tuple[int, ...] = (0,), input_data: bytes | None = None) -> bytes:
+        try:
+            r = subprocess.run(self.prefix + list(args), env=self.env,
+                input=input_data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        except subprocess.TimeoutExpired as exc:
+            raise AuditError(f'git {args[0]} timed out after 120 seconds') from exc
         if r.returncode not in allowed:
             error = r.stderr.decode(errors='replace').strip()
             if any(line.startswith('fatal: detected dubious ownership in repository') for line in error.splitlines()):
@@ -189,63 +194,342 @@ class Repository:
     def symbolic(self) -> str | None:
         return self.text('symbolic-ref', '--quiet', '--short', 'HEAD', allowed=(0, 1)) or None
 
-    def clean(self) -> None:
-        status = self.git('status', '--porcelain=v1', '-z', '--untracked-files=all')
+    def symbolic_ref(self) -> str | None:
+        return self.text('symbolic-ref', '--quiet', '--no-recurse', 'HEAD', allowed=(0, 1)) or None
+
+    def clean(self, *, local: bool = False) -> None:
+        if not local and hasattr(self, 'nodes'):
+            for path, node in self.nodes.items():
+                try:
+                    node.clean(local=True)
+                except AuditError as exc:
+                    raise UnsafeRepository(f'{path}: {exc}') from exc
+            return
+        # Each child is checked directly. During a planned switch its HEAD can
+        # temporarily differ from its parent's gitlink. Still check staged gitlinks.
+        status = self.git('status', '--porcelain=v1', '-z', '--untracked-files=all',
+                          '--ignore-submodules=all')
+        staged = self.git('diff-index', '--cached', '--raw', '-z', '--ignore-submodules=none',
+                          '--no-ext-diff', 'HEAD', '--')
         ignored = self.git('ls-files', '--others', '--ignored', '--exclude-standard', '-z')
-        if status or ignored:
+        if status or staged or ignored:
             raise UnsafeRepository('Working tree must have no modifications, untracked files, '
                                    'or ignored files. No automatic stash/reset/clean is performed.')
         flags = self.git('ls-files', '-v', '-z').split(b'\0')
         if any(line and (line[:1].islower() or line[:1] == b'S') for line in flags):
             raise UnsafeRepository('assume-unchanged/skip-worktree entries are unsupported.')
 
-    def preflight(self, branches: list[str]) -> dict[str, str]:
-        if not (self.path / '.git').is_dir():
-            raise AuditError('A normal standalone checkout is required; no bare/linked worktree.')
-        if Path(self.text('rev-parse', '--show-toplevel')).resolve() != self.path:
-            raise AuditError('repository must point to the checkout root.')
+    @staticmethod
+    def safe_relative(value: str) -> str:
+        if (not value or value.startswith('/') or '\\' in value or
+                any(part in ('', '.', '..') or part.lower() == '.git' for part in value.split('/'))):
+            raise UnsafeRepository(f'Unsafe submodule path or name: {value!r}')
+        return value
+
+    @staticmethod
+    def directory_chain(path: Path, boundary: Path) -> dict:
+        if boundary.resolve() != boundary or not inside(path, boundary):
+            raise UnsafeRepository(f'Path escapes checkout boundary: {path}')
+        result = {}
+        items = [boundary]
+        for part in path.relative_to(boundary).parts:
+            items.append(items[-1] / part)
+        for item in items:
+            info = item.lstat()
+            if not stat.S_ISDIR(info.st_mode):
+                raise UnsafeRepository(f'Directory replaced or symbolic link encountered: {item}')
+            result[str(item)] = [info.st_dev, info.st_ino, info.st_mode]
+        return result
+
+    @staticmethod
+    def file_stamp(path: Path) -> list | None:
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISREG(info.st_mode):
+            raise UnsafeRepository(f'Git metadata must be a regular file: {path}')
+        return [info.st_dev, info.st_ino, info.st_mode, digest(path.read_bytes())]
+
+    def setup_node(self, root: Repository, parent: Repository | None = None, name: str | None = None) -> None:
+        entry = self.path / '.git'
+        self.root_path = root.path
+        self.directory_chain(self.path, root.path)
+        if entry.is_symlink():
+            raise UnsafeRepository(f'Symbolic .git entry: {entry}')
+        if entry.is_dir():
+            expected = entry
+        elif parent and entry.is_file():
+            raw = entry.read_text().rstrip('\n')
+            if not raw.startswith('gitdir: '):
+                raise UnsafeRepository(f'Invalid .git file: {entry}')
+            expected = parent.git_dir / 'modules' / self.safe_relative(name)
+            target = Path(os.path.abspath(self.path / raw[8:]))
+            if target != expected:
+                raise UnsafeRepository(f'Unexpected external Git directory for {self.path}')
+        else:
+            raise AuditError('Submodule is not initialized locally.' if parent else
+                             'A normal standalone checkout is required; no bare/linked worktree.')
+        boundary = root.path
+        self.directory_chain(expected, boundary)
+        self.git_dir = expected
+        self.git_boundary = boundary
+        self._fixed = self.fixed_metadata()
+        self.control_metadata()
+        if self._fixed['files']['commondir'] is not None:
+            raise UnsafeRepository('Linked/common Git directories are unsupported.')
+        # Validate the paths before any command receives a safe.directory exception.
+        actual = Path(self.git('rev-parse', '--absolute-git-dir').decode().rstrip('\n'))
+        common = Path(os.path.abspath(self.path / self.git('rev-parse', '--git-common-dir').decode().rstrip('\n')))
+        top = Path(self.git('rev-parse', '--show-toplevel').decode().rstrip('\n'))
+        if actual != expected or common != expected or top != self.path:
+            raise UnsafeRepository(f'Git data does not belong to expected checkout: {self.path}')
+        self.policy()
+        self.clean(local=True)
+        self._trees = {}
+
+    def fixed_metadata(self) -> dict:
+        directories = self.directory_chain(self.path, self.root_path)
+        directories.update(self.directory_chain(self.git_dir, self.git_boundary))
+        for name in ('objects', 'refs'):
+            directories.update(self.directory_chain(self.git_dir / name, self.git_dir))
+        if (self.git_dir / 'objects/info/alternates').exists():
+            raise UnsafeRepository('External object alternates are unsupported; make objects local first.')
+        files = {name: self.file_stamp(self.git_dir / name)
+                 for name in ('config', 'config.worktree', 'commondir')}
+        if self.path / '.git' != self.git_dir:
+            files['gitfile'] = self.file_stamp(self.path / '.git')
+        return {'directories': directories, 'files': files}
+
+    def control_metadata(self) -> dict:
+        return {name: self.file_stamp(self.git_dir / name) for name in ('HEAD', 'index')}
+
+    def reference_metadata(self, ref: str) -> dict:
+        path = self.git_dir / ref
+        directories = {}
+        for parent in reversed(path.relative_to(self.git_dir).parents):
+            candidate = self.git_dir / parent
+            if candidate.exists() or candidate.is_symlink():
+                directories.update(self.directory_chain(candidate, self.git_dir))
+        return {'directories': directories, 'loose': self.file_stamp(path),
+                'packed': self.file_stamp(self.git_dir / 'packed-refs')}
+
+    def guard_metadata(self) -> None:
+        if self.fixed_metadata() != self._fixed:
+            raise UnsafeRepository('Working directory or Git metadata changed outside the orchestrator.')
+
+    def policy(self) -> None:
         if self.git('config', '--get-regexp', r'^filter\.', allowed=(0, 1)):
             raise AuditError('Git filters (including Git LFS filters) require a separate supported policy.')
         for marker in ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-apply', 'rebase-merge', 'BISECT_START'):
-            if (self.path / '.git' / marker).exists():
+            if (self.git_dir / marker).exists():
                 raise UnsafeRepository(f'Unfinished Git operation: {marker}')
         if self.text('config', '--bool', '--get', 'core.sparseCheckout', allowed=(0, 1)) == 'true':
             raise AuditError('Sparse checkouts are unsupported.')
-        self.clean()
+
+    def tree(self, commit: str) -> dict:
+        if commit in self._trees:
+            return self._trees[commit]
+        if self.text('cat-file', '-t', commit) != 'commit':
+            raise AuditError('Required object is not a commit.')
+        entries = {}
+        for entry in self.git('ls-tree', '-r', '-z', commit).split(b'\0'):
+            if entry:
+                header, path = entry.split(b'\t', 1)
+                mode, kind, oid = header.decode('ascii').split(' ')
+                entries[path.decode('utf-8')] = (mode, kind, oid)
+        # Do not allow lazy fetching, including on Git versions predating
+        # GIT_NO_LAZY_FETCH. GIT_ALLOW_PROTOCOL='' also blocks every transport.
+        blobs = [oid for mode, kind, oid in entries.values() if kind == 'blob']
+        if blobs:
+            checked = self.git('cat-file', '--batch-check', input_data=('\n'.join(blobs) + '\n').encode())
+            if len(checked.splitlines()) != len(blobs) or any(
+                    len(line.split()) != 3 or line.split()[1] != b'blob' for line in checked.splitlines()):
+                raise AuditError('Required tree/blob objects are unavailable locally.')
+        links = {p: oid for p, (mode, kind, oid) in entries.items() if mode == '160000'}
+        modules = {}
+        if '.gitmodules' in entries:
+            if entries['.gitmodules'][0] not in ('100644', '100755'):
+                raise AuditError('.gitmodules must be a regular tracked file.')
+            try:
+                raw = self.git('config', '--no-includes', '--null', '--blob', commit + ':.gitmodules',
+                               '--get-regexp', r'^submodule\..*\.path$', allowed=(0, 1))
+            except AuditError as exc:
+                raise AuditError('Cannot parse committed .gitmodules.') from exc
+            names = set()
+            for record in raw.split(b'\0'):
+                if not record:
+                    continue
+                key, path = record.decode('utf-8').split('\n', 1)
+                name = self.safe_relative(key[len('submodule.'):-len('.path')])
+                self.safe_relative(path)
+                if path in modules or name in names:
+                    raise AuditError(f'Duplicate submodule path/name: {path!r}, {name!r}')
+                modules[path] = name
+                names.add(name)
+        if set(links) != set(modules):
+            raise AuditError('gitlinks and committed .gitmodules paths differ: ' +
+                             repr(sorted(set(links) ^ set(modules))))
+        self._trees[commit] = {path: {'name': modules[path], 'commit': sha} for path, sha in links.items()}
+        return self._trees[commit]
+
+    def preflight(self, branches: list[str]) -> dict[str, str]:
+        self.nodes, self.original, self.plans, self.expected, self.journal = {}, {}, {}, {}, []
+        self.descriptions = {}
+        used = set()
+
+        def visit(node, path, parent, name, required, label, plan, discover=False):
+            try:
+                if discover:
+                    node.setup_node(self, parent, name)
+                    identity = tuple(node._fixed['directories'][str(node.git_dir)][:2])
+                    if identity in used:
+                        raise UnsafeRepository('Git directory reused by multiple submodules.')
+                    used.add(identity)
+                    self.nodes[path] = node
+                    self.descriptions[path] = {'path': path, 'parent': None if parent is None else
+                        str(parent.path.relative_to(self.path)), 'name': name}
+                    actual = node.head()
+                    if required and actual != required:
+                        raise UnsafeRepository(f'Initial HEAD {actual} does not match gitlink.')
+                    required = required or actual
+                    ref = node.symbolic_ref()
+                    if ref and not ref.startswith('refs/heads/'):
+                        raise UnsafeRepository(f'Unsupported symbolic HEAD: {ref}')
+                    self.original[path] = {'commit': required, 'ref': ref,
+                        'worktree': str(node.path), 'git_dir': str(node.git_dir), 'identity': node._fixed,
+                        'ref_identity': node.reference_metadata(ref) if ref else None}
+                    self.expected[path] = {'commit': required, 'ref': ref, 'control': node.control_metadata()}
+                    if parent is None:
+                        label = f'original ({ref or required})'
+                plan[path] = required
+                children = node.tree(required)
+                if not discover:
+                    original_children = node.tree(self.original[path]['commit'])
+                    for child in sorted(set(children) | set(original_children)):
+                        before, after = original_children.get(child), children.get(child)
+                        if before is None or after is None or before['name'] != after['name']:
+                            detail = after or before
+                            raise AuditError(f'Unsupported submodule structure change at {path}/{child}: '
+                                             f'required SHA {detail["commit"]}; paths and logical names must match original checkout.')
+                for child, detail in children.items():
+                    full = child if path == '.' else path + '/' + child
+                    child_path = node.path / child
+                    # Check lexical paths before Repository resolves them.
+                    if discover:
+                        try:
+                            self.directory_chain(child_path, self.path)
+                        except OSError as exc:
+                            raise AuditError(f'Submodule {full!r}, required SHA {detail["commit"]}: not initialized locally.') from exc
+                    child_node = Repository(child_path, self.trust_repository) if discover else self.nodes[full]
+                    visit(child_node, full, node, detail['name'], detail['commit'], label, plan, discover)
+            except (AuditError, OSError) as exc:
+                kind = UnsafeRepository if isinstance(exc, UnsafeRepository) else AuditError
+                raise kind(f'Snapshot {label!r}, path {path!r}, required SHA {required or "HEAD"}: {exc}') from exc
+
+        initial = {}
+        visit(self, '.', None, None, None, 'original', initial, True)
+        self.plans[initial['.']] = initial
         result = {}
         for name in branches:
             self.git('check-ref-format', 'refs/heads/' + name)
             commit = self.text('rev-parse', '--verify', 'refs/heads/' + name + '^{commit}')
-            entries = self.git('ls-tree', '-r', '-z', commit).split(b'\0')
-            if any(entry.startswith(b'160000 ') for entry in entries):
-                raise AuditError(f'Submodules are unsupported by this version: {name}')
+            plan = {}
+            visit(self, '.', None, None, commit, name, plan)
+            self.plans[commit] = plan
             result[name] = commit
+        self.assert_expected()
         return result
 
+    def assert_expected(self) -> None:
+        for path, node in self.nodes.items():
+            try:
+                node.guard_metadata()
+                state = self.expected[path]
+                if node.control_metadata() != state['control'] or node.head() != state['commit'] or node.symbolic_ref() != state['ref']:
+                    raise UnsafeRepository('HEAD/index changed outside the orchestrator.')
+                original = self.original[path]
+                if original['ref'] and (node.reference_metadata(original['ref']) != original['ref_identity'] or
+                        node.text('rev-parse', '--verify', original['ref']) != original['commit']):
+                    raise UnsafeRepository('Original branch moved concurrently; refusing automatic restoration.')
+                node.policy()
+                node.clean(local=True)
+            except (AuditError, OSError) as exc:
+                error = UnsafeRepository(f'{path}: {exc}')
+                error.node = path
+                raise error from exc
+
+    def switch_node(self, path: str, commit: str, ref: str | None = None) -> None:
+        self.assert_expected()
+        node = self.nodes[path]
+        before = self.expected[path]
+        target = {'commit': commit, 'ref': ref}
+        entry = {'path': path, 'before': {k: before[k] for k in target}, 'target': target, 'status': 'INTENDED'}
+        self.journal.append(entry)
+        switch_error = None
+        try:
+            if ref:
+                node.git('switch', '--no-guess', '--no-recurse-submodules', '--', ref[len('refs/heads/'):])
+            else:
+                node.git('switch', '--detach', '--no-recurse-submodules', commit)
+        except BaseException as exc:
+            switch_error = exc
+            exc.node = path
+            raise
+        finally:
+            # Git may have completed just before a handled signal or error. Only
+            # accept a clean old or intended state; never infer arbitrary progress.
+            try:
+                node.guard_metadata()
+                actual = {'commit': node.head(), 'ref': node.symbolic_ref()}
+                if actual != target and actual != entry['before']:
+                    raise UnsafeRepository('Unexpected HEAD during interrupted switch.')
+                node.clean(local=True)
+                self.expected[path] = dict(actual, control=node.control_metadata())
+                entry['status'] = 'COMPLETED' if actual == target else 'UNCHANGED'
+            except (AuditError, OSError) as exc:
+                entry.update(status='UNSAFE', error=str(exc))
+                exc.node = path
+                # Keep the last expected state so restoration refuses evidence.
+                if switch_error is None:
+                    raise
+        self.assert_expected()
+
     def checkout(self, commit: str) -> None:
-        self.clean()
-        self.git('switch', '--detach', commit)
+        if not hasattr(self, 'plans'):
+            self.preflight([])
+            # Compatibility for callers that previously checked out directly.
+            if commit not in self.plans:
+                if self.tree(commit):
+                    raise AuditError('Submodule checkout requires a prepared preflight plan.')
+                self.plans[commit] = {'.': commit}
+        for path, sha in self.plans[commit].items():
+            self.switch_node(path, sha)
         self.assert_snapshot(commit)
 
     def assert_snapshot(self, commit: str) -> None:
-        if self.head() != commit or self.symbolic() is not None:
-            raise UnsafeRepository('HEAD changed outside the orchestrator.')
-        self.clean()
+        self.assert_expected()
+        for path, sha in self.plans[commit].items():
+            if self.expected[path]['commit'] != sha or self.expected[path]['ref'] is not None:
+                raise UnsafeRepository(f'{path}: HEAD differs from the detached snapshot plan.')
 
     def restore(self, branch: str | None, commit: str) -> dict:
-        self.clean()
-        # A concurrent actor may have moved the original branch. Never reset it.
-        if branch:
-            current_ref = self.text('rev-parse', 'refs/heads/' + branch + '^{commit}')
-            if current_ref != commit:
-                raise UnsafeRepository('Original branch moved concurrently; refusing automatic restoration.')
-            self.git('switch', '--no-guess', branch)
-        else:
-            self.git('switch', '--detach', commit)
-        self.clean()
-        if self.head() != commit or self.symbolic() != branch:
-            raise UnsafeRepository('Restoration verification failed.')
-        return {'restored': True, 'branch': branch, 'commit': commit}
+        self.assert_expected()
+        for path, state in self.original.items():
+            if any(self.expected[path][k] != state[k] for k in ('commit', 'ref')):
+                self.switch_node(path, state['commit'], state['ref'])
+        self.assert_expected()
+        return {'restored': True, 'branch': branch, 'commit': commit,
+                'nodes': {p: {'commit': s['commit'], 'ref': s['ref'], 'restored': True}
+                          for p, s in self.original.items()}}
+
+    def submodules(self, commit: str, verified: bool = False) -> list[dict]:
+        if verified:
+            self.assert_snapshot(commit)
+        return [dict(self.descriptions[path], expected_commit=sha, available_locally=True,
+                     actual={'commit': self.expected[path]['commit'], 'ref': self.expected[path]['ref'],
+                             'clean': True}, snapshot_verified=verified)
+                for path, sha in self.plans[commit].items() if path != '.']
 
     def delta(self, baseline: str, other: str) -> dict:
         raw = self.git('diff', '--raw', '--no-abbrev', '--no-renames', '--no-ext-diff',
@@ -262,12 +546,17 @@ class Repository:
                 'old_mode': oldmode.lstrip(':'), 'new_mode': newmode,
                 'old_blob': oldoid, 'new_blob': newoid})
         bases = self.text('merge-base', '--all', baseline, other, allowed=(0, 1)).splitlines()
+        submodules = [dict(self.descriptions[path], baseline_commit=sha, branch_commit=self.plans[other][path])
+                      for path, sha in getattr(self, 'plans', {}).get(baseline, {}).items()
+                      if path != '.' and sha != self.plans[other][path]]
         return {'orientation': 'baseline_tree_to_branch_tree', 'baseline_commit': baseline,
             'branch_commit': other, 'merge_bases': bases, 'changes': changes,
+            'submodule_changes': submodules,
             'identical_trees': self.text('rev-parse', baseline + '^{tree}') ==
                                self.text('rev-parse', other + '^{tree}'),
             'limitations': ['Path/mode/blob changes only; no patch, runtime evidence, or historical rationale.',
-                            'Rename detection disabled: renames appear as deletion plus addition.']}
+                            'Rename detection disabled: renames appear as deletion plus addition.',
+                            'Gitlink/submodule SHA changes are not file diffs of the nested repositories.']}
 
 class Folder:
     def __init__(self, path: Path):
@@ -586,6 +875,8 @@ class Runner:
             'prompt_sha256': digest(payload), 'template_sha256': digest(template.encode()),
             'schema_sha256': digest(json.dumps(self.schemas[stage], sort_keys=True).encode()),
             'input_bytes': len(payload), 'status': 'RUNNING'}
+        if self.repo:
+            meta['submodules'] = context.get('submodules', [])
         save_json(destination / 'invocation.json', meta)
         # Saved by the parent only, for reproducibility; includes only this stage's permitted input.
         atomic(destination / 'input.prompt.txt', payload)
@@ -596,6 +887,8 @@ class Runner:
         try:
             if self.folder:
                 self.folder.assert_snapshot(context['source_fingerprint'])
+            else:
+                self.repo.assert_expected()
             with tempfile.TemporaryDirectory(prefix='archaudit-invocation-') as raw:
                 state = Path(raw).resolve()
                 cwd = state if stage == 'compare' else self.source_path
@@ -611,6 +904,8 @@ class Runner:
                 finally:
                     if self.folder:
                         self.folder.assert_snapshot(context['source_fingerprint'])
+                    else:
+                        self.repo.assert_expected()
                 if r['returncode'] or r['error']:
                     raise AuditError(r['error'] or f'{agent["backend"]} exited with {r["returncode"]}; see stderr.log')
                 data, provider_meta = parse_backend(agent['backend'], r['stdout'].decode('utf-8'))
@@ -637,10 +932,27 @@ class Runner:
             'isolation': 'cli-native-permissions', 'platform': sys.platform,
             'branches': [], 'errors': []}
         def persist():
+            if hasattr(self.repo, 'journal'):
+                manifest['switch_journal'] = self.repo.journal
             save_json(self.run_dir / 'manifest.json', manifest)
         persist()
         original_branch = original_commit = None
         restored = False
+        restoration_attempted = False
+
+        def restore():
+            nonlocal restored, restoration_attempted
+            restoration_attempted = True
+            try:
+                manifest['restoration'] = self.repo.restore(original_branch, original_commit)
+                restored = True
+            except BaseException as exc:
+                manifest['restoration'] = {'restored': False, 'node': getattr(exc, 'node', None),
+                                           'error': str(exc) or type(exc).__name__}
+                raise
+            finally:
+                persist()
+
         try:
             if not self.cfg['project_description']:
                 log('Описание проекта не указано. Рекомендуем заполнить project_description: '
@@ -649,12 +961,19 @@ class Runner:
             manifest['pins'] = pins
             original_branch, original_commit = self.repo.symbolic(), self.repo.head()
             manifest['original_checkout'] = {'branch': original_branch, 'commit': original_commit}
-            manifest['cli_checks'] = self.check_cli()
+            manifest['original_hierarchy'] = self.repo.original
+            manifest['snapshot_plans'] = {name: {'commit': sha, 'submodules': self.repo.submodules(sha)}
+                                          for name, sha in pins.items()}
+            try:
+                manifest['cli_checks'] = self.check_cli()
+            finally:
+                self.repo.assert_expected()
             persist()
             if check_only:
                 manifest.update(status='PREFLIGHT_OK', finished_at=now())
                 persist()
                 return manifest, 0
+            analysis_error = None
             try:
                 for branch in self.source['branches']:
                     commit = pins[branch]
@@ -666,7 +985,9 @@ class Runner:
                     manifest['branches'].append(item)
                     persist()
                     self.repo.checkout(commit)
+                    item['submodules'] = self.repo.submodules(commit, verified=True)
                     context = {'source_mode': 'git', 'branch': branch, 'source_commit': commit,
+                        'submodules': item['submodules'],
                         'repository': str(self.repo.path), 'output_language': self.cfg['output_language'],
                         'project_description': self.cfg['project_description'],
                         'priority_scenarios': self.cfg['priority_scenarios'],
@@ -683,12 +1004,13 @@ class Runner:
                             stage_context['document_sha256'] = digest((doc['report_markdown'].rstrip() + '\n').encode())
                         try:
                             log(f'  {stage}: {self.cfg["_agents"][stage]["backend"]}')
+                            self.repo.assert_snapshot(commit)
                             data, meta = self.invoke(stage, stage_context, branch_dir / (stage + '.logs'))
                             item[stage] = data
                             item[stage + '_invocation'] = meta
                         except (AuditError, ContractError, OSError, UnicodeError) as exc:
                             item['errors'].append(f'{stage}: {exc}')
-                            if not self.cfg['continue_on_error']:
+                            if isinstance(exc, UnsafeRepository) or not self.cfg['continue_on_error']:
                                 raise
                         finally:
                             # Changed HEAD or working tree is always fatal, even with continue_on_error.
@@ -696,10 +1018,16 @@ class Runner:
                             persist()
                     item['accepted'] = accepted(item)
                     persist()
+            except BaseException as exc:
+                analysis_error = exc
+                raise
             finally:
-                manifest['restoration'] = self.repo.restore(original_branch, original_commit)
-                restored = True
-                persist()
+                try:
+                    restore()
+                except BaseException as exc:
+                    if analysis_error is None:
+                        raise
+                    manifest['errors'].append('Restoration: ' + (str(exc) or type(exc).__name__))
             # Include all requested branches even if future policies skip one; missing inputs stay visible.
             existing = {b['branch']: b for b in manifest['branches']}
             entries = [existing.get(b, {'branch': b, 'source_commit': pins[b], 'document': None,
@@ -709,22 +1037,21 @@ class Runner:
                 'requested_branches': self.source['branches'], 'output_language': self.cfg['output_language'],
                 'project_description': self.cfg['project_description'],
                 'scope': 'reports-only comparison; source inspection is outside task scope',
-                'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'document', 'review', 'errors')} for b in entries],
+                'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'submodules', 'document', 'review', 'errors')} for b in entries],
                 'git_deltas': {b: self.repo.delta(pins[baseline], pins[b]) for b in self.source['branches'] if b != baseline}}
             comp_dir = self.run_dir / 'comparison'
             save_json(comp_dir / 'inputs.json', bundle)
             log('Comparing all branch reports in a new session outside the repository')
             try:
+                self.repo.assert_expected()
                 comparison, meta = self.invoke('compare', bundle, comp_dir / 'compare.logs')
             finally:
                 # Compare also uses the user's profile, so verify the restored
                 # checkout even though this stage runs outside the repository.
                 try:
-                    self.repo.clean()
-                    if self.repo.head() != original_commit or self.repo.symbolic() != original_branch:
-                        raise UnsafeRepository('Original checkout changed during comparison.')
+                    self.repo.assert_expected()
                 except AuditError as exc:
-                    manifest['restoration'] = {'restored': False, 'error': str(exc)}
+                    manifest['restoration'] = {'restored': False, 'node': getattr(exc, 'node', None), 'error': str(exc)}
                     raise
             manifest['comparison'] = comparison
             manifest['comparison_invocation'] = meta
@@ -738,11 +1065,11 @@ class Runner:
             code = 130 if isinstance(exc, KeyboardInterrupt) else 1
             # Only restore if preflight established an original checkout and restoration
             # has not already completed; never force away evidence of unexpected writes.
-            if original_commit and not restored and not check_only:
+            if original_commit and not restored and not restoration_attempted and not check_only:
                 try:
-                    manifest['restoration'] = self.repo.restore(original_branch, original_commit)
-                except Exception as restore_error:
-                    manifest['restoration'] = {'restored': False, 'error': str(restore_error)}
+                    restore()
+                except BaseException as restore_error:
+                    manifest['errors'].append('Restoration: ' + (str(restore_error) or type(restore_error).__name__))
             log(f'Run failed: {exc}')
         manifest['finished_at'] = now()
         manifest['exit_code'] = code

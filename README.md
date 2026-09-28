@@ -68,6 +68,30 @@ local branches and one of them selected as the comparison baseline. The checkout
 must have no staged or unstaged changes, untracked files, or ignored files. The
 runner does not automatically stash or clean it, and does not fetch remote branches.
 
+Recursive Git submodules are supported when they are already initialized. Prepare
+them yourself before starting the runner, for example with
+`git submodule update --init --recursive --checkout` in a trusted checkout. Fetch
+any additional historical submodule commits needed by the selected branches during
+that preparation. The runner never fetches, initializes submodules, runs custom
+update commands, or advances them to remote tips. Every required commit, tree, and
+blob must be available locally; partial clones with missing objects are rejected
+without lazy fetching. Object stores using alternates are not supported.
+
+The original checkout and every selected branch must contain the same submodule
+paths and logical names at every level. Their pinned SHAs and source contents may
+differ at any depth. Additions, removals, moves, and logical-name changes are rejected
+during preflight, before any checkout switches. The runner reads `.gitmodules`
+from each pinned parent commit. Missing checkouts or objects are reported with the
+snapshot, submodule path, and required SHA.
+
+Every initialized submodule must initially match its parent's gitlink, with no
+staged, tracked, untracked, or ignored changes and no unfinished Git operation.
+Each working tree is checked directly, even with `submodule.<name>.ignore=all`.
+Filters, sparse checkout, skip-worktree, and assume-unchanged are unsupported in
+the parent and in every submodule. Submodule `.git` files and embedded `.git`
+directories are supported; external/reused Git directories and symlink substitution
+of checkout or administrative directories are rejected.
+
 For folder mode, prepare an existing directory with the source files and subdirectories.
 There is no requirement for `.git`, branches, or a clean checkout. All entries,
 including hidden files, are inventoried; there are no configurable exclusions.
@@ -254,6 +278,9 @@ The `--check` option checks CLI availability, versions, and required capabilitie
 without calling a model or switching branches. It writes a manifest and configuration
 snapshot under `reports_dir`. In folder mode it also inventories and fingerprints
 the source tree, and checks only the CLIs used for document and review.
+In Git mode, it builds and validates the complete recursive plan for the original
+checkout and all selected branches. It does not change HEAD, refs, indexes, source
+files, or Git configuration, including when the last branch fails validation.
 
 Then start the investigation:
 
@@ -280,9 +307,10 @@ python3 explain.py \
   --check
 ```
 
-`--trust-repository` applies only to the checkout selected by the active Git
-configuration. Each runner Git command receives an empty `safe.directory` entry
-to reset the exception list, followed by the checkout's canonical absolute path
+`--trust-repository` applies to the checkout selected by the active Git
+configuration and its discovered, path-validated submodules. Each runner Git command
+receives an empty `safe.directory` entry to reset the exception list, followed by
+only that command's checkout's canonical absolute path
 (including symlink resolution). Paths with spaces are supported. The runner does
 not change system, user, or repository Git configuration, trust other checkouts,
 or pass this exception to external agents. Its Git processes continue to ignore
@@ -296,10 +324,30 @@ also does not guarantee that Codex CLI, Claude Code, or OpenCode permits running
 as root. Their sandbox and tool restrictions remain in effect; the runner does
 not bypass their own startup policies or change the process user.
 
-In git mode, the runner locks the repository, pins the selected branch commits, and checks out
-each commit to run the `document` and `review` stages. It restores the original
-checkout before running `compare` in a new session outside the repository. Avoid
-editing or switching the inspected checkout while the run is in progress.
+In git mode, the runner locks the repository, pins the selected commits and all
+recursive gitlinks, and switches the entire hierarchy to detached HEADs before
+`document` or `review` can inspect it. It verifies source and Git metadata integrity
+before and after analysis, after CLI checks, and after `compare`. An integrity
+failure always stops the run, regardless of `continue_on_error`.
+
+Before `compare` runs outside the repository, the runner restores the original
+commit and full symbolic branch ref (or detached HEAD) of every node. It also
+attempts restoration on agent/Git failures and handled interruptions such as SIGINT
+or SIGTERM. A switch journal accounts for partially completed hierarchy changes.
+If another process changes files, HEAD, Git metadata, or an original branch ref,
+restoration refuses to overwrite the evidence. It never uses forced checkout,
+reset, clean, or forced ref movement. The manifest records restoration success or
+the failing node and preserves the analysis error alongside restoration errors.
+Avoid editing or switching any node while the run is in progress. These are checks
+at stage and switch boundaries, not continuous immutability or a backup. Restoration
+cannot be promised after SIGKILL, power loss, or termination that bypasses Python
+handlers.
+
+Submodule sources are part of the document/review scope. Their root-relative paths,
+parent repositories, expected SHAs, and verified actual states are supplied in the
+stage contexts and manifest, with original restoration state stored separately.
+Comparison inputs include recursive SHA changes against the baseline. A gitlink
+change is commit metadata, not a complete file diff of the nested repository.
 
 In folder mode, the runner locks the source directory and runs document and review
 in place, in separate sessions. It records relative paths, entry types, permissions,
