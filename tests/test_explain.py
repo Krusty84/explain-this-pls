@@ -208,6 +208,39 @@ class RepoFixture(unittest.TestCase):
         self.assertIn('test01',result['comparison']['unresolved_branches'])
         self.assertTrue(result['branches'][2]['accepted'])
         self.assertEqual(self.repo.symbolic(),'master')
+    def test_single_branch_status_and_restoration(self):
+        cases=[('study','PARTIAL',True,'PARTIAL',2),
+               ('review','PARTIAL',True,'PARTIAL',2),
+               ('study','BLOCKED',True,'FAILED',1),
+               ('study','error',True,'FAILED',1),
+               ('review','error',True,'FAILED',1),
+               ('review','error',False,'FAILED',1)]
+        for index,(failed_stage,outcome,continue_on_error,status,expected_code) in enumerate(cases):
+            with self.subTest(stage=failed_stage,outcome=outcome,continue_on_error=continue_on_error):
+                config=self.config();config['branches']=['master']
+                config['continue_on_error']=continue_on_error
+                dest=self.base/'reports'/str(index)
+                fake=FakeRunner(config,dest)
+                invoke=fake.invoke
+                def change_result(stage,context,destination):
+                    if stage==failed_stage and outcome=='error':
+                        raise AuditError('simulated CLI failure')
+                    data,meta=invoke(stage,context,destination)
+                    if stage==failed_stage:
+                        data.update(completion_status=outcome,limitations=['Incomplete coverage.'])
+                        if stage=='review':data['verdict']='INCONCLUSIVE'
+                    return data,meta
+                fake.invoke=change_result
+                with patch.object(fake.repo,'delta',side_effect=AssertionError('Unexpected comparison')):
+                    result,code=fake.run()
+                self.assertEqual((result['status'],code),(status,expected_code))
+                self.assertNotIn('comparison',result)
+                self.assertNotIn('comparison_invocation',result)
+                self.assertFalse((dest/'comparison').exists())
+                self.assertTrue(result['restoration']['restored'])
+                self.assertEqual(self.repo.symbolic(),'master')
+                self.assertEqual(self.repo.head(),self.master)
+                self.repo.clean()
     def test_fail_fast_restores(self):
         config=self.config();config['continue_on_error']=False
         dest=self.base/'reports'/'run';dest.mkdir()
@@ -330,6 +363,26 @@ class ConfigTests(unittest.TestCase):
                 self.value['project_description']=raw
                 with self.assertRaisesRegex(AuditError,'project_description must be a string'):
                     self.load()
+    def test_single_branch_ignores_compare_settings_in_both_config_formats(self):
+        self.value.update(branches=['master'],
+            stage_agents={'compare':{'backend':'unavailable','executable':'/missing/cli'}},
+            prompts={'compare':'/missing/prompt'})
+        for grouped in (False,True):
+            with self.subTest(grouped=grouped):
+                if grouped:
+                    self.value['mode']='git'
+                    self.value['git_mode']={key:self.value.pop(key)
+                        for key in ('repository','branches','baseline_branch')}
+                cfg=self.load()
+                self.assertEqual(set(cfg['_agents']),{'study','review'})
+                self.assertEqual(set(cfg['_prompt_paths']),{'study','review'})
+    def test_git_branches_and_baseline_validation(self):
+        for branches,baseline in (([],'master'),(['master','master'],'master'),
+                ([''],'master'),([None],'master'),('master','master'),
+                (['master'],'other'),(['master','test01'],'other')):
+            with self.subTest(branches=branches,baseline=baseline):
+                self.value.update(branches=branches,baseline_branch=baseline)
+                with self.assertRaises(AuditError):self.load()
     def test_removed_limits_are_not_defaulted_and_are_rejected(self):
         cfg=self.load()
         for key in ('timeout_seconds','max_input_bytes','max_output_bytes'):

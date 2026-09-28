@@ -5,7 +5,8 @@
   // Choose "git" or "folder". Only the selected section is used.
   "mode": "git",
 
-  // A clean standalone checkout and at least two existing local branches.
+  // A clean standalone checkout and one or more existing local branches.
+  // For one branch, use ["master"] and baseline_branch: "master"; compare is skipped.
   "git_mode": {
     "repository": "../legacy-app",
     "branches": ["master", "lockheed_ver10.2a.0", "general_ver10.0"],
@@ -50,7 +51,7 @@
       // "model": null,
       // "expected_version": null,
     },
-    // Used only in git mode; ignored in folder mode.
+    // Used only in git mode with two or more selected branches.
     "compare": {
       // "backend": "claude-code",
       // "executable": "claude",
@@ -70,6 +71,6 @@
   "prompts": {
     // "study": "./custom-prompts/study.md",
     // "review": "./custom-prompts/review.md",
-    // "compare": "./custom-prompts/compare.md", // Used only in git mode.
+    // "compare": "./custom-prompts/compare.md", // Git mode with two or more branches only.
   }
 }

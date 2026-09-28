@@ -375,7 +375,10 @@ class Reporter(NullReporter):
                           'Comparison: ' + status('not applicable') + ' (folder mode)',
                           'Restoration: ' + status('not applicable') + ' (folder mode)']
             else:
-                lines += ['Comparison: ' + status(manifest.get('comparison', {}).get('completion_status', 'not completed'))]
+                if 'comparison' not in manifest and len(manifest.get('pins', {})) == 1:
+                    lines += ['Comparison: ' + status('not applicable') + ' (single branch)']
+                else:
+                    lines += ['Comparison: ' + status(manifest.get('comparison', {}).get('completion_status', 'not completed'))]
                 restoration = manifest.get('restoration')
                 lines += ['Restoration: ' + status('verified' if restoration and restoration['restored'] else
                           'FAILED' if restoration else 'not performed')]

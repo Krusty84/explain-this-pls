@@ -886,8 +886,8 @@ def load_config(path: Path) -> dict:
         raise AuditError('Source directory and reports_dir must be disjoint, not ancestors of each other.')
     if mode == 'git':
         branches = source['branches']
-        if not isinstance(branches, list) or len(branches) < 2 or any(not isinstance(b, str) or not b for b in branches):
-            raise AuditError('At least two nonempty local branch names are required.')
+        if not isinstance(branches, list) or not branches or any(not isinstance(b, str) or not b for b in branches):
+            raise AuditError('At least one nonempty local branch name is required.')
         if len(set(branches)) != len(branches) or source['baseline_branch'] not in branches:
             raise AuditError('Branches must be unique and include baseline_branch.')
     defaults = {'output_language': 'Russian', 'project_description': '', 'priority_scenarios': [],
@@ -904,7 +904,7 @@ def load_config(path: Path) -> dict:
         raise AuditError('continue_on_error must be boolean.')
     if not isinstance(value['priority_scenarios'], list) or any(not isinstance(s, str) for s in value['priority_scenarios']):
         raise AuditError('priority_scenarios must be an array of strings.')
-    stages = STAGES if mode == 'git' else STAGES[:2]
+    stages = STAGES if mode == 'git' and len(source['branches']) > 1 else STAGES[:2]
     for stage in value['stage_agents']:
         if stage not in STAGES:
             raise AuditError(f'Unknown stage override: {stage}')
@@ -1277,33 +1277,35 @@ class Runner:
             existing = {b['branch']: b for b in manifest['branches']}
             entries = [existing.get(b, {'branch': b, 'source_commit': pins[b], 'study': None,
                        'review': None, 'errors': ['Branch was not analyzed.']}) for b in self.source['branches']]
-            baseline = self.source['baseline_branch']
-            bundle = {'baseline_branch': baseline, 'baseline_commit': pins[baseline],
-                'requested_branches': self.source['branches'], 'output_language': self.cfg['output_language'],
-                'project_description': self.cfg['project_description'],
-                'scope': 'reports-only comparison; source inspection is outside task scope',
-                'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'submodules', 'study', 'review', 'errors')} for b in entries],
-                'git_deltas': {b: self.repo.delta(pins[baseline], pins[b]) for b in self.source['branches'] if b != baseline}}
-            comp_dir = self.run_dir / 'comparison'
-            save_json(comp_dir / 'inputs.json', bundle)
-            started = self.stage_started('compare', bundle)
-            try:
-                self.repo.assert_expected()
-                comparison, meta = self.invoke('compare', bundle, comp_dir / 'compare.logs')
-            finally:
-                # Compare also uses the user's profile, so verify the restored
-                # checkout even though this stage runs outside the repository.
+            quality_ok = all(accepted(b) for b in entries)
+            if len(self.source['branches']) > 1:
+                baseline = self.source['baseline_branch']
+                bundle = {'baseline_branch': baseline, 'baseline_commit': pins[baseline],
+                    'requested_branches': self.source['branches'], 'output_language': self.cfg['output_language'],
+                    'project_description': self.cfg['project_description'],
+                    'scope': 'reports-only comparison; source inspection is outside task scope',
+                    'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'submodules', 'study', 'review', 'errors')} for b in entries],
+                    'git_deltas': {b: self.repo.delta(pins[baseline], pins[b]) for b in self.source['branches'] if b != baseline}}
+                comp_dir = self.run_dir / 'comparison'
+                save_json(comp_dir / 'inputs.json', bundle)
+                started = self.stage_started('compare', bundle)
                 try:
                     self.repo.assert_expected()
-                except AuditError as exc:
-                    manifest['restoration'] = {'restored': False, 'node': getattr(exc, 'node', None), 'error': str(exc)}
-                    self.record_error(manifest, exc, phase='restoration')
-                    raise
-            manifest['comparison'] = comparison
-            manifest['comparison_invocation'] = meta
-            self.stage_finished('compare', bundle, comparison, started)
+                    comparison, meta = self.invoke('compare', bundle, comp_dir / 'compare.logs')
+                finally:
+                    # Compare also uses the user's profile, so verify the restored
+                    # checkout even though this stage runs outside the repository.
+                    try:
+                        self.repo.assert_expected()
+                    except AuditError as exc:
+                        manifest['restoration'] = {'restored': False, 'node': getattr(exc, 'node', None), 'error': str(exc)}
+                        self.record_error(manifest, exc, phase='restoration')
+                        raise
+                manifest['comparison'] = comparison
+                manifest['comparison_invocation'] = meta
+                self.stage_finished('compare', bundle, comparison, started)
+                quality_ok = quality_ok and comparison['completion_status'] == 'COMPLETE'
             failed = any(b['errors'] for b in entries)
-            quality_ok = all(accepted(b) for b in entries) and comparison['completion_status'] == 'COMPLETE'
             manifest['status'] = 'FAILED' if failed else 'COMPLETE' if quality_ok else 'PARTIAL'
             code = 1 if failed else 0 if quality_ok else 2
         except BaseException as exc:
