@@ -26,6 +26,32 @@ jobs:
           git --version
           python3 -B -m unittest discover -s tests -v
 
+  almalinux:
+    name: AlmaLinux 9 / Python 3.11
+    runs-on: ubuntu-latest
+    container:
+      image: almalinux:9
+      options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined
+    defaults:
+      run:
+        shell: bash
+    env:
+      AUDIT_GIT_BUILD: modern
+    steps:
+      - name: Install Git, Python, and network isolation tools
+        run: |
+          set -euo pipefail
+          dnf install -y git python3.11 util-linux
+      - uses: actions/checkout@v4
+      - name: Full suite on AlmaLinux 9 with no network
+        run: |
+          set -euo pipefail
+          cat /etc/os-release
+          command -v git
+          git --version
+          python3.11 --version
+          unshare --net python3.11 -B -m unittest discover -s tests -v
+
   git-compatibility:
     runs-on: ubuntu-22.04
     strategy:
