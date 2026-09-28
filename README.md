@@ -26,14 +26,10 @@ instruct agents to inspect code without running the project's builds or tests.
   to commit IDs pinned at the start of the run.
 - **Plain-folder research** with file inventories and SHA-256 fingerprints checked
   at stage boundaries, without creating a repository or copying the source.
-- **Commented JSONC configuration** showing both modes and all available options,
-  with support for existing JSON configurations.
 - **Choice of coding agent** with Codex CLI, Claude Code, and OpenCode support,
   including per-stage executable and model settings.
 - **Markdown and JSON results** with validated output contracts, invocation logs,
   a run manifest, and a configuration snapshot.
-- **macOS and Linux support** using Python's standard library, with no additional
-  Python packages to install.
 
 ## Who is it for?
 
@@ -47,10 +43,7 @@ branches before planning changes.
 
 - macOS or Linux.
 - Python 3.11 or newer.
-- Git with support for `git switch`, only when using git mode.
-  `--trust-repository` requires Git 2.38 or newer, which supports `safe.directory`
-  in command-line protected configuration (see the
-  [Git 2.38 configuration documentation](https://git-scm.com/docs/git-config/2.38.0)).
+- Git 2.34.1 or newer.
 - At least one installed and authenticated coding-agent CLI: Codex CLI, Claude Code,
   or OpenCode.
 
@@ -74,29 +67,20 @@ them yourself before starting the runner, for example with
 any additional historical submodule commits needed by the selected branches during
 that preparation. The runner never fetches, initializes submodules, runs custom
 update commands, or advances them to remote tips. Every required commit, tree, and
-blob must be available locally; partial clones with missing objects are rejected
-without lazy fetching. Object stores using alternates are not supported.
+blob must be available locally.
 
 The original checkout and every selected branch must contain the same submodule
-paths and logical names at every level. Their pinned SHAs and source contents may
-differ at any depth. Additions, removals, moves, and logical-name changes are rejected
-during preflight, before any checkout switches. The runner reads `.gitmodules`
+paths and logical names at every level. The runner reads `.gitmodules`
 from each pinned parent commit. Missing checkouts or objects are reported with the
 snapshot, submodule path, and required SHA.
 
 Every initialized submodule must initially match its parent's gitlink, with no
 staged, tracked, untracked, or ignored changes and no unfinished Git operation.
 Each working tree is checked directly, even with `submodule.<name>.ignore=all`.
-Filters, sparse checkout, skip-worktree, and assume-unchanged are unsupported in
-the parent and in every submodule. Submodule `.git` files and embedded `.git`
-directories are supported; external/reused Git directories and symlink substitution
-of checkout or administrative directories are rejected.
 
 For folder mode, prepare an existing directory with the source files and subdirectories.
 There is no requirement for `.git`, branches, or a clean checkout. All entries,
 including hidden files, are inventoried; there are no configurable exclusions.
-Symbolic links are recorded without following their targets. Unreadable entries
-and special files such as FIFOs stop the run with an error.
 
 Keep this package and the reports outside the inspected source directory. Prepare a short
 description of the system's purpose and history for `project_description`; for
@@ -161,24 +145,24 @@ Existing flat configurations with top-level `repository`, `branches`, and
 
 #### Project and execution settings
 
-| Field                 | Required / default | Description                                                                                                                                                                                                                                         |
-| --------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mode` | Required in grouped format | `"git"` or `"folder"`; only the selected source section is used. |
-| `git_mode.repository` | Required in git mode | Root of a standalone checkout, not a linked worktree or bare repository. |
-| `folder_mode.path` | Required in folder mode | Existing source directory; no Git installation or repository is required. |
-| `reports_dir`         | Required           | Directory for results. Each run creates a new subdirectory containing reports, logs, a manifest, and a configuration snapshot.                                                                                                                      |
-| `project_description` | Recommended; `""` | Introduction to the system's purpose and history, passed to every active stage as user background, not verified implementation evidence. |
-| `git_mode.branches` | Required in git mode | At least two unique, nonempty local branch names, processed in order. No fetch or pull is performed; commit IDs are pinned at startup. |
-| `git_mode.baseline_branch` | Required in git mode | Reference branch for comparison. Must be included in `git_mode.branches`. |
-| `output_language`     | `"Russian"`        | Language of the generated reports. Set `"English"` for English output.                                                                                                                                                                              |
-| `agent`               | Required           | Default CLI settings for all stages; see below.                                                                                                                                                                                                     |
-| `stage_agents` | `{}` | Overrides of `agent` for `document`, `review`, or `compare`. Only active stages are resolved and checked. |
-| `priority_scenarios`  | `[]`               | An array of strings describing flows or areas to prioritize during documentation and review.                                                                                                                                                        |
-| `timeout_seconds`     | `1800`             | Maximum duration of each document, review, or comparison CLI call, in seconds. Must be a positive integer. CLI version/help checks have a separate 30-second limit.                                                                                 |
-| `max_input_bytes`     | `800000`           | Maximum UTF-8 size of the complete prompt, context, and output schema sent to a stage. Must be a positive integer. Oversized input fails the stage before a model call; it is never silently truncated.                                             |
-| `max_output_bytes`    | `16000000`         | Maximum combined stdout and stderr size per CLI call. Must be a positive integer. Exceeding it terminates the call.                                                                                                                                 |
-| `continue_on_error` | `true` | Git mode: continue with other branches after a stage fails. `false` stops on the first operational failure and attempts checkout restoration. Integrity failures always stop. Folder mode always stops on an operational failure; review findings are not operational failures. |
-| `prompts` | `{}` | Custom prompt paths for `document`, `review`, and `compare`. Unspecified active stages use bundled templates; `compare` is ignored in folder mode. |
+| Field                      | Required / default         | Description                                                                                                                                                                                                                                                                     |
+| -------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                     | Required in grouped format | `"git"` or `"folder"`; only the selected source section is used.                                                                                                                                                                                                                |
+| `git_mode.repository`      | Required in git mode       | Root of a standalone checkout, not a linked worktree or bare repository.                                                                                                                                                                                                        |
+| `folder_mode.path`         | Required in folder mode    | Existing source directory; no Git installation or repository is required.                                                                                                                                                                                                       |
+| `reports_dir`              | Required                   | Directory for results. Each run creates a new subdirectory containing reports, logs, a manifest, and a configuration snapshot.                                                                                                                                                  |
+| `project_description`      | Recommended; `""`          | Introduction to the system's purpose and history, passed to every active stage as user background, not verified implementation evidence.                                                                                                                                        |
+| `git_mode.branches`        | Required in git mode       | At least two unique, nonempty local branch names, processed in order. No fetch or pull is performed; commit IDs are pinned at startup.                                                                                                                                          |
+| `git_mode.baseline_branch` | Required in git mode       | Reference branch for comparison. Must be included in `git_mode.branches`.                                                                                                                                                                                                       |
+| `output_language`          | `"Russian"`                | Language of the generated reports. Set `"English"` for English output.                                                                                                                                                                                                          |
+| `agent`                    | Required                   | Default CLI settings for all stages; see below.                                                                                                                                                                                                                                 |
+| `stage_agents`             | `{}`                       | Overrides of `agent` for `document`, `review`, or `compare`. Only active stages are resolved and checked.                                                                                                                                                                       |
+| `priority_scenarios`       | `[]`                       | An array of strings describing flows or areas to prioritize during documentation and review.                                                                                                                                                                                    |
+| `timeout_seconds`          | `1800`                     | Maximum duration of each document, review, or comparison CLI call, in seconds. Must be a positive integer. CLI version/help checks have a separate 30-second limit.                                                                                                             |
+| `max_input_bytes`          | `800000`                   | Maximum UTF-8 size of the complete prompt, context, and output schema sent to a stage. Must be a positive integer. Oversized input fails the stage before a model call; it is never silently truncated.                                                                         |
+| `max_output_bytes`         | `16000000`                 | Maximum combined stdout and stderr size per CLI call. Must be a positive integer. Exceeding it terminates the call.                                                                                                                                                             |
+| `continue_on_error`        | `true`                     | Git mode: continue with other branches after a stage fails. `false` stops on the first operational failure and attempts checkout restoration. Integrity failures always stop. Folder mode always stops on an operational failure; review findings are not operational failures. |
+| `prompts`                  | `{}`                       | Custom prompt paths for `document`, `review`, and `compare`. Unspecified active stages use bundled templates; `compare` is ignored in folder mode.                                                                                                                              |
 
 Relative source, report, prompt, and explicit executable paths are resolved
 against the configuration file's directory. `~` is expanded. The source and
@@ -251,8 +235,6 @@ Custom prompts must follow the
 existing output contracts: the runner appends the stage context and required JSON
 Schema, and the agent must return the report in `report_markdown` rather than write
 files itself.
-Git document/review contracts remain version `2.0` with `branch` and `source_commit`.
-Folder contracts use version `3.0` with `source_directory` and `source_fingerprint`.
 Custom document/review prompts must handle the chosen source mode. See the
 [folder document schema](schemas/folder-document.schema.json) and
 [folder review schema](schemas/folder-review.schema.json).
@@ -288,8 +270,11 @@ Then start the investigation:
 python3 explain.py --config config.jsonc
 ```
 
-Git ownership checks apply equally to root and ordinary users. If Git rejects a
-checkout owned by another UID, run with the checkout owner's UID, or explicitly
+The runner checks owners of each checkout root, `.git` entry, and actual Git
+directory before running Git there. All must belong to the runner's effective UID;
+root has no automatic exception for another UID, including `SUDO_UID`.
+These checks also apply to old Git builds without native ownership protection.
+For a checkout owned by another UID, run with its owner's UID, or explicitly
 trust that specific checkout for this run:
 
 ```sh
@@ -308,13 +293,16 @@ python3 explain.py \
 ```
 
 `--trust-repository` applies to the checkout selected by the active Git
-configuration and its discovered, path-validated submodules. Each runner Git command
-receives an empty `safe.directory` entry to reset the exception list, followed by
-only that command's checkout's canonical absolute path
-(including symlink resolution). Paths with spaces are supported. The runner does
-not change system, user, or repository Git configuration, trust other checkouts,
-or pass this exception to external agents. Its Git processes continue to ignore
-system and global configuration, so a global Git exception is not a substitute.
+configuration and its discovered, path-validated submodules. Each checkout has a
+private temporary global config containing an empty `safe.directory` reset followed
+by that checkout's canonical absolute path. Only runner Git processes receive it
+through `GIT_CONFIG_GLOBAL`; it works even on packages that ignore command-scope
+`safe.directory`. Spaces, Unicode, and quoted paths are escaped. Temporary files
+are outside the sources, with directory mode 0700 and file mode 0600, and are
+removed on completion and handled errors. No wildcard exceptions are used.
+The runner does not change system, user, or repository Git configuration, trust
+other checkouts, or pass these settings to external agents. Its Git processes
+ignore system and real user configuration, so a user's global exception is not a substitute.
 In folder mode, this option is a configuration error before results are created.
 
 Trust does not fix filesystem permissions, an inaccessible HOME, missing CLIs, or
@@ -331,7 +319,10 @@ before and after analysis, after CLI checks, and after `compare`. An integrity
 failure always stops the run, regardless of `continue_on_error`.
 
 Before `compare` runs outside the repository, the runner restores the original
-commit and full symbolic branch ref (or detached HEAD) of every node. It also
+commit and immediate symbolic branch ref (or detached HEAD) of every node,
+including `HEAD -> alias -> branch` chains. It reads a bounded regular HEAD file
+from the verified Git directory and checks for symlinks and changes during reading.
+Restoration uses Git commands; the runner never writes HEAD directly. It also
 attempts restoration on agent/Git failures and handled interruptions such as SIGINT
 or SIGTERM. A switch journal accounts for partially completed hierarchy changes.
 If another process changes files, HEAD, Git metadata, or an original branch ref,
@@ -359,15 +350,15 @@ contents for each fingerprint takes additional I/O time on large trees.
 
 Each run creates a separate directory under `reports_dir`. Successful Git stages produce:
 
-| Path within the run directory                          | Contents                                                                     |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `branches/<branch-id>/ARCHITECTURE.md`                 | Architecture documentation for one branch.                                   |
-| `branches/<branch-id>/ARCHITECTURE_REVIEW.md`          | Independent review of that document.                                         |
-| `branches/<branch-id>/document.json` and `review.json` | Structured versions of the branch reports.                                   |
-| `comparison/BRANCH_COMPARISON.md` and `compare.json`   | Baseline comparison in Markdown and JSON.                                    |
-| `comparison/inputs.json`                               | The reports and Git metadata supplied to the comparison stage.               |
-| `manifest.json`                                        | Run status, pinned commits, stage results, and checkout restoration details. |
-| `config.snapshot.json`                                 | The configuration used for this run.                                         |
+| Path within the run directory                          | Contents                                                                                                                      |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `branches/<branch-id>/ARCHITECTURE.md`                 | Architecture documentation for one branch.                                                                                    |
+| `branches/<branch-id>/ARCHITECTURE_REVIEW.md`          | Independent review of that document.                                                                                          |
+| `branches/<branch-id>/document.json` and `review.json` | Structured versions of the branch reports.                                                                                    |
+| `comparison/BRANCH_COMPARISON.md` and `compare.json`   | Baseline comparison in Markdown and JSON.                                                                                     |
+| `comparison/inputs.json`                               | The reports and Git metadata supplied to the comparison stage.                                                                |
+| `manifest.json`                                        | Run status, Git executable/version/compatibility mechanisms, pinned commits, stage results, and checkout restoration details. |
+| `config.snapshot.json`                                 | The configuration used for this run.                                                                                          |
 
 Folder runs place `ARCHITECTURE.md`, `ARCHITECTURE_REVIEW.md`, `document.json`,
 `review.json`, `manifest.json`, and `config.snapshot.json` directly in the run

@@ -21,14 +21,60 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Git, folder, JSONC, and CLI integration tests
-        run: python -B -m unittest discover -s tests -v
+        run: |
+          command -v git
+          git --version
+          python3 -B -m unittest discover -s tests -v
+
+  git-compatibility:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        git: [upstream-2.34.1, jammy-updates, jammy-command-scope-broken]
+    container:
+      image: ubuntu:22.04
+      # Only test processes enter a network namespace, after tool installation.
+      options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined
+    env:
+      AUDIT_GIT_BUILD: ${{ matrix.git }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install and identify the real Git build
+        run: bash .github/ci/prepare-git.sh "$AUDIT_GIT_BUILD"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Full suite, actual root and foreign owners, with no network
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v git
+          git --version
+          python3 -c 'import shutil; from pathlib import Path; print(Path(shutil.which("git")).resolve())'
+          unshare --net python3 -B -m unittest discover -s tests -v 2>&1 | tee git-tests.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: git-${{ matrix.git }}
+          path: |
+            git-build.log
+            git-tests.log
 
   root-ownership:
     runs-on: ubuntu-latest
-    container: python:3.13-bookworm
+    container:
+      image: python:3.13-bookworm
+      options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined
     steps:
       - uses: actions/checkout@v4
       - name: Install Git for offline fixtures
         run: apt-get update && apt-get install -y --no-install-recommends git
       - name: Real root and foreign-owner integration tests in an isolated container
-        run: python -B -m unittest discover -s tests -v
+        env:
+          AUDIT_GIT_BUILD: modern
+        run: |
+          command -v git
+          git --version
+          dpkg-query -W git
+          unshare --net python3 -B -m unittest discover -s tests -v

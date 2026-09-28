@@ -1,12 +1,6 @@
 {
   "type": "object",
   "properties": {
-    "schema_version": {
-      "type": "string",
-      "enum": [
-        "3.0"
-      ]
-    },
     "completion_status": {
       "type": "string",
       "enum": [
@@ -38,7 +32,6 @@
     }
   },
   "required": [
-    "schema_version",
     "completion_status",
     "report_markdown",
     "limitations",

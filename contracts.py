@@ -26,7 +26,7 @@ def obj(**properties: dict) -> dict:
 
 STRINGS = array(string())
 STATUS = string('COMPLETE', 'PARTIAL', 'BLOCKED')
-BASE = dict(schema_version=string('2.0'), completion_status=STATUS,
+BASE = dict(completion_status=STATUS,
             report_markdown=string(), limitations=STRINGS)
 
 SCHEMAS = {
@@ -57,7 +57,7 @@ SCHEMAS = {
 FOLDER_SCHEMAS = {
     stage: obj(**({key: spec for key, spec in SCHEMAS[stage]['properties'].items()
                   if key not in ('branch', 'source_commit')} |
-                 {'schema_version': string('3.0'), 'source_directory': string(),
+                 {'source_directory': string(),
                   'source_fingerprint': string()}))
     for stage in ('document', 'review')
 }

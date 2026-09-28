@@ -286,6 +286,7 @@ class RecursivePreflightTests(RecursiveFixture, unittest.TestCase):
     def test_trust_uses_only_each_verified_canonical_path_without_config_writes(self):
         before = self.state()
         repo = Repository(self.path, trust_repository=True)
+        self.addCleanup(repo.close)
         repo.preflight(['master', 'topic'])
         for node in repo.nodes.values():
             self.assertEqual(node.git('config', '--get-all', 'safe.directory'),
@@ -564,11 +565,14 @@ print(json.dumps({'base': str(fixture.base), 'path': str(fixture.path), 'expecte
                 self.assertEqual(Path(item['worktree']).stat().st_uid, owner.pw_uid)
             calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
             self.assertTrue(all(call['git_config_env'] == {} for call in calls))
-        # An explicit exception for the parent never authorizes a child command.
-        with self.assertRaisesRegex(AuditError, 'ownership mismatch'):
-            Repository(self.path / CHILD).head()
         repo = Repository(self.path, trust_repository=True)
+        self.addCleanup(repo.close)
         repo.preflight(['master', 'topic'])
+        # Sharing a checked executable with a trusted parent does not authorize
+        # a separately created, untrusted child, even on old upstream Git.
+        child = Repository(self.path / CHILD, runtime=repo.runtime)
+        with self.assertRaisesRegex(AuditError, 'ownership mismatch'):
+            child.setup_node(repo, repo, 'logical module')
         for node in repo.nodes.values():
             self.assertEqual(node.git('config', '--get-all', 'safe.directory'),
                              ('\n' + str(node.path) + '\n').encode())

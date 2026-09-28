@@ -8,25 +8,33 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import tempfile
 
 
 def inspect_sources(context):
     expected_path = os.environ.get('AUDIT_TEST_EXPECTED')
-    if not expected_path:
-        return
-    expected = json.loads(Path(expected_path).read_text())[context['branch']]
+    expected = (json.loads(Path(expected_path).read_text())[context['branch']] if expected_path else
+                {'.': {'commit': context['source_commit']}})
     observed = {}
     for relative, record in expected.items():
         path = Path(context['repository']) / relative
         # The fixture makes its own explicit read authorization, independently of
         # runner trust. Never import runner Git configuration into the child.
-        cmd = ['git', '-c', f'safe.directory={path}', '-C', str(path)]
-        sha = subprocess.check_output(cmd + ['rev-parse', 'HEAD']).decode().strip()
-        ref = subprocess.run(cmd + ['symbolic-ref', '-q', 'HEAD'], capture_output=True)
+        with tempfile.TemporaryDirectory(prefix='fake-cli-git-', dir='/tmp') as neutral:
+            config = Path(neutral) / 'config'
+            env = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=str(config))
+            subprocess.run(['git', 'config', '--file', str(config), 'safe.directory', str(path)],
+                           cwd=neutral, env=env, check=True)
+            cmd = ['git', '-C', str(path)]
+            sha = subprocess.check_output(cmd + ['rev-parse', 'HEAD'], env=env).decode().strip()
+            ref = subprocess.run(cmd + ['symbolic-ref', '-q', 'HEAD'], env=env, capture_output=True)
+            expected_content = record.get('content')
+            if expected_content is None:
+                expected_content = subprocess.check_output(cmd + ['show', record['commit'] + ':app.py'], env=env).decode()
         assert sha == record['commit'], (relative, sha, record)
         assert ref.returncode == 1, (relative, ref.stdout)
         content = (path / 'app.py').read_text()
-        assert content == record['content'], (relative, content, record)
+        assert content == expected_content, (relative, content, record)
         if relative != '.':
             supplied = next(item for item in context['submodules'] if item['path'] == relative)
             assert supplied['expected_commit'] == sha
@@ -70,13 +78,19 @@ elif '--help' in args:
 else:
     prompt = sys.stdin.read()
     raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]
-    context = json.loads(raw.split('\n\n# Required final JSON Schema', 1)[0])
+    context_text, schema_text = raw.split('\n\n# Required final JSON Schema\n', 1)
+    context = json.loads(context_text)
     call['context'] = context
+    call['schema'] = json.loads(schema_text)
+    if '--output-schema' in args:
+        assert json.loads(Path(args[args.index('--output-schema') + 1]).read_text()) == call['schema']
+    elif '--json-schema' in args:
+        assert json.loads(args[args.index('--json-schema') + 1]) == call['schema']
     stage = 'compare' if 'baseline_branch' in context else 'review' if 'architecture_document' in context else 'document'
     if stage != 'compare' and context.get('source_mode') == 'git':
         inspect_sources(context)
     action(stage)
-    data = {'schema_version': '2.0', 'completion_status': 'COMPLETE',
+    data = {'completion_status': 'COMPLETE',
             'report_markdown': '# Report: configured-model\nC-001\n', 'limitations': []}
     if 'baseline_branch' in context:
         data.update(task='architecture_comparison', baseline_branch=context['baseline_branch'],
@@ -84,7 +98,7 @@ else:
                     compared_branches=[b for b in context['requested_branches'] if b != context['baseline_branch']])
     else:
         if context.get('source_mode') == 'folder':
-            data.update(schema_version='3.0', source_directory=context['source_directory'],
+            data.update(source_directory=context['source_directory'],
                         source_fingerprint=context['source_fingerprint'])
             # Exercise rejection of a changed tree using an actual subprocess.
             if os.environ.get('AUDIT_TEST_MUTATE_SOURCE'):

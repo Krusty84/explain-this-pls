@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from explain import AuditError, Repository, Runner, UnsafeRepository, cli_env, load_config, process, repository_lock, slug
 from contracts import ContractError, parse_backend, review_verdict, strict_json, validate_result
 
-BASE = {'schema_version': '2.0', 'completion_status': 'COMPLETE',
+BASE = {'completion_status': 'COMPLETE',
         'report_markdown': '# Report\nC-001\n', 'limitations': []}
 
 def doc(branch, commit):
@@ -29,6 +29,27 @@ def review(branch, commit):
         'outcome': 'SUPPORTED', 'evidence': ['app.py:main'], 'limitation': '', 'finding_ids': []}], findings=[])
 
 class ContractTests(unittest.TestCase):
+    def test_results_without_schema_version_and_rejection_of_legacy_field(self):
+        git_context = {'branch': 'master', 'source_commit': 'abc'}
+        folder_context = {'source_directory': '/source', 'source_fingerprint': 'abc'}
+        comparison = dict(BASE, task='architecture_comparison', baseline_branch='master',
+            baseline_commit='abc', compared_branches=[], unresolved_branches=[], differences=[])
+        comparison_context = {'baseline_branch': 'master', 'baseline_commit': 'abc',
+                              'requested_branches': ['master'], 'branches': []}
+        cases = [('compare', comparison, comparison_context, 'git')]
+        for mode, context in (('git', git_context), ('folder', folder_context)):
+            for stage, data in (('document', doc('master', 'abc')), ('review', review('master', 'abc'))):
+                if mode == 'folder':
+                    del data['branch']; del data['source_commit']
+                    data.update(context)
+                cases.append((stage, data, context, mode))
+        for stage, data, context, mode in cases:
+            with self.subTest(stage=stage, mode=mode):
+                validate_result(stage, data, context, mode)
+                with self.assertRaisesRegex(ContractError, 'missing/extra keys'):
+                    validate_result(stage, data | {'schema_version': '3.0' if mode == 'folder' else '2.0'},
+                                    context, mode)
+
     def test_duplicate_keys_rejected(self):
         with self.assertRaises(ContractError):
             strict_json('{"x":1,"x":2}')
@@ -95,6 +116,7 @@ class RepoFixture(unittest.TestCase):
         self.git('switch','master')
         self.repo=Repository(self.repo_path)
     def tearDown(self):
+        self.repo.close()
         self.tmp.cleanup()
     def git(self,*args):
         r=subprocess.run(['git','-C',str(self.repo_path),*args],stdout=subprocess.PIPE,
@@ -119,7 +141,7 @@ class RepoFixture(unittest.TestCase):
         result,code=FakeRunner(cfg,self.base/'grouped-run').run()
         self.assertEqual(code,0)
         self.assertEqual(result['status'],'COMPLETE')
-        self.assertEqual(result['schema_version'],'2.0')
+        self.assertNotIn('schema_version',result)
         self.assertEqual(result['comparison']['compared_branches'],['test01','dev_01_customerA'])
         self.assertEqual(self.repo.symbolic(),'master')
         self.assertEqual(self.repo.head(),self.master)
@@ -441,6 +463,8 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                     output=json.loads(result.stdout)
                     self.assertEqual(output['status'],'PREFLIGHT_OK' if check_only else 'COMPLETE')
                     run_dir=Path(output['manifest']).parent
+                    manifest=json.loads((run_dir/'manifest.json').read_text())
+                    self.assertNotIn('schema_version',manifest)
                     snapshot=json.loads((run_dir/'config.snapshot.json').read_text())
                     self.assertEqual(snapshot['project_description'],cfg.get('project_description',''))
                     self.assertEqual(result.stderr.count('Описание проекта не указано.'),int(check_only))
@@ -449,6 +473,8 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                     self.assertEqual(len(calls),2 if check_only else 9)
                     self.assertEqual(len(invocations),0 if check_only else 7)
                     for call in invocations:
+                        self.assertNotIn('schema_version',call['schema']['properties'])
+                        self.assertNotIn('schema_version',call['schema']['required'])
                         self.assertEqual(call['home'],str(home))
                         self.assertEqual(call['context']['project_description'],cfg['project_description'])
                         compare='baseline_branch' in call['context']
@@ -456,6 +482,13 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                         if backend=='opencode':
                             self.assertEqual(call['permissions']['*'],'deny')
                             self.assertEqual(call['permissions'].get('read'),None if compare else 'allow')
+                    if not check_only:
+                        results=[run_dir/'comparison'/'compare.json']
+                        for branch in manifest['branches']:
+                            results.extend(run_dir/branch['directory']/f'{stage}.json'
+                                           for stage in ('document','review'))
+                        for path in results:
+                            self.assertNotIn('schema_version',json.loads(path.read_text()))
                     self.assertEqual(self.repo.symbolic(),'master')
                     self.assertEqual(self.repo.head(),self.master)
                     self.repo.clean()

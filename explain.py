@@ -5,7 +5,7 @@
 """Sequential architecture auditing with configured coding-agent CLIs.
 
 macOS or Linux, Python 3.11+, and one or more authenticated coding-agent CLIs.
-Git is required only for git mode; folder mode inspects an existing directory.
+Git >= 2.34.1 is required only for git mode; folder mode needs no Git.
 No third-party Python packages, worktrees, or source copies.
 The parent is the only artifact writer. The agent receives stdin and returns JSON.
 """
@@ -36,6 +36,7 @@ STAGES = ('document', 'review', 'compare')
 ARTIFACTS = {'document': 'ARCHITECTURE.md', 'review': 'ARCHITECTURE_REVIEW.md',
              'compare': 'BRANCH_COMPARISON.md'}
 BACKENDS = {'codex': 'codex', 'claude-code': 'claude', 'opencode': 'opencode'}
+MIN_GIT_VERSION = (2, 34, 1)
 
 class AuditError(RuntimeError):
     pass
@@ -156,21 +157,78 @@ def process(command: list[str], cwd: Path, env: dict[str, str], input_data: byte
     return {'stdout': bytes(out), 'stderr': bytes(err), 'returncode': p.returncode,
             'error': problem, 'duration_seconds': round(time.monotonic() - start, 3)}
 
-class Repository:
-    def __init__(self, path: Path, trust_repository: bool = False):
-        self.path = path.resolve()
-        self.trust_repository = trust_repository
+class GitRuntime:
+    """One PATH resolution and version check for the entire repository hierarchy."""
+    def __init__(self):
+        executable = shutil.which('git')
+        if not executable:
+            raise AuditError('Git >= 2.34.1 is required for git mode; git was not found in PATH.')
+        self.executable = str(Path(executable).resolve())
         self.env = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL') if k in os.environ}
         self.env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
                         GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0', GIT_PAGER='cat',
                         GIT_NO_LAZY_FETCH='1', GIT_ALLOW_PROTOCOL='', GIT_NO_REPLACE_OBJECTS='1')
-        self.prefix = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
+        # Do not discover a repository or use an inherited TMPDIR in source files.
+        with tempfile.TemporaryDirectory(prefix='archaudit-git-version-', dir='/tmp') as neutral:
+            result = process([self.executable, '--version'], Path(neutral), self.env,
+                             timeout=30, max_output=4096)
+        self.version_string = result['stdout'].decode('utf-8', errors='replace').strip()
+        match = re.fullmatch(r'git version (\d+)\.(\d+)\.(\d+)(?:[-+. ][^\r\n]*)?', self.version_string)
+        if result['returncode'] or result['error'] or not match:
+            raise AuditError(f'Cannot determine Git version at {self.executable}: '
+                             f'{self.version_string!r}; Git >= 2.34.1 is required.')
+        self.version = tuple(map(int, match.groups()))
+        if self.version < MIN_GIT_VERSION:
+            raise AuditError(f'Found {self.version_string} at {self.executable}; Git >= 2.34.1 is required.')
+        self.temporary = None
+
+    def trust_config(self, path: Path) -> str:
+        if str(path).endswith('/*'):
+            raise UnsafeRepository(f'Cannot express exact safe.directory trust for a checkout named "*": {path}')
+        if self.temporary is None:
+            self.temporary = tempfile.TemporaryDirectory(prefix='archaudit-git-trust-', dir='/tmp')
+        config = Path(self.temporary.name) / (uuid.uuid4().hex + '.gitconfig')
+        value = str(path).replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\t', '\\t').replace('\b', '\\b')
+        atomic(config, '[safe]\n\tdirectory =\n\tdirectory = "' + value + '"\n')
+        return str(config)
+
+    def close(self) -> None:
+        if self.temporary is not None:
+            self.temporary.cleanup()
+            self.temporary = None
+
+    def manifest(self) -> dict:
+        return {'executable': self.executable, 'version_string': self.version_string,
+                'version': list(self.version), 'minimum_version': list(MIN_GIT_VERSION),
+                'compatibility': {'head': 'validated-direct-file', 'fsmonitor': 'empty-config-value',
+                    'ownership': 'runner-euid', 'trust': 'private-global-config-per-checkout',
+                    'local_objects': 'reject-promisor-config; deny-all-transports; no-lazy-fetch-when-supported'}}
+
+
+class Repository:
+    def __init__(self, path: Path, trust_repository: bool = False, runtime: GitRuntime | None = None):
+        self.runtime = runtime or GitRuntime()
+        self.path = path.resolve()
+        self.trust_repository = trust_repository
+        self.env = self.runtime.env.copy()
+        self.prefix = [self.runtime.executable, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=',
             '-c', 'core.untrackedCache=false', '-c', 'submodule.recurse=false',
             '-c', 'core.pager=cat', '-C', str(self.path)]
-        if trust_repository:
-            self.prefix += ['-c', 'safe.directory=', '-c', f'safe.directory={self.path}']
+
+    def close(self) -> None:
+        self.runtime.close()
+
+    def check_ownership(self) -> None:
+        for path in dict.fromkeys((self.path, self.path / '.git', self.git_dir)):
+            owner = path.lstat().st_uid
+            if owner != os.geteuid() and not self.trust_repository:
+                raise UnsafeRepository(f'Repository ownership mismatch at {path}: owner UID {owner}, '
+                    f'runner UID {os.geteuid()}. Use --trust-repository only if you trust this checkout.')
 
     def git(self, *args: str, allowed: tuple[int, ...] = (0,), input_data: bytes | None = None) -> bytes:
+        if not hasattr(self, 'git_dir'):
+            self.setup_paths(self)
+        self.check_ownership()
         try:
             r = subprocess.run(self.prefix + list(args), env=self.env,
                 input=input_data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
@@ -178,7 +236,8 @@ class Repository:
             raise AuditError(f'git {args[0]} timed out after 120 seconds') from exc
         if r.returncode not in allowed:
             error = r.stderr.decode(errors='replace').strip()
-            if any(line.startswith('fatal: detected dubious ownership in repository') for line in error.splitlines()):
+            if any(line.startswith(('fatal: detected dubious ownership in repository', 'fatal: unsafe repository'))
+                   for line in error.splitlines()):
                 error += ('\nGit rejected the repository because of an ownership mismatch.\n'
                           'Run with the checkout owner\'s UID, or use --trust-repository\n'
                           'only if you trust this specific checkout.')
@@ -192,10 +251,61 @@ class Repository:
         return self.text('rev-parse', 'HEAD')
 
     def symbolic(self) -> str | None:
-        return self.text('symbolic-ref', '--quiet', '--short', 'HEAD', allowed=(0, 1)) or None
+        ref = self.symbolic_ref()
+        return ref[len('refs/heads/'):] if ref and ref.startswith('refs/heads/') else ref
 
     def symbolic_ref(self) -> str | None:
-        return self.text('symbolic-ref', '--quiet', '--no-recurse', 'HEAD', allowed=(0, 1)) or None
+        if not hasattr(self, 'git_dir'):
+            self.setup_paths(self)
+        raw, _ = self.read_head()
+        value = raw.removesuffix(b'\n')
+        if value.startswith(b'ref: '):
+            try:
+                ref = value[5:].decode('utf-8')
+            except UnicodeError as exc:
+                raise UnsafeRepository(f'Invalid symbolic HEAD at {self.git_dir / "HEAD"}') from exc
+            if not ref.startswith('refs/') or '\0' in ref:
+                raise UnsafeRepository(f'Invalid symbolic HEAD at {self.git_dir / "HEAD"}: {ref!r}')
+            try:
+                self.git('check-ref-format', ref)
+            except AuditError as exc:
+                raise UnsafeRepository(f'Invalid symbolic HEAD at {self.git_dir / "HEAD"}: {ref!r}: {exc}') from exc
+            return ref
+        if not re.fullmatch(b'[0-9a-fA-F]+', value):
+            raise UnsafeRepository(f'Invalid detached HEAD at {self.git_dir / "HEAD"}')
+        # Both SHA-1 and SHA-256 repositories exist in Git 2.34.1.
+        try:
+            object_format = self.text('rev-parse', '--show-object-format')
+            if object_format not in ('sha1', 'sha256') or len(value) != {'sha1': 40, 'sha256': 64}[object_format]:
+                raise AuditError(f'Invalid object ID for format {object_format!r}')
+            if self.text('cat-file', '-t', value.decode('ascii')) != 'commit':
+                raise AuditError('Object is not a commit')
+        except AuditError as exc:
+            raise UnsafeRepository(f'Invalid detached HEAD at {self.git_dir / "HEAD"}: {exc}') from exc
+        return None
+
+    def read_head(self) -> tuple[bytes, list]:
+        path = self.git_dir / 'HEAD'
+        def stamp(info):
+            return [info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                    info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+        try:
+            before = path.lstat()
+            if not stat.S_ISREG(before.st_mode):
+                raise UnsafeRepository(f'HEAD must be a regular file, not a symlink: {path}')
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'rb') as stream:
+                opened = os.fstat(stream.fileno())
+                if not stat.S_ISREG(opened.st_mode) or stamp(before) != stamp(opened):
+                    raise UnsafeRepository(f'HEAD changed while opening: {path}')
+                data = stream.read(4097)
+                if stamp(opened) != stamp(os.fstat(stream.fileno())) or stamp(opened) != stamp(path.lstat()):
+                    raise UnsafeRepository(f'HEAD changed while reading: {path}')
+            if not data or len(data) > 4096:
+                raise UnsafeRepository(f'Empty or oversized HEAD: {path}')
+            return data, stamp(opened) + [digest(data)]
+        except OSError as exc:
+            raise UnsafeRepository(f'Cannot read HEAD at {path}: {exc}') from exc
 
     def clean(self, *, local: bool = False) -> None:
         if not local and hasattr(self, 'nodes'):
@@ -238,7 +348,7 @@ class Repository:
             info = item.lstat()
             if not stat.S_ISDIR(info.st_mode):
                 raise UnsafeRepository(f'Directory replaced or symbolic link encountered: {item}')
-            result[str(item)] = [info.st_dev, info.st_ino, info.st_mode]
+            result[str(item)] = [info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid]
         return result
 
     @staticmethod
@@ -249,9 +359,9 @@ class Repository:
             return None
         if not stat.S_ISREG(info.st_mode):
             raise UnsafeRepository(f'Git metadata must be a regular file: {path}')
-        return [info.st_dev, info.st_ino, info.st_mode, digest(path.read_bytes())]
+        return [info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid, digest(path.read_bytes())]
 
-    def setup_node(self, root: Repository, parent: Repository | None = None, name: str | None = None) -> None:
+    def setup_paths(self, root: Repository, parent: Repository | None = None, name: str | None = None) -> None:
         entry = self.path / '.git'
         self.root_path = root.path
         self.directory_chain(self.path, root.path)
@@ -274,15 +384,29 @@ class Repository:
         self.directory_chain(expected, boundary)
         self.git_dir = expected
         self.git_boundary = boundary
+        self.check_ownership()
         self._fixed = self.fixed_metadata()
         self.control_metadata()
         if self._fixed['files']['commondir'] is not None:
             raise UnsafeRepository('Linked/common Git directories are unsupported.')
+        if self.trust_repository:
+            self.env['GIT_CONFIG_GLOBAL'] = self.runtime.trust_config(self.path)
+
+    def setup_node(self, root: Repository, parent: Repository | None = None, name: str | None = None) -> None:
+        self.setup_paths(root, parent, name)
+        # 2.34.1 ignores GIT_NO_LAZY_FETCH. A failed lazy fetch can even write
+        # remote.*.partialclonefilter before GIT_ALLOW_PROTOCOL denies transport.
+        # Reject these configurations before resolving HEAD or reading objects.
+        if self.git('config', '--get-regexp',
+                    r'^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$', allowed=(0, 1)):
+            raise AuditError('Partial-clone/promisor configuration is unsupported: Git may attempt lazy fetching '
+                             'and change config before transport denial. Prepare a full local checkout.')
+        self.symbolic_ref()
         # Validate the paths before any command receives a safe.directory exception.
         actual = Path(self.git('rev-parse', '--absolute-git-dir').decode().rstrip('\n'))
         common = Path(os.path.abspath(self.path / self.git('rev-parse', '--git-common-dir').decode().rstrip('\n')))
         top = Path(self.git('rev-parse', '--show-toplevel').decode().rstrip('\n'))
-        if actual != expected or common != expected or top != self.path:
+        if actual != self.git_dir or common != self.git_dir or top != self.path:
             raise UnsafeRepository(f'Git data does not belong to expected checkout: {self.path}')
         self.policy()
         self.clean(local=True)
@@ -302,7 +426,7 @@ class Repository:
         return {'directories': directories, 'files': files}
 
     def control_metadata(self) -> dict:
-        return {name: self.file_stamp(self.git_dir / name) for name in ('HEAD', 'index')}
+        return {'HEAD': self.read_head()[1], 'index': self.file_stamp(self.git_dir / 'index')}
 
     def reference_metadata(self, ref: str) -> dict:
         path = self.git_dir / ref
@@ -421,7 +545,7 @@ class Repository:
                             self.directory_chain(child_path, self.path)
                         except OSError as exc:
                             raise AuditError(f'Submodule {full!r}, required SHA {detail["commit"]}: not initialized locally.') from exc
-                    child_node = Repository(child_path, self.trust_repository) if discover else self.nodes[full]
+                    child_node = Repository(child_path, self.trust_repository, self.runtime) if discover else self.nodes[full]
                     visit(child_node, full, node, detail['name'], detail['commit'], label, plan, discover)
             except (AuditError, OSError) as exc:
                 kind = UnsafeRepository if isinstance(exc, UnsafeRepository) else AuditError
@@ -926,8 +1050,15 @@ class Runner:
     def run(self, check_only: bool = False) -> tuple[dict, int]:
         if self.folder:
             return self.run_folder(check_only)
-        manifest = {'schema_version': '2.0', 'run_id': self.run_dir.name,
+        try:
+            return self.run_git(check_only)
+        finally:
+            self.repo.close()
+
+    def run_git(self, check_only: bool = False) -> tuple[dict, int]:
+        manifest = {'run_id': self.run_dir.name,
             'started_at': now(), 'repository': str(self.repo.path),
+            'git': self.repo.runtime.manifest(),
             'baseline_branch': self.source['baseline_branch'], 'status': 'RUNNING',
             'isolation': 'cli-native-permissions', 'platform': sys.platform,
             'branches': [], 'errors': []}
@@ -1077,7 +1208,7 @@ class Runner:
         return manifest, code
 
     def run_folder(self, check_only: bool = False) -> tuple[dict, int]:
-        manifest = {'schema_version': '3.0', 'mode': 'folder', 'run_id': self.run_dir.name,
+        manifest = {'mode': 'folder', 'run_id': self.run_dir.name,
             'started_at': now(), 'source_directory': str(self.source_path), 'status': 'RUNNING',
             'isolation': 'cli-native-permissions', 'platform': sys.platform,
             'integrity': 'Fingerprints at stage boundaries; not a backup or continuous immutability guarantee.',
@@ -1134,7 +1265,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True, type=Path, help='Path to a JSON or JSONC configuration.')
     parser.add_argument('--check', action='store_true', help='Check configuration, source state, and CLI capabilities; no branch switch or model calls.')
-    parser.add_argument('--trust-repository', action='store_true', help='Trust only the configured Git checkout despite an ownership mismatch (Git 2.38+).')
+    parser.add_argument('--trust-repository', action='store_true', help='Trust only the configured Git checkout and verified submodules despite an ownership mismatch (Git >= 2.34.1).')
     args = parser.parse_args()
     if sys.platform not in ('darwin', 'linux') or sys.version_info < (3, 11):
         raise AuditError('This implementation requires macOS or Linux and Python 3.11+.')

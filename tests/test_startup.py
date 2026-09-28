@@ -45,15 +45,17 @@ class RepositoryTrustTests(unittest.TestCase):
             'GIT_CONFIG_GLOBAL': '/unwanted', 'GIT_CONFIG_COUNT': '1',
             'GIT_CONFIG_KEY_0': 'safe.directory', 'GIT_CONFIG_VALUE_0': '*',
             'GIT_CONFIG_PARAMETERS': "'safe.directory=*'", 'GIT_TEST_ASSUME_DIFFERENT_OWNER': '1'}
-        protected = ['core.hooksPath=/dev/null', 'core.fsmonitor=false',
+        protected = ['core.hooksPath=/dev/null', 'core.fsmonitor=',
                      'core.untrackedCache=false', 'submodule.recurse=false', 'core.pager=cat']
         for euid in (0, 1000):
             for trust in (False, True):
                 with self.subTest(mocked_euid=euid, trust=trust), \
                         patch('explain.os.geteuid', return_value=euid), \
+                        patch.object(Repository, 'check_ownership'), \
                         patch.dict(os.environ, inherited, clear=True), \
                         patch('explain.subprocess.run', wraps=subprocess.run) as run:
                     repo = Repository(alias, trust_repository=trust)
+                    self.addCleanup(repo.close)
                     pins = repo.preflight(['master', 'test01'])
                     repo.checkout(pins['test01'])
                     repo.restore('master', pins['master'])
@@ -66,28 +68,30 @@ class RepositoryTrustTests(unittest.TestCase):
                         self.assertFalse(call.kwargs.get('shell', False))
                         self.assertEqual(command[command.index('-C') + 1], str(path))
                         settings = [command[i + 1] for i, arg in enumerate(command) if arg == '-c']
-                        self.assertEqual(settings, protected + (
-                            ['safe.directory=', f'safe.directory={path}'] if trust else []))
+                        self.assertEqual(settings, protected)
                         self.assertEqual(call.kwargs['env'], {'PATH': inherited['PATH'],
                             'LANG': 'C', 'LC_ALL': 'C', 'GIT_CONFIG_NOSYSTEM': '1',
-                            'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0',
+                            'GIT_CONFIG_GLOBAL': repo.env['GIT_CONFIG_GLOBAL'], 'GIT_TERMINAL_PROMPT': '0',
                             'GIT_OPTIONAL_LOCKS': '0', 'GIT_PAGER': 'cat',
                             'GIT_NO_LAZY_FETCH': '1', 'GIT_ALLOW_PROTOCOL': '', 'GIT_NO_REPLACE_OBJECTS': '1'})
                     self.assertEqual(dict(os.environ), inherited)
 
     def test_only_dubious_ownership_gets_hint_and_never_retries(self):
         errors = ["fatal: detected dubious ownership in repository at '/checkout'\noriginal detail",
+                  "fatal: unsafe repository ('/checkout' is owned by someone else)",
                   "fatal: cannot open '.git/HEAD': Permission denied",
                   'fatal: Needed a single revision',
                   "fatal: ambiguous argument 'detected dubious ownership in repository': unknown revision"]
         for error in errors:
             for trust in (False, True):
+                repo = Repository(self.repo_path, trust_repository=trust)
+                self.addCleanup(repo.close)
                 with self.subTest(error=error, trust=trust), patch('explain.subprocess.run') as run:
                     run.return_value = subprocess.CompletedProcess([], 128, b'', error.encode())
                     with self.assertRaises(AuditError) as caught:
-                        Repository(self.repo_path, trust_repository=trust).head()
+                        repo.head()
                     expected = 'git rev-parse failed: ' + error
-                    if error == errors[0]:
+                    if error in errors[:2]:
                         expected += '\n' + OWNERSHIP_HINT
                     self.assertEqual(str(caught.exception), expected)
                     run.assert_called_once()
@@ -148,6 +152,7 @@ class StartupCLIIntegrationTests(unittest.TestCase):
         try:
             with patch('sys.argv', ['explain.py', *args]), \
                     patch('explain.os.geteuid', return_value=euid), \
+                    patch.object(Repository, 'check_ownership'), \
                     patch.dict(os.environ, self.env, clear=True), \
                     contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 code = main()
@@ -198,8 +203,7 @@ class StartupCLIIntegrationTests(unittest.TestCase):
                             self.assertEqual(bool(commands), mode == 'git')
                             for command in commands:
                                 settings = [arg for arg in command if arg.startswith('safe.directory=')]
-                                expected = ['safe.directory=', f'safe.directory={self.repo_path}'] if trust else []
-                                self.assertEqual(settings, expected)
+                                self.assertEqual(settings, [])
                             self.assert_completed(result, mode, check, euid)
 
     def test_mocked_root_still_validates_cli_configuration(self):
@@ -324,8 +328,8 @@ print(json.dumps({'base': str(base), 'repo': str(repo), 'commit': git('rev-parse
             with self.subTest(check=check):
                 rejected = self.execute('git', check)
                 self.assertEqual(rejected.returncode, 1, rejected.stderr)
-                self.assertIn('detected dubious ownership in repository', rejected.stderr)
-                self.assertIn(OWNERSHIP_HINT, rejected.stderr)
+                self.assertIn('ownership mismatch', rejected.stderr)
+                self.assertIn('--trust-repository', rejected.stderr)
                 self.assertEqual(self.calls.read_text(), '')
                 self.assert_completed(self.execute('git', check, trust=True), 'git', check, 0)
 

@@ -222,13 +222,13 @@ class FolderInventoryTests(FolderFixture):
 
 
 class FolderContractTests(unittest.TestCase):
-    def test_identity_and_version_are_checked(self):
+    def test_identity_is_checked(self):
         data = review('unused', 'unused')
         del data['branch']; del data['source_commit']
-        data.update(schema_version='3.0', source_directory='/source', source_fingerprint='abc')
+        data.update(source_directory='/source', source_fingerprint='abc')
         context = {'source_directory': '/source', 'source_fingerprint': 'abc'}
         validate_result('review', data, context, 'folder')
-        for changed in ({'source_directory': '/other'}, {'source_fingerprint': 'wrong'}, {'schema_version': '2.0'}):
+        for changed in ({'source_directory': '/other'}, {'source_fingerprint': 'wrong'}):
             with self.subTest(changed=changed), self.assertRaises(ContractError):
                 validate_result('review', data | changed, context, 'folder')
         with self.assertRaises(ContractError):
@@ -257,7 +257,7 @@ class FolderPipelineTests(FolderFixture):
                 'report_markdown': '# Architecture',
                 'limitations': [] if doc_status == 'COMPLETE' else ['Investigation incomplete.']}
             data.pop('branch', None); data.pop('source_commit', None)
-            data.update(schema_version='3.0', source_directory=context['source_directory'],
+            data.update(source_directory=context['source_directory'],
                         source_fingerprint=context['source_fingerprint'])
             if stage == 'review' and mutate_review:
                 (self.source / 'app.py').unlink()
@@ -349,6 +349,7 @@ class FolderCLIIntegrationTests(FolderFixture):
                     self.assertEqual(result.stderr.count('Описание проекта не указано.'), int(check))
                     run = Path(output['manifest']).parent
                     manifest = json.loads((run / 'manifest.json').read_text())
+                    self.assertNotIn('schema_version', manifest)
                     self.assertEqual(manifest['source_fingerprint'], before['source_fingerprint'])
                     self.assertEqual(json.loads((run / 'source.inventory.json').read_text()), before)
                     snapshot = json.loads((run / 'config.snapshot.json').read_text())
@@ -361,6 +362,8 @@ class FolderCLIIntegrationTests(FolderFixture):
                     self.assertFalse((self.source / '.git').exists())
                     for call in invocations:
                         context, args = call['context'], call['args']
+                        self.assertNotIn('schema_version', call['schema']['properties'])
+                        self.assertNotIn('schema_version', call['schema']['required'])
                         self.assertEqual(call['cwd'], str(self.source))
                         self.assertEqual(context['project_description'], self.value['project_description'])
                         self.assertNotIn('entries', context)
@@ -370,8 +373,6 @@ class FolderCLIIntegrationTests(FolderFixture):
                             self.assertNotIn('features.shell_tool=false', args)
                         elif backend == 'claude-code':
                             self.assertEqual(args[args.index('--tools') + 1], 'Read,Glob,Grep')
-                            schema = json.loads(args[args.index('--json-schema') + 1])
-                            self.assertEqual(schema['properties']['schema_version']['enum'], ['3.0'])
                         else:
                             self.assertEqual(call['permissions'], {'*': 'deny', 'read': 'allow',
                                 'glob': 'allow', 'grep': 'allow', 'list': 'allow'})
@@ -382,7 +383,7 @@ class FolderCLIIntegrationTests(FolderFixture):
                         self.assertTrue((run / 'ARCHITECTURE_REVIEW.md').is_file())
                         for stage in ('document', 'review'):
                             data = json.loads((run / f'{stage}.json').read_text())
-                            self.assertEqual(data['schema_version'], '3.0')
+                            self.assertNotIn('schema_version', data)
                             self.assertEqual(data['source_fingerprint'], before['source_fingerprint'])
                     self.assertEqual(Folder(self.source).snapshot(), before)
 
