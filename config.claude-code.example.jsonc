@@ -23,6 +23,13 @@
   "reports_dir": "../architecture-reports/legacy-app",
   "output_language": "Russian",
 
+  // No automatic Claude Code retries are introduced by these settings.
+  "execution": {
+    "stage_timeout_seconds": 3600,
+    "idle_timeout_seconds": null,
+    "opencode_format_retries": 2
+  },
+
   // Shared CLI settings. Authenticate/configure the CLI before starting the runner.
   "agent": {
     // Supported backends: "codex", "claude-code", "opencode".

@@ -15,6 +15,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from explain import AuditError, Repository, Runner, UnsafeRepository, cli_env, load_config, process, repository_lock, slug
 from reporting import Reporter
+from opencode import prepare_environment
 from contracts import ContractError, parse_backend, review_verdict, strict_json, validate_result
 
 BASE = {'completion_status': 'COMPLETE',
@@ -70,14 +71,15 @@ class ContractTests(unittest.TestCase):
     def test_claude_error_is_not_success(self):
         with self.assertRaises(ContractError):
             parse_backend('claude-code', '{"is_error":true,"result":"error"}')
-    def test_opencode_uses_last_completed_message_not_planning(self):
+    def test_opencode_old_text_transport_is_explicitly_rejected(self):
         events = [
             {'type':'text','sessionID':'s','part':{'id':'p1','messageID':'m1','text':'Planning prose'}},
             {'type':'step_finish','part':{'messageID':'m1','reason':'tool-calls'}},
             {'type':'text','sessionID':'s','part':{'id':'p2','messageID':'m2','text':json.dumps(doc('test01','abc'))}},
             {'type':'step_finish','part':{'messageID':'m2','reason':'stop'}}]
-        data, _ = parse_backend('opencode', '\n'.join(map(json.dumps,events)))
-        self.assertEqual(data['branch'],'test01')
+        with self.assertRaises(ContractError) as caught:
+            parse_backend('opencode', '\n'.join(map(json.dumps,events)))
+        self.assertEqual(caught.exception.failure_kind, 'BACKEND_INCOMPATIBLE')
     def test_opencode_truncation_rejected(self):
         with self.assertRaises(ContractError):
             parse_backend('opencode', json.dumps({'type':'text','part':{'id':'p','messageID':'m','text':'{}'}}))
@@ -461,27 +463,27 @@ class AdapterCommandTests(unittest.TestCase):
             with self.subTest(stage=stage):
                 env={'HOME':str(self.base),'OPENCODE_CONFIG':'/custom/config.json',
                      'OPENCODE_CONFIG_CONTENT':json.dumps(original)}
-                cmd=self.command('opencode',stage,env)
+                name=prepare_environment(env,stage)
                 merged=json.loads(env['OPENCODE_CONFIG_CONTENT'])
-                name=cmd[cmd.index('--agent')+1]
                 runtime_agent=merged['agent'].pop(name)
                 self.assertEqual(merged,original)
                 self.assertEqual(runtime_agent['mode'],'primary')
-                expected={'*':'deny'}
+                expected={'*':'deny', 'StructuredOutput':'allow'}
                 if stage!='compare':expected.update(read='allow',glob='allow',grep='allow',list='allow')
                 self.assertEqual(runtime_agent['permission'],expected)
                 self.assertEqual(env['OPENCODE_CONFIG'],'/custom/config.json')
-                self.assertNotIn('--pure',cmd);self.assertNotIn('--model',cmd)
                 self.assertFalse(any(key.startswith('OPENCODE_DISABLE') for key in env))
-                for flag in ('--attach','--session','--continue'):self.assertNotIn(flag,cmd)
+                with self.assertRaisesRegex(AuditError, 'managed HTTP'):
+                    self.command('opencode',stage,env)
     def test_invalid_opencode_overlay_does_not_discard_configuration(self):
         for raw in ('not json','[]','{"agent": []}'):
             env={'OPENCODE_CONFIG_CONTENT':raw}
-            with self.subTest(raw=raw),self.assertRaisesRegex(AuditError,'OPENCODE_CONFIG_CONTENT'):
-                self.command('opencode',env=env)
+            with self.subTest(raw=raw),self.assertRaisesRegex(ContractError,'OPENCODE_CONFIG_CONTENT'):
+                prepare_environment(env,'study')
             self.assertEqual(env['OPENCODE_CONFIG_CONTENT'],raw)
     def test_explicit_models_override_cli_default_for_all_backends(self):
-        for backend in ('codex','claude-code','opencode'):
+        # OpenCode's explicit model is checked in test_opencode_http's request body.
+        for backend in ('codex','claude-code'):
             cmd=self.command(backend,model='chosen-model')
             self.assertEqual(cmd[cmd.index('--model')+1],'chosen-model')
     def test_environment_preserves_profiles_path_and_credentials(self):
@@ -492,10 +494,16 @@ class AdapterCommandTests(unittest.TestCase):
             'CODEX_HOME':'/custom/codex','CLAUDE_CONFIG_DIR':'/custom/claude',
             'OPENCODE_CONFIG_DIR':'/custom/opencode','HTTPS_PROXY':'http://proxy.invalid',
             'OPENAI_API_KEY':'test-existing-key'}
+        # Construct the Git runtime before intentionally replacing PATH. This test
+        # checks child environment preservation, not Git discovery in a fake PATH.
+        cfg=self.config(); runner=Runner(cfg,self.base/'reports'/'env-run')
+        self.addCleanup(runner.repo.close)
         with patch.dict(os.environ,inherited,clear=True):
             env=cli_env(self.repo_path)
-            for backend in ('codex','claude-code','opencode'):
-                self.command(backend,env=env)
+            for backend in ('codex','claude-code'):
+                agent=cfg['_agents']['study'] | {'backend':backend}
+                runner.command('study',self.base,agent,self.base/'schema.json',env)
+            prepare_environment(env,'study')
             for key,value in inherited.items():self.assertEqual(env[key],value)
             self.assertNotIn('CODEX_API_KEY',env)
             self.assertEqual(dict(os.environ),inherited)
@@ -529,6 +537,15 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                     cmd=[sys.executable,'-B',str(root/'explain.py'),'--config',str(config_path)]
                     if check_only:cmd.append('--check')
                     result=subprocess.run(cmd,cwd=self.base,env=env,capture_output=True,text=True,timeout=30)
+                    if backend == 'opencode':
+                        # The former fake CLI emits prompt-only JSON. It is no
+                        # longer a supported interface; native HTTP has its own fixtures.
+                        self.assertEqual(result.returncode,1,result.stderr)
+                        calls=[json.loads(line) for line in calls_path.read_text().splitlines()]
+                        self.assertFalse(any('context' in call for call in calls))
+                        self.assertEqual(self.repo.head(),self.master)
+                        self.assertEqual(self.repo.symbolic(),'master')
+                        continue
                     self.assertEqual(result.returncode,0,result.stderr)
                     output=json.loads(result.stdout)
                     self.assertEqual(output['status'],'PREFLIGHT_OK' if check_only else 'COMPLETE')

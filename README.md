@@ -150,6 +150,21 @@ Add a brief `project_description` to give the agent context about your system.
 
 Detected source changes always stop the run, even with `continue_on_error` enabled.
 
+Optional execution limits (these are also the defaults for older configurations):
+
+```json
+"execution": {
+  "stage_timeout_seconds": 3600,
+  "idle_timeout_seconds": null,
+  "opencode_format_retries": 2
+}
+```
+
+Timeouts must be positive finite numbers; idle may be null. Format retries must be
+an integer from 0 to 2. Booleans are rejected. The overall monotonic stage deadline
+cannot be extended by output activity. No new Codex/Claude automatic retries are
+introduced. See [activity, cleanup, diagnostics and retry semantics](docs/opencode-protocol.md).
+
 #### Agent settings
 
 | Field              | What to enter                                                                                           |

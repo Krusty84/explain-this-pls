@@ -5,7 +5,7 @@ build=$1
 exec > >(tee git-build.log) 2>&1
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl xz-utils util-linux
+apt-get install -y --no-install-recommends ca-certificates curl xz-utils util-linux iproute2
 
 case "$build" in
   upstream-2.34.1)

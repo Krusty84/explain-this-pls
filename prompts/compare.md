@@ -79,7 +79,8 @@ Do not claim to have run tests, inspected deployments, or read source in this st
 
 ## Output contract
 
-Return exactly the JSON object specified by the appended schema. Put the entire
+Return the object specified by the appended schema through the output mechanism
+specified by the orchestrator. Do not add schema_version. Put the entire
 comparison in report_markdown. compared_branches must list every requested non-
 baseline branch exactly once, including branches you can only discuss as unresolved.
 Return structured differences with IDs D-001 etc., branch, category, classification,

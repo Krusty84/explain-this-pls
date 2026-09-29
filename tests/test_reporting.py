@@ -447,6 +447,13 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     value['prompts'] = {'compare': '/missing/compare-prompt'}
                     self.config_path.write_text(json.dumps(value))
                     result = self.run_cli(args + ['--output', 'text'])
+                    if backend == 'opencode':
+                        self.assertEqual(result.returncode, 1, result.stderr)
+                        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+                        self.assertFalse(any('context' in call for call in calls))
+                        self.assertEqual(self.repo.head(), self.master)
+                        self.assertEqual(self.repo.symbolic(), 'master')
+                        continue
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertTrue(result.stdout.startswith('PREFLIGHT PASSED' if check else 'COMPLETE'))
                     calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
@@ -581,7 +588,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.assertIn('— \x1b[32mCOMPLETE\x1b[0m | Elapsed:', console)
         self.assertIn('\x1b[32m[OK]\x1b[0m Configuration', console)
         run_dir = Path(summary['manifest']).parent
-        logs = [run_dir / 'run.log', *run_dir.glob('*.logs/stdout.log'), *run_dir.glob('*.logs/stderr.log')]
+        logs = [run_dir / 'run.log', *run_dir.glob('*.logs/attempt-001/stdout.log'), *run_dir.glob('*.logs/attempt-001/stderr.log')]
         self.assertEqual(len(logs), 5)
         for path in logs:
             self.assertNotIn(b'\x1b', path.read_bytes(), str(path))
@@ -758,7 +765,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
             self.assertEqual(call['context']['project_description'], description.strip())
             logs = run / (stage + '.logs')
             meta = json.loads((logs / 'invocation.json').read_text())
-            payload = (logs / 'input.prompt.txt').read_bytes()
+            payload = (logs / meta['attempt'] / 'input.prompt.txt').read_bytes()
             self.assertEqual(meta['status'], 'SUCCEEDED')
             self.assertEqual(meta['input_bytes'], len(payload))
             self.assertGreater(len(payload), 800000)
@@ -777,7 +784,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         data = json.loads(result.stdout)
         run = Path(data['manifest']).parent
         self.assertNotIn('PRIVATE_MODEL_VALUE', result.stderr + (run / 'run.log').read_text())
-        self.assertIn('PRIVATE_MODEL_VALUE', (run / 'study.logs/stdout.log').read_text())
+        self.assertIn('PRIVATE_MODEL_VALUE', (run / 'study.logs/attempt-001/stdout.log').read_text())
         self.assertIn('INVALID_RESPONSE', result.stderr)
         self.assertNotIn('[OK] source folder / study', result.stderr)
         errors = [json.loads(line) for line in (run / 'run.log').read_text().splitlines()

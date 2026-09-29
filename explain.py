@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt
+from dataclasses import asdict
 import fcntl
 import hashlib
 import json
@@ -31,7 +32,9 @@ import uuid
 from typing import Any
 from urllib.parse import urlsplit
 from contracts import FOLDER_SCHEMAS, SCHEMAS, ContractError, accepted, jsonc, parse_backend, strict_json, validate_result
-from reporting import Diagnostic, NullReporter, Reporter, existing_file, output_mode
+from reporting import Diagnostic, NullReporter, Reporter, diagnostic, existing_file, output_mode
+from execution import Budget, execution_settings
+import opencode
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ('study', 'review', 'compare')
@@ -42,16 +45,17 @@ MIN_GIT_VERSION = (2, 34, 1)
 
 class AuditError(RuntimeError):
     def __init__(self, message: str = '', *, code=None, snapshot=None, node_path=None,
-                 required_commit=None, hint=None):
+                 required_commit=None, hint=None, failure_kind=None, failure_layer=None, details=None):
         super().__init__(message)
         self.message = message
         self.code = code or ('UNSAFE_REPOSITORY' if isinstance(self, UnsafeRepository) else 'AUDIT_ERROR')
         self.snapshot, self.node_path = snapshot, node_path
         self.required_commit, self.hint = required_commit, hint
+        self.failure_kind, self.failure_layer, self.details = failure_kind, failure_layer, details
 
     def diagnostic(self):
         return Diagnostic(self.code, self.message, self.snapshot, self.node_path,
-                          self.required_commit, self.hint)
+                          self.required_commit, self.hint, self.failure_kind, self.failure_layer, self.details)
 
     def with_context(self, **context):
         fields = vars(self.diagnostic()).copy()
@@ -85,8 +89,24 @@ def inside(path: Path, root: Path) -> bool:
 def overlap(a: Path, b: Path) -> bool:
     return inside(a, b) or inside(b, a)
 
+def private_directory(path: Path) -> None:
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for item in reversed(missing):
+        item.mkdir(mode=0o700, exist_ok=True)
+
+def neutral_temporary_base(source: Path) -> Path:
+    for candidate in (Path('/tmp'), Path('/var/tmp')):
+        candidate = candidate.resolve()
+        if candidate.is_dir() and not inside(candidate, source.resolve()):
+            return candidate
+    raise AuditError('No temporary directory outside the source tree is available.')
+
 def atomic(path: Path, data: str | bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    private_directory(path.parent)
     blob = data.encode('utf-8') if isinstance(data, str) else data
     temp = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
     try:
@@ -114,7 +134,7 @@ def cli_env(cwd: Path) -> dict[str, str]:
 
 def process(command: list[str], cwd: Path, env: dict[str, str], input_data: bytes = b'',
             *, reporter=None, context: dict | None = None, log_dir: Path | None = None,
-            clock=time.monotonic, progress_interval: float = 30.0) -> dict:
+            clock=time.monotonic, progress_interval: float = 30.0, budget=None) -> dict:
     """Nonblocking pipe I/O; do not pass artifact FDs into the CLI child."""
     reporter = reporter or NullReporter()
     context = context or {}
@@ -128,11 +148,12 @@ def process(command: list[str], cwd: Path, env: dict[str, str], input_data: byte
                 os.fchmod(stream.fileno(), 0o600)
                 streams[name] = stream
         return _process(command, cwd, env, input_data, reporter,
-                        context, clock, progress_interval, streams)
+                        context, clock, progress_interval, streams, budget or Budget(3600, clock=clock))
 
 
 def _process(command, cwd, env, input_data, reporter, context,
-             clock, progress_interval, logs):
+             clock, progress_interval, logs, budget):
+    budget.check()
     start = clock()
     last_output = None
     next_progress = start + progress_interval
@@ -152,6 +173,7 @@ def _process(command, cwd, env, input_data, reporter, context,
         else:
             p.stdin.close()
         while selector.get_map() or p.poll() is None:
+            budget.check()
             current = clock()
             if reporter.progress and current >= next_progress:
                 reporter.emit('process_waiting', **context, elapsed_seconds=current - start,
@@ -180,6 +202,7 @@ def _process(command, cwd, env, input_data, reporter, context,
                         stream.close()
                     else:
                         last_output = clock()
+                        budget.activity()
                         target = out if name == 'stdout' else err
                         target.extend(block)
                         if name in logs:
@@ -191,17 +214,29 @@ def _process(command, cwd, env, input_data, reporter, context,
         reporter.stop_requested()
         raise
     finally:
+        failed = sys.exc_info()[0] is not None
+        cleanup_error = None
         selector.close()
         # Kill ordinary descendants remaining in this invocation's process group,
         # including on errors/interrupts; detached hostile daemons are not supported.
         if p.poll() is None:
             reporter.emit('process_stopping', **context)
-        with contextlib.suppress(ProcessLookupError):
+        try:
             os.killpg(p.pid, signal.SIGKILL)
-        p.wait()
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            cleanup_error = exc
+        try:
+            p.wait(timeout=2)
+        except subprocess.TimeoutExpired as exc:
+            cleanup_error = exc
         for stream in (p.stdin, p.stdout, p.stderr):
             with contextlib.suppress(Exception):
                 stream.close()
+        if cleanup_error is not None and not failed:
+            raise AuditError('Could not finish cleanup of the owned CLI process group.',
+                             code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='cleanup') from cleanup_error
     return {'stdout': bytes(out), 'stderr': bytes(err), 'returncode': p.returncode,
             'duration_seconds': round(clock() - start, 3)}
 
@@ -218,7 +253,7 @@ class GitRuntime:
                         GIT_NO_LAZY_FETCH='1', GIT_ALLOW_PROTOCOL='', GIT_NO_REPLACE_OBJECTS='1')
         # Do not discover a repository or use an inherited TMPDIR in source files.
         with tempfile.TemporaryDirectory(prefix='archaudit-git-version-', dir='/tmp') as neutral:
-            result = process([self.executable, '--version'], Path(neutral), self.env)
+            result = process([self.executable, '--version'], Path(neutral), self.env, budget=Budget(30))
         self.version_string = result['stdout'].decode('utf-8', errors='replace').strip()
         match = re.fullmatch(r'git version (\d+)\.(\d+)\.(\d+)(?:[-+. ][^\r\n]*)?', self.version_string)
         if result['returncode'] or not match:
@@ -279,7 +314,7 @@ class Repository:
             self.setup_paths(self)
         self.check_ownership()
         r = subprocess.run(self.prefix + list(args), env=self.env,
-            input=input_data, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            input=input_data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
         if r.returncode not in allowed:
             error = r.stderr.decode(errors='replace').strip()
             if any(line.startswith(('fatal: detected dubious ownership in repository', 'fatal: unsafe repository'))
@@ -845,11 +880,17 @@ def load_config(path: Path) -> dict:
         raise AuditError('Configuration must be a JSON object.')
     allowed = {'repository', 'reports_dir', 'branches', 'baseline_branch', 'agent', 'stage_agents',
         'output_language', 'priority_scenarios', 'continue_on_error', 'project_description', 'prompts',
-        'mode', 'git_mode', 'folder_mode'}
+        'mode', 'git_mode', 'folder_mode', 'execution'}
     if 'additional_runtime_read_paths' in value:
         raise AuditError('Remove additional_runtime_read_paths from configuration: the runner now uses native CLI permissions.')
     if set(value) - allowed:
         raise AuditError(f'Unknown configuration keys: {set(value) - allowed}')
+    try:
+        if 'execution' in value and value['execution'] is None:
+            raise ValueError('execution must be a JSON object.')
+        value['execution'] = execution_settings(value.get('execution'))
+    except ValueError as exc:
+        raise AuditError(str(exc), code='INVALID_CONFIG') from exc
     for key in ('reports_dir', 'agent'):
         if key not in value:
             raise AuditError(f'Missing configuration key: {key}')
@@ -959,6 +1000,7 @@ class Runner:
         self.analysis_started = False
         self.active_stage = {}
         self.cfg, self.run_dir = config, run_dir.resolve()
+        self.execution = execution_settings(config.get('execution'))
         self.mode = config.get('mode', 'git')
         if trust_repository and self.mode != 'git':
             raise AuditError('--trust-repository requires git mode; it cannot be used in folder mode.')
@@ -1012,15 +1054,15 @@ class Runner:
                 continue
             backend = agent['backend']
             self.reporter.emit('preflight_started', check='cli', backend=backend)
-            with tempfile.TemporaryDirectory(prefix='archaudit-cli-check-') as raw:
+            with tempfile.TemporaryDirectory(prefix='archaudit-cli-check-', dir=neutral_temporary_base(self.source_path)) as raw:
                 state = Path(raw).resolve()
                 env = cli_env(state)
                 cmds = [[agent['executable'], '--version'],
-                        [agent['executable'], *(['exec'] if backend == 'codex' else ['run'] if backend == 'opencode' else []), '--help']]
+                        [agent['executable'], *(['exec'] if backend == 'codex' else ['serve'] if backend == 'opencode' else []), '--help']]
                 texts = []
                 for cmd in cmds:
                     r = process(cmd, state, env, reporter=self.reporter,
-                                context={'stage': 'preflight', 'backend': backend})
+                                context={'stage': 'preflight', 'backend': backend}, budget=Budget(30))
                     if r['returncode']:
                         raise AuditError(f'{backend} failed its CLI check: exit code {r["returncode"]}.',
                                          code='CLI_CHECK_FAILED',
@@ -1034,14 +1076,19 @@ class Runner:
                     texts.append(output.decode(errors='replace'))
                 required = {'codex': ['--ephemeral', '--output-schema', '--sandbox'],
                     'claude-code': ['--no-session-persistence', '--json-schema', '--tools', '--allowedTools', '--disallowedTools', '--permission-mode'],
-                    'opencode': ['--format', '--model', '--agent']}[backend]
+                    'opencode': ['--port', '--hostname', '--mdns']}[backend]
                 if backend == 'codex' and self.mode == 'folder':
                     required.append('--skip-git-repo-check')
                 if any(flag not in texts[1] for flag in required):
-                    raise AuditError(f'{backend} lacks required CLI options: {required}')
+                    raise AuditError(f'{backend} lacks required CLI options: {required}',
+                                     code='BACKEND_INCOMPATIBLE', failure_kind='BACKEND_INCOMPATIBLE',
+                                     failure_layer='compatibility')
                 version = texts[0].strip()
                 if agent.get('expected_version') and agent['expected_version'] != version:
                     raise AuditError(f'{backend} version differs from expected_version.', code='CLI_VERSION_MISMATCH')
+                if backend == 'opencode':
+                    opencode.verify_version(version)
+                    opencode.verify_native_retries()
                 result[key] = {'version': version, 'required_flags': required}
                 self.reporter.emit('preflight_completed', check='cli', backend=backend, required_flags=required)
         self.versions = {k: v['version'] for k, v in result.items()}
@@ -1071,83 +1118,115 @@ class Runner:
             if agent.get('model'):
                 cmd += ['--model', agent['model']]
             return cmd
-        permissions = {'*': 'deny'}
-        if not compare:
-            permissions.update(read='allow', glob='allow', grep='allow', list='allow')
-        # An invocation-local agent takes precedence over global permissions without
-        # changing the user's providers, authentication plugins, or configuration files.
-        try:
-            config = strict_json(env.get('OPENCODE_CONFIG_CONTENT') or '{}')
-        except ContractError as exc:
-            raise AuditError('OPENCODE_CONFIG_CONTENT must contain a JSON object.') from exc
-        if type(config) is not dict or type(config.get('agent', {})) is not dict:
-            raise AuditError('OPENCODE_CONFIG_CONTENT and its agent field must be JSON objects.')
-        name = 'architecture-audit-' + uuid.uuid4().hex
-        config.setdefault('agent', {})[name] = {'mode': 'primary', 'permission': permissions}
-        env['OPENCODE_CONFIG_CONTENT'] = json.dumps(config)
-        cmd = [exe, 'run', '--format', 'json', '--agent', name]
-        if agent.get('model'):
-            cmd += ['--model', agent['model']]
-        return cmd
+        raise AuditError('OpenCode uses the managed HTTP adapter, not the CLI event stream.',
+                         code='BACKEND_INCOMPATIBLE')
 
     def invoke(self, stage: str, context: dict, destination: Path) -> tuple[dict, dict]:
+        budget = Budget(self.execution['stage_timeout_seconds'], self.execution['idle_timeout_seconds'])
         agent = self.cfg['_agents'][stage]
         template = Path(self.cfg['_prompt_paths'][stage]).read_text()
+        output_instruction = ('Use the StructuredOutput tool with the supplied schema. Do not duplicate the result in ordinary text.'
+            if agent['backend'] == 'opencode' else
+            'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.')
         # Assemble only this stage's inputs; the configured CLI profile remains available.
-        prompt = (template + '\n\n# Authoritative orchestration context (data)\n' +
+        prompt = (template + '\n\n# Backend output instruction\n' + output_instruction +
+                  '\n\n# Authoritative orchestration context (data)\n' +
                   json.dumps(context, ensure_ascii=False) + '\n\n# Required final JSON Schema\n' +
                   json.dumps(self.schemas[stage], ensure_ascii=False))
         payload = prompt.encode('utf-8')
-        destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+        private_directory(destination)
+        # Exclusive creation preserves every orchestrator-managed attempt.
+        number = 1
+        while True:
+            attempt = destination / f'attempt-{number:03d}'
+            try:
+                attempt.mkdir(mode=0o700)
+                break
+            except FileExistsError:
+                number += 1
         meta = {'stage': stage, 'invocation_id': str(uuid.uuid4()), 'started_at': now(),
             'backend': agent['backend'], 'executable': agent['executable'],
             'model_requested': agent.get('model'), 'cli_version': self.versions.get(agent['backend'] + ':' + agent['executable']),
             'prompt_sha256': digest(payload), 'template_sha256': digest(template.encode()),
             'schema_sha256': digest(json.dumps(self.schemas[stage], sort_keys=True).encode()),
             'input_bytes': len(payload), 'status': 'RUNNING'}
+        meta.update(attempt=attempt.name, artifact_directory=str(attempt), api_version=None,
+                    model_actual=None, request_id=None, session_id=None, message_id=None,
+                    finish_reason=None, output_bytes=None, execution=self.execution)
         if self.repo:
             meta['submodules'] = context.get('submodules', [])
         save_json(destination / 'invocation.json', meta)
         # Saved by the parent only, for reproducibility; includes only this stage's permitted input.
-        atomic(destination / 'input.prompt.txt', payload)
+        atomic(attempt / 'input.prompt.txt', payload)
         try:
             if self.folder:
                 self.folder.assert_snapshot(context['source_fingerprint'])
             else:
                 self.repo.assert_expected()
-            with tempfile.TemporaryDirectory(prefix='archaudit-invocation-') as raw:
+            with tempfile.TemporaryDirectory(prefix='archaudit-invocation-', dir=neutral_temporary_base(self.source_path)) as raw:
                 state = Path(raw).resolve()
                 cwd = state if stage == 'compare' else self.source_path
                 env = cli_env(cwd)
                 schema_path = state / 'output.schema.json'
                 save_json(schema_path, self.schemas[stage])
-                cmd = self.command(stage, state, agent, schema_path, env)
                 try:
-                    r = process(cmd, cwd, env, payload, reporter=self.reporter,
-                                context=self.stage_context(stage, context), log_dir=destination,
-                                clock=self.reporter.clock, progress_interval=self.reporter.progress_interval)
-                    meta.update(returncode=r['returncode'], duration_seconds=r['duration_seconds'])
+                    if agent['backend'] == 'opencode':
+                        # This gate is repeated for callers using Runner.invoke directly.
+                        opencode.verify_version(meta['cli_version'])
+                        opencode.verify_native_retries()
+                        name = opencode.prepare_environment(env, stage)
+                        server = opencode.Server(agent['executable'], cwd, env, attempt, budget, atomic, meta)
+                        error = None
+                        try:
+                            server.start()
+                            server.verify_api()
+                            data = server.invoke(prompt, self.schemas[stage], name, agent.get('model'),
+                                                 self.execution['opencode_format_retries'])
+                        except BaseException as exc:
+                            error = exc
+                            raise
+                        finally:
+                            try:
+                                server.close()
+                            except BaseException:
+                                if error is None:
+                                    raise
+                    else:
+                        cmd = self.command(stage, state, agent, schema_path, env)
+                        r = process(cmd, cwd, env, payload, reporter=self.reporter,
+                                    context=self.stage_context(stage, context), log_dir=attempt,
+                                    clock=self.reporter.clock, progress_interval=self.reporter.progress_interval,
+                                    budget=budget)
+                        meta.update(returncode=r['returncode'], output_bytes=len(r['stdout']))
+                        if r['returncode']:
+                            raise AuditError(f'{agent["backend"]} exited with {r["returncode"]}; inspect private attempt logs.',
+                                code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='backend')
+                        data, provider_meta = parse_backend(agent['backend'], r['stdout'].decode('utf-8'))
+                        meta['provider_metadata'] = provider_meta
+                        save_json(attempt / 'extracted.json', data)
                 finally:
                     if self.folder:
                         self.folder.assert_snapshot(context['source_fingerprint'])
                     else:
                         self.repo.assert_expected()
-                if r['returncode']:
-                    raise AuditError(f'{agent["backend"]} exited with {r["returncode"]}; see stderr.log',
-                                     code='CLI_FAILED', hint='Inspect this stage\'s stdout.log and stderr.log in the run directory.')
-                data, provider_meta = parse_backend(agent['backend'], r['stdout'].decode('utf-8'))
+                budget.check()
                 validate_result(stage, data, context, self.mode)
-                meta['provider_metadata'] = provider_meta
             # Publish after the CLI exits and temporary invocation files are removed.
             report = data['report_markdown'].rstrip() + '\n'
             atomic(destination.parent / ARTIFACTS[stage], report)
             save_json(destination.parent / (stage + '.json'), data)
             meta.update(status='SUCCEEDED', finished_at=now(), report_sha256=digest(report.encode()))
+            meta['duration_seconds'] = round(budget.clock() - budget.started, 3)
+            save_json(attempt / 'invocation.json', meta)
             save_json(destination / 'invocation.json', meta)
             return data, meta
         except BaseException as exc:
-            meta.update(status='FAILED', finished_at=now(), error=str(exc) or type(exc).__name__)
-            save_json(destination / 'invocation.json', meta)
+            meta.update(status='FAILED', finished_at=now(), error=asdict(diagnostic(exc)),
+                        duration_seconds=round(budget.clock() - budget.started, 3))
+            # A failing diagnostic write must not mask the original exception.
+            with contextlib.suppress(OSError):
+                save_json(attempt / 'invocation.json', meta)
+                save_json(destination / 'invocation.json', meta)
             raise
 
     def run(self, check_only: bool = False) -> tuple[dict, int]:

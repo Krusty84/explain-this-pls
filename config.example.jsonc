@@ -23,6 +23,14 @@
   "reports_dir": "../architecture-reports/legacy-app",
   "output_language": "Russian",
 
+  // One monotonic budget per stage. null disables the optional idle deadline.
+  // Format retries apply only to native OpenCode output (see docs/opencode-protocol.md).
+  "execution": {
+    "stage_timeout_seconds": 3600,
+    "idle_timeout_seconds": null,
+    "opencode_format_retries": 2
+  },
+
   // Shared CLI settings. Authenticate/configure the CLI before starting the runner.
   "agent": {
     // Supported backends: "codex", "claude-code", "opencode".

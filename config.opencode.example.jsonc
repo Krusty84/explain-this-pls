@@ -1,4 +1,6 @@
 {
+  // BLOCKED upstream: inspected OpenCode versions do not enforce retryCount.
+  // --check fails before any model request. See docs/opencode-protocol.md.
   // Briefly describe the system's purpose and history. Empty/missing means a warning.
   "project_description": "An ERP system originally developed in 1995",
 
@@ -23,6 +25,12 @@
   "reports_dir": "../architecture-reports/legacy-app",
   "output_language": "Russian",
 
+  "execution": {
+    "stage_timeout_seconds": 3600,
+    "idle_timeout_seconds": null,
+    "opencode_format_retries": 2
+  },
+
   // Shared CLI settings. Authenticate/configure the CLI before starting the runner.
   "agent": {
     // Supported backends: "codex", "claude-code", "opencode".
@@ -31,7 +39,7 @@
     "executable": "opencode",
     // null uses the model selected by the configured CLI.
     "model": null,
-    // null disables version pinning; otherwise use the exact --version output.
+    // null disables this additional pin, not the mandatory API capability gate.
     "expected_version": null
   },
 

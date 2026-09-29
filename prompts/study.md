@@ -118,11 +118,11 @@ them with boilerplate. The report may be useful and incomplete; never fake compl
 
 ## Output contract
 
-Return exactly the JSON object specified by the appended schema, without Markdown
-fences or surrounding text. Put the complete document in report_markdown. Do not
+Return the object specified by the appended schema through the output mechanism
+specified by the orchestrator. Put the complete document in report_markdown. Do not
 create ARCHITECTURE.md or any other file yourself. In git mode, echo branch and
-source_commit exactly using schema version 2.0. In folder mode, echo source_directory
-and source_fingerprint exactly using version 3.0; do not invent a branch or commit.
+source_commit exactly. In folder mode, echo source_directory
+and source_fingerprint exactly; do not invent a branch or commit. Do not add schema_version.
 
 COMPLETE means all required feasible investigation passes and applicable sections
 are finished within the declared scope, with evidence checked and limits disclosed.

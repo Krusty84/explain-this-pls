@@ -14,11 +14,12 @@ from pathlib import Path
 import re
 import shlex
 import sys
+import subprocess
 import time
 import traceback
 import unicodedata
 from typing import Any
-from contracts import ContractError
+from contracts import ContractError, json_error_details
 
 LABEL_COLORS = {'[WARN]': '\x1b[33m', '[RUN]': '\x1b[36m', '[OK]': '\x1b[32m',
                 '[FAIL]': '\x1b[31m', '[SKIP]': '\x1b[90m'}
@@ -36,6 +37,9 @@ class Diagnostic:
     node_path: str | None = None
     required_commit: str | None = None
     hint: str | None = None
+    failure_kind: str | None = None
+    failure_layer: str | None = None
+    details: dict | None = None
 
 
 def diagnostic(exc: BaseException) -> Diagnostic:
@@ -49,10 +53,17 @@ def diagnostic(exc: BaseException) -> Diagnostic:
         return data
     if isinstance(exc, KeyboardInterrupt):
         return Diagnostic('INTERRUPTED', 'The run was interrupted.')
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return Diagnostic('COMMAND_TIMEOUT', 'Local command exceeded its time limit.',
+                          failure_kind='STAGE_TIMEOUT', failure_layer='execution')
+    if isinstance(exc, json.JSONDecodeError):
+        return Diagnostic('INVALID_RESPONSE', 'Invalid JSON syntax.', failure_kind='INVALID_JSON',
+                          failure_layer='result', details=json_error_details(exc))
     if isinstance(exc, ContractError):
         # Contract exceptions can embed arbitrary values returned by a model.
-        return Diagnostic('INVALID_RESPONSE', 'The agent response failed contract validation.',
-                          hint='Inspect the saved stdout.log and stderr.log for this stage.')
+        return Diagnostic('BACKEND_INCOMPATIBLE' if exc.failure_kind == 'BACKEND_INCOMPATIBLE' else 'INVALID_RESPONSE', exc.safe_message,
+                          hint='Inspect the private attempt artifacts listed in invocation.json.',
+                          failure_kind=exc.failure_kind, failure_layer=exc.failure_layer, details=exc.details)
     if isinstance(exc, UnicodeError):
         return Diagnostic('INVALID_ENCODING', 'Input or CLI output could not be decoded.')
     if isinstance(exc, OSError):

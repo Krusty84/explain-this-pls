@@ -9,7 +9,29 @@ import re
 from typing import Any
 
 class ContractError(ValueError):
-    pass
+    def __init__(self, message, *, failure_kind='SEMANTIC_ERROR', failure_layer='semantic',
+                 details=None, safe=False):
+        super().__init__(message)
+        self.failure_kind = failure_kind
+        self.failure_layer = failure_layer
+        self.details = details or {}
+        self.safe_message = message if safe else 'The agent response failed contract validation.'
+
+
+def response_error(kind, layer, message, **details):
+    return ContractError(message, failure_kind=kind, failure_layer=layer,
+                         details=details, safe=True)
+
+
+def json_error_details(exc):
+    # JSONDecodeError.msg can be supplied by callers, so use a closed vocabulary.
+    messages = {'Expecting value', 'Expecting property name enclosed in double quotes',
+                "Expecting ':' delimiter", "Expecting ',' delimiter", 'Extra data',
+                'Unterminated string starting at', 'Invalid \\escape',
+                'Invalid \\uXXXX escape', 'Invalid control character at',
+                'Unterminated block comment'}
+    return {'json_error': exc.msg if exc.msg in messages else 'Invalid JSON syntax',
+            'line': exc.lineno, 'column': exc.colno, 'position': exc.pos}
 
 def string(*values: str) -> dict:
     spec = {'type': 'string'}
@@ -67,11 +89,11 @@ def strict_json(text: str) -> Any:
         result = {}
         for key, value in items:
             if key in result:
-                raise ContractError(f'Duplicate JSON key: {key}')
+                raise response_error('INVALID_JSON', 'result', 'Duplicate JSON key.', json_error='duplicate_key')
             result[key] = value
         return result
     def reject(value):
-        raise ContractError(f'Non-finite JSON value: {value}')
+        raise response_error('INVALID_JSON', 'result', 'Non-finite JSON value.', json_error='non_finite')
     def finite_float(value):
         number = float(value)
         if not math.isfinite(number):
@@ -79,8 +101,14 @@ def strict_json(text: str) -> Any:
         return number
     try:
         return json.loads(text, object_pairs_hook=pairs, parse_constant=reject, parse_float=finite_float)
-    except (json.JSONDecodeError, UnicodeError) as exc:
-        raise ContractError(f'Invalid JSON: {exc}') from exc
+    except json.JSONDecodeError as exc:
+        raise response_error('INVALID_JSON', 'result',
+                             f'Invalid JSON syntax: line {exc.lineno} column {exc.colno} (char {exc.pos}).',
+                             **json_error_details(exc)) from exc
+    except (UnicodeError, RecursionError, ValueError) as exc:
+        if isinstance(exc, ContractError):
+            raise
+        raise response_error('INVALID_JSON', 'result', 'Invalid JSON encoding or numeric/nesting limit.') from exc
 
 def jsonc(text: str) -> Any:
     """Replace comments/trailing commas with spaces, preserving error positions."""
@@ -110,7 +138,9 @@ def jsonc(text: str) -> Any:
                 end = text.find('*/', i + 2)
                 if end == -1:
                     error = json.JSONDecodeError('Unterminated block comment', text, start)
-                    raise ContractError(f'Invalid JSONC: {error}')
+                    raise response_error('INVALID_JSON', 'configuration',
+                                         f'Invalid JSONC comment: line {error.lineno} column {error.colno} (char {error.pos}).',
+                                         **json_error_details(error)) from error
                 i = end + 2
             for pos in range(start, i):
                 if chars[pos] not in '\r\n':
@@ -131,13 +161,13 @@ def validate_schema(value: Any, schema: dict, where: str = '$') -> None:
     types = {'object': dict, 'array': list, 'string': str, 'boolean': bool}
     typ = schema['type']
     if type(value) is not types[typ]:
-        raise ContractError(f'{where}: expected {typ}')
+        raise response_error('SCHEMA_ERROR', 'schema', f'{where}: expected {typ}', path=where, violation='type')
     if 'enum' in schema and value not in schema['enum']:
-        raise ContractError(f'{where}: unexpected enum value {value!r}')
+        raise response_error('SCHEMA_ERROR', 'schema', f'{where}: unexpected enum value', path=where, violation='enum')
     if typ == 'object':
         if set(value) != set(schema['properties']):
-            raise ContractError(f'{where}: missing/extra keys: '
-                                f'{set(value) ^ set(schema["properties"])}')
+            raise response_error('SCHEMA_ERROR', 'schema', f'{where}: missing/extra keys',
+                                 path=where, violation='required/additionalProperties')
         for key, subschema in schema['properties'].items():
             validate_schema(value[key], subschema, f'{where}.{key}')
     elif typ == 'array':
@@ -222,44 +252,28 @@ def validate_result(stage: str, value: dict, context: dict, mode: str = 'git') -
             if diff['id'] not in value['report_markdown']:
                 raise ContractError('Markdown omits a structured difference ID')
 
+def transport_json(text):
+    try:
+        return strict_json(text)
+    except ContractError as exc:
+        raise response_error('TRANSPORT_ERROR', 'transport', 'Invalid transport JSON.', **exc.details) from exc
+
+
 def parse_backend(backend: str, output: str) -> tuple[dict, dict]:
     """Normalize only documented transports. Never extract JSON with a greedy regex."""
     if backend == 'codex':
         return strict_json(output.strip()), {}
     if backend == 'claude-code':
-        transport = strict_json(output.strip())
-        if type(transport) is not dict or transport.get('is_error'):
-            raise ContractError('Claude Code returned an error result')
+        transport = transport_json(output.strip())
+        if type(transport) is not dict or type(transport.get('is_error')) is not bool:
+            raise response_error('TRANSPORT_ERROR', 'transport', 'Invalid Claude Code result envelope.')
+        if transport['is_error']:
+            raise response_error('BACKEND_ERROR', 'backend', 'Claude Code returned an error result.')
         if type(transport.get('structured_output')) is not dict:
-            raise ContractError('Claude Code did not return structured_output')
+            raise response_error('INCOMPLETE_OUTPUT', 'result', 'Claude Code did not return structured_output.')
         metadata = {k: transport[k] for k in ('session_id', 'total_cost_usd', 'usage', 'modelUsage') if k in transport}
         return transport['structured_output'], metadata
     if backend == 'opencode':
-        messages: dict[str, dict[str, str]] = {}
-        stops: list[str] = []
-        session_ids = set()
-        for line in output.splitlines():
-            if not line.strip():
-                continue
-            event = strict_json(line)
-            if type(event) is not dict:
-                raise ContractError('OpenCode emitted a non-object event')
-            if event.get('type') == 'error':
-                raise ContractError('OpenCode emitted an error event')
-            if event.get('sessionID'):
-                session_ids.add(event['sessionID'])
-            part = event.get('part', {})
-            mid = part.get('messageID')
-            if event.get('type') == 'text':
-                if not mid or not part.get('id') or not isinstance(part.get('text'), str):
-                    raise ContractError('Unrecognized OpenCode text event layout')
-                messages.setdefault(mid, {})[part['id']] = part['text']
-            if event.get('type') == 'step_finish' and part.get('reason') == 'stop':
-                if not mid:
-                    raise ContractError('OpenCode stop event has no messageID')
-                stops.append(mid)
-        if not stops or stops[-1] not in messages:
-            raise ContractError('No completed final OpenCode assistant message; output may be truncated')
-        text = '\n'.join(messages[stops[-1]].values())
-        return strict_json(text.strip()), {'session_ids': sorted(session_ids)}
+        raise response_error('BACKEND_INCOMPATIBLE', 'compatibility',
+                             'OpenCode text event parsing was removed; native HTTP structured output is required.')
     raise ContractError(f'Unknown backend: {backend}')

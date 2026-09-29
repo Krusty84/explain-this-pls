@@ -372,6 +372,14 @@ class FolderCLIIntegrationTests(FolderFixture):
                     self.value['agent']['backend'] = backend
                     self.value['project_description'] = '' if check else 'ERP-система 1995 года.'
                     result = self.execute(check)
+                    if backend == 'opencode':
+                        # Legacy text fixture is unsupported; HTTP pipeline is
+                        # covered separately, with its upstream capability limit explicit.
+                        self.assertEqual(result.returncode, 1, result.stderr)
+                        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+                        self.assertFalse(any('context' in call for call in calls))
+                        self.assertEqual(Folder(self.source).snapshot(), before)
+                        continue
                     self.assertEqual(result.returncode, 0, result.stderr)
                     output = json.loads(result.stdout)
                     self.assertEqual(output['status'], 'PREFLIGHT_OK' if check else 'COMPLETE')

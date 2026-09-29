@@ -41,7 +41,7 @@ jobs:
       - name: Install Git, Python, and network isolation tools
         run: |
           set -euo pipefail
-          dnf install -y git python3.11 util-linux
+          dnf install -y git python3.11 util-linux iproute
       - uses: actions/checkout@v4
       - name: Full suite on AlmaLinux 9 with no network
         run: |
@@ -50,7 +50,7 @@ jobs:
           command -v git
           git --version
           python3.11 --version
-          unshare --net python3.11 -B -m unittest discover -s tests -v
+          bash .github/ci/offline-tests.sh python3.11 -B -m unittest discover -s tests -v
 
   git-compatibility:
     runs-on: ubuntu-22.04
@@ -78,7 +78,7 @@ jobs:
           command -v git
           git --version
           python3 -c 'import shutil; from pathlib import Path; print(Path(shutil.which("git")).resolve())'
-          unshare --net python3 -B -m unittest discover -s tests -v 2>&1 | tee git-tests.log
+          bash .github/ci/offline-tests.sh python3 -B -m unittest discover -s tests -v 2>&1 | tee git-tests.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -95,7 +95,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Git for offline fixtures
-        run: apt-get update && apt-get install -y --no-install-recommends git
+        run: apt-get update && apt-get install -y --no-install-recommends git iproute2
       - name: Real root and foreign-owner integration tests in an isolated container
         env:
           AUDIT_GIT_BUILD: modern
@@ -103,4 +103,4 @@ jobs:
           command -v git
           git --version
           dpkg-query -W git
-          unshare --net python3 -B -m unittest discover -s tests -v
+          bash .github/ci/offline-tests.sh python3 -B -m unittest discover -s tests -v

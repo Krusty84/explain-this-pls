@@ -106,10 +106,10 @@ limitations, not fabricated architecture defects. Severity rates documentation i
 
 ## Output contract
 
-Return one JSON object conforming to the appended schema, no Markdown fences or
-extra prose. Include complete report_markdown, a structured claims ledger and
-structured findings. Echo branch/source_commit using schema version 2.0 in git mode,
-or source_directory/source_fingerprint using version 3.0 in folder mode. The orchestrator
+Return the object conforming to the appended schema through the output mechanism
+specified by the orchestrator. Include complete report_markdown, a structured claims ledger and
+structured findings. Echo branch/source_commit in git mode,
+or source_directory/source_fingerprint in folder mode. Do not add schema_version. The orchestrator
 checks schema, IDs, verdict logic, and source stability independently.
 
 completion_status: COMPLETE only if material-claim inventory and required area-level

@@ -141,6 +141,15 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
                 self.config['agent']['backend'] = backend
                 self.env['OPENCODE_CONFIG_CONTENT'] = '{"provider":{"custom":{"options":{"baseURL":"https://example.invalid"}}}}'
                 result, manifest = self.execute()
+                if backend == 'opencode':
+                    # Prompt-only transport was retired, so this legacy CLI
+                    # fixture must stop before reading any source snapshot.
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertEqual(manifest['status'], 'FAILED')
+                    self.assert_original(before)
+                    calls = [json.loads(s) for s in self.calls.read_text().splitlines()]
+                    self.assertFalse(any('context' in c for c in calls))
+                    continue
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(manifest['status'], 'COMPLETE')
                 self.assertTrue(manifest['restoration']['restored'])
