@@ -119,6 +119,16 @@ class Handler(BaseHTTPRequestHandler):
             repair = prompt.startswith('Correct only the format')
             raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]
             context = json.loads(raw.split('\n\n# Required final JSON Schema\n')[0])
+            if scenario == 'progress-barrier':
+                # No response/history activity until the parent test observes the UI.
+                gate = Path(os.environ['AUDIT_FAKE_PROGRESS_GATE'])
+                stage = 'review' if 'architecture_document' in context else 'study'
+                (gate / (stage + '.ready')).touch()
+                deadline = time.monotonic() + 10
+                while not (gate / (stage + '.release')).exists():
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('Progress test did not release the HTTP response')
+                    time.sleep(.01)
             if scenario == 'source-change':
                 (Path.cwd() / 'app.py').write_text('unexpected fixture mutation\n')
             data = result(context)

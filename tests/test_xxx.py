@@ -36,14 +36,14 @@ class XXXTests(unittest.TestCase):
             'agent': {'backend': 'xxx', 'executable': str(self.cli), 'model': None}}
         self.number = 0
 
-    def run_case(self, scenario='', *, check=False):
+    def run_case(self, scenario='', *, check=False, reporter=None):
         self.number += 1
         path = self.root / 'config.json'
         path.write_text(json.dumps(self.value))
         config = load_config(path)
         self.run_dir = self.root / f'run-{self.number}'
         with patch.dict(os.environ, self.env | {'AUDIT_FAKE_CASE': scenario}):
-            return Runner(config, self.run_dir).run(check_only=check)
+            return Runner(config, self.run_dir, reporter=reporter).run(check_only=check)
 
     def recorded(self):
         return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []

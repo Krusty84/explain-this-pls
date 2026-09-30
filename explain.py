@@ -160,6 +160,9 @@ def _process(command, cwd, env, input_data, reporter, context,
     start = clock()
     last_output = None
     next_progress = start + progress_interval
+    # A stage-owned Reporter also covers silent HTTP waits and retries. Legacy
+    # reporters / standalone process callers retain the original waiting events.
+    managed_progress = getattr(reporter, 'cli_started', lambda: False)()
     out, err = bytearray(), bytearray()
     p = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -178,7 +181,7 @@ def _process(command, cwd, env, input_data, reporter, context,
         while selector.get_map() or p.poll() is None:
             budget.check()
             current = clock()
-            if reporter.progress and current >= next_progress:
+            if reporter.progress and not managed_progress and current >= next_progress:
                 reporter.emit('process_waiting', **context, elapsed_seconds=current - start,
                               last_output_seconds=None if last_output is None else current - last_output)
                 next_progress = current + progress_interval
@@ -205,6 +208,8 @@ def _process(command, cwd, env, input_data, reporter, context,
                         stream.close()
                     else:
                         last_output = clock()
+                        if managed_progress:
+                            reporter.cli_output()
                         budget.activity()
                         target = out if name == 'stdout' else err
                         target.extend(block)
@@ -1023,6 +1028,7 @@ class Runner:
         self.versions: dict[str, str] = {}
 
     def record_error(self, manifest, exc, *, phase='run', **context):
+        getattr(self.reporter, 'stop_progress', lambda: None)()
         recoverable = isinstance(exc, ContractError) or (isinstance(exc, AuditError)
             and exc.code == 'CLI_FAILED' and exc.failure_layer == 'backend')
         if (not recoverable or phase in ('preflight', 'restoration')
@@ -1048,7 +1054,7 @@ class Runner:
     def stage_started(self, stage, context):
         started = self.reporter.clock()
         self.active_stage = self.stage_context(stage, context)
-        self.reporter.emit('stage_started', **self.active_stage)
+        self.reporter.emit('stage_started', _started=started, **self.active_stage)
         return started
 
     def stage_finished(self, stage, context, data, started):
@@ -1430,6 +1436,7 @@ class Runner:
         try:
             manifest, code = self.run_folder(check_only) if self.folder else self.run_git(check_only)
         finally:
+            getattr(self.reporter, 'stop_progress', lambda: None)()
             if self.repo:
                 try:
                     self.repo.close()
@@ -1733,7 +1740,7 @@ def main() -> int:
     parser.add_argument('--output', choices=('auto', 'text', 'json'), default='auto',
                         help='Result format on stdout: text is human-readable; auto selects text for a TTY, JSON otherwise (default: auto). Diagnostics use stderr.')
     parser.add_argument('--verbose', action='store_true', help='Add technical event details to stderr; never print prompts, credentials or raw model output.')
-    parser.add_argument('--no-progress', action='store_true', help='Disable periodic waiting messages; keep stage boundaries, warnings and errors.')
+    parser.add_argument('--no-progress', action='store_true', help='Disable the spinner and periodic waiting messages; keep stage boundaries, warnings and errors.')
     args = parser.parse_args()
     reporter = Reporter(mode=output_mode(args.output, sys.stdout), verbose=args.verbose, progress=not args.no_progress)
     run_id = run_dir = runner = None

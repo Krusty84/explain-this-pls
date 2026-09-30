@@ -231,7 +231,7 @@ Add these optional flags to either command as needed:
 | `--output text`      | Always show a readable final summary.                                       |
 | `--output json`      | Return the final result as JSON for scripts.                                |
 | `--verbose`          | Show extra diagnostic details.                                              |
-| `--no-progress`      | Hide periodic waiting messages keep stage updates and errors.              |
+| `--no-progress`      | Hide the spinner and waiting messages keep stage updates and errors.      |
 | `--trust-repository` | Allow a Git checkout owned by another user, if you trust it. Git mode only. |
 
 Each run saves results in a new subfolder of `reports_dir`. Start with these files:
@@ -250,7 +250,7 @@ reports are directly in the run folder.
 The default `"result_policy": "compromise"` preserves usable material even when
 individual stages fail. The orchestrator assembles `FINAL_REPORT.md` without an
 additional model request, in both folder and Git modes. Original reports are not
-rewritten. A study without a completed review is explicitly unverified; review
+rewritten. A study without a completed review is explicitly unverified review
 inconsistencies and missing inputs appear before the affected material.
 
 Strictly validated results retain their existing filenames and JSON contracts.
@@ -270,4 +270,4 @@ for usable material with caveats or individual stage failures, `1` / `FAILED` fo
 usable study or critical source-integrity, restoration, cleanup, or publication
 failure. Interruption remains `130`. `continue_on_error: false` stops further agent
 calls but still assembles previously completed material. Configured format repairs
-remain bounded; semantic errors do not trigger extra model requests.
+remain bounded semantic errors do not trigger extra model requests.

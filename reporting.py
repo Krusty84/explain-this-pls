@@ -15,6 +15,7 @@ import re
 import shlex
 import sys
 import subprocess
+import threading
 import time
 import traceback
 import unicodedata
@@ -27,6 +28,42 @@ STATUS_COLORS = {'COMPLETE': '\x1b[32m', 'PREFLIGHT PASSED': '\x1b[32m', 'verifi
                  'FAILED': '\x1b[31m', 'PARTIAL': '\x1b[33m', 'BLOCKED': '\x1b[33m',
                  'not started': '\x1b[90m', 'not completed': '\x1b[90m', 'not performed': '\x1b[90m',
                  'not applicable': '\x1b[90m'}
+
+SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+FRAME_INTERVAL = 0.125
+ANIMATION_DELAY = 0.5
+
+
+def cell_width(text):
+    """Width of already escaped, unstyled text (no terminal control sequences)."""
+    return sum(0 if unicodedata.category(c).startswith('M') else
+               2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in text)
+
+
+def clip_cells(text, limit):
+    if cell_width(text) <= limit:
+        return text
+    result, used = [], 0
+    for char in text:
+        width = cell_width(char)
+        if used + width > limit - 1:
+            break
+        result.append(char)
+        used += width
+    return ''.join(result) + '~' if limit > 0 else ''
+
+
+@dataclass
+class StageProgress:
+    context: dict
+    started: float
+    next_wait: float
+    stop: threading.Event = field(default_factory=threading.Event)
+    thread: threading.Thread | None = None
+    cli: bool = False
+    last_output: float | None = None
+    drawn: bool = False
+    last_frame: str | None = None
 
 
 @dataclass(frozen=True)
@@ -146,6 +183,9 @@ class NullReporter:
     def stop_requested(self):
         pass
 
+    def stop_progress(self):
+        pass
+
 
 class Reporter(NullReporter):
     def __init__(self, *, mode='text', verbose=False, progress=True, stdout=None, stderr=None,
@@ -154,11 +194,28 @@ class Reporter(NullReporter):
         self.stdout = sys.stdout if stdout is None else stdout
         self.stderr = sys.stderr if stderr is None else stderr
         self.colors = {}
+        self.redraw = False
         for stream in (self.stdout, self.stderr):
             try:
-                self.colors[id(stream)] = bool(stream.isatty()) and not os.environ.get('NO_COLOR') and os.environ.get('TERM') != 'dumb'
+                tty = bool(stream.isatty()) and os.environ.get('TERM') != 'dumb'
             except Exception:
-                self.colors[id(stream)] = False
+                tty = False
+            self.colors[id(stream)] = tty and not os.environ.get('NO_COLOR')
+            if stream is self.stderr:
+                self.redraw = tty
+        self._lock = threading.RLock()
+        self._progress = None
+        self._closed = False
+        self.frames = SPINNER
+        self._encoding = getattr(self.stderr, 'encoding', None)
+        if not isinstance(self._encoding, str):
+            self._encoding = 'utf-8'
+        try:
+            SPINNER.encode(self._encoding)
+        except LookupError:
+            self._encoding, self.redraw = 'utf-8', False
+        except UnicodeError:
+            self.frames = '|/-\\'
         self.clock, self.progress_interval = clock, progress_interval
         self.started = clock()
         self.run_id = None
@@ -197,20 +254,139 @@ class Reporter(NullReporter):
             return STATUS_COLORS[value] + text + '\x1b[0m'
         return text
 
-    def write(self, stream, text):
+    def _write(self, stream, text):
+        """All console writes, including frames, hold _lock and flush explicitly."""
         if id(stream) in self.failed_streams:
             return
-        if stream is self.stderr and self.colors.get(id(stream)):
-            text = re.sub(r'^\[(?:WARN|RUN|OK|FAIL|SKIP)\](?= |$)',
-                          lambda match: LABEL_COLORS[match[0]] + match[0] + '\x1b[0m',
-                          text, flags=re.MULTILINE)
         try:
-            stream.write(text + '\n')
+            if stream is self.stderr:
+                # Keep status/diagnostic lines readable on the same restricted
+                # encoding as the spinner (including a strict ASCII stream).
+                text = text.encode(self._encoding, errors='backslashreplace').decode(self._encoding)
+            stream.write(text)
             stream.flush()
         except (OSError, UnicodeError, ValueError):
             self.failed_streams.add(id(stream))
+            if stream is self.stderr and self._progress:
+                self._progress.stop.set()
+
+    def _labels(self, text):
+        if self.colors.get(id(self.stderr)):
+            return re.sub(r'^\[(?:WARN|RUN|OK|FAIL|SKIP)\](?= |$)',
+                          lambda m: LABEL_COLORS[m[0]] + m[0] + '\x1b[0m', text, flags=re.MULTILINE)
+        return text
+
+    def write(self, stream, text):
+        with self._lock:
+            state = self._progress
+            self._clear_progress(state)
+            self._write(stream, (self._labels(text) if stream is self.stderr else text) + '\n')
+            if state and not state.stop.is_set():
+                self._draw_progress(state)
+
+    def _terminal_columns(self):
+        try:
+            # Query stderr itself, never stdout or the COLUMNS environment variable.
+            return os.get_terminal_size(self.stderr.fileno()).columns
+        except Exception:
+            return 0
+
+    def _progress_line(self, state):
+        if not self.redraw:
+            return None
+        columns = self._terminal_columns() - 1
+        elapsed = max(0, self.clock() - state.started)
+        index = 0 if elapsed < ANIMATION_DELAY else 1 + int((elapsed - ANIMATION_DELAY) / FRAME_INTERVAL)
+        timer = duration(elapsed)
+        tail = '  ' + self.frames[index % len(self.frames)] + ' ' + timer
+        c = state.context
+        # Encode before measuring: ASCII replacement may expand escaped characters.
+        def display(value):
+            text = self.display(value)
+            return text.encode(self._encoding, errors='backslashreplace').decode(self._encoding)
+        source = display(c.get('source_name') or c.get('branch') or '')
+        stage = display(c['stage']) + ' / ' + display(c['backend'])
+        fixed = '[RUN]  / ' + stage + tail
+        # Reserve the hours field so a truncated source does not move the stage
+        # label when MM:SS becomes HH:MM:SS.
+        source_columns = columns - cell_width(fixed) - max(0, 8 - len(timer))
+        if source_columns >= 1:
+            line = '[RUN] ' + clip_cells(source, source_columns) + ' / ' + stage + tail
+        else:
+            # Keep stage and time when the source cannot fit; tiny/unknown terminals
+            # use the regular, infrequent line-oriented fallback.
+            fixed = '[RUN] ' + stage + tail
+            if columns < cell_width(fixed):
+                return None
+            line = fixed
+        return self._labels(line)
+
+    def _clear_progress(self, state):
+        if state and state.drawn:
+            self._write(self.stderr, '\r\x1b[2K')
+            state.drawn = False
+
+    def _draw_progress(self, state):
+        line = self._progress_line(state)
+        if line is None:
+            self._clear_progress(state)
+            return
+        if not state.drawn or line != state.last_frame:
+            # Overwrite in one flushed write; erase only the old trailing suffix.
+            self._write(self.stderr, ('\r' if state.drawn else '') + line + '\x1b[K')
+            state.drawn, state.last_frame = True, line
+
+    def _start_worker(self, state):
+        state.thread = threading.Thread(target=self._refresh_progress, args=(state,),
+                                        name='audit-progress', daemon=True)
+        state.thread.start()
+
+    def _refresh_progress(self, state):
+        while not state.stop.wait(FRAME_INTERVAL if self.redraw else self.progress_interval):
+            self._tick_progress(state)
+
+    def _tick_progress(self, state):
+        """One presentation tick; never touches an execution budget or transport."""
+        with self._lock:
+            if self._progress is not state or state.stop.is_set():
+                return
+            self._draw_progress(state)
+            current = self.clock()
+            if current >= state.next_wait:
+                state.next_wait = current + self.progress_interval
+                activity = ({'last_output_seconds': None if state.last_output is None else
+                             current - state.last_output} if state.cli else {})
+                self.emit('process_waiting', **state.context,
+                          elapsed_seconds=current - state.started, **activity)
+
+    def cli_started(self):
+        with self._lock:
+            if self._progress is None:
+                return False
+            self._progress.cli, self._progress.last_output = True, None
+            return True
+
+    def cli_output(self):
+        with self._lock:
+            if self._progress:
+                self._progress.last_output = self.clock()
+
+    def stop_progress(self):
+        with self._lock:
+            state, self._progress = self._progress, None
+            if state:
+                state.stop.set()
+                self._clear_progress(state)
+        # The worker needs _lock to finish a tick. Never join while holding it.
+        if (state and state.thread and state.thread.ident is not None
+                and state.thread is not threading.current_thread()):
+            state.thread.join()
 
     def attach_log(self, run_dir: Path):
+        with self._lock:
+            self._attach_log(run_dir)
+
+    def _attach_log(self, run_dir):
         if self.handler or self.log_failed:
             return
         path = run_dir / 'run.log'
@@ -228,6 +404,10 @@ class Reporter(NullReporter):
             self.disable_log()
 
     def disable_log(self):
+        with self._lock:
+            self._disable_log()
+
+    def _disable_log(self):
         if self.handler:
             self.logger.removeHandler(self.handler)
             self.handler.close()
@@ -237,26 +417,43 @@ class Reporter(NullReporter):
             self.write(self.stderr, '[WARN] Technical log is unavailable or incomplete; execution and cleanup continue.')
 
     def log(self, event):
-        if self.handler:
-            try:
-                self.logger.log(event.level, event.event, extra={'audit_event': event})
-            except (OSError, ValueError):
-                self.disable_log()
-        elif not self.log_failed:
-            self.early.append(event)
+        with self._lock:
+            if self.handler:
+                try:
+                    self.logger.log(event.level, event.event, extra={'audit_event': event})
+                except (OSError, ValueError):
+                    self.disable_log()
+            elif not self.log_failed:
+                self.early.append(event)
 
-    def emit(self, event, level=logging.INFO, *, exception=None, **context):
+    def emit(self, event, level=logging.INFO, *, exception=None, _started=None, **context):
+        if event in ('stage_started', 'stage_completed', 'error', 'stop_requested',
+                     'restoration_started', 'run_completed'):
+            self.stop_progress()
+        with self._lock:
+            self._emit(event, level, exception=exception, _started=_started, **context)
+
+    def _emit(self, event, level, *, exception, _started, **context):
         if event in ('root_warning', 'description_missing', 'stop_requested'):
             level = logging.WARNING
         item = Event(event, level, dt.datetime.now(dt.timezone.utc).isoformat(), self.run_id,
                      self.clean(context), exception)
         self.log(item)
+        if (event == 'stage_started' and context.get('stage') in ('study', 'review', 'compare')
+                and self.progress and not self._closed and not self.finished and not self.stopping
+                and id(self.stderr) not in self.failed_streams):
+            started = self.clock() if _started is None else _started
+            self._progress = StageProgress(item.context, started, started + self.progress_interval)
         lines = self.render(item)
         if lines:
             self.write(self.stderr, '\n'.join(lines))
         if self.verbose and event not in ('process_waiting', 'error'):
             self.write(self.stderr, '[RUN] Detail: ' + self.display(event) + ' ' +
                        self.display(json.dumps(item.context, ensure_ascii=False)))
+        if event == 'stage_started' and self._progress:
+            self._draw_progress(self._progress)
+            if not self._progress.stop.is_set():
+                self._start_worker(self._progress)
 
     def exception_chain(self, exc):
         """Keep every stack and cause, without locals or model-supplied exception values."""
@@ -315,14 +512,18 @@ class Reporter(NullReporter):
         if name == 'branch_started':
             return ['[RUN] Preparing ' + s(c['branch']) + ' at ' + s(c['commit'][:12])]
         if name == 'stage_started':
+            if self._progress and self._progress_line(self._progress) is not None:
+                return []
             return ['[RUN] ' + stage]
         if name == 'process_waiting':
-            if not self.progress:
+            if not self.progress or (self._progress and self._progress_line(self._progress) is not None):
                 return []
-            last = ('No CLI output received yet' if c['last_output_seconds'] is None else
-                    'Last CLI output: ' + duration(c['last_output_seconds']) + ' ago')
+            last = ''
+            if 'last_output_seconds' in c:
+                last = ' | ' + ('No CLI output received yet' if c['last_output_seconds'] is None else
+                                'Last CLI output: ' + duration(c['last_output_seconds']) + ' ago')
             return ['[RUN] ' + stage, '      Elapsed: ' + duration(c['elapsed_seconds']) +
-                    ' | ' + last]
+                    last]
         if name == 'stage_completed':
             status = c['status']
             label = '[OK] ' if status == 'COMPLETE' else '[FAIL] ' if status == 'FAILED' else '[WARN] '
@@ -355,6 +556,7 @@ class Reporter(NullReporter):
         return []
 
     def finish(self, result, manifest, *, check_only, config_path, run_dir=None, trust=False):
+        self.stop_progress()
         if self.finished:
             return
         self.finished = True
@@ -413,8 +615,11 @@ class Reporter(NullReporter):
         self.write(self.stdout, '\n'.join(lines))
 
     def close(self):
-        if self.handler:
-            self.logger.removeHandler(self.handler)
-            self.handler.close()
-            self.handler = None
-        self.early.clear()
+        self._closed = True
+        self.stop_progress()
+        with self._lock:
+            if self.handler:
+                self.logger.removeHandler(self.handler)
+                self.handler.close()
+                self.handler = None
+            self.early.clear()
