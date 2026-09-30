@@ -377,17 +377,11 @@ def transport_json(text):
 def parse_backend(backend: str, output: str) -> tuple[dict, dict]:
     """Normalize only documented transports. Never extract JSON with a greedy regex."""
     if backend == 'codex':
-        return strict_json(output.strip()), {}
+        from codex import parse_output
+        return parse_output(output)
     if backend == 'claude-code':
-        transport = transport_json(output.strip())
-        if type(transport) is not dict or type(transport.get('is_error')) is not bool:
-            raise response_error('TRANSPORT_ERROR', 'transport', 'Invalid Claude Code result envelope.')
-        if transport['is_error']:
-            raise response_error('BACKEND_ERROR', 'backend', 'Claude Code returned an error result.')
-        if type(transport.get('structured_output')) is not dict:
-            raise response_error('INCOMPLETE_OUTPUT', 'result', 'Claude Code did not return structured_output.')
-        metadata = {k: transport[k] for k in ('session_id', 'total_cost_usd', 'usage', 'modelUsage') if k in transport}
-        return transport['structured_output'], metadata
+        from claude_code import parse_output
+        return parse_output(output)
     if backend == 'opencode':
         raise response_error('BACKEND_INCOMPATIBLE', 'compatibility',
                              'OpenCode text event parsing was removed; native HTTP structured output is required.')

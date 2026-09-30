@@ -34,6 +34,8 @@ from urllib.parse import urlsplit
 from contracts import FOLDER_SCHEMAS, SCHEMAS, ContractError, accepted, jsonc, parse_backend, strict_json, validate_result, schema_diagnostics, result_diagnostics
 from reporting import Diagnostic, NullReporter, Reporter, diagnostic, existing_file, output_mode
 from execution import Budget, execution_settings
+import codex
+import claude_code
 import opencode
 import xxx
 from structured_output import blocked_comparison, repair_prompt, required_unresolved, retry_policy, validate_repair
@@ -44,6 +46,7 @@ STAGES = ('study', 'review', 'compare')
 ARTIFACTS = {'study': 'ARCHITECTURE.md', 'review': 'ARCHITECTURE_REVIEW.md',
              'compare': 'BRANCH_COMPARISON.md'}
 BACKENDS = {'codex': 'codex', 'claude-code': 'claude', 'opencode': 'opencode', 'xxx': 'xxx'}
+CLI_ADAPTERS = {'codex': codex, 'claude-code': claude_code}
 MIN_GIT_VERSION = (2, 34, 1)
 
 class AuditError(RuntimeError):
@@ -1078,8 +1081,10 @@ class Runner:
             with tempfile.TemporaryDirectory(prefix='archaudit-cli-check-', dir=neutral_temporary_base(self.source_path)) as raw:
                 state = Path(raw).resolve()
                 env = cli_env(state)
+                adapter = CLI_ADAPTERS.get(backend)
                 cmds = [[agent['executable'], '--version'],
-                        [agent['executable'], *(['exec'] if backend == 'codex' else ['serve'] if backend in ('opencode', 'xxx') else []), '--help']]
+                        adapter.help_command(agent['executable']) if adapter else
+                        [agent['executable'], 'serve', '--help']]
                 texts = []
                 for cmd in cmds:
                     r = process(cmd, state, env, reporter=self.reporter,
@@ -1095,12 +1100,7 @@ class Runner:
                     elif not output.strip():
                         output = r['stderr']
                     texts.append(output.decode(errors='replace'))
-                required = {'codex': ['--ephemeral', '--output-schema', '--sandbox'],
-                    'claude-code': ['--no-session-persistence', '--json-schema', '--tools', '--allowedTools', '--disallowedTools', '--permission-mode'],
-                    'opencode': ['--port', '--hostname', '--mdns'],
-                    'xxx': ['--port', '--hostname', '--mdns']}[backend]
-                if backend == 'codex' and self.mode == 'folder':
-                    required.append('--skip-git-repo-check')
+                required = adapter.required_flags(self.mode) if adapter else ['--port', '--hostname', '--mdns']
                 if any(flag not in texts[1] for flag in required):
                     raise AuditError(f'{backend} lacks required CLI options: {required}',
                                      code='BACKEND_INCOMPATIBLE', failure_kind='BACKEND_INCOMPATIBLE',
@@ -1156,29 +1156,9 @@ class Runner:
         return meta
 
     def command(self, stage: str, state: Path, agent: dict, schema_path: Path, env: dict) -> list[str]:
-        backend, exe = agent['backend'], agent['executable']
-        compare = stage == 'compare'
-        if backend == 'codex':
-            cmd = [exe, 'exec', '--ephemeral', '--color', 'never', '--sandbox', 'read-only',
-                '--output-schema', str(schema_path), '-c', 'approval_policy="never"',
-                '-c', 'web_search="disabled"']
-            if compare or self.mode == 'folder':
-                cmd += ['--skip-git-repo-check']
-            if compare:
-                cmd += ['-c', 'features.shell_tool=false']
-            if agent.get('model'):
-                cmd += ['--model', agent['model']]
-            return cmd + ['-']
-        if backend == 'claude-code':
-            tools = '' if compare else 'Read,Glob,Grep'
-            cmd = [exe, '-p', '--no-session-persistence', '--output-format', 'json',
-                '--json-schema', json.dumps(self.schemas[stage]), '--permission-mode', 'dontAsk',
-                '--tools', tools, '--disallowedTools', 'mcp__*']
-            if tools:
-                cmd += ['--allowedTools', tools]
-            if agent.get('model'):
-                cmd += ['--model', agent['model']]
-            return cmd
+        adapter = CLI_ADAPTERS.get(agent['backend'])
+        if adapter:
+            return adapter.build_command(agent, stage, self.mode, self.schemas[stage], schema_path)
         raise AuditError('OpenCode and XXX use the managed HTTP adapter, not the CLI event stream.',
                          code='BACKEND_INCOMPATIBLE')
 
