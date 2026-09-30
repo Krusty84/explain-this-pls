@@ -4,7 +4,7 @@
 
 """Owned loopback OpenCode HTTP transport (Python stdlib only).
 
-Wire contract inspected at upstream v1.2.27. See docs/opencode-protocol.md for
+Wire contract inspected at upstream v1.2.27. See docs/structured-output-protocol.md for
 the upstream retry defect and the deliberately closed production capability gate.
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ import threading
 import time
 
 from contracts import ContractError, response_error, strict_json, transport_json
-from execution import Budget
+from execution import Budget, execution_settings
 
 WIRE_VERSION = '1.2.27'
 STARTUP_SECONDS = 20
@@ -50,7 +50,7 @@ def verify_native_retries():
     # tool-validation corrections in the inspected upstream loop.
     raise incompatible('OpenCode 1.2.27 does not enforce format.retryCount (including zero). '
                        'Bounded native structured-output retries are not supported by this build. '
-                       'No model request was sent; see docs/opencode-protocol.md.')
+                       'No model request was sent; see docs/structured-output-protocol.md.')
 
 
 def object_value(value, label):
@@ -148,7 +148,7 @@ def extract_result(value, session_id, request_id, agent_name):
         raise response_error('INCOMPLETE_OUTPUT', 'result', 'No native structured result; text is not a substitute.')
     if not structured_calls:
         raise response_error('INCOMPLETE_OUTPUT', 'result', 'No completed StructuredOutput tool call.')
-    if type(info['structured']) is dict and not any(p['state']['input'] == info['structured'] for p in structured_calls):
+    if not any(p['state']['input'] == info['structured'] for p in structured_calls):
         raise response_error('TRANSPORT_ERROR', 'transport', 'Native result differs from its completed tool input.')
     # Its type and contents are checked by validate_result, independently of upstream.
     return info['structured'], {'session_id': session_id, 'request_id': request_id,
@@ -193,7 +193,7 @@ def prepare_environment(env, stage):
     if type(config) is not dict or type(config.get('agent', {})) is not dict:
         raise incompatible('OPENCODE_CONFIG_CONTENT and its agent field must be JSON objects.')
     permission = {'*': 'deny'}
-    if stage != 'compare':
+    if stage not in ('compare', 'repair'):
         permission.update(read='allow', glob='allow', grep='allow', list='allow')
     # v1.2.27 LLM.resolveTools filters this exact, case-sensitive tool name.
     permission['StructuredOutput'] = 'allow'
@@ -246,7 +246,9 @@ class Request:
 
 
 class Server:
-    def __init__(self, executable, cwd, env, artifacts, budget, save, meta):
+    api_doc_checks = 1
+
+    def __init__(self, executable, cwd, env, artifacts, budget, save, meta, execution=None):
         self.executable, self.cwd, self.env = executable, cwd, env.copy()
         self.artifacts, self.budget, self.save, self.meta = artifacts, budget, save, meta
         self.process = None
@@ -255,6 +257,11 @@ class Server:
         self.files = []
         self.counter = 0
         self.authorization = ''
+        self.execution = execution_settings(execution)
+
+    @classmethod
+    def preflight_seconds(cls, execution):
+        return STARTUP_SECONDS + cls.api_doc_checks * execution['api_doc_timeout_seconds'] + execution['http_timeout_seconds']
 
     def listener_ready(self):
         announcement = f'opencode server listening on http://127.0.0.1:{self.port}'.encode()
@@ -296,19 +303,34 @@ class Server:
                 time.sleep(.05)
                 continue
             try:
-                health = self.request('GET', '/global/health', budget=Budget(max(.01, startup_end - time.monotonic())))
+                health = self.request('GET', '/global/health', budget=Budget(max(.01, startup_end - time.monotonic()), label='startup'))
             except ConnectionRefusedError:
                 time.sleep(.05)
                 continue
             self.check_health(health)
             return
 
-    def begin(self, method, path, body=None, *, timeout=HTTP_SECONDS):
+    def begin(self, method, path, body=None, *, timeout=HTTP_SECONDS, configured_limit=None, budget_source='http_operation'):
         self.counter += 1
         request = Request(self.port, self.authorization, method, path, body, timeout=timeout)
         request.number = self.counter
+        request.operation = (method + ' ' + ('/session/{sessionID}/message' if path.endswith('/message')
+            else '/session/{sessionID}/abort' if path.endswith('/abort')
+            else '/session/{sessionID}' if path.startswith('/session/') else path))
+        request.limit = configured_limit if configured_limit is not None else timeout
+        request.budget_source = budget_source
         self.requests.append(request)
         return request
+
+    def timeout_error(self, request, error=None):
+        details = {'operation': request.operation, 'limit_seconds': request.limit,
+                   'elapsed_seconds': round(time.monotonic() - request.started, 3),
+                   'budget_source': request.budget_source}
+        if error is not None:
+            details.update(error.details)
+        kind = error.failure_kind if error else 'IDLE_TIMEOUT' if request.budget_source == 'idle' else 'STAGE_TIMEOUT'
+        return response_error(kind, 'execution',
+                              'HTTP operation exceeded its time budget.', **details)
 
     def finish(self, request):
         if request in self.requests:
@@ -316,8 +338,11 @@ class Server:
         raw = bytes(request.body)
         self.save(self.artifacts / f'response-{request.number:03d}.json', raw)
         self.meta.setdefault('http_responses', []).append({'artifact': f'response-{request.number:03d}.json',
-            'status': request.status, 'bytes': len(raw)})
+            'status': request.status, 'bytes': len(raw), 'operation': request.operation,
+            'limit_seconds': request.limit, 'elapsed_seconds': round(time.monotonic() - request.started, 3)})
         if request.error:
+            if isinstance(request.error, TimeoutError):
+                raise self.timeout_error(request) from request.error
             if isinstance(request.error, ConnectionRefusedError):
                 raise request.error
             raise response_error('BACKEND_ERROR', 'backend', 'OpenCode HTTP operation failed.') from request.error
@@ -331,19 +356,47 @@ class Server:
 
     def request(self, method, path, body=None, *, budget=None, cleanup=False):
         budget = budget or self.budget
-        budget.check()
-        request = self.begin(method, path, body)
+        remaining = budget.check()
+        limiting_budget = budget
+        if not cleanup:
+            stage_remaining = self.budget.check()
+            if stage_remaining < remaining:
+                remaining, limiting_budget = stage_remaining, self.budget
+        limit = min(CLEANUP_SECONDS, self.execution['http_timeout_seconds']) if cleanup else self.execution[
+            'api_doc_timeout_seconds' if path == '/doc' else 'http_timeout_seconds']
+        source = 'http_operation' if limit < remaining else limiting_budget.label
+        if limiting_budget.idle is not None and remaining < limiting_budget.deadline - limiting_budget.clock() and remaining <= limit:
+            source = 'idle'
+        request = self.begin(method, path, body, timeout=min(limit, remaining),
+                             configured_limit=limit, budget_source=source)
+        error = None
         try:
             while not request.done.wait(.02):
                 budget.check()
                 if not cleanup:
                     self.budget.check()
-                if time.monotonic() - request.started >= HTTP_SECONDS:
-                    raise response_error('STAGE_TIMEOUT', 'execution', 'OpenCode HTTP operation exceeded its time limit.')
+                if time.monotonic() - request.started >= limit:
+                    raise self.timeout_error(request)
             budget.check()
+            if not cleanup:
+                self.budget.check()
+            if time.monotonic() - request.started >= limit:
+                raise self.timeout_error(request)
             return self.finish(request)
+        except BaseException as exc:
+            error = exc
+            if isinstance(exc, ContractError) and exc.failure_kind in ('STAGE_TIMEOUT', 'IDLE_TIMEOUT'):
+                raise self.timeout_error(request, exc) from exc
+            raise
         finally:
-            request.close()
+            try:
+                request.close()
+                if request in self.requests:
+                    self.requests.remove(request)
+                    self.save(self.artifacts / f'response-{request.number:03d}.partial', bytes(request.body))
+            except BaseException:
+                if error is None:
+                    raise
 
     def verify_api(self):
         spec = object_value(self.request('GET', '/doc'), 'OpenAPI document')
@@ -375,25 +428,31 @@ class Server:
             body['model'] = {'providerID': provider, 'modelID': model_id}
         self.save(self.artifacts / 'request.json', json.dumps(body))
         self.budget.check()
+        self.meta['prompt_sent'] = True
         pending = self.begin('POST', f'/session/{self.session_id}/message', body,
-                             timeout=self.budget.deadline - self.budget.clock())
+                             timeout=self.budget.deadline - self.budget.clock(), budget_source=self.budget.label)
         # Prompt's synchronous response confirms the native loop returned. Polling
         # is observational, never a second prompt or an outer repair loop.
         fingerprint = None
-        while not pending.done.wait(.1):
+        try:
+            while not pending.done.wait(.1):
+                self.budget.check()
+                if self.process.poll() is not None:
+                    raise response_error('BACKEND_ERROR', 'backend', 'Owned OpenCode server exited during the request.')
+                messages = self.request('GET', f'/session/{self.session_id}/message')
+                validate_history(messages, self.session_id, request_id)
+                current = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).digest()
+                if current != fingerprint and messages:
+                    self.budget.activity()
+                fingerprint = current
             self.budget.check()
-            if self.process.poll() is not None:
-                raise response_error('BACKEND_ERROR', 'backend', 'Owned OpenCode server exited during the request.')
-            messages = self.request('GET', f'/session/{self.session_id}/message')
-            validate_history(messages, self.session_id, request_id)
-            current = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).digest()
-            if current != fingerprint and messages:
-                self.budget.activity()
-            fingerprint = current
-        self.budget.check()
+        except ContractError as exc:
+            if exc.failure_kind in ('STAGE_TIMEOUT', 'IDLE_TIMEOUT') and 'operation' not in exc.details:
+                raise self.timeout_error(pending, exc) from exc
+            raise
         self.meta['output_bytes'] = len(pending.body)
-        envelope = self.finish(pending)
         self.save(self.artifacts / 'response.json', bytes(pending.body))
+        envelope = self.finish(pending)
         info = envelope.get('info') if type(envelope) is dict else None
         if type(info) is dict:
             # Private metadata, never rendered as a provider error message.
@@ -417,7 +476,7 @@ class Server:
 
     def close(self):
         errors = []
-        cleanup = Budget(CLEANUP_SECONDS)
+        cleanup = Budget(CLEANUP_SECONDS, label='cleanup')
         try:
             for request in list(self.requests):
                 try:

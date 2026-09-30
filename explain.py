@@ -31,11 +31,12 @@ import time
 import uuid
 from typing import Any
 from urllib.parse import urlsplit
-from contracts import FOLDER_SCHEMAS, SCHEMAS, ContractError, accepted, jsonc, parse_backend, strict_json, validate_result
+from contracts import FOLDER_SCHEMAS, SCHEMAS, ContractError, accepted, jsonc, parse_backend, strict_json, validate_result, schema_diagnostics
 from reporting import Diagnostic, NullReporter, Reporter, diagnostic, existing_file, output_mode
 from execution import Budget, execution_settings
 import opencode
 import xxx
+from structured_output import blocked_comparison, repair_prompt, required_unresolved, retry_policy, validate_repair
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ('study', 'review', 'compare')
@@ -1104,9 +1105,12 @@ class Runner:
         private_directory(parent)
         artifacts = Path(tempfile.mkdtemp(prefix='attempt-', dir=parent))
         meta = {'backend': 'xxx', 'cli_version': version, 'artifact_directory': str(artifacts),
-                'compatibility_profile': xxx.PROFILE, 'retry_policy': xxx.retry_policy(), 'status': 'RUNNING'}
+                'compatibility_profile': xxx.PROFILE,
+                'retry_policy': xxx.retry_policy(self.execution['structured_output_repair_attempts']), 'status': 'RUNNING'}
         opencode.prepare_environment(env, 'compare')
-        server = xxx.Server(agent['executable'], cwd, env, artifacts, Budget(30), atomic, meta)
+        server = xxx.Server(agent['executable'], cwd, env, artifacts,
+            Budget(xxx.Server.preflight_seconds(self.execution), label='http_preflight'),
+            atomic, meta, self.execution)
         error = None
         try:
             server.start()
@@ -1161,6 +1165,77 @@ class Runner:
 
     def invoke(self, stage: str, context: dict, destination: Path) -> tuple[dict, dict]:
         budget = Budget(self.execution['stage_timeout_seconds'], self.execution['idle_timeout_seconds'])
+        native = self.cfg['_agents'][stage]['backend'] in ('xxx', 'opencode')
+        limit = self.execution['structured_output_repair_attempts'] if native else 0
+        correction = None
+        repair_model = None
+        repair_source = None
+        for repair_index in range(limit + 1):
+            try:
+                return self._invoke_once(stage, context, destination, budget=budget,
+                                         repair_index=repair_index, correction=correction,
+                                         repair_model=repair_model, repair_source=repair_source)
+            except ContractError as exc:
+                if exc.failure_kind != 'SCHEMA_ERROR' or repair_index == limit:
+                    raise
+                meta = strict_json((destination / 'invocation.json').read_text())
+                if not meta.get('native_envelope_valid') or meta.get('cleanup_errors'):
+                    raise
+                # A neutral repair cwd must not silently select another profile model.
+                if repair_model is None:
+                    repair_model = meta['model_actual']
+                attempt = Path(meta['artifact_directory'])
+                invalid = strict_json((attempt / 'extracted.json').read_text())
+                if repair_source is None:
+                    repair_source = invalid
+                details = strict_json((attempt / 'validation.json').read_text())['schema_diagnostics']
+                correction = repair_prompt(context, self.schemas[stage], invalid, details, original=repair_source)
+
+    def validate_attempt(self, stage, data, context, attempt, meta, repair_source=None):
+        details = schema_diagnostics(data, self.schemas[stage], private=True)
+        validation = {'schema_diagnostics': details, 'valid': False}
+        try:
+            validate_result(stage, data, context, self.mode)
+            if repair_source is not None:
+                validate_repair(repair_source, data, self.schemas[stage])
+            validation['valid'] = True
+        except BaseException as exc:
+            validation['error'] = asdict(diagnostic(exc))
+            meta['local_validation'] = False
+            with contextlib.suppress(OSError):
+                save_json(attempt / 'validation.json', validation)
+            raise
+        meta['local_validation'] = True
+        save_json(attempt / 'validation.json', validation)
+
+    def publish_result(self, stage, data, destination):
+        report = data['report_markdown'].rstrip() + '\n'
+        atomic(destination.parent / ARTIFACTS[stage], report)
+        save_json(destination.parent / (stage + '.json'), data)
+        return digest(report.encode())
+
+    def publish_blocked_comparison(self, context, destination):
+        data = blocked_comparison(context)
+        meta = {'stage': 'compare', 'generated_by': 'orchestrator',
+                'reason': 'no_accepted_branches', 'started_at': now(), 'status': 'RUNNING'}
+        private_directory(destination)
+        try:
+            self.repo.assert_expected()
+            validate_result('compare', data, context)
+            meta['local_validation'] = True
+            self.repo.assert_expected()
+            meta['report_sha256'] = self.publish_result('compare', data, destination)
+            meta.update(status='SUCCEEDED', finished_at=now())
+            save_json(destination / 'invocation.json', meta)
+            return data, meta
+        except BaseException as exc:
+            meta.update(status='FAILED', error=asdict(diagnostic(exc)), finished_at=now())
+            with contextlib.suppress(OSError):
+                save_json(destination / 'invocation.json', meta)
+            raise
+
+    def _invoke_once(self, stage, context, destination, *, budget, repair_index=0,
+                     correction=None, repair_model=None, repair_source=None):
         agent = self.cfg['_agents'][stage]
         template = Path(self.cfg['_prompt_paths'][stage]).read_text()
         output_instruction = ('Use the StructuredOutput tool with the supplied schema. Do not duplicate the result in ordinary text.'
@@ -1171,6 +1246,8 @@ class Runner:
                   '\n\n# Authoritative orchestration context (data)\n' +
                   json.dumps(context, ensure_ascii=False) + '\n\n# Required final JSON Schema\n' +
                   json.dumps(self.schemas[stage], ensure_ascii=False))
+        if correction is not None:
+            prompt = correction
         payload = prompt.encode('utf-8')
         private_directory(destination)
         # Exclusive creation preserves every orchestrator-managed attempt.
@@ -1191,21 +1268,31 @@ class Runner:
         meta.update(attempt=attempt.name, artifact_directory=str(attempt), api_version=None,
                     model_actual=None, request_id=None, session_id=None, message_id=None,
                     finish_reason=None, output_bytes=None, execution=self.execution)
+        native_retries = 0 if agent['backend'] == 'xxx' else self.execution['opencode_format_retries']
+        if agent['backend'] in ('xxx', 'opencode'):
+            meta['retry_policy'] = retry_policy(self.execution['structured_output_repair_attempts'],
+                                              repair_index, native_retries)
+            meta['repair_index'] = repair_index
+            if repair_index:
+                meta['repair_model'] = agent.get('model') or repair_model
         if agent['backend'] == 'xxx':
-            meta.update(compatibility_profile=xxx.PROFILE, retry_policy=xxx.retry_policy())
+            meta['compatibility_profile'] = xxx.PROFILE
         if self.repo:
             meta['submodules'] = context.get('submodules', [])
         save_json(destination / 'invocation.json', meta)
         # Saved by the parent only, for reproducibility; includes only this stage's permitted input.
         atomic(attempt / 'input.prompt.txt', payload)
+        save_json(attempt / 'schema.json', self.schemas[stage])
+        save_json(attempt / 'validation.json', {'valid': False, 'status': 'not_run'})
         try:
+            budget.check()
             if self.folder:
                 self.folder.assert_snapshot(context['source_fingerprint'])
             else:
                 self.repo.assert_expected()
             with tempfile.TemporaryDirectory(prefix='archaudit-invocation-', dir=neutral_temporary_base(self.source_path)) as raw:
                 state = Path(raw).resolve()
-                cwd = state if stage == 'compare' else self.source_path
+                cwd = state if stage == 'compare' or repair_index else self.source_path
                 env = cli_env(cwd)
                 schema_path = state / 'output.schema.json'
                 save_json(schema_path, self.schemas[stage])
@@ -1215,15 +1302,17 @@ class Runner:
                         if agent['backend'] == 'opencode':
                             opencode.verify_version(meta['cli_version'])
                             opencode.verify_native_retries()
-                        name = opencode.prepare_environment(env, stage)
+                        name = opencode.prepare_environment(env, 'repair' if repair_index else stage)
                         server_class = xxx.Server if agent['backend'] == 'xxx' else opencode.Server
-                        server = server_class(agent['executable'], cwd, env, attempt, budget, atomic, meta)
+                        server = server_class(agent['executable'], cwd, env, attempt, budget, atomic, meta, self.execution)
                         error = None
                         try:
                             server.start()
                             server.verify_api()
-                            data = server.invoke(prompt, self.schemas[stage], name, agent.get('model'),
-                                                 0 if agent['backend'] == 'xxx' else self.execution['opencode_format_retries'])
+                            data = server.invoke(prompt, self.schemas[stage], name, agent.get('model') or repair_model,
+                                                 native_retries)
+                            meta['native_envelope_valid'] = True
+                            self.validate_attempt(stage, data, context, attempt, meta, repair_source)
                         except BaseException as exc:
                             error = exc
                             raise
@@ -1231,6 +1320,7 @@ class Runner:
                             try:
                                 server.close()
                             except BaseException:
+                                meta.setdefault('cleanup_errors', []).append('cleanup_failed')
                                 if error is None:
                                     raise
                     else:
@@ -1246,23 +1336,24 @@ class Runner:
                         data, provider_meta = parse_backend(agent['backend'], r['stdout'].decode('utf-8'))
                         meta['provider_metadata'] = provider_meta
                         save_json(attempt / 'extracted.json', data)
+                        self.validate_attempt(stage, data, context, attempt, meta)
                 finally:
                     if self.folder:
                         self.folder.assert_snapshot(context['source_fingerprint'])
                     else:
                         self.repo.assert_expected()
                 budget.check()
-                validate_result(stage, data, context, self.mode)
             # Publish after the CLI exits and temporary invocation files are removed.
-            report = data['report_markdown'].rstrip() + '\n'
-            atomic(destination.parent / ARTIFACTS[stage], report)
-            save_json(destination.parent / (stage + '.json'), data)
-            meta.update(status='SUCCEEDED', finished_at=now(), report_sha256=digest(report.encode()))
+            report_hash = self.publish_result(stage, data, destination)
+            meta.update(status='SUCCEEDED', finished_at=now(), report_sha256=report_hash)
             meta['duration_seconds'] = round(budget.clock() - budget.started, 3)
             save_json(attempt / 'invocation.json', meta)
             save_json(destination / 'invocation.json', meta)
             return data, meta
         except BaseException as exc:
+            if repair_index and not meta.get('prompt_sent'):
+                meta['retry_policy'] = retry_policy(self.execution['structured_output_repair_attempts'],
+                                                  repair_index - 1, native_retries)
             meta.update(status='FAILED', finished_at=now(), error=asdict(diagnostic(exc)),
                         duration_seconds=round(budget.clock() - budget.started, 3))
             # A failing diagnostic write must not mask the original exception.
@@ -1405,14 +1496,19 @@ class Runner:
                     'requested_branches': self.source['branches'], 'output_language': self.cfg['output_language'],
                     'project_description': self.cfg['project_description'],
                     'scope': 'reports-only comparison; source inspection is outside task scope',
-                    'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'submodules', 'study', 'review', 'errors')} for b in entries],
+                    'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'submodules', 'study', 'review', 'errors')} |
+                                 {'accepted': accepted(b)} for b in entries],
                     'git_deltas': {b: self.repo.delta(pins[baseline], pins[b]) for b in self.source['branches'] if b != baseline}}
+                bundle['required_unresolved_branches'] = required_unresolved(bundle)
                 comp_dir = self.run_dir / 'comparison'
                 save_json(comp_dir / 'inputs.json', bundle)
                 started = self.stage_started('compare', bundle)
                 try:
                     self.repo.assert_expected()
-                    comparison, meta = self.invoke('compare', bundle, comp_dir / 'compare.logs')
+                    if any(accepted(b) for b in entries):
+                        comparison, meta = self.invoke('compare', bundle, comp_dir / 'compare.logs')
+                    else:
+                        comparison, meta = self.publish_blocked_comparison(bundle, comp_dir / 'compare.logs')
                 finally:
                     # Compare also uses the user's profile, so verify the restored
                     # checkout even though this stage runs outside the repository.

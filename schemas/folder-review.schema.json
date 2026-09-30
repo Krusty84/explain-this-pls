@@ -65,13 +65,15 @@
             }
           },
           "limitation": {
-            "type": "string"
+            "type": "string",
+            "description": "Required. Use an empty string when no limitation applies; unchecked/unverifiable claims require a reason."
           },
           "finding_ids": {
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Required links to findings (F-...). Use [] when none. Never put claim_ids in a claim."
           }
         },
         "required": [
@@ -116,7 +118,8 @@
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Required links to claims (C-...). Use [] when no existing claim applies. Only findings have claim_ids."
           },
           "location": {
             "type": "string"

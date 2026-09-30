@@ -165,11 +165,14 @@ class HTTPFixture(unittest.TestCase):
             '_prompt_paths': {s: str(ROOT / 'prompts' / (s + '.md')) for s in ('study', 'review')}}
 
     def test_real_preflight_rejects_unenforced_retries_without_model_request(self):
-        runner = Runner(self.config(), self.root / 'preflight')
-        result, code = runner.run(check_only=True)
-        self.assertEqual(code, 1)
-        self.assertEqual(result['diagnostics'][0]['code'], 'BACKEND_INCOMPATIBLE')
-        self.assertFalse(self.calls.exists())
+        for repairs in (0, 1, 2):
+            config = self.config()
+            config['execution'] = {'structured_output_repair_attempts': repairs}
+            runner = Runner(config, self.root / f'preflight-{repairs}')
+            result, code = runner.run(check_only=True)
+            self.assertEqual(code, 1)
+            self.assertEqual(result['diagnostics'][0]['code'], 'BACKEND_INCOMPATIBLE')
+            self.assertFalse(self.calls.exists())
 
     def test_wire_pipeline_only_with_explicit_test_gate_bypass(self):
         # This bypass is confined to this test. It proves no upstream retry behavior.

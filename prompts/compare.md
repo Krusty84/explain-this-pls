@@ -15,6 +15,14 @@ context as evidence beyond the supplied comparison bundle.
 
 ## Inputs and authority
 
+Each branch's accepted flag and the bundle's required_unresolved_branches are
+computed by the orchestrator from validated study AND review results. Preserve
+every branch in required_unresolved_branches in your unresolved_branches,
+including an unaccepted baseline. You cannot override acceptance, omit a failed
+review because a study exists, or narrow the requested branch list. You may add
+other unresolved branches and explain additional limitations. Keep Markdown and
+completion_status consistent with these required unresolved inputs.
+
 The bundle contains requested branch names and pinned commit IDs, independently
 created architecture documents, their independent reviews, processing status, and
 Git-generated metadata comparing each branch's final tree against the baseline's

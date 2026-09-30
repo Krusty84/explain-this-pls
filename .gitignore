@@ -12,3 +12,9 @@ tests/fixtures/fake_probe_agent.py
 tests/fixtures/unknown-agent-case-003.json
 docs/
 docs/opencode-protocol.md
+docs/*
+docs/structured-output-protocol.md
+docs/validation-results.md
+docs/structured-output-protocol.md
+docs/validation-results.md
+patches/opencode-v1.2.27-structured-output-validation.patch

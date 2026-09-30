@@ -60,11 +60,15 @@ SCHEMAS = {
         claim_inventory_complete={'type': 'boolean'},
         claims=array(obj(id=string(), location=string(), statement=string(),
             outcome=string('SUPPORTED', 'CONTRADICTED', 'UNVERIFIABLE', 'NOT_CHECKED'),
-            evidence=STRINGS, limitation=string(), finding_ids=STRINGS)),
+            evidence=STRINGS, limitation={**string(), 'description':
+                'Required. Use an empty string when no limitation applies; unchecked/unverifiable claims require a reason.'},
+            finding_ids={**STRINGS, 'description':
+                'Required links to findings (F-...). Use [] when none. Never put claim_ids in a claim.'})),
         findings=array(obj(id=string(), severity=string('HIGH', 'MEDIUM', 'LOW'),
             type=string('FACTUAL_ERROR', 'UNSUPPORTED_ASSERTION', 'MATERIAL_OMISSION',
                         'SCOPE_MISMATCH', 'CONTRACT_VIOLATION'),
-            claim_ids=STRINGS, location=string(), evidence=STRINGS,
+            claim_ids={**STRINGS, 'description':
+                'Required links to claims (C-...). Use [] when no existing claim applies. Only findings have claim_ids.'}, location=string(), evidence=STRINGS,
             impact=string(), proposed_correction=string()))),
     'compare': obj(**BASE, task=string('architecture_comparison'),
         baseline_branch=string(), baseline_commit=string(),
@@ -157,22 +161,50 @@ def jsonc(text: str) -> Any:
                 chars[pos] = ' '
     return strict_json(''.join(chars))
 
-def validate_schema(value: Any, schema: dict, where: str = '$') -> None:
+def schema_diagnostics(value: Any, schema: dict, where: str = '$', *, private=False, limit=100) -> dict:
+    """Collect every defect count, but bound the detail list. Paths use trusted schema keys.
+
+    Only private artifacts/repair input may contain arbitrary additional key names.
+    Values remain in the original extracted object, never in public diagnostics.
+    """
     types = {'object': dict, 'array': list, 'string': str, 'boolean': bool}
-    typ = schema['type']
-    if type(value) is not types[typ]:
-        raise response_error('SCHEMA_ERROR', 'schema', f'{where}: expected {typ}', path=where, violation='type')
-    if 'enum' in schema and value not in schema['enum']:
-        raise response_error('SCHEMA_ERROR', 'schema', f'{where}: unexpected enum value', path=where, violation='enum')
-    if typ == 'object':
-        if set(value) != set(schema['properties']):
-            raise response_error('SCHEMA_ERROR', 'schema', f'{where}: missing/extra keys',
-                                 path=where, violation='required/additionalProperties')
-        for key, subschema in schema['properties'].items():
-            validate_schema(value[key], subschema, f'{where}.{key}')
-    elif typ == 'array':
-        for i, item in enumerate(value):
-            validate_schema(item, schema['items'], f'{where}[{i}]')
+    violations, total = [], 0
+    def add(path, kind, **detail):
+        nonlocal total
+        total += 1
+        if len(violations) < limit:
+            violations.append({'path': path, 'violation': kind,
+                               'missing_keys': [], 'extra_key_count': 0, **detail})
+    def visit(data, spec, path):
+        typ = spec['type']
+        if type(data) is not types[typ]:
+            add(path, 'type', expected_type=typ)
+            return
+        if 'enum' in spec and data not in spec['enum']:
+            add(path, 'enum')
+        if typ == 'object':
+            missing = [key for key in spec['required'] if key not in data]
+            extra = [key for key in data if key not in spec['properties']]
+            if missing or extra:
+                add(path, 'required/additionalProperties', missing_keys=missing,
+                    extra_key_count=len(extra), **({'extra_keys': extra} if private else {}))
+            for key, child in spec['properties'].items():
+                if key in data:
+                    visit(data[key], child, f'{path}.{key}')
+        elif typ == 'array':
+            for i, item in enumerate(data):
+                visit(item, spec['items'], f'{path}[{i}]')
+    visit(value, schema, where)
+    return {'violations': violations, 'total_violations': total, 'truncated': total > len(violations)}
+
+
+def validate_schema(value: Any, schema: dict, where: str = '$') -> None:
+    details = schema_diagnostics(value, schema, where)
+    if details['total_violations']:
+        first = details['violations'][0]
+        raise response_error('SCHEMA_ERROR', 'schema',
+            f"Structured result has {details['total_violations']} schema violation(s); first at {first['path']}.",
+            **first, **details)
 
 def review_verdict(value: dict) -> str:
     if any(f['severity'] in ('HIGH', 'MEDIUM') for f in value['findings']):
@@ -238,7 +270,8 @@ def validate_result(stage: str, value: dict, context: dict, mode: str = 'git') -
             raise ContractError('Comparison must cover every non-baseline branch exactly once')
         if len(value['unresolved_branches']) != len(set(value['unresolved_branches'])) or not set(value['unresolved_branches']) <= set(context['requested_branches']):
             raise ContractError('Invalid unresolved branches')
-        missing = {b['branch'] for b in context['branches'] if not accepted(b)}
+        entries = {b['branch']: b for b in context['branches']}
+        missing = {b for b in context['requested_branches'] if not accepted(entries.get(b, {}))}
         if not missing <= set(value['unresolved_branches']):
             raise ContractError('Comparison conceals unaccepted/missing branch inputs')
         if value['completion_status'] == 'COMPLETE' and value['unresolved_branches']:

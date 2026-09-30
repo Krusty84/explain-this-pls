@@ -24,11 +24,16 @@
   "output_language": "English",
 
   // One monotonic budget per stage. null disables the optional idle deadline.
-  // Format retries apply only to native OpenCode output (see docs/opencode-protocol.md).
+  // Native retries apply only to OpenCode (see docs/structured-output-protocol.md).
   "execution": {
     "stage_timeout_seconds": 3600,
     "idle_timeout_seconds": null,
-    "opencode_format_retries": 2
+    "opencode_format_retries": 2,
+    "http_timeout_seconds": 5,
+    "api_doc_timeout_seconds": 30,
+    // Explicit opt-in: XXX/OpenCode may send one extra format correction request.
+    // Other backends ignore this setting. The default for omitted settings is 0.
+    "structured_output_repair_attempts": 1
   },
 
   // Shared CLI settings. Authenticate/configure the CLI before starting the runner.

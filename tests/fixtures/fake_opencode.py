@@ -38,7 +38,7 @@ scenario = os.environ.get('AUDIT_FAKE_CASE')
 def result(context):
     data = {'completion_status': 'COMPLETE', 'report_markdown': '# Fixture\nC-001', 'limitations': []}
     if 'baseline_branch' in context:
-        unresolved = [b['branch'] for b in context['branches'] if not b.get('study') or not b.get('review')]
+        unresolved = context['required_unresolved_branches']
         data.update(task='architecture_comparison', baseline_branch=context['baseline_branch'],
             baseline_commit=context['baseline_commit'],
             compared_branches=[b for b in context['requested_branches'] if b != context['baseline_branch']],
@@ -64,11 +64,25 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def handle_request(self):
+        if self.path == '/doc':
+            if scenario in ('doc-delay', 'doc-hang'):
+                time.sleep(float(os.environ.get('AUDIT_FAKE_DOC_DELAY', '60')))
+            if scenario == 'doc-drip-headers':
+                with __import__('contextlib').suppress(BrokenPipeError, ConnectionResetError):
+                    for byte in b'HTTP/1.1 200 OK\r\nX-Slow: ' + b'x' * 100:
+                        self.wfile.write(bytes([byte])); self.wfile.flush(); time.sleep(.04)
+                return
+            if scenario == 'doc-drip-body':
+                self.send_response(200); self.end_headers()
+                with __import__('contextlib').suppress(BrokenPipeError, ConnectionResetError):
+                    for byte in b'{"slow": "' + b'x' * 100:
+                        self.wfile.write(bytes([byte])); self.wfile.flush(); time.sleep(.04)
+                return
         if scenario != 'no-auth' and self.headers.get('Authorization') != authorization:
             self.send_response(401); self.end_headers(); return
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))) or b'null')
         call = {'method': self.command, 'path': self.path, 'body': body, 'cwd': str(Path.cwd()), 'server_pid': os.getpid()}
-        if xxx and isinstance(body, dict) and 'agent' in body:
+        if isinstance(body, dict) and 'agent' in body:
             call['permissions'] = json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])['agent'][body['agent']]['permission']
         log = os.environ.get('AUDIT_FAKE_CALLS')
         if log:
@@ -102,11 +116,33 @@ class Handler(BaseHTTPRequestHandler):
                 os.kill(os.getppid(), getattr(signal, os.environ.get('AUDIT_FAKE_SIGNAL', 'SIGTERM')))
                 time.sleep(60)
             prompt = body['parts'][0]['text']
+            repair = prompt.startswith('Correct only the format')
             raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]
             context = json.loads(raw.split('\n\n# Required final JSON Schema\n')[0])
             if scenario == 'source-change':
                 (Path.cwd() / 'app.py').write_text('unexpected fixture mutation\n')
             data = result(context)
+            if scenario in ('repair-ok', 'repair-invalid', 'repair-semantic', 'repair-timeout'):
+                if not repair or scenario == 'repair-invalid':
+                    data['extra_private_key'] = ['private value']
+                elif scenario == 'repair-semantic':
+                    data['source_fingerprint' if 'source_fingerprint' in data else 'source_commit'] = 'wrong'
+                elif scenario == 'repair-timeout':
+                    time.sleep(2)
+            if scenario in ('repair-verdict', 'repair-evidence'):
+                if not repair:
+                    data['extra_private_key'] = []
+                    if scenario == 'repair-verdict':
+                        data['verdict'] = 'INCONCLUSIVE'
+                elif scenario == 'repair-evidence':
+                    data['claims'][0]['evidence'] = ['invented.py:fake']
+            if scenario in ('claims-44', 'claims-40', 'claims-empty') and 'architecture_document' in context:
+                count = 40 if scenario == 'claims-40' else 44
+                data['claims'] = [dict(data['claims'][0], id=f'C-{i + 1:03d}',
+                    claim_ids=[] if scenario == 'claims-empty' else ['C-PRIVATE']) for i in range(count)]
+                data['report_markdown'] = '\n'.join(c['id'] for c in data['claims'])
+            if scenario == 'partial-review' and 'architecture_document' in context:
+                data.update(completion_status='PARTIAL', verdict='INCONCLUSIVE', limitations=['Synthetic incomplete review'])
             if scenario == 'wrong-identity':
                 data['source_fingerprint' if 'source_fingerprint' in data else 'source_commit'] = 'wrong'
             if scenario == 'schema-error' or (scenario == 'fail-main-study' and

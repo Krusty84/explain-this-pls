@@ -112,6 +112,15 @@ structured findings. Echo branch/source_commit in git mode,
 or source_directory/source_fingerprint in folder mode. Do not add schema_version. The orchestrator
 checks schema, IDs, verdict logic, and source stability independently.
 
+The two link directions are different: claims[].finding_ids contains finding IDs
+(F-...), while findings[].claim_ids contains claim IDs (C-...). A claim must never
+contain claim_ids, even an empty array. Use exactly the fields defined by the schema.
+Every required field must be present: use [] for a permitted empty list of links,
+evidence or findings, and "" for a permitted empty limitation string. Empty values
+are allowed only where consistent with the outcome and verdict rules below;
+SUPPORTED/CONTRADICTED claims still require evidence. Do not omit required fields,
+substitute null, invent evidence, or add fields copied from another record type.
+
 completion_status: COMPLETE only if material-claim inventory and required area-level
 inspection are complete, all inventoried factual claims assessed, and your report
 validated; PARTIAL if useful review remains unfinished; BLOCKED if no substantive

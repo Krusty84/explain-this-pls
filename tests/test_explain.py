@@ -37,7 +37,8 @@ class ContractTests(unittest.TestCase):
         comparison = dict(BASE, task='architecture_comparison', baseline_branch='master',
             baseline_commit='abc', compared_branches=[], unresolved_branches=[], differences=[])
         comparison_context = {'baseline_branch': 'master', 'baseline_commit': 'abc',
-                              'requested_branches': ['master'], 'branches': []}
+                              'requested_branches': ['master'], 'branches': [
+                                  {'branch': 'master', 'study': doc('master', 'abc'), 'review': review('master', 'abc')}]}
         cases = [('compare', comparison, comparison_context, 'git')]
         for mode, context in (('git', git_context), ('folder', folder_context)):
             for stage, data in (('study', doc('master', 'abc')), ('review', review('master', 'abc'))):
@@ -48,9 +49,12 @@ class ContractTests(unittest.TestCase):
         for stage, data, context, mode in cases:
             with self.subTest(stage=stage, mode=mode):
                 validate_result(stage, data, context, mode)
-                with self.assertRaisesRegex(ContractError, 'missing/extra keys'):
+                with self.assertRaises(ContractError) as caught:
                     validate_result(stage, data | {'schema_version': '3.0' if mode == 'folder' else '2.0'},
                                     context, mode)
+                self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')
+                self.assertEqual(caught.exception.details['path'], '$')
+                self.assertEqual(caught.exception.details['extra_key_count'], 1)
 
     def test_duplicate_keys_rejected(self):
         with self.assertRaises(ContractError):

@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Explicit XXX profile: native structured result, one prompt, local acceptance.
+"""Explicit XXX profile: native structured result and strict local acceptance.
 
 This profile makes no native format-retry guarantee.
 It does not enable or change the upstream OpenCode capability gate.
@@ -24,9 +24,9 @@ PROFILE = 'xxx-http-v1'
 PROFILE_PATH = Path(__file__).resolve().parent / 'schemas/xxx-declarations.json'
 
 
-def retry_policy():
-    return {'mode': 'single_prompt_local_validation', 'orchestrator_retries': 0,
-            'format_retries_requested': 0, 'native_enforcement_verified': False}
+def retry_policy(configured=0, performed=0):
+    from structured_output import retry_policy as shared_policy
+    return shared_policy(configured, performed, 0)
 
 
 def owns_listener(pid, port):
@@ -56,6 +56,8 @@ def owns_listener(pid, port):
 
 
 class Server(OpenCodeServer):
+    api_doc_checks = 3
+
     def listener_ready(self):
         if sys.platform.startswith('linux'):
             ready = owns_listener(self.process.pid, self.port)
@@ -71,7 +73,7 @@ class Server(OpenCodeServer):
         version = health.get('version')
         if health.get('healthy') is not True or type(version) is not str or not version.strip():
             raise incompatible('XXX returned an invalid health/version response.')
-        self.meta.update(api_version=version, compatibility_profile=PROFILE, retry_policy=retry_policy())
+        self.meta.update(api_version=version, compatibility_profile=PROFILE)
 
     def verify_api(self):
         original = self.authorization
@@ -101,6 +103,5 @@ class Server(OpenCodeServer):
 
     def invoke(self, prompt, schema, agent_name, model, retries=0):
         if retries != 0:
-            raise incompatible('XXX permits only a single prompt with format.retryCount=0.')
-        self.meta['retry_policy'] = retry_policy()
+            raise incompatible('XXX requires format.retryCount=0 for each orchestrator request.')
         return super().invoke(prompt, schema, agent_name, model, 0)

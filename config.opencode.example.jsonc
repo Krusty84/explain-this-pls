@@ -1,6 +1,6 @@
 {
-  // BLOCKED upstream: inspected OpenCode versions do not enforce retryCount.
-  // --check fails before any model request. See docs/opencode-protocol.md.
+  // BLOCKED upstream: inspected OpenCode 1.2.27 does not enforce retryCount.
+  // --check fails before any model request. See docs/structured-output-protocol.md.
   // Briefly describe the system's purpose and history. Empty/missing means a warning.
   "project_description": "An ERP system originally developed in 1995",
 
@@ -28,7 +28,12 @@
   "execution": {
     "stage_timeout_seconds": 3600,
     "idle_timeout_seconds": null,
-    "opencode_format_retries": 2
+    "opencode_format_retries": 2,
+    "http_timeout_seconds": 5,
+    "api_doc_timeout_seconds": 30,
+    // Explicit opt-in to at most one extra model request for format correction.
+    // This does not enable the unsupported upstream native retry capability.
+    "structured_output_repair_attempts": 1
   },
 
   // Shared CLI settings. Authenticate/configure the CLI before starting the runner.

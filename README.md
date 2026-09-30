@@ -4,13 +4,10 @@
 
 Analyzes legacy code and explains how the damn thing actually works.
 
-explain-this-pls uses Codex CLI, Claude Code, OpenCode, and a special proprietary XXX agent based on OpenCode to read an existing
-codebase and write an architecture report explaining how it works. A separate
-review checks the report against the code.
-
-Analyze one Git branch, compare several branches to understand their differences,
-or analyze source code outside Git. Agents are instructed to read the code without
-running the project's builds or tests.
+explain-this-pls uses your coding agent to document an existing codebase, then
+independently reviews the report against the code. Analyze a folder, study a Git
+branch, or compare several branches. Agents are instructed to read the code
+without running the project's builds or tests.
 
 ## Features
 
@@ -33,8 +30,10 @@ or compare versions before planning changes.
 - macOS or Linux.
 - Python 3.11 or newer.
 - Git 2.34.1 or newer, only for Git mode.
-- At least one installed coding-agent CLI: Codex CLI, Claude Code, OpenCode, or XXX.
-  Configure it and sign in before using explain-this-pls.
+- An installed and configured coding-agent CLI: Codex CLI, Claude Code, or special proprietary XXX.
+  Sign in before using explain-this-pls.
+
+The OpenCode backend is currently unavailable in this package.
 
 ### Get Your Input Data
 
@@ -48,22 +47,20 @@ cd explain-this-pls
 Choose how to provide your source code:
 
 - **Git mode:** use a standalone local clone with one or more local branches.
-  Choose one as the baseline comparison runs only when multiple branches are selected.
-  The clone must be clean: no unfinished Git operations, uncommitted changes,
+  Choose a baseline for comparison. Fetch the branches you need before starting.
+  The clone must be clean, with no unfinished Git operations, uncommitted changes,
   untracked files, or ignored files.
-  Fetch any needed branches before starting.
 - **Folder mode:** use an existing directory containing your source files.
   Git and a clean checkout are not required. Hidden files are included too.
 
-If the Git project uses submodules, initialize them before starting, for example
-with `git submodule update --init --recursive --checkout` in the source repository.
-They must be clean, at the versions recorded by the parent repository, with all
-versions needed by the selected branches available locally. Submodule names and
-paths must match across the original checkout and selected branches, including
-nested submodules.
+If the project uses submodules, prepare them with
+`git submodule update --init --recursive --checkout` in the source repository.
+All submodules, including nested ones, must be clean and at their recorded versions.
+Versions needed by the selected branches must be available locally, and submodule
+names and paths must match across those branches and the original checkout.
 
-Keep this package and the reports outside the source directory. Do not edit the
-source or switch branches while analysis is running.
+Keep this package outside the source directory. Do not edit the source or switch
+branches while analysis is running.
 
 ### Configuration
 
@@ -123,13 +120,11 @@ To analyze only `master`, keep `mode` set to `"git"` and use:
 }
 ```
 
-This runs `study` and `review`, restores the original Git checkout, and produces
-no comparison report. `baseline_branch` is still required and must match the
-selected branch. The `compare` agent and prompt settings are ignored.
+This creates an architecture report and review, then restores the original Git
+checkout. `baseline_branch` must match the selected branch. Comparison is skipped.
 
 For source code outside Git, change `mode` to `"folder"` and set `folder_mode.path`.
-The `git_mode` settings are then ignored, and no branch comparison is produced.
-Add a brief `project_description` to give the agent context about your system.
+Folder mode creates an architecture report and review `git_mode` settings are ignored.
 
 #### Project and execution settings
 
@@ -140,10 +135,10 @@ Add a brief `project_description` to give the agent context about your system.
 | `git_mode.branches`        | One or more distinct local branch names, required in Git mode.                    |
 | `git_mode.baseline_branch` | Required member of `branches` used as the baseline when comparing branches.       |
 | `folder_mode.path`         | Path to your source directory, required in folder mode.                           |
-| `reports_dir`              | Required destination for reports each run gets its own subfolder.                 |
+| `reports_dir`              | Required destination for reports. Each run gets its own subfolder.                |
 | `project_description`      | A short description of the system's purpose and history. Optional.                |
 | `output_language`          | Report language, such as `"English"`. Default: `"Russian"`.                       |
-| `agent`                    | Required settings for your coding agent see below.                                |
+| `agent`                    | Required settings for your coding agent see below.                               |
 | `stage_agents`             | Optional agent settings for individual stages. Default: `{}`.                     |
 | `priority_scenarios`       | Workflows or areas to focus on. Default: `[]`.                                    |
 | `continue_on_error`        | Continue with other branches after a stage fails. Default: `true`. Git mode only. |
@@ -151,19 +146,31 @@ Add a brief `project_description` to give the agent context about your system.
 
 Detected source changes always stop the run, even with `continue_on_error` enabled.
 
-Optional execution limits (these are also the defaults for older configurations):
+Optional execution settings and their defaults:
 
 ```json
 "execution": {
   "stage_timeout_seconds": 3600,
   "idle_timeout_seconds": null,
-  "opencode_format_retries": 2
+  "opencode_format_retries": 2,
+  "structured_output_repair_attempts": 0,
+  "http_timeout_seconds": 5,
+  "api_doc_timeout_seconds": 30
 }
 ```
 
-Timeouts must be positive finite numbers; idle may be null. Format retries must be
-an integer from 0 to 2. Booleans are rejected.
-XXX always sends `retryCount: 0`; `opencode_format_retries` does not apply to it.
+Timeouts are in seconds and must be greater than zero.
+
+- `stage_timeout_seconds`: maximum time for each analysis, review or comparison stage.
+- `idle_timeout_seconds`: stop after this much inactivity `null` disables this limit.
+- `http_timeout_seconds`: time allowed for service requests to XXX or OpenCode.
+- `api_doc_timeout_seconds`: time allowed to check the agent's API compatibility.
+- `structured_output_repair_attempts`: allow up to 1 or 2 extra model requests to
+  correct response formatting with XXX or OpenCode. Default `0` disables corrections.
+- `opencode_format_retries`: format retries for OpenCode, from 0 to 2 ignored by XXX.
+
+The XXX and OpenCode examples enable one correction attempt. Extra requests may
+increase model usage, but must fit within the original stage time limit.
 
 #### Agent settings
 
@@ -183,16 +190,16 @@ Leave `stage_agents` empty to use one agent throughout. To choose a different ag
 for analysis (`study`), review (`review`), or comparison (`compare`), edit the
 corresponding block in the [commented example](config.example.jsonc).
 
-Unspecified values are inherited from `agent`. When changing the backend, also
+Unspecified settings use the values from `agent`. When changing the backend, also
 update `executable` and clear or replace any inherited `model` and `expected_version`.
 The `compare` stage is used only in Git mode with two or more selected branches.
 
 #### Custom prompts
 
-The included prompts work without customization. To change them, copy an existing
+The included prompts are ready to use. To customize them, copy an existing
 [study](prompts/study.md), [review](prompts/review.md), or [comparison](prompts/compare.md)
 template, keep its required response format, and set its path in `prompts`.
-Store custom templates outside the source directory see the
+Store custom templates outside the source directory. See the
 [commented configuration](config.example.jsonc) for examples.
 
 ### Run explain-this-pls
@@ -203,8 +210,8 @@ First, check your configuration, source files, and CLI setup:
 python3 explain.py --config config.jsonc --check
 ```
 
-This checks local readiness without calling a model or switching branches.
-It does not verify your agent login or model availability.
+This checks your local setup without calling a model or switching branches.
+It does not test your agent login or model availability.
 
 Then start the analysis:
 
@@ -213,7 +220,7 @@ python3 explain.py --config config.jsonc
 ```
 
 Progress messages show the current branch or folder and analysis stage. The final
-summary shows the outcome and paths to the results. Console messages are in English,
+summary shows the outcome and paths to the results. Console messages are in English
 `output_language` controls the reports.
 
 Add these optional flags to either command as needed:
@@ -224,7 +231,7 @@ Add these optional flags to either command as needed:
 | `--output text`      | Always show a readable final summary.                                       |
 | `--output json`      | Return the final result as JSON for scripts.                                |
 | `--verbose`          | Show extra diagnostic details.                                              |
-| `--no-progress`      | Hide periodic waiting messages keep stage updates and errors.               |
+| `--no-progress`      | Hide periodic waiting messages keep stage updates and errors.              |
 | `--trust-repository` | Allow a Git checkout owned by another user, if you trust it. Git mode only. |
 
 Each run saves results in a new subfolder of `reports_dir`. Start with these files:
@@ -238,3 +245,8 @@ Each run saves results in a new subfolder of `reports_dir`. Start with these fil
 In Git mode, the first two reports are under `branches/<branch-id>/`, and the
 comparison, when applicable, is under `comparison/`. In folder mode, the first two
 reports are directly in the run folder.
+
+If no branch has a complete report that passes review, the comparison is marked
+`BLOCKED` without an extra model request. Analysis failures still make the run fail.
+
+For troubleshooting details, see the [technical reference](docs/structured-output-protocol.md).

@@ -21,8 +21,13 @@
   },
   "execution": {
     "stage_timeout_seconds": 3600,
-    "idle_timeout_seconds": null
-    // XXX always requests format.retryCount=0 and never retries a failed result.
+    "idle_timeout_seconds": null,
+    "http_timeout_seconds": 5,
+    "api_doc_timeout_seconds": 30,
+    // Explicit opt-in: at most one extra model request to correct native output format.
+    // Default is 0. All requests share the original stage budget.
+    "structured_output_repair_attempts": 1
+    // XXX always requests format.retryCount=0 for each request.
     // opencode_format_retries applies only to backend=opencode, not XXX.
   },
   "stage_agents": {},
