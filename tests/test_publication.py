@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
+# SPDX-License-Identifier: MIT
+
 """Only locally validated and completely published reports are accepted."""
 import json
 import os

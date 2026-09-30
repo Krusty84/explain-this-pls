@@ -46,6 +46,13 @@ behavior, permissions and OpenAPI, updating the fixtures and version gate, and
 adding tests for zero retries, correction success and exhaustion. No invented
 version marker or schema flag is used to pretend an upstream fix exists.
 
+Unknown forks can now be examined separately with the
+[verification scripts](verify-agent.md): a no-prompt CLI/OpenAPI probe and an
+optional loopback-only behavioral harness using a real executable and synthetic
+provider responses. Neither mode changes this production gate. That document
+also records a separate real-CLI v1.2.27 observation with the local provider;
+it is not a real-model test or a reproduction of the user's original failure.
+
 ## HTTP transport prepared for a compatible implementation
 
 The parent starts its own `opencode serve --hostname 127.0.0.1 --port PORT --mdns false`.

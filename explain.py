@@ -35,12 +35,13 @@ from contracts import FOLDER_SCHEMAS, SCHEMAS, ContractError, accepted, jsonc, p
 from reporting import Diagnostic, NullReporter, Reporter, diagnostic, existing_file, output_mode
 from execution import Budget, execution_settings
 import opencode
+import xxx
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ('study', 'review', 'compare')
 ARTIFACTS = {'study': 'ARCHITECTURE.md', 'review': 'ARCHITECTURE_REVIEW.md',
              'compare': 'BRANCH_COMPARISON.md'}
-BACKENDS = {'codex': 'codex', 'claude-code': 'claude', 'opencode': 'opencode'}
+BACKENDS = {'codex': 'codex', 'claude-code': 'claude', 'opencode': 'opencode', 'xxx': 'xxx'}
 MIN_GIT_VERSION = (2, 34, 1)
 
 class AuditError(RuntimeError):
@@ -1058,7 +1059,7 @@ class Runner:
                 state = Path(raw).resolve()
                 env = cli_env(state)
                 cmds = [[agent['executable'], '--version'],
-                        [agent['executable'], *(['exec'] if backend == 'codex' else ['serve'] if backend == 'opencode' else []), '--help']]
+                        [agent['executable'], *(['exec'] if backend == 'codex' else ['serve'] if backend in ('opencode', 'xxx') else []), '--help']]
                 texts = []
                 for cmd in cmds:
                     r = process(cmd, state, env, reporter=self.reporter,
@@ -1076,7 +1077,8 @@ class Runner:
                     texts.append(output.decode(errors='replace'))
                 required = {'codex': ['--ephemeral', '--output-schema', '--sandbox'],
                     'claude-code': ['--no-session-persistence', '--json-schema', '--tools', '--allowedTools', '--disallowedTools', '--permission-mode'],
-                    'opencode': ['--port', '--hostname', '--mdns']}[backend]
+                    'opencode': ['--port', '--hostname', '--mdns'],
+                    'xxx': ['--port', '--hostname', '--mdns']}[backend]
                 if backend == 'codex' and self.mode == 'folder':
                     required.append('--skip-git-repo-check')
                 if any(flag not in texts[1] for flag in required):
@@ -1090,9 +1092,45 @@ class Runner:
                     opencode.verify_version(version)
                     opencode.verify_native_retries()
                 result[key] = {'version': version, 'required_flags': required}
+                if backend == 'xxx':
+                    result[key]['http'] = self.check_xxx(agent, state, env, version)
                 self.reporter.emit('preflight_completed', check='cli', backend=backend, required_flags=required)
         self.versions = {k: v['version'] for k, v in result.items()}
         return result
+
+    def check_xxx(self, agent, cwd, env, version):
+        """Local readiness only: no session or model prompt is created."""
+        parent = self.run_dir / 'cli-checks' / slug(agent['executable'])
+        private_directory(parent)
+        artifacts = Path(tempfile.mkdtemp(prefix='attempt-', dir=parent))
+        meta = {'backend': 'xxx', 'cli_version': version, 'artifact_directory': str(artifacts),
+                'compatibility_profile': xxx.PROFILE, 'retry_policy': xxx.retry_policy(), 'status': 'RUNNING'}
+        opencode.prepare_environment(env, 'compare')
+        server = xxx.Server(agent['executable'], cwd, env, artifacts, Budget(30), atomic, meta)
+        error = None
+        try:
+            server.start()
+            server.verify_api()
+        except BaseException as exc:
+            error = exc
+            meta.update(status='FAILED', error=asdict(diagnostic(exc)))
+            raise
+        finally:
+            try:
+                server.close()
+            except BaseException as exc:
+                if error is None:
+                    error = exc
+                    meta.update(status='FAILED', error=asdict(diagnostic(exc)))
+                    raise
+            finally:
+                if error is None:
+                    meta['status'] = 'SUCCEEDED'
+                    save_json(artifacts / 'invocation.json', meta)
+                else:
+                    with contextlib.suppress(OSError):
+                        save_json(artifacts / 'invocation.json', meta)
+        return meta
 
     def command(self, stage: str, state: Path, agent: dict, schema_path: Path, env: dict) -> list[str]:
         backend, exe = agent['backend'], agent['executable']
@@ -1118,7 +1156,7 @@ class Runner:
             if agent.get('model'):
                 cmd += ['--model', agent['model']]
             return cmd
-        raise AuditError('OpenCode uses the managed HTTP adapter, not the CLI event stream.',
+        raise AuditError('OpenCode and XXX use the managed HTTP adapter, not the CLI event stream.',
                          code='BACKEND_INCOMPATIBLE')
 
     def invoke(self, stage: str, context: dict, destination: Path) -> tuple[dict, dict]:
@@ -1126,7 +1164,7 @@ class Runner:
         agent = self.cfg['_agents'][stage]
         template = Path(self.cfg['_prompt_paths'][stage]).read_text()
         output_instruction = ('Use the StructuredOutput tool with the supplied schema. Do not duplicate the result in ordinary text.'
-            if agent['backend'] == 'opencode' else
+            if agent['backend'] in ('opencode', 'xxx') else
             'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.')
         # Assemble only this stage's inputs; the configured CLI profile remains available.
         prompt = (template + '\n\n# Backend output instruction\n' + output_instruction +
@@ -1153,6 +1191,8 @@ class Runner:
         meta.update(attempt=attempt.name, artifact_directory=str(attempt), api_version=None,
                     model_actual=None, request_id=None, session_id=None, message_id=None,
                     finish_reason=None, output_bytes=None, execution=self.execution)
+        if agent['backend'] == 'xxx':
+            meta.update(compatibility_profile=xxx.PROFILE, retry_policy=xxx.retry_policy())
         if self.repo:
             meta['submodules'] = context.get('submodules', [])
         save_json(destination / 'invocation.json', meta)
@@ -1170,18 +1210,20 @@ class Runner:
                 schema_path = state / 'output.schema.json'
                 save_json(schema_path, self.schemas[stage])
                 try:
-                    if agent['backend'] == 'opencode':
+                    if agent['backend'] in ('opencode', 'xxx'):
                         # This gate is repeated for callers using Runner.invoke directly.
-                        opencode.verify_version(meta['cli_version'])
-                        opencode.verify_native_retries()
+                        if agent['backend'] == 'opencode':
+                            opencode.verify_version(meta['cli_version'])
+                            opencode.verify_native_retries()
                         name = opencode.prepare_environment(env, stage)
-                        server = opencode.Server(agent['executable'], cwd, env, attempt, budget, atomic, meta)
+                        server_class = xxx.Server if agent['backend'] == 'xxx' else opencode.Server
+                        server = server_class(agent['executable'], cwd, env, attempt, budget, atomic, meta)
                         error = None
                         try:
                             server.start()
                             server.verify_api()
                             data = server.invoke(prompt, self.schemas[stage], name, agent.get('model'),
-                                                 self.execution['opencode_format_retries'])
+                                                 0 if agent['backend'] == 'xxx' else self.execution['opencode_format_retries'])
                         except BaseException as exc:
                             error = exc
                             raise

@@ -1,0 +1,32 @@
+{
+  "project_description": "Legacy application architecture audit using XXX",
+  "mode": "folder",
+  "folder_mode": {"path": "../legacy-app"},
+  "git_mode": {
+    "repository": "../legacy-app",
+    "branches": ["main", "customer-version"],
+    "baseline_branch": "main"
+  },
+  "reports_dir": "../architecture-reports/legacy-app",
+  "output_language": "English",
+  "agent": {
+    // XXX is the explicit fork profile; it does not enable the opencode backend.
+    "backend": "xxx",
+    // Replace with the actual executable command or path. No installation is done.
+    "executable": "xxx",
+    // null preserves the agent's configured provider/model and authentication.
+    "model": null,
+    // Optional exact output of this executable's --version, not its upstream version.
+    "expected_version": null
+  },
+  "execution": {
+    "stage_timeout_seconds": 3600,
+    "idle_timeout_seconds": null
+    // XXX always requests format.retryCount=0 and never retries a failed result.
+    // opencode_format_retries applies only to backend=opencode, not XXX.
+  },
+  "stage_agents": {},
+  "priority_scenarios": [],
+  "continue_on_error": true,
+  "prompts": {}
+}

@@ -1,1 +1,14 @@
-
+agent_probe_provider.py
+diff_agent_openapi.py
+opencode_tester.zip
+verify_agent.py
+docs/openapi-diff.md
+docs/opencode-protocol.md
+docs/verify-agent.md
+scripts/verify-agent-offline.sh
+tests/test_openapi_diff.py
+tests/test_verify_agent.py
+tests/fixtures/fake_probe_agent.py
+tests/fixtures/unknown-agent-case-003.json
+docs/
+docs/opencode-protocol.md

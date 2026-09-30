@@ -419,7 +419,7 @@ class ConfigTests(unittest.TestCase):
     def test_all_examples_load_without_credentials(self):
         root=Path(__file__).resolve().parents[1]
         paths = list(root.glob('config*.example.json*'))
-        self.assertEqual(len(paths), 3)
+        self.assertEqual(len(paths), 4)  # Includes the explicit XXX fork profile.
         for path in paths:
             with self.subTest(path=path.name), patch.dict(os.environ,{},clear=True), \
                  patch('explain.shutil.which',return_value=sys.executable):

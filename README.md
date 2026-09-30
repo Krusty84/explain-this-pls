@@ -4,7 +4,7 @@
 
 Analyzes legacy code and explains how the damn thing actually works.
 
-explain-this-pls uses Codex CLI, Claude Code, or OpenCode to read an existing
+explain-this-pls uses Codex CLI, Claude Code, OpenCode, and a special proprietary XXX agent based on OpenCode to read an existing
 codebase and write an architecture report explaining how it works. A separate
 review checks the report against the code.
 
@@ -33,7 +33,7 @@ or compare versions before planning changes.
 - macOS or Linux.
 - Python 3.11 or newer.
 - Git 2.34.1 or newer, only for Git mode.
-- At least one installed coding-agent CLI: Codex CLI, Claude Code, or OpenCode.
+- At least one installed coding-agent CLI: Codex CLI, Claude Code, OpenCode, or XXX.
   Configure it and sign in before using explain-this-pls.
 
 ### Get Your Input Data
@@ -72,6 +72,7 @@ Copy the example for your agent to `config.jsonc`:
 - [Codex CLI](config.example.jsonc)
 - [Claude Code](config.claude-code.example.jsonc)
 - [OpenCode](config.opencode.example.jsonc)
+- [XXX](config.xxx.example.jsonc)
 
 For example, with Codex CLI:
 
@@ -161,16 +162,15 @@ Optional execution limits (these are also the defaults for older configurations)
 ```
 
 Timeouts must be positive finite numbers; idle may be null. Format retries must be
-an integer from 0 to 2. Booleans are rejected. The overall monotonic stage deadline
-cannot be extended by output activity. No new Codex/Claude automatic retries are
-introduced. See [activity, cleanup, diagnostics and retry semantics](docs/opencode-protocol.md).
+an integer from 0 to 2. Booleans are rejected.
+XXX always sends `retryCount: 0`; `opencode_format_retries` does not apply to it.
 
 #### Agent settings
 
 | Field              | What to enter                                                                                           |
 | ------------------ | ------------------------------------------------------------------------------------------------------- |
-| `backend`          | Required: `codex`, `claude-code`, or `opencode`.                                                        |
-| `executable`       | CLI command or path. Defaults to `codex`, `claude`, or `opencode`, respectively.                        |
+| `backend`          | Required: `codex`, `claude-code`, `opencode`, or `xxx`.                                                 |
+| `executable`       | CLI command or path. Defaults to `codex`, `claude`, `opencode`, or `xxx`, respectively.                 |
 | `model`            | Optional model name. Leave `null` to use your CLI's configured model.                                   |
 | `expected_version` | Optional exact CLI version from `--version`, a mismatch stops the run. Leave `null` to skip this check. |
 

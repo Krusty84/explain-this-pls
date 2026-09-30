@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
+# SPDX-License-Identifier: MIT
+
 """Offline wire fixture derived from v1.2.27 OpenAPI; never calls a provider.
 
 This does NOT simulate enforcement of retryCount, which upstream lacks.
@@ -13,8 +17,10 @@ import time
 import uuid
 
 args = sys.argv[1:]
+xxx = os.environ.get('AUDIT_FAKE_BACKEND') == 'xxx'
+version = 'XXX fixture-unknown' if xxx else '1.2.27'
 if '--version' in args:
-    print('1.2.27')
+    print(version)
     sys.exit(0)
 if '--help' in args:
     print('--hostname --port --mdns')
@@ -58,10 +64,12 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def handle_request(self):
-        if self.headers.get('Authorization') != authorization:
+        if scenario != 'no-auth' and self.headers.get('Authorization') != authorization:
             self.send_response(401); self.end_headers(); return
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))) or b'null')
         call = {'method': self.command, 'path': self.path, 'body': body, 'cwd': str(Path.cwd()), 'server_pid': os.getpid()}
+        if xxx and isinstance(body, dict) and 'agent' in body:
+            call['permissions'] = json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])['agent'][body['agent']]['permission']
         log = os.environ.get('AUDIT_FAKE_CALLS')
         if log:
             with open(log, 'a') as stream:
@@ -69,11 +77,25 @@ class Handler(BaseHTTPRequestHandler):
         if scenario == 'http-hang':
             time.sleep(60)
         if self.path == '/global/health':
-            response = {'healthy': True, 'version': '1.2.27'}
+            response = {'healthy': scenario != 'bad-health', 'version': version}
         elif self.path == '/doc':
             response = json.loads((Path(__file__).parent / 'opencode-v1.2.27/openapi.json').read_text())
+            if xxx:
+                # Reconstruct the user-reported delta independently of the runtime profile.
+                schemas = response['components']['schemas']
+                schemas['Session']['properties']['compactionCount'] = {'type': 'number'}
+                schemas['Session']['required'].append('compactionCount')
+                for name, props in [('unattended_retry', {'attempt': {'type': 'number'},
+                        'message': {'type': 'string'}, 'next': {'type': 'number'}}),
+                        ('queued', {'runningTaskSize': {'type': 'number'}, 'waitingQueueIndex': {'type': 'number'}})]:
+                    props['type'] = {'const': name, 'type': 'string'}
+                    schemas['SessionStatus']['anyOf'].append({'type': 'object', 'properties': props, 'required': list(props)})
+                if scenario == 'bad-api':
+                    del schemas['AssistantMessage']['properties']['structured']
+            if scenario == 'null-doc':
+                response = None
         elif self.path == '/session' and self.command == 'POST':
-            response = {'id': session_id}
+            response = {'id': session_id, **({'compactionCount': 0} if xxx else {})}
         elif self.path.endswith('/message') and self.command == 'POST':
             if scenario == 'interrupt':
                 import signal
@@ -82,9 +104,14 @@ class Handler(BaseHTTPRequestHandler):
             prompt = body['parts'][0]['text']
             raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]
             context = json.loads(raw.split('\n\n# Required final JSON Schema\n')[0])
+            if scenario == 'source-change':
+                (Path.cwd() / 'app.py').write_text('unexpected fixture mutation\n')
             data = result(context)
             if scenario == 'wrong-identity':
                 data['source_fingerprint' if 'source_fingerprint' in data else 'source_commit'] = 'wrong'
+            if scenario == 'schema-error' or (scenario == 'fail-main-study' and
+                    context.get('branch') == 'main' and 'architecture_document' not in context):
+                data['completion_status'] = 'INVALID'
             model = body.get('model', {'providerID': 'fixture', 'modelID': 'configured-model'})
             mid = 'msg_' + uuid.uuid4().hex
             info = {'id': mid, 'sessionID': session_id, 'role': 'assistant',
@@ -139,5 +166,6 @@ if scenario == 'not-ready':
     time.sleep(60)
 else:
     server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
-    print(f'opencode server listening on http://127.0.0.1:{port}', flush=True)
+    brand = 'XXX' if xxx and sys.platform.startswith('linux') else 'opencode'
+    print(f'{brand} server listening on http://127.0.0.1:{port}', flush=True)
     server.serve_forever()

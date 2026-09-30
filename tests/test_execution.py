@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
+# SPDX-License-Identifier: MIT
+
 """Offline execution budgets: deterministic time plus real owned child groups."""
 import os
 from pathlib import Path

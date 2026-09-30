@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
+# SPDX-License-Identifier: MIT
+
 """Owned loopback OpenCode HTTP transport (Python stdlib only).
 
 Wire contract inspected at upstream v1.2.27. See docs/opencode-protocol.md for
@@ -252,6 +256,17 @@ class Server:
         self.counter = 0
         self.authorization = ''
 
+    def listener_ready(self):
+        announcement = f'opencode server listening on http://127.0.0.1:{self.port}'.encode()
+        with (self.artifacts / 'server.stdout.log').open('rb') as stream:
+            return announcement in stream.read(1024 * 1024).splitlines()
+
+    def check_health(self, health):
+        object_value(health, 'health response')
+        if health.get('healthy') is not True or health.get('version') != WIRE_VERSION:
+            raise incompatible('Owned OpenCode server returned an incompatible API version.')
+        self.meta['api_version'] = health['version']
+
     def start(self):
         password = secrets.token_urlsafe(32)
         self.env.update(OPENCODE_SERVER_PASSWORD=password, OPENCODE_SERVER_USERNAME='opencode')
@@ -277,10 +292,7 @@ class Server:
                 raise response_error('STAGE_TIMEOUT', 'execution', 'OpenCode server readiness timed out.')
             if self.process.poll() is not None:
                 raise response_error('BACKEND_ERROR', 'backend', 'Owned OpenCode server exited during startup.')
-            announcement = f'opencode server listening on http://127.0.0.1:{self.port}'.encode()
-            with (self.artifacts / 'server.stdout.log').open('rb') as stream:
-                announced = announcement in stream.read(1024 * 1024).splitlines()
-            if not announced:
+            if not self.listener_ready():
                 time.sleep(.05)
                 continue
             try:
@@ -288,10 +300,7 @@ class Server:
             except ConnectionRefusedError:
                 time.sleep(.05)
                 continue
-            object_value(health, 'health response')
-            if health.get('healthy') is not True or health.get('version') != WIRE_VERSION:
-                raise incompatible('Owned OpenCode server returned an incompatible API version.')
-            self.meta['api_version'] = health['version']
+            self.check_health(health)
             return
 
     def begin(self, method, path, body=None, *, timeout=HTTP_SECONDS):

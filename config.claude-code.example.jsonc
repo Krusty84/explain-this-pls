@@ -21,7 +21,7 @@
   // All relative paths are relative to this configuration file; ~ is supported.
   // Keep reports and this package outside the inspected source directory.
   "reports_dir": "../architecture-reports/legacy-app",
-  "output_language": "Russian",
+  "output_language": "English",
 
   // No automatic Claude Code retries are introduced by these settings.
   "execution": {
@@ -32,9 +32,9 @@
 
   // Shared CLI settings. Authenticate/configure the CLI before starting the runner.
   "agent": {
-    // Supported backends: "codex", "claude-code", "opencode".
+    // Supported backends: "codex", "claude-code", "opencode", "xxx".
     "backend": "claude-code",
-    // Command on PATH or executable path. Defaults: codex / claude / opencode.
+    // Command on PATH or executable path. Defaults: codex / claude / opencode / xxx.
     "executable": "claude",
     // null uses the model selected by the configured CLI.
     "model": null,

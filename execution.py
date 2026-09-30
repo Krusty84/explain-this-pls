@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
+# SPDX-License-Identifier: MIT
+
 """Monotonic execution budgets. Cleanup and source guards use separate budgets."""
 import math
 import time

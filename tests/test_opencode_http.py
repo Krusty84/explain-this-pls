@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
+# SPDX-License-Identifier: MIT
+
 """Wire tests bypass ONLY the known upstream retry-capability gate, explicitly.
 
 They validate HTTP integration, not a working upstream native retry implementation.
