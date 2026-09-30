@@ -1,4 +1,6 @@
 {
+  // Default: retain useful text with caveats; use "strict" for previous acceptance rules.
+  "result_policy": "compromise",
   // BLOCKED upstream: inspected OpenCode 1.2.27 does not enforce retryCount.
   // --check fails before any model request. See docs/structured-output-protocol.md.
   // Briefly describe the system's purpose and history. Empty/missing means a warning.

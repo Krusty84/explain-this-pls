@@ -8,6 +8,10 @@ symbolic links, and do not use Git. Folder fingerprints check stage boundaries, 
 continuous immutability. Missing Git history alone is not a documentation defect
 and does not require PARTIAL or BLOCKED.
 Do not rely on the author's confidence, earlier dialogue, or evidence IDs alone.
+When document_strictly_valid is false, the orchestrator retained a completed study
+text whose output contract failed. Review its report_markdown normally; its
+validation_issues describe formatting/consistency defects, not evidence that the
+architecture is false. Do not treat recovered metadata as verified facts.
 Use cited locations as starting points and actively search for counterexamples.
 This is a documentation audit, not a formal proof of software correctness.
 In git mode, the recursive submodules in the context are part of the source scope.
@@ -72,6 +76,9 @@ falsehood: independently check the claim and assess traceability separately.
 An unqualified material UNVERIFIABLE assertion requires an associated correction
 finding; it must not pass silently as a fact. Correctly declared unknowns are not
 errors merely because source-only review cannot resolve them.
+Every CONTRADICTED or UNVERIFIABLE entry in claims must link through finding_ids
+to a HIGH or MEDIUM finding. Keep correctly declared unknowns in accepted
+limitations rather than misclassifying them as unsupported factual assertions.
 
 Finding IDs: F-001 etc. Types: FACTUAL_ERROR, UNSUPPORTED_ASSERTION, MATERIAL_OMISSION,
 SCOPE_MISMATCH, CONTRACT_VIOLATION. Severity:

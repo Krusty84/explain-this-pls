@@ -310,7 +310,10 @@ class RecursiveCompatibilityCLI(recursive.RecursiveFixture, unittest.TestCase):
                 if failure:
                     self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'review', 'path': str(self.path), 'kind': failure})
                 result, manifest = self.execute()
-                self.assertEqual(result.returncode, 0 if failure is None else 130 if failure == 'interrupt' else 1, result.stderr)
+                self.assertEqual(result.returncode, 0 if failure is None else 130 if failure == 'interrupt' else 2, result.stderr)
+                if failure == 'error':
+                    self.assertEqual(manifest['status'], 'PARTIAL')
+                    self.assertTrue(Path(manifest['final_report']).is_file())
                 self.assert_original(before)
                 self.assertTrue(manifest['restoration']['restored'])
                 self.assertEqual(manifest['original_checkout']['branch'], 'alias')

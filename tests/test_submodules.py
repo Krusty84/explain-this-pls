@@ -182,11 +182,14 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
         result, manifest = self.execute()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_original(before)
-        for kind, code in (('error', 1), ('interrupt', 130)):
+        for kind, code in (('error', 2), ('interrupt', 130)):
             with self.subTest(kind=kind):
                 self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'review', 'kind': kind, 'path': str(self.path)})
                 result, manifest = self.execute()
                 self.assertEqual(result.returncode, code, result.stderr)
+                summary = json.loads(result.stdout)
+                self.assertEqual(summary['final_report'], manifest['final_report'])
+                self.assertTrue(summary['has_usable_material'])
                 self.assertTrue(manifest['restoration']['restored'])
                 self.assert_original(before)
 

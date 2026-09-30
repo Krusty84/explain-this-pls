@@ -143,6 +143,8 @@ class Handler(BaseHTTPRequestHandler):
                 data['report_markdown'] = '\n'.join(c['id'] for c in data['claims'])
             if scenario == 'partial-review' and 'architecture_document' in context:
                 data.update(completion_status='PARTIAL', verdict='INCONCLUSIVE', limitations=['Synthetic incomplete review'])
+            if scenario == 'material-review' and 'architecture_document' in context:
+                data['claims'][0].update(outcome='UNVERIFIABLE', limitation='Insufficient static evidence')
             if scenario == 'wrong-identity':
                 data['source_fingerprint' if 'source_fingerprint' in data else 'source_commit'] = 'wrong'
             if scenario == 'schema-error' or (scenario == 'fail-main-study' and

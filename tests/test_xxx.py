@@ -31,7 +31,7 @@ class XXXTests(unittest.TestCase):
         self.cli.chmod(0o700)
         self.calls = self.root / 'calls.jsonl'
         self.env = {'AUDIT_FAKE_BACKEND': 'xxx', 'AUDIT_FAKE_CALLS': str(self.calls)}
-        self.value = {'mode': 'folder', 'folder_mode': {'path': str(self.source)},
+        self.value = {'result_policy': 'strict', 'mode': 'folder', 'folder_mode': {'path': str(self.source)},
             'reports_dir': str(self.root / 'reports'), 'project_description': 'Synthetic fixture',
             'agent': {'backend': 'xxx', 'executable': str(self.cli), 'model': None}}
         self.number = 0

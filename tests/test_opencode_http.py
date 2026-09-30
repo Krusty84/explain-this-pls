@@ -158,7 +158,7 @@ class HTTPFixture(unittest.TestCase):
         self.assertEqual(caught.exception.failure_kind, 'INCOMPLETE_OUTPUT')
 
     def config(self):
-        return {'mode': 'folder', 'folder_mode': {'path': str(self.source)},
+        return {'result_policy': 'strict', 'mode': 'folder', 'folder_mode': {'path': str(self.source)},
             'reports_dir': str(self.root / 'reports'), 'project_description': 'fixture',
             'priority_scenarios': [], 'output_language': 'English', 'continue_on_error': True,
             '_agents': {s: {'backend': 'opencode', 'executable': str(self.cli), 'model': None} for s in ('study', 'review')},

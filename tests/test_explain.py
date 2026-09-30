@@ -133,7 +133,7 @@ class RepoFixture(unittest.TestCase):
         reports=self.base/'reports'; reports.mkdir(exist_ok=True)
         agent={'backend':'codex','executable':str(Path(sys.executable).resolve()),
                'model':None}
-        return {'repository':str(self.repo_path),'reports_dir':str(reports),
+        return {'result_policy':'strict', 'repository':str(self.repo_path),'reports_dir':str(reports),
             'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master',
             'output_language':'Russian','project_description':'ERP-система 1995 года.',
             'priority_scenarios':[],'continue_on_error':True,

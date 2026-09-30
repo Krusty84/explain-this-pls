@@ -23,6 +23,15 @@ review because a study exists, or narrow the requested branch list. You may add
 other unresolved branches and explain additional limitations. Keep Markdown and
 completion_status consistent with these required unresolved inputs.
 
+In compromise mode, study_material/review_material may contain retained text
+that failed its output contract. Treat it as unvalidated source material with
+explicit caveats; validation_issues are orchestrator diagnostics. The original
+study/review fields contain only strictly validated results. A missing review or
+an unaccepted branch does not prevent a useful PARTIAL comparison. For any pair
+whose baseline or compared branch is not accepted, use only REPORTED_UNVERIFIED
+or INSUFFICIENT_EVIDENCE, never CONFIRMED_DIFFERENCE. Retain every requested
+branch and explain missing inputs. Never repair facts or infer absence from gaps.
+
 The bundle contains requested branch names and pinned commit IDs, independently
 created architecture documents, their independent reviews, processing status, and
 Git-generated metadata comparing each branch's final tree against the baseline's

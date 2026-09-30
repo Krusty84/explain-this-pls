@@ -31,12 +31,13 @@ import time
 import uuid
 from typing import Any
 from urllib.parse import urlsplit
-from contracts import FOLDER_SCHEMAS, SCHEMAS, ContractError, accepted, jsonc, parse_backend, strict_json, validate_result, schema_diagnostics
+from contracts import FOLDER_SCHEMAS, SCHEMAS, ContractError, accepted, jsonc, parse_backend, strict_json, validate_result, schema_diagnostics, result_diagnostics
 from reporting import Diagnostic, NullReporter, Reporter, diagnostic, existing_file, output_mode
 from execution import Budget, execution_settings
 import opencode
 import xxx
 from structured_output import blocked_comparison, repair_prompt, required_unresolved, retry_policy, validate_repair
+from final_report import recoverable_material, stage_document, usable_study, report_entries, comparison_possible, render_final_report
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ('study', 'review', 'compare')
@@ -216,7 +217,8 @@ def _process(command, cwd, env, input_data, reporter, context,
         reporter.stop_requested()
         raise
     finally:
-        failed = sys.exc_info()[0] is not None
+        failure = sys.exc_info()[1]
+        failed = failure is not None
         cleanup_error = None
         selector.close()
         # Kill ordinary descendants remaining in this invocation's process group,
@@ -239,6 +241,8 @@ def _process(command, cwd, env, input_data, reporter, context,
         if cleanup_error is not None and not failed:
             raise AuditError('Could not finish cleanup of the owned CLI process group.',
                              code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='cleanup') from cleanup_error
+        if cleanup_error is not None and failure is not None:
+            failure.cleanup_failed = True
     return {'stdout': bytes(out), 'stderr': bytes(err), 'returncode': p.returncode,
             'duration_seconds': round(clock() - start, 3)}
 
@@ -882,7 +886,7 @@ def load_config(path: Path) -> dict:
         raise AuditError('Configuration must be a JSON object.')
     allowed = {'repository', 'reports_dir', 'branches', 'baseline_branch', 'agent', 'stage_agents',
         'output_language', 'priority_scenarios', 'continue_on_error', 'project_description', 'prompts',
-        'mode', 'git_mode', 'folder_mode', 'execution'}
+        'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy'}
     if 'additional_runtime_read_paths' in value:
         raise AuditError('Remove additional_runtime_read_paths from configuration: the runner now uses native CLI permissions.')
     if set(value) - allowed:
@@ -934,7 +938,7 @@ def load_config(path: Path) -> dict:
         if len(set(branches)) != len(branches) or source['baseline_branch'] not in branches:
             raise AuditError('Branches must be unique and include baseline_branch.')
     defaults = {'output_language': 'Russian', 'project_description': '', 'priority_scenarios': [],
-        'continue_on_error': True, 'stage_agents': {}, 'prompts': {}}
+        'continue_on_error': True, 'stage_agents': {}, 'prompts': {}, 'result_policy': 'compromise'}
     for key, default in defaults.items():
         value.setdefault(key, default)
     if not isinstance(value['project_description'], str):
@@ -945,6 +949,8 @@ def load_config(path: Path) -> dict:
             raise AuditError(f'{key} must be a JSON object.')
     if type(value['continue_on_error']) is not bool:
         raise AuditError('continue_on_error must be boolean.')
+    if value['result_policy'] not in ('compromise', 'strict'):
+        raise AuditError('result_policy must be compromise or strict.')
     if not isinstance(value['priority_scenarios'], list) or any(not isinstance(s, str) for s in value['priority_scenarios']):
         raise AuditError('priority_scenarios must be an array of strings.')
     stages = STAGES if mode == 'git' and len(source['branches']) > 1 else STAGES[:2]
@@ -1002,6 +1008,8 @@ class Runner:
         self.analysis_started = False
         self.active_stage = {}
         self.cfg, self.run_dir = config, run_dir.resolve()
+        self.compromise = config.get('result_policy', 'compromise') == 'compromise'
+        self.critical_failure = False
         self.execution = execution_settings(config.get('execution'))
         self.mode = config.get('mode', 'git')
         if trust_repository and self.mode != 'git':
@@ -1015,6 +1023,11 @@ class Runner:
         self.versions: dict[str, str] = {}
 
     def record_error(self, manifest, exc, *, phase='run', **context):
+        recoverable = isinstance(exc, ContractError) or (isinstance(exc, AuditError)
+            and exc.code == 'CLI_FAILED' and exc.failure_layer == 'backend')
+        if (not recoverable or phase in ('preflight', 'restoration')
+                or getattr(exc, 'failure_layer', None) == 'cleanup' or getattr(exc, 'cleanup_failed', False)):
+            self.critical_failure = True
         if isinstance(exc, KeyboardInterrupt):
             self.reporter.stop_requested()
         if not any(exc is seen for seen in self.reported_errors):
@@ -1024,7 +1037,7 @@ class Runner:
                 context = self.active_stage | context
             detail = self.reporter.error(exc, phase=phase, analysis_started=self.analysis_started,
                 switches_performed=bool(getattr(self.repo, 'journal', [])), **context)
-            manifest.setdefault('diagnostics', []).append(detail)
+            manifest.setdefault('diagnostics', []).append(detail | {'phase': phase} | context)
 
     def stage_context(self, stage, context):
         return {'branch': context.get('branch', 'all branches' if stage == 'compare' else 'folder'),
@@ -1163,28 +1176,57 @@ class Runner:
         raise AuditError('OpenCode and XXX use the managed HTTP adapter, not the CLI event stream.',
                          code='BACKEND_INCOMPATIBLE')
 
-    def invoke(self, stage: str, context: dict, destination: Path) -> tuple[dict, dict]:
+    def invoke(self, stage: str, context: dict, destination: Path) -> tuple[dict | None, dict]:
         budget = Budget(self.execution['stage_timeout_seconds'], self.execution['idle_timeout_seconds'])
         native = self.cfg['_agents'][stage]['backend'] in ('xxx', 'opencode')
         limit = self.execution['structured_output_repair_attempts'] if native else 0
         correction = None
         repair_model = None
         repair_source = None
+        candidate = None
+        candidate_attempt = None
         for repair_index in range(limit + 1):
             try:
                 return self._invoke_once(stage, context, destination, budget=budget,
                                          repair_index=repair_index, correction=correction,
                                          repair_model=repair_model, repair_source=repair_source)
             except ContractError as exc:
-                if exc.failure_kind != 'SCHEMA_ERROR' or repair_index == limit:
+                if not (destination / 'invocation.json').is_file():
                     raise
                 meta = strict_json((destination / 'invocation.json').read_text())
-                if not meta.get('native_envelope_valid') or meta.get('cleanup_errors'):
+                if meta.get('cleanup_errors'):
+                    self.critical_failure = True
                     raise
+                attempt = Path(meta['artifact_directory'])
+                # Recover only the original response, never facts rewritten by a format repair.
+                if (self.compromise and repair_index == 0 and meta.get('source_integrity_verified')
+                        and meta.get('validation_failed') and meta.get('backend_result_valid')
+                        and exc.failure_kind in ('SCHEMA_ERROR', 'SEMANTIC_ERROR')):
+                    invalid = strict_json((attempt / 'extracted.json').read_text())
+                    candidate = recoverable_material(stage, invalid, context, self.mode,
+                        result_diagnostics(stage, invalid, context, self.mode))
+                    candidate_attempt = str(attempt)
+                can_repair = (exc.failure_kind == 'SCHEMA_ERROR' and repair_index < limit
+                              and meta.get('native_envelope_valid'))
+                if not can_repair:
+                    if candidate is None:
+                        raise
+                    # A failed repair cannot erase the original completed document.
+                    # Recheck the source even if the later attempt expired before starting.
+                    if self.folder:
+                        self.folder.assert_snapshot(context['source_fingerprint'])
+                    else:
+                        self.repo.assert_expected()
+                    candidate['artifact_directory'] = candidate_attempt
+                    save_json(destination.parent / (stage + '.material.json'), candidate)
+                    meta = meta | {'status': 'PARTIAL', 'usable_material': candidate,
+                                   'local_validation': False, 'recovery_source_attempt': candidate_attempt}
+                    # Per-attempt files remain the original failed validation record.
+                    save_json(destination / 'invocation.json', meta)
+                    return None, meta
                 # A neutral repair cwd must not silently select another profile model.
                 if repair_model is None:
                     repair_model = meta['model_actual']
-                attempt = Path(meta['artifact_directory'])
                 invalid = strict_json((attempt / 'extracted.json').read_text())
                 if repair_source is None:
                     repair_source = invalid
@@ -1193,7 +1235,7 @@ class Runner:
 
     def validate_attempt(self, stage, data, context, attempt, meta, repair_source=None):
         details = schema_diagnostics(data, self.schemas[stage], private=True)
-        validation = {'schema_diagnostics': details, 'valid': False}
+        validation = result_diagnostics(stage, data, context, self.mode) | {'schema_diagnostics': details, 'valid': False}
         try:
             validate_result(stage, data, context, self.mode)
             if repair_source is not None:
@@ -1202,11 +1244,25 @@ class Runner:
         except BaseException as exc:
             validation['error'] = asdict(diagnostic(exc))
             meta['local_validation'] = False
+            meta['validation_failed'] = True
             with contextlib.suppress(OSError):
                 save_json(attempt / 'validation.json', validation)
             raise
         meta['local_validation'] = True
         save_json(attempt / 'validation.json', validation)
+
+    def store_stage(self, item, stage, data, meta, context):
+        item[stage], item[stage + '_invocation'] = data, meta
+        material = meta.get('usable_material')
+        if material is not None:
+            item[stage + '_material'] = material
+            detail = meta['error'] | self.stage_context(stage, context) | {'phase': 'stage'}
+            self.manifest.setdefault('diagnostics', []).append(detail)
+            self.reporter.emit('stage_recovered', level=30, **self.stage_context(stage, context),
+                               message='Unvalidated text retained with explicit caveats.')
+        item[stage + '_usable'] = usable_study(item) if stage == 'study' else bool(stage_document(item, stage))
+        if material is not None and not self.cfg['continue_on_error']:
+            raise ContractError('Stopped after retaining unvalidated material (continue_on_error=false).')
 
     def publish_result(self, stage, data, destination):
         report = data['report_markdown'].rstrip() + '\n'
@@ -1217,7 +1273,8 @@ class Runner:
     def publish_blocked_comparison(self, context, destination):
         data = blocked_comparison(context)
         meta = {'stage': 'compare', 'generated_by': 'orchestrator',
-                'reason': 'no_accepted_branches', 'started_at': now(), 'status': 'RUNNING'}
+                'reason': 'no_comparable_studies' if self.compromise else 'no_accepted_branches',
+                'started_at': now(), 'status': 'RUNNING'}
         private_directory(destination)
         try:
             self.repo.assert_expected()
@@ -1312,6 +1369,7 @@ class Runner:
                             data = server.invoke(prompt, self.schemas[stage], name, agent.get('model') or repair_model,
                                                  native_retries)
                             meta['native_envelope_valid'] = True
+                            meta['backend_result_valid'] = True
                             self.validate_attempt(stage, data, context, attempt, meta, repair_source)
                         except BaseException as exc:
                             error = exc
@@ -1320,6 +1378,7 @@ class Runner:
                             try:
                                 server.close()
                             except BaseException:
+                                self.critical_failure = True
                                 meta.setdefault('cleanup_errors', []).append('cleanup_failed')
                                 if error is None:
                                     raise
@@ -1334,6 +1393,7 @@ class Runner:
                             raise AuditError(f'{agent["backend"]} exited with {r["returncode"]}; inspect private attempt logs.',
                                 code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='backend')
                         data, provider_meta = parse_backend(agent['backend'], r['stdout'].decode('utf-8'))
+                        meta['backend_result_valid'] = True
                         meta['provider_metadata'] = provider_meta
                         save_json(attempt / 'extracted.json', data)
                         self.validate_attempt(stage, data, context, attempt, meta)
@@ -1342,6 +1402,7 @@ class Runner:
                         self.folder.assert_snapshot(context['source_fingerprint'])
                     else:
                         self.repo.assert_expected()
+                    meta['source_integrity_verified'] = True
                 budget.check()
             # Publish after the CLI exits and temporary invocation files are removed.
             report_hash = self.publish_result(stage, data, destination)
@@ -1351,6 +1412,9 @@ class Runner:
             save_json(destination / 'invocation.json', meta)
             return data, meta
         except BaseException as exc:
+            if getattr(exc, 'cleanup_failed', False):
+                self.critical_failure = True
+                meta.setdefault('cleanup_errors', []).append('process_cleanup_failed')
             if repair_index and not meta.get('prompt_sent'):
                 meta['retry_policy'] = retry_policy(self.execution['structured_output_repair_attempts'],
                                                   repair_index - 1, native_retries)
@@ -1363,12 +1427,42 @@ class Runner:
             raise
 
     def run(self, check_only: bool = False) -> tuple[dict, int]:
-        if self.folder:
-            return self.run_folder(check_only)
         try:
-            return self.run_git(check_only)
+            manifest, code = self.run_folder(check_only) if self.folder else self.run_git(check_only)
         finally:
-            self.repo.close()
+            if self.repo:
+                try:
+                    self.repo.close()
+                except OSError as exc:
+                    self.record_error(self.manifest, exc, phase='restoration')
+        manifest['result_policy'] = 'compromise' if self.compromise else 'strict'
+        manifest['critical_failure'] = self.critical_failure
+        if not check_only:
+            entries = report_entries(manifest, self.source, self.mode)
+            if self.compromise and code != 130:
+                if self.critical_failure or not any(usable_study(b) for b in entries):
+                    manifest['status'], code = 'FAILED', 1
+                elif (all(accepted(b) for b in entries) and not manifest.get('diagnostics')
+                      and (self.mode == 'folder' or len(entries) == 1
+                           or manifest.get('comparison', {}).get('completion_status') == 'COMPLETE')):
+                    manifest['status'], code = 'COMPLETE', 0
+                else:
+                    manifest['status'], code = 'PARTIAL', 2
+            elif self.critical_failure and code != 130:
+                manifest['status'], code = 'FAILED', 1
+            try:
+                report, useful = render_final_report(manifest, self.source, self.mode,
+                                                     self.cfg.get('output_language', 'Russian'))
+                path = self.run_dir / 'FINAL_REPORT.md'
+                atomic(path, report)
+                manifest.update(final_report=str(path), has_usable_material=useful)
+            except OSError as exc:
+                self.record_error(manifest, exc, phase='publication')
+                manifest.update(status='FAILED', critical_failure=True)
+                code = 130 if code == 130 else 1
+        manifest['exit_code'] = code
+        save_json(self.run_dir / 'manifest.json', manifest)
+        return manifest, code
 
     def run_git(self, check_only: bool = False) -> tuple[dict, int]:
         manifest = {'run_id': self.run_dir.name,
@@ -1446,32 +1540,45 @@ class Runner:
                         'execution_mode': 'static-only', 'initial_working_tree': 'clean',
                         'source_access': 'current checkout; native CLI permissions; other branch reports are outside task scope'}
                     for stage in ('study', 'review'):
-                        if stage == 'review' and (not item['study'] or item['study']['completion_status'] == 'BLOCKED'):
+                        if stage == 'review' and not usable_study(item):
                             item['errors'].append('Review skipped: no usable architecture document.')
                             self.reporter.emit('stage_skipped', **self.stage_context(stage, context))
                             break
                         stage_context = dict(context)
                         if stage == 'review':
-                            doc = item['study']
+                            doc = stage_document(item, 'study')
                             stage_context['architecture_document'] = doc
+                            stage_context['document_strictly_valid'] = item['study'] is not None
                             stage_context['document_sha256'] = digest((doc['report_markdown'].rstrip() + '\n').encode())
                         try:
                             started = self.stage_started(stage, context)
                             self.repo.assert_snapshot(commit)
                             data, meta = self.invoke(stage, stage_context, branch_dir / (stage + '.logs'))
-                            item[stage] = data
-                            item[stage + '_invocation'] = meta
+                            self.store_stage(item, stage, data, meta, stage_context)
                         except (AuditError, ContractError, OSError, UnicodeError) as exc:
                             item['errors'].append(f'{stage}: {exc}')
                             self.record_error(manifest, exc, phase='stage', **self.stage_context(stage, context))
-                            if isinstance(exc, UnsafeRepository) or not self.cfg['continue_on_error']:
+                            if (isinstance(exc, UnsafeRepository) or (self.compromise and self.critical_failure)
+                                    or not self.cfg['continue_on_error']):
                                 raise
                         finally:
                             # Changed HEAD or working tree is always fatal, even with continue_on_error.
-                            self.repo.assert_snapshot(commit)
-                            persist()
+                            try:
+                                self.repo.assert_snapshot(commit)
+                            except BaseException:
+                                # A result must not survive a failed stage-boundary source check.
+                                item[stage] = None
+                                item.pop(stage + '_material', None)
+                                item[stage + '_usable'] = False
+                                raise
+                            finally:
+                                persist()
                         if item[stage] is not None:
                             self.stage_finished(stage, context, item[stage], started)
+                        elif item.get(stage + '_material'):
+                            self.reporter.emit('stage_completed', **self.stage_context(stage, context),
+                                               status='PARTIAL', elapsed_seconds=self.reporter.clock() - started)
+                            self.active_stage = {}
                     item['accepted'] = accepted(item)
                     persist()
             except BaseException as exc:
@@ -1493,10 +1600,12 @@ class Runner:
             if len(self.source['branches']) > 1:
                 baseline = self.source['baseline_branch']
                 bundle = {'baseline_branch': baseline, 'baseline_commit': pins[baseline],
+                    'result_policy': 'compromise' if self.compromise else 'strict',
                     'requested_branches': self.source['branches'], 'output_language': self.cfg['output_language'],
                     'project_description': self.cfg['project_description'],
                     'scope': 'reports-only comparison; source inspection is outside task scope',
-                    'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'submodules', 'study', 'review', 'errors')} |
+                    'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'submodules', 'study', 'review',
+                                                       'study_material', 'review_material', 'errors')} |
                                  {'accepted': accepted(b)} for b in entries],
                     'git_deltas': {b: self.repo.delta(pins[baseline], pins[b]) for b in self.source['branches'] if b != baseline}}
                 bundle['required_unresolved_branches'] = required_unresolved(bundle)
@@ -1505,7 +1614,9 @@ class Runner:
                 started = self.stage_started('compare', bundle)
                 try:
                     self.repo.assert_expected()
-                    if any(accepted(b) for b in entries):
+                    can_compare = (comparison_possible(entries, baseline) if self.compromise
+                                   else any(accepted(b) for b in entries))
+                    if can_compare:
                         comparison, meta = self.invoke('compare', bundle, comp_dir / 'compare.logs')
                     else:
                         comparison, meta = self.publish_blocked_comparison(bundle, comp_dir / 'compare.logs')
@@ -1578,18 +1689,25 @@ class Runner:
                 for stage in ('study', 'review'):
                     stage_context = dict(context)
                     if stage == 'review':
-                        doc = manifest['study']
-                        if doc['completion_status'] == 'BLOCKED':
+                        doc = stage_document(manifest, 'study')
+                        if not usable_study(manifest):
                             manifest['review_skipped'] = 'No usable architecture document.'
                             self.reporter.emit('stage_skipped', **self.stage_context(stage, context))
                             break
                         stage_context.update(architecture_document=doc,
+                            document_strictly_valid=manifest['study'] is not None,
                             document_sha256=digest((doc['report_markdown'].rstrip() + '\n').encode()))
                     started = self.stage_started(stage, context)
                     data, meta = self.invoke(stage, stage_context, self.run_dir / (stage + '.logs'))
-                    manifest[stage], manifest[stage + '_invocation'] = data, meta
+                    self.folder.assert_snapshot(fingerprint)
+                    self.store_stage(manifest, stage, data, meta, stage_context)
                     persist()
-                    self.stage_finished(stage, context, data, started)
+                    if data is not None:
+                        self.stage_finished(stage, context, data, started)
+                    else:
+                        self.reporter.emit('stage_completed', **self.stage_context(stage, context),
+                                           status='PARTIAL', elapsed_seconds=self.reporter.clock() - started)
+                        self.active_stage = {}
                 manifest['accepted'] = accepted(manifest)
                 manifest['status'] = 'COMPLETE' if manifest['accepted'] else 'PARTIAL'
                 code = 0 if manifest['accepted'] else 2
@@ -1711,6 +1829,8 @@ def main() -> int:
         manifest_path = run_dir / 'manifest.json' if run_dir else None
         result = {'run_id': run_id, 'status': manifest.get('status', 'FAILED'),
                   'manifest': str(manifest_path) if existing_file(manifest_path) else None,
+                  'final_report': manifest.get('final_report'),
+                  'has_usable_material': manifest.get('has_usable_material', False),
                   'exit_code': code}
         try:
             reporter.finish(result, manifest, check_only=args.check, config_path=args.config,

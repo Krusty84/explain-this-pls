@@ -238,6 +238,7 @@ Each run saves results in a new subfolder of `reports_dir`. Start with these fil
 
 | Report                   | Contents                                                               |
 | ------------------------ | ---------------------------------------------------------------------- |
+| `FINAL_REPORT.md`        | Start here: consolidated results, coverage, discrepancies and caveats. |
 | `ARCHITECTURE.md`        | How the system works.                                                  |
 | `ARCHITECTURE_REVIEW.md` | Review findings and gaps in the architecture report.                   |
 | `BRANCH_COMPARISON.md`   | Differences from the baseline, with two or more selected Git branches. |
@@ -246,7 +247,27 @@ In Git mode, the first two reports are under `branches/<branch-id>/`, and the
 comparison, when applicable, is under `comparison/`. In folder mode, the first two
 reports are directly in the run folder.
 
-If no branch has a complete report that passes review, the comparison is marked
-`BLOCKED` without an extra model request. Analysis failures still make the run fail.
+The default `"result_policy": "compromise"` preserves usable material even when
+individual stages fail. The orchestrator assembles `FINAL_REPORT.md` without an
+additional model request, in both folder and Git modes. Original reports are not
+rewritten. A study without a completed review is explicitly unverified; review
+inconsistencies and missing inputs appear before the affected material.
 
-For troubleshooting details, see the [technical reference](docs/structured-output-protocol.md).
+Strictly validated results retain their existing filenames and JSON contracts.
+Completed study/review text with a valid task and source identity but other contract
+defects is retained separately in `study.material.json` / `review.material.json`.
+It never becomes an accepted result. Malformed JSON, foreign identities, incomplete
+transport responses, and results from changed sources are not recovered.
+
+The existing comparison stage can use a usable baseline study and at least one
+other study without requiring review PASS. Comparisons involving unaccepted inputs
+remain unverified. If comparison fails or inputs are missing, the final report still
+contains the available studies and reviews. With no usable study, it is explicitly
+a diagnostic summary. `--check` does not create a final report.
+
+Compromise exit codes: `0` / `COMPLETE` for full strict acceptance, `2` / `PARTIAL`
+for usable material with caveats or individual stage failures, `1` / `FAILED` for no
+usable study or critical source-integrity, restoration, cleanup, or publication
+failure. Interruption remains `130`. `continue_on_error: false` stops further agent
+calls but still assembles previously completed material. Configured format repairs
+remain bounded; semantic errors do not trigger extra model requests.

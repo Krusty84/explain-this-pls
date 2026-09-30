@@ -282,8 +282,90 @@ def validate_result(stage: str, value: dict, context: dict, mode: str = 'git') -
                 raise ContractError('Difference references an unexpected branch')
             if diff['classification'] == 'CONFIRMED_DIFFERENCE' and len(diff['evidence_refs']) < 2:
                 raise ContractError('Confirmed contrast needs references for both sides')
+            if (context.get('result_policy') == 'compromise'
+                    and diff['classification'] == 'CONFIRMED_DIFFERENCE'
+                    and (context['baseline_branch'] in missing or diff['branch'] in missing)):
+                raise ContractError('Confirmed contrast requires accepted inputs on both sides')
             if diff['id'] not in value['report_markdown']:
                 raise ContractError('Markdown omits a structured difference ID')
+
+
+def result_diagnostics(stage: str, value: Any, context: dict, mode: str = 'git') -> dict:
+    """All independently checkable defects; public paths/messages contain no model text.
+
+    Partial or malformed ledgers are not evidence. Inspect only schema-valid records,
+    retaining their original indexes, so one malformed record does not hide others.
+    The strict validator remains the authority for acceptance.
+    """
+    schema = (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage]
+    structural = schema_diagnostics(value, schema)
+    issues, total = [], 0
+
+    def add(path, code, message):
+        nonlocal total
+        total += 1
+        if len(issues) < 100:
+            issues.append({'path': path, 'code': code, 'message': message})
+
+    if type(value) is dict:
+        report = value.get('report_markdown')
+        if type(report) is str and not report.strip():
+            add('$.report_markdown', 'EMPTY_REPORT', 'Empty Markdown report.')
+        if value.get('completion_status') in ('PARTIAL', 'BLOCKED') and value.get('limitations') == []:
+            add('$.limitations', 'MISSING_LIMITATIONS', 'PARTIAL/BLOCKED requires explicit limitations.')
+        identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
+        if stage in ('study', 'review'):
+            for key in identity:
+                if value.get(key) != context.get(key):
+                    add('$.' + key, 'IDENTITY_MISMATCH', 'Identity does not match the pinned input.')
+        if stage == 'review':
+            records = {}
+            for key, prefix in (('claims', 'C'), ('findings', 'F')):
+                items = value.get(key)
+                records[key] = []
+                if type(items) is not list:
+                    continue
+                seen = set()
+                for i, record in enumerate(items):
+                    if schema_diagnostics(record, schema['properties'][key]['items'], limit=0)['total_violations']:
+                        continue
+                    records[key].append((i, record))
+                    if not re.fullmatch(prefix + r'-[0-9]{3,}', record['id']) or record['id'] in seen:
+                        add(f'$.{key}[{i}].id', 'INVALID_ID', 'Invalid or duplicate record ID.')
+                    seen.add(record['id'])
+                    if type(report) is str and record['id'] not in report:
+                        add(f'$.{key}[{i}].id', 'MISSING_REPORT_ID', 'Markdown omits a structured record ID.')
+            claims, findings = records['claims'], records['findings']
+            cids = {c['id'] for _, c in claims}
+            fs = {f['id']: f for _, f in findings}
+            if value.get('completion_status') == 'COMPLETE':
+                if value.get('claim_inventory_complete') is not True or not value.get('claims'):
+                    add('$.claims', 'INCOMPLETE_INVENTORY', 'COMPLETE review requires a nonempty complete inventory.')
+            for i, c in claims:
+                path = f'$.claims[{i}]'
+                if not set(c['finding_ids']) <= fs.keys():
+                    add(path + '.finding_ids', 'UNKNOWN_FINDING', 'Unknown or malformed finding reference.')
+                if c['outcome'] in ('SUPPORTED', 'CONTRADICTED') and not c['evidence']:
+                    add(path + '.evidence', 'MISSING_EVIDENCE', 'Supported/contradicted claims require evidence.')
+                if c['outcome'] in ('UNVERIFIABLE', 'NOT_CHECKED') and not c['limitation'].strip():
+                    add(path + '.limitation', 'MISSING_REASON', 'Unverified/unchecked claim requires a reason.')
+                if c['outcome'] == 'NOT_CHECKED' and value.get('completion_status') == 'COMPLETE':
+                    add(path + '.outcome', 'UNCHECKED_CLAIM', 'COMPLETE review contains an unchecked claim.')
+                if c['outcome'] in ('CONTRADICTED', 'UNVERIFIABLE') and not any(
+                        fs.get(fid, {}).get('severity') in ('HIGH', 'MEDIUM') for fid in c['finding_ids']):
+                    add(path + '.finding_ids', 'MISSING_MATERIAL_FINDING',
+                        'Contradicted/unverifiable claim lacks a linked HIGH/MEDIUM finding.')
+            for i, f in findings:
+                if not set(f['claim_ids']) <= cids:
+                    add(f'$.findings[{i}].claim_ids', 'UNKNOWN_CLAIM', 'Unknown or malformed claim reference.')
+                if not f['evidence'] or not f['proposed_correction'].strip():
+                    add(f'$.findings[{i}]', 'INCOMPLETE_FINDING', 'Finding requires evidence and a concrete correction.')
+            if (type(value.get('findings')) is list and len(findings) == len(value['findings'])
+                    and value.get('completion_status') in ('COMPLETE', 'PARTIAL', 'BLOCKED')
+                    and value.get('verdict') != review_verdict(value)):
+                add('$.verdict', 'INCONSISTENT_VERDICT', 'Verdict violates deterministic verdict rules.')
+    return {'schema_diagnostics': structural,
+            'semantic_diagnostics': {'violations': issues, 'total_violations': total, 'truncated': total > len(issues)}}
 
 def transport_json(text):
     try:

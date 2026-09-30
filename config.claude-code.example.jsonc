@@ -1,4 +1,6 @@
 {
+  // Default: retain useful text with caveats; use "strict" for previous acceptance rules.
+  "result_policy": "compromise",
   // Briefly describe the system's purpose and history. Empty/missing means a warning.
   "project_description": "An ERP system originally developed in 1995",
 

@@ -375,8 +375,10 @@ class Reporter(NullReporter):
                       'Start analysis:', '  ' + s(shlex.join(command))]
         elif not check_only:
             for branch in manifest.get('branches', []):
+                partial_material = manifest.get('result_policy') == 'compromise' and branch.get('study_usable')
                 lines += ['Branch ' + s(branch['branch']) + ': ' +
-                          status('COMPLETE' if branch.get('accepted') else 'FAILED' if branch['errors'] else 'PARTIAL')]
+                          status('COMPLETE' if branch.get('accepted') else 'PARTIAL' if partial_material
+                                 else 'FAILED' if branch['errors'] else 'PARTIAL')]
             analyzed = {branch['branch'] for branch in manifest.get('branches', [])}
             for branch in manifest.get('pins', {}):
                 if branch not in analyzed:
@@ -397,6 +399,9 @@ class Reporter(NullReporter):
         if self.log_path:
             paths.append(('Technical log', self.log_path))
         if run_dir and not check_only:
+            if manifest.get('final_report'):
+                paths.append(('Final report' if manifest.get('has_usable_material') else 'Final report (diagnostic only)',
+                              Path(manifest['final_report'])))
             for branch in manifest.get('branches', []):
                 for name in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md'):
                     paths.append(('Report (' + s(branch['branch']) + ')', run_dir / branch['directory'] / name))

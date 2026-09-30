@@ -67,6 +67,8 @@ class FolderFixture(unittest.TestCase):
             'agent': {'backend': 'codex', 'executable': sys.executable}}
 
     def config(self):
+        # Existing fixtures exercise the retained strict publication contract.
+        self.value.setdefault('result_policy', 'strict')
         self.config_path.write_text(json.dumps(self.value))
         return load_config(self.config_path)
 
