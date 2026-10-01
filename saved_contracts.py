@@ -6,6 +6,9 @@ from contracts import SCHEMAS, FOLDER_SCHEMAS, CLAIM, STRINGS, obj, array, strin
 
 INTEGER = {'type': 'integer', 'minimum': 0}
 NULL_STRING = {'type': ['string', 'null']}
+NORMALIZATION_PROVENANCE = obj(rule=string('STUDY_LOCAL_EVIDENCE_REF_V1'),
+    hash_format=string('canonical-json-utf8-v1'), extracted_sha256=string(),
+    normalized_sha256=string(), replacement_count=INTEGER)
 
 
 def mapping(items):
@@ -53,6 +56,10 @@ def artifact_schemas(wire):
         if stage == 'review':
             properties.update(claim_registry=array(CLAIM), verdict=string('PASS', 'CHANGES_REQUIRED', 'INCONCLUSIVE'))
         result[stage] = obj(**properties)
+        if stage == 'study':
+            # Optional for older saved artifacts and direct prepare_result callers;
+            # every new Runner publication writes this orchestrator-only record.
+            result[stage]['properties']['normalization_provenance'] = NORMALIZATION_PROVENANCE
     return result
 
 

@@ -23,6 +23,19 @@ def response_error(kind, layer, message, **details):
                          details=details, safe=True)
 
 
+def contract_violation(code, path, *, kind='SEMANTIC_ERROR', layer='semantic', **details):
+    """Callers supply closed codes and schema-owned paths, never response text/IDs."""
+    suffix = (f"; expected {details['expected_type']}, got {details['actual_type']}"
+              if code == 'CLAIMS_TYPE_MISMATCH' else '')
+    return response_error(kind, layer, f'Response contract rejected: {code} at {path}{suffix}.',
+                          code=code, path=path, **details)
+
+
+def json_type(value):
+    return {dict: 'object', list: 'array', str: 'string', bool: 'boolean',
+            int: 'integer', float: 'number', type(None): 'null'}.get(type(value), 'non_json')
+
+
 def json_error_details(exc):
     # JSONDecodeError.msg can be supplied by callers, so use a closed vocabulary.
     messages = {'Expecting value', 'Expecting property name enclosed in double quotes',
@@ -182,7 +195,8 @@ def schema_diagnostics(value: Any, schema: dict, where: str = '$', *, private=Fa
         permitted = requested if isinstance(requested, list) else [requested]
         typ = next((name for name in permitted if type(data) in types[name]), None)
         if typ is None:
-            add(path, 'type', expected_type=requested)
+            add(path, 'type', expected_type=requested, actual_type=json_type(data),
+                **({'code': 'CLAIMS_TYPE_MISMATCH'} if path == '$.claims' and requested == 'array' else {}))
             return
         if 'enum' in spec and data not in spec['enum']:
             add(path, 'enum')
@@ -216,6 +230,13 @@ def validate_schema(value: Any, schema: dict, where: str = '$') -> None:
     details = schema_diagnostics(value, schema, where)
     if details['total_violations']:
         first = details['violations'][0]
+        if (where == '$' and type(value) is dict and 'claims' in value
+                and schema.get('properties', {}).get('claims', {}).get('type') == 'array'
+                and type(value['claims']) is not list):
+            raise contract_violation('CLAIMS_TYPE_MISMATCH', '$.claims', kind='SCHEMA_ERROR', layer='schema',
+                expected_type='array', actual_type=json_type(value['claims']), **details)
+        if first['path'] == '$.task' and first['violation'] == 'enum':
+            raise contract_violation('TASK_IDENTITY_MISMATCH', '$.task', kind='SCHEMA_ERROR', layer='schema', **details)
         raise response_error('SCHEMA_ERROR', 'schema',
             f"Structured result has {details['total_violations']} schema violation(s); first at {first['path']}.",
             **first, **details)
@@ -236,11 +257,16 @@ def has_program_checks(value):
     return (type(value) is dict and type(value.get('program_checks')) is dict
             and value['program_checks'].get('contract') == 'VALID')
 
-def unique_ids(records, pattern):
-    ids = [r['id'] for r in records]
-    if len(set(ids)) != len(ids) or any(not re.fullmatch(pattern, i) for i in ids):
-        raise ContractError('Invalid or duplicate record IDs')
-    return set(ids)
+def unique_ids(records, pattern, path):
+    seen = set()
+    for i, record in enumerate(records):
+        identifier = record['id']
+        if not re.fullmatch(pattern, identifier):
+            raise contract_violation('INVALID_RECORD_ID', f'{path}[{i}].id')
+        if identifier in seen:
+            raise contract_violation('DUPLICATE_RECORD_ID', f'{path}[{i}].id')
+        seen.add(identifier)
+    return seen
 
 
 def review_verdict(value):
@@ -265,63 +291,87 @@ def nonblank(value, key=''):
             nonblank(child, key)
 
 
-def references(refs, allowed):
-    if len(refs) != len(set(refs)) or not set(refs) <= allowed:
-        raise ContractError('Duplicate or unknown typed reference')
+def references(refs, allowed, path, *, namespaces=None):
+    seen = set()
+    for i, ref in enumerate(refs):
+        at = f'{path}[{i}]'
+        if namespaces is not None:
+            # Bare IDs (including unknown ones) are unknown references in strict
+            # validation. An explicit foreign/malformed namespace is distinct.
+            if ':' in ref and ref.split(':', 1)[0] not in namespaces:
+                raise contract_violation('INVALID_EVIDENCE_NAMESPACE', at)
+        subject = 'EVIDENCE_REFERENCE' if namespaces is not None else 'REFERENCE'
+        if ref in seen:
+            raise contract_violation('DUPLICATE_' + subject, at)
+        if ref not in allowed:
+            raise contract_violation('UNKNOWN_' + subject, at)
+        seen.add(ref)
+
+
+def validate_wire_identity(stage, value, context, mode='git'):
+    """Structural and pinned-identity prerequisites; performs no repair."""
+    try:
+        validate_schema(value, (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage])
+    except ContractError as exc:
+        if (type(value) is dict and not has_ledger_structure(stage, value)
+                and not exc.details.get('code')):
+            exc.safe_message = ('Expected the current evidence ledger structure. Legacy output/custom prompts '
+                                'must be updated; new checks cannot be inferred from old fields.')
+        raise
+    if stage in ('study', 'review'):
+        identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
+        for key in identity:
+            if value[key] != context.get(key):
+                raise contract_violation('SOURCE_IDENTITY_MISMATCH', '$.' + key,
+                                         kind='IDENTITY_MISMATCH', layer='identity')
 
 
 def validate_result(stage, value, context, mode='git'):
     from evidence import lines, source_catalog
     from ledger import verify_review_context
-    try:
-        validate_schema(value, (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage])
-    except ContractError as exc:
-        if type(value) is dict and not has_ledger_structure(stage, value):
-            exc.safe_message = ('Expected the current evidence ledger structure. Legacy output/custom prompts '
-                                'must be updated; new checks cannot be inferred from old fields.')
-        raise
+    validate_wire_identity(stage, value, context, mode)
     nonblank(value)
     if value['completion_status'] != 'COMPLETE' and not value['limitations']:
         raise ContractError('PARTIAL/BLOCKED requires explicit limitations')
     if stage in ('study', 'review'):
-        identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
-        if any(value[key] != context[key] for key in identity):
-            raise response_error('IDENTITY_MISMATCH', 'identity', 'Source identity does not match the pinned input.')
-        unique_ids(value['evidence'], r'E-[0-9]{3,}')
-        for e in value['evidence']:
+        unique_ids(value['evidence'], r'E-[0-9]{3,}', '$.evidence')
+        for i, e in enumerate(value['evidence']):
             if e['start_line'] < 1 or e['end_line'] < e['start_line']:
-                raise ContractError('Evidence line range must be positive and ordered')
+                raise contract_violation('INVALID_EVIDENCE_LINE_RANGE', f'$.evidence[{i}]')
         # Invalid locators remain machine-readable evidence results and prevent
         # policy success. Wrong JSON types still fail schema validation.
         evidence_ids = {stage + ':' + e['id'] for e in value['evidence']}
-        unique_ids(value['claims'], r'C-[0-9]{3,}')
+        unique_ids(value['claims'], r'C-[0-9]{3,}', '$.claims')
     if stage == 'study':
         document = lines(value['report_markdown'])
-        for claim in value['claims']:
-            references(claim['evidence_ids'], evidence_ids)
+        for i, claim in enumerate(value['claims']):
+            references(claim['evidence_ids'], evidence_ids, f'$.claims[{i}].evidence_ids', namespaces={'study'})
             loc = claim['document_locator']
             a, b = loc['start_line'], loc['end_line']
             if a < 1 or b < a or b > len(document) or not loc['quote'].strip() or ''.join(document[a-1:b]) != loc['quote']:
-                raise ContractError('Claim document locator does not exactly match the document')
+                raise contract_violation('DOCUMENT_LOCATOR_MISMATCH', f'$.claims[{i}].document_locator')
             if claim['epistemic_kind'] != 'FACT' and not claim['uncertainty'].strip():
                 raise ContractError('Hypothesis/unknown requires a concrete missing check or limitation')
     elif stage == 'review':
         verify_review_context(context)
         if value['target'] != context['review_target']:
-            raise response_error('IDENTITY_MISMATCH', 'identity', 'Review target does not match the frozen plan.')
+            key = next(k for k in TARGET['properties'] if value['target'][k] != context['review_target'][k])
+            raise contract_violation('TARGET_IDENTITY_MISMATCH', '$.target.' + key,
+                                     kind='IDENTITY_MISMATCH', layer='identity')
         registry = {c['id']: c for c in context['claim_registry']}
-        if not {c['id'] for c in value['claims']} <= registry.keys():
-            raise ContractError('Review contains unknown claim IDs')
+        for i, c in enumerate(value['claims']):
+            if c['id'] not in registry:
+                raise contract_violation('UNKNOWN_CLAIM_ID', f'$.claims[{i}].id')
         study = context['architecture_document']
         evidence_ids |= {'study:' + e['id'] for e in study.get('evidence', [])}
-        fids = unique_ids(value['findings'], r'F-[0-9]{3,}')
-        for finding in value['findings']:
-            references(finding['claim_ids'], registry.keys())
-            references(finding['evidence_ids'], evidence_ids)
+        fids = unique_ids(value['findings'], r'F-[0-9]{3,}', '$.findings')
+        for i, finding in enumerate(value['findings']):
+            references(finding['claim_ids'], registry.keys(), f'$.findings[{i}].claim_ids')
+            references(finding['evidence_ids'], evidence_ids, f'$.findings[{i}].evidence_ids', namespaces={'study', 'review'})
             if not finding['evidence_ids']:
                 raise ContractError('Finding requires source evidence')
-        for claim in value['claims']:
-            references(claim['evidence_ids'], evidence_ids)
+        for i, claim in enumerate(value['claims']):
+            references(claim['evidence_ids'], evidence_ids, f'$.claims[{i}].evidence_ids', namespaces={'study', 'review'})
             fact = registry[claim['id']]['epistemic_kind'] == 'FACT'
             permitted = {'SUPPORTED', 'CONTRADICTED', 'UNVERIFIABLE', 'NOT_CHECKED'} if fact else {
                 'CAVEAT_ACCEPTABLE', 'CAVEAT_INADEQUATE', 'NOT_CHECKED'}
@@ -335,11 +385,14 @@ def validate_result(stage, value, context, mode='git'):
                     claim['id'] in f['claim_ids'] and f['severity'] in ('HIGH', 'MEDIUM') for f in value['findings']):
                 raise ContractError('Material issue requires a linked material finding')
         areas = {a['id'] for a in context['review_plan']['omission_areas']}
-        returned = [a['area_id'] for a in value['omission_search']]
-        if len(returned) != len(set(returned)) or not set(returned) <= areas:
-            raise ContractError('Duplicate or unknown omission area ID')
-        for area in value['omission_search']:
-            references(area['finding_ids'], fids)
+        returned = set()
+        for i, area in enumerate(value['omission_search']):
+            if area['area_id'] in returned:
+                raise contract_violation('DUPLICATE_OMISSION_AREA_ID', f'$.omission_search[{i}].area_id')
+            if area['area_id'] not in areas:
+                raise contract_violation('UNKNOWN_OMISSION_AREA_ID', f'$.omission_search[{i}].area_id')
+            returned.add(area['area_id'])
+            references(area['finding_ids'], fids, f'$.omission_search[{i}].finding_ids')
             if area['status'] != 'INSPECTED' and not area['limitation'].strip():
                 raise ContractError('Unfinished omission search requires a limitation')
     else:
@@ -348,14 +401,14 @@ def validate_result(stage, value, context, mode='git'):
             raise response_error('IDENTITY_MISMATCH', 'identity', 'Comparison baseline mismatch.')
         if sorted(value['compared_branches']) != sorted(expected):
             raise ContractError('Comparison must cover each non-baseline branch exactly once')
-        references(value['unresolved_branches'], set(context['requested_branches']))
+        references(value['unresolved_branches'], set(context['requested_branches']), '$.unresolved_branches')
         entries = {b['branch']: b for b in context['branches']}
         missing = {b for b in context['requested_branches'] if not accepted(entries.get(b, {}))}
         if not missing <= set(value['unresolved_branches']):
             raise ContractError('Comparison conceals unaccepted inputs')
         if value['completion_status'] == 'COMPLETE' and value['unresolved_branches']:
             raise ContractError('COMPLETE comparison contains unresolved inputs')
-        unique_ids(value['differences'], r'D-[0-9]{3,}')
+        unique_ids(value['differences'], r'D-[0-9]{3,}', '$.differences')
         for diff in value['differences']:
             if diff['branch'] not in expected:
                 raise ContractError('Unknown difference branch')
@@ -391,7 +444,8 @@ def result_diagnostics(stage, value, context, mode='git'):
         try:
             validate_result(stage, value, context, mode)
         except ContractError as exc:
-            issues.append({'path': '$', 'code': exc.failure_kind, 'message': exc.safe_message})
+            issues.append({'path': exc.details.get('path', '$'),
+                           'code': exc.details.get('code', exc.failure_kind), 'message': exc.safe_message})
     if type(value) is dict and stage == 'review':
         # Inspect independently valid records even when another row is malformed.
         # Only trusted field paths and closed messages appear in diagnostics.
@@ -405,10 +459,11 @@ def result_diagnostics(stage, value, context, mode='git'):
         for i, c in records['claims']:
             path = f'$.claims[{i}]'
             if c['id'] in seen or not re.fullmatch(r'C-[0-9]{3,}', c['id']):
-                issues.append({'path': path + '.id', 'code': 'INVALID_ID', 'message': 'Invalid or duplicate claim ID.'})
+                code = 'DUPLICATE_RECORD_ID' if c['id'] in seen else 'INVALID_RECORD_ID'
+                issues.append({'path': path + '.id', 'code': code, 'message': 'Invalid or duplicate claim ID.'})
             seen.add(c['id'])
             if c['id'] not in registry:
-                issues.append({'path': path + '.id', 'code': 'UNKNOWN_CLAIM', 'message': 'Claim is absent from the frozen registry.'})
+                issues.append({'path': path + '.id', 'code': 'UNKNOWN_CLAIM_ID', 'message': 'Claim is absent from the frozen registry.'})
             if c['outcome'] in ('CONTRADICTED', 'UNVERIFIABLE', 'CAVEAT_INADEQUATE') and not any(
                     c['id'] in f['claim_ids'] and f['severity'] in ('HIGH', 'MEDIUM') for _, f in records['findings']):
                 issues.append({'path': path, 'code': 'MISSING_MATERIAL_FINDING',

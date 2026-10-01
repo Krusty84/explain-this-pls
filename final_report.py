@@ -82,8 +82,8 @@ def render_final_report(manifest, source, mode, language='Russian'):
     for b in entries:
         out += ['## ' + cell(b.get('branch', manifest.get('source_directory', source.get('path', '')))), '',
             t('Условия политики обработки и ревью выполнены.', 'Processing and review policy checks satisfied.') if accepted(b) else
-            t('Условия политики не выполнены. Проверка не завершена или данных недостаточно.',
-              'Policy checks not satisfied. Review incomplete or evidence insufficient.'), '']
+            t('Условия политики не выполнены; причины указаны в диагностике.',
+              'Policy checks not satisfied; see diagnostics for the reasons.'), '']
         if not b.get('review') or not accepted(b):
             out += ['> ' + t('Проверка реестра не завершена с положительным результатом политики.',
                               'Registry review has not completed with a positive policy result.'), '']
@@ -109,10 +109,17 @@ def render_final_report(manifest, source, mode, language='Russian'):
                 out += [stage + ': ' + t('Результат отсутствует.', 'Result unavailable.'), '']
                 continue
             if not has_program_checks(doc) or doc.get('strict_valid') is False:
-                out += ['> ' + t('Старый формат или текст с нарушениями контракта; новые проверки не выполнялись. '
-                                  'Исходный текст не получает положительную приёмку.',
-                                  'Legacy format or text with contract violations; new checks were not performed. '
-                                  'Original text has no positive acceptance.'), '']
+                failure = doc.get('contract_failure')
+                if failure:
+                    out += ['> ' + cell(failure['message']) + ' ' +
+                            t('Текст сохранён; проверки политики не завершены. Самооценка агента: ',
+                              'Text retained; policy checks not completed. Agent self-assessment: ') +
+                            (doc.get('completion_status') or 'UNAVAILABLE') + '.', '']
+                if not failure or not failure.get('details', {}).get('code'):
+                    out += ['> ' + t('Старый формат или текст с нарушениями контракта; новые проверки не выполнялись. '
+                                      'Исходный текст не получает положительную приёмку.',
+                                      'Legacy format or text with contract violations; new checks were not performed. '
+                                      'Original text has no positive acceptance.'), '']
             if stage == 'study':
                 out += [render_stage(stage, doc, language), '']
             for issue in doc.get('limitations', []):

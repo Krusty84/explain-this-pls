@@ -94,7 +94,7 @@ class ProgressTests(unittest.TestCase):
         self.tick(r, .4)
         r.emit('stage_completed', **CONTEXT, status='PARTIAL', elapsed_seconds=.4)
         self.assertEqual(sum(self.err.getvalue().count(c) for c in SPINNER), 1)
-        self.assertIn('— PARTIAL: Processing incomplete or evidence insufficient | Elapsed: 00:00\n', self.err.getvalue())
+        self.assertIn('— PARTIAL: Policy checks not completed or not satisfied; see diagnostics | Elapsed: 00:00\n', self.err.getvalue())
 
     def test_runner_context_retries_and_next_stage_reset(self):
         r = self.reporter()

@@ -438,6 +438,41 @@
         "eligible_study"
       ],
       "additionalProperties": false
+    },
+    "normalization_provenance": {
+      "type": "object",
+      "properties": {
+        "rule": {
+          "type": "string",
+          "enum": [
+            "STUDY_LOCAL_EVIDENCE_REF_V1"
+          ]
+        },
+        "hash_format": {
+          "type": "string",
+          "enum": [
+            "canonical-json-utf8-v1"
+          ]
+        },
+        "extracted_sha256": {
+          "type": "string"
+        },
+        "normalized_sha256": {
+          "type": "string"
+        },
+        "replacement_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "rule",
+        "hash_format",
+        "extracted_sha256",
+        "normalized_sha256",
+        "replacement_count"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

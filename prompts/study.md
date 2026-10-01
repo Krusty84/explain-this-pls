@@ -137,7 +137,12 @@ FACT uses "" unless a scoped uncertainty must be stated.
 Return structured evidence with local IDs E-001 etc., source_id from context.sources,
 path relative to that source's root, start_line, end_line and quote. Use "" for
 quote unless quoting the complete normalized range exactly. Do not calculate
-hashes. Reference evidence as study:E-001. A nested submodule uses its own source_id
+hashes. The canonical reference form is study:E-001; keep evidence definitions
+local (E-001). Only in study, the program supports exact unprefixed references to
+unique, valid local evidence IDs as deterministic compatibility. It does not
+repair unknown IDs, spelling, whitespace, foreign namespaces or duplicates.
+Return claims and evidence as arrays of records, never JSON encoded in strings.
+A nested submodule uses its own source_id
 and paths relative to that submodule; do not cite it through the main source ID.
 Use positive integer lines, no absolute paths or links. Limits: 256 pointers,
 16 KiB per record, 200 lines and 64 KiB per fragment, 8 MiB per file and 32 MiB

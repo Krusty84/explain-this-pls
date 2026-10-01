@@ -775,7 +775,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.env['AUDIT_TEST_PARTIAL'] = '1'
         result = self.run_cli(args + ['--output', 'text'])
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertTrue(result.stdout.startswith('PARTIAL: Processing incomplete or evidence insufficient;'))
+        self.assertTrue(result.stdout.startswith('PARTIAL: Policy checks not completed or not satisfied;'))
         self.assertIn('[WARN] source folder / study / codex — PARTIAL', result.stderr)
         del self.env['AUDIT_TEST_PARTIAL']
         self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': 'invalid', 'value': 'PRIVATE_MODEL_VALUE'})

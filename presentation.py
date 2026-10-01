@@ -17,7 +17,8 @@ LABELS = {
     'PASS': ('По обязательным пунктам агент не сообщил существенных замечаний; условия политики выполнены',
              'No material issues reported for the required claim registry; policy checks satisfied'),
     'CHANGES_REQUIRED': ('Есть существенные замечания агента', 'Material issues reported by the agent'),
-    'INCONCLUSIVE': ('Проверка не завершена или данных недостаточно', 'Review incomplete or evidence insufficient'),
+    'INCONCLUSIVE': ('Нет положительного результата политики; см. результаты проверок',
+                     'No positive policy result; see check results'),
     'CONFIRMED_DIFFERENCE': ('Различие поддержано отчётами по оценке агента', 'Difference supported by supplied reports according to the agent'),
     'REPORTED_UNVERIFIED': ('Сообщено агентом; не проверено', 'Reported by the agent; unverified'),
     'INSUFFICIENT_EVIDENCE': ('Недостаточно данных для сравнения', 'Insufficient comparison evidence'),
@@ -41,6 +42,9 @@ def render_stage(stage, data, language='English'):
     ru = russian(language)
     def t(r, e): return r if ru else e
     if not has_program_checks(data):
+        if (data.get('contract_failure') or {}).get('details', {}).get('code'):
+            return '> ' + t('Текст сохранён после отказа контракта; полной проверки политики нет.',
+                            'Text retained after contract rejection; full policy checks are not complete.') + '\n\n'
         return '> ' + t('Старый или восстановленный формат; новые проверки не выполнялись.',
                         'Legacy or recovered format; new checks were not performed.') + '\n\n'
     checks = data['program_checks']

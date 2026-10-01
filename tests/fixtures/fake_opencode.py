@@ -142,6 +142,10 @@ class Handler(BaseHTTPRequestHandler):
             if scenario == 'schema-error' or (scenario == 'fail-main-study' and
                     context.get('branch') == 'main' and 'architecture_document' not in context):
                 data['completion_status'] = 'INVALID'
+            if os.environ.get('AUDIT_FAKE_LOCAL_REFS'):
+                data['claims'][0]['evidence_ids'] = ['E-001']
+            if scenario == 'claims-string':
+                data['claims'] = '[{"private":"' + 'x' * 21295
             model = body.get('model', {'providerID': 'fixture', 'modelID': 'configured-model'})
             mid = 'msg_' + uuid.uuid4().hex
             info = {'id': mid, 'sessionID': session_id, 'role': 'assistant',
@@ -165,6 +169,10 @@ class Handler(BaseHTTPRequestHandler):
                 del info['structured']
             if scenario == 'no-final':
                 del info['time']['completed']
+            if scenario == 'tool-input-mismatch':
+                different = json.loads(json.dumps(data))
+                different['claims'][0]['evidence_ids'] = ['study:E-001']
+                response['parts'][1]['state']['input'] = different
             if scenario == 'foreign-session':
                 info['sessionID'] = 'ses_foreign'
             if scenario == 'foreign-request':

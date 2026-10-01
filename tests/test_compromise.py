@@ -37,6 +37,29 @@ def response_for(context):
 
 
 class CompromiseFolder(folder_fixtures.FolderFixture):
+    def test_normalized_study_acceptance_and_contract_rejection_remain_distinct(self):
+        for policy in ('strict', 'compromise'):
+            for backend in ('codex', 'claude-code'):
+                def local(stage, data):
+                    if stage == 'study': data['claims'][0]['evidence_ids'] = ['E-001']
+                    return data
+                manifest, code = self.run_case(local, backend=backend, policy=policy)
+                self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
+                self.assertEqual(manifest['study']['normalization_provenance']['replacement_count'], 1)
+                self.assertEqual(manifest['review']['claim_registry'], manifest['study']['claims'])
+        def malformed(stage, data):
+            if stage == 'study': data['claims'] = 'PRIVATE_MALFORMED_CLAIMS' + '{' * 21295
+            return data
+        manifest, code = self.run_case(malformed, policy='compromise')
+        self.assertEqual((code, manifest['status'], manifest['accepted']), (2, 'PARTIAL', False))
+        final = Path(manifest['final_report']).read_text()
+        self.assertIn('CLAIMS_TYPE_MISMATCH at $.claims; expected array, got string', final)
+        self.assertNotIn('PRIVATE_MALFORMED_CLAIMS', final)
+        self.assertNotIn('Review incomplete or evidence insufficient', final)
+        self.assertNotIn('Проверка не завершена или данных недостаточно', final)
+        self.assertNotIn('Старый', final)
+        self.assertFalse(manifest['review']['program_checks']['policy_satisfied'])
+
     def run_case(self, change=None, *, backend='codex', policy=None, continue_on_error=True, atomic_override=None):
         config = self.config()
         config.pop('result_policy')  # Exercise Runner's default as well as load_config's default.

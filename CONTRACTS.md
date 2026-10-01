@@ -1,6 +1,6 @@
 # Evidence ledger contract
 
-Response and saved-result schemas contain no version fields. The orchestrator
+Response schemas contain no version fields. The orchestrator
 selects the required schema for each stage and validates its structure locally.
 `schemas/{study,review,compare}.schema.json` and their `folder-` variants
 are **wire** schemas generated from `contracts.py`. Separate `saved-*.schema.json`
@@ -25,11 +25,13 @@ new checks were not performed”. They cannot receive positive acceptance.
 
 An attempt's private `extracted.json` preserves the original wire object.
 Transport/stdout and stderr remain private attempt artifacts. A saved `study.json`,
-`review.json` or `compare.json` is a separate representation with original wire
-fields and `program_checks`. Version identifiers (`contract_version:
+`review.json` or `compare.json` is a separate representation with processed wire
+fields and `program_checks`. Study changes only the references allowed below.
+Contract/artifact identifiers (`contract_version:
 "evidence-ledger-v1"`, `artifact_version: "evidence-ledger-artifacts-v1"`) belong only
 to invocation metadata and the manifest, not agent responses, saved-result schemas,
-or the review plan. Study adds `review_plan`. Review also adds `review_plan`, the
+or the review plan. Study adds `review_plan` and `normalization_provenance` (including
+the normalization rule version). Review also adds `review_plan`, the
 unchanged `claim_registry`, and the Python-derived `verdict`. These extra fields
 are forbidden in wire output. The saved representation must not be re-submitted
 as an agent response. Stored `program_checks` are execution records, not signatures
@@ -64,6 +66,9 @@ still retain successfully published earlier stages and a diagnostic final report
 
 An evidence record has `id`, `source_id`, `path`, `start_line`, `end_line`, `quote`.
 IDs are local `E-001` etc.; references use `study:E-001` or `review:E-001`.
+Prefixed references are canonical. Study has the narrowly scoped compatibility
+rule below; review always requires explicit namespaces because both its own
+evidence and study evidence are available.
 The orchestrator assigns `source-001` to the main source and subsequent IDs to
 submodules sorted by root-relative path. Each nested source has its exact commit,
 root path and containing main commit; it must be cited through its own source ID.
@@ -106,6 +111,126 @@ that the locator resolved. Other statuses distinguish `INVALID_POINTER`,
 `LIMIT_EXCEEDED`. Bad/inaccessible pointers prevent positive policy acceptance
 without discarding an otherwise well-formed report. A real fragment may be
 irrelevant to its architecture claim; the resolver never assigns `SUPPORTED`.
+
+## Study reference compatibility and diagnostics
+
+`study_normalization.normalize_study(value, context, mode='git')` is a pure
+function returning `(candidate, changes)`. The candidate is a deep copy, including
+when no changes are needed. It first requires the complete study wire schema,
+the `architecture_documentation` task, matching pinned Git/folder identity, and
+valid unique evidence definition IDs (`E-[0-9]{3,}`). It never repairs the schema.
+Only `claims[i].evidence_ids[j]` exactly equal to an existing local evidence ID
+changes, for example `E-001` to `study:E-001`. The rule is
+`STUDY_LOCAL_EVIDENCE_REF_V1`.
+
+All other fields, evidence definitions, Markdown, locators, source identities,
+claim content and record/reference order and counts stay unchanged. Unknown IDs,
+case, whitespace, digit counts, punctuation and foreign namespaces are never
+guessed or corrected. Already prefixed references are preserved. Repeated
+normalization is idempotent and returns no changes. References are never
+deduplicated: `["E-001", "study:E-001"]` becomes two identical references and is
+then rejected by strict validation. `validate_result()` itself remains strict
+and does not normalize or ignore unknown references.
+
+Live processing preserves the existing source/cleanup guards:
+
+1. Check backend completion, transport/session/request identity, and native
+   StructuredOutput equality with the original completed tool input. Native
+   adapters can retain untrusted extracted data even on envelope failure for
+   diagnostics, but cannot normalize it or admit it to local validation.
+2. Retain the original object in private `extracted.json`. For study only, check
+   prerequisites, create the candidate, and write private `normalized.json` and
+   `normalization.json` separately. These files are required even for zero edits.
+3. Fully validate the candidate, including document links. `validation.json`
+   identifies `validated_object` and includes the normalization provenance when
+   available. A successful normalization is the separate `study_normalized`
+   event with its replacement count, never a schema/semantic failure or model
+   repair request. A later failure retains the candidate and its actual error.
+4. Finish cleanup and source guards, resolve evidence against pinned bytes,
+   compute policy, and freeze the registry/plan from the processed candidate.
+   Recheck source and review targets at existing boundaries, then publish only
+   after all required artifact and invocation writes succeed.
+
+The private journal is a provenance object plus `changes`, for example:
+
+```json
+{
+  "rule": "STUDY_LOCAL_EVIDENCE_REF_V1",
+  "path": "$.claims[0].evidence_ids[0]",
+  "before": "E-001",
+  "after": "study:E-001"
+}
+```
+
+Each change has the above shape. The provenance object contains `rule`,
+`hash_format: "canonical-json-utf8-v1"`, `replacement_count`, `extracted_sha256`
+and `normalized_sha256`. Both SHA-256 hashes cover the respective **entire wire
+objects**, serialized with Python `json.dumps(ensure_ascii=False, sort_keys=True,
+separators=(',', ':'), allow_nan=False)` and UTF-8 encoded, without BOM or trailing
+newline. They do not hash the pretty-printed artifact file bytes. Unicode and
+array order are unchanged. With zero edits both hashes are identical.
+The same provenance summary is carried in invocation metadata and every new
+published `study.json`; it is optional in the saved schema for older artifacts.
+It is never requested from the model or admitted by the wire schema. Successful
+normalization does not change `completion_status`, establish content accuracy,
+satisfy policy, or imply publication.
+
+Contract failures retain their broad `failure_kind` (`SCHEMA_ERROR`,
+`SEMANTIC_ERROR`, or `IDENTITY_MISMATCH`) for existing control flow. Specific,
+closed `details.code` values and schema-owned JSON paths distinguish:
+
+| Code | Meaning |
+| --- | --- |
+| `UNKNOWN_EVIDENCE_REFERENCE` | No definition resolves the exact reference |
+| `DUPLICATE_EVIDENCE_REFERENCE` | Repeated reference in one list |
+| `INVALID_EVIDENCE_NAMESPACE` | Explicit namespace is unavailable at this stage |
+| `CLAIMS_TYPE_MISMATCH` | `$.claims` is not an array; expected/actual types are recorded |
+| `INVALID_RECORD_ID`, `DUPLICATE_RECORD_ID`, `UNKNOWN_CLAIM_ID` | Invalid, repeated or unregistered record identity |
+| `DOCUMENT_LOCATOR_MISMATCH`, `INVALID_EVIDENCE_LINE_RANGE` | Invalid document binding or evidence line range |
+| `TASK_IDENTITY_MISMATCH`, `SOURCE_IDENTITY_MISMATCH`, `TARGET_IDENTITY_MISMATCH` | Task, source or frozen review target mismatch |
+| `UNKNOWN_REFERENCE`, `DUPLICATE_REFERENCE` | Non-evidence relations such as finding/claim links |
+| `UNKNOWN_OMISSION_AREA_ID`, `DUPLICATE_OMISSION_AREA_ID` | Unknown or repeated review-plan area |
+
+Diagnostics never echo arbitrary response values, source content or invalid IDs.
+Paths contain trusted schema keys and numeric indices. Journal IDs are validated
+local IDs and JSON encoded. Public retention messages state the contract reason,
+that text was retained, that policy checks were not completed, and the agent's
+self-assessment; they do not infer insufficient architectural evidence from a
+structure error.
+
+A string-valued `claims`, including large strings that strict JSON parsing cannot
+decode, stays a string in private `extracted.json` alongside original Markdown.
+It is rejected with `CLAIMS_TYPE_MISMATCH at $.claims; expected array, got string`.
+No nested decoding, partial extraction, empty-array substitution or model registry
+reconstruction is performed. In compromise mode only the existing unvalidated
+text-retention path applies; it never makes an accepted registry. The application
+received a wrong type; this does not establish whether the model, runtime or
+serialization produced it. Any future regeneration/reconstruction must be a
+separate result revision with full review.
+
+### Offline candidate checking versus a new acceptance pass
+
+An offline caller may load a saved **wire** study using `strict_json`, supply its
+expected identity, call `normalize_study`, and run `validate_result('study',
+candidate, context, mode)`. This reads no sources, calls no model, publishes
+nothing and grants no new COMPLETE. Keep any outputs in a separate location;
+never overwrite the historical `extracted.json`, manifest, material or review.
+
+Full reuse additionally requires the corresponding source snapshot, submodule
+state and evidence checks, all cleanup/publication guards, and a newly frozen
+review plan. Changing registry references changes its hash and requires a new
+review; an old review of an empty/different registry cannot be made applicable by
+replacing target hashes. No resume/import subsystem is implemented here.
+
+For the investigated run `20261001T120459Z-bdbe271e91`, the reported master
+`claims` was a 21,295-character string whose nested strict JSON decoding failed;
+its actual contents were not supplied and are not classified as truncated JSON,
+Markdown or an array. The 29 shown GLM violations were existing local IDs without
+prefixes. Of DeepSeek's 48 reported violations, only 30 were shown with that
+pattern; the remaining 18 are not assumed identical. Fixing that representation
+may expose further contract, source or policy failures. No historical artifacts
+or acceptance records are changed, and these observations do not establish
+whether the architecture conclusions are correct.
 
 ## Frozen registry and review plan
 

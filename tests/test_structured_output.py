@@ -54,6 +54,76 @@ class NativeStructuredOutputTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
         return [c for c in calls if c['method'] == 'POST' and c['path'].endswith('/message')]
 
+    def test_native_study_normalization_after_transport_before_frozen_plan(self):
+        from evidence import canonical, sha
+        for backend in ('xxx', 'opencode'):
+            start = len(self.prompts())
+            with patch.dict(os.environ, {'AUDIT_FAKE_LOCAL_REFS': '1'}):
+                saved, meta = self.stage(backend, 'valid', repairs=2)
+            attempt = self.destination / 'attempt-001'
+            extracted = json.loads((attempt / 'extracted.json').read_text())
+            candidate = json.loads((attempt / 'normalized.json').read_text())
+            envelope = json.loads((attempt / 'response.json').read_text())
+            self.assertEqual(extracted['claims'][0]['evidence_ids'], ['E-001'])
+            self.assertEqual(envelope['info']['structured'], extracted)
+            self.assertEqual(envelope['parts'][1]['state']['input'], extracted)
+            self.assertEqual(candidate['claims'][0]['evidence_ids'], ['study:E-001'])
+            self.assertEqual(saved['claims'], candidate['claims'])
+            self.assertEqual(saved['normalization_provenance']['replacement_count'], 1)
+            self.assertEqual(saved['review_plan']['registry_sha256'], sha(canonical(candidate['claims'])))
+            self.assertTrue(meta['publication_complete'])
+            self.assertEqual(len(self.prompts()) - start, 1)
+            self.assertEqual(meta['retry_policy']['orchestrator_repair_attempts_performed'], 0)
+
+    def test_native_transport_and_cleanup_failures_cannot_be_normalized_into_success(self):
+        original_close = opencode.Server.close
+        def fail_close(server):
+            original_close(server)
+            raise OSError('synthetic cleanup failure')
+        for backend in ('xxx', 'opencode'):
+            for scenario in ('no-final', 'foreign-session', 'foreign-request', 'tool-input-mismatch',
+                             'wrong-identity', 'source-change', 'cleanup'):
+                (self.source / 'app.py').write_text('print(1)')
+                before = len(self.prompts())
+                config = self.config() | {'result_policy': 'compromise'}
+                with self.subTest(backend=backend, scenario=scenario), \
+                        patch.object(self, 'config', return_value=config), \
+                        patch.dict(os.environ, {'AUDIT_FAKE_LOCAL_REFS': '1'}), \
+                        patch.object(opencode.Server, 'close', fail_close if scenario == 'cleanup' else original_close), \
+                        self.assertRaises((ContractError, AuditError, OSError)):
+                    self.stage(backend, scenario, repairs=2)
+                self.assertEqual(len(self.prompts()) - before, 1)
+                self.assertFalse((self.destination.parent / 'study.json').exists())
+                meta = json.loads((self.destination / 'invocation.json').read_text())
+                self.assertFalse(meta['publication_complete'])
+                if scenario not in ('cleanup', 'source-change'):
+                    self.assertFalse((self.destination / 'attempt-001/normalized.json').exists())
+
+    def test_native_string_claims_are_retained_and_never_model_repaired(self):
+        for backend in ('xxx', 'opencode'):
+            for policy in ('strict', 'compromise'):
+                before = len(self.prompts())
+                config = self.config() | {'result_policy': policy}
+                with patch.object(self, 'config', return_value=config):
+                    if policy == 'strict':
+                        with self.assertRaises(ContractError) as caught:
+                            self.stage(backend, 'claims-string', repairs=2)
+                        self.assertEqual(caught.exception.details['code'], 'CLAIMS_TYPE_MISMATCH')
+                    else:
+                        saved, meta = self.stage(backend, 'claims-string', repairs=2)
+                        self.assertIsNone(saved)
+                        self.assertIn('CLAIMS_TYPE_MISMATCH', meta['usable_material']['contract_failure']['message'])
+                self.assertEqual(len(self.prompts()) - before, 1)
+                self.assertFalse((self.destination.parent / 'study.json').exists())
+                self.assertFalse((self.destination / 'attempt-001/normalized.json').exists())
+
+    def test_native_review_bare_references_are_not_normalized(self):
+        for backend in ('xxx', 'opencode'):
+            with patch.dict(os.environ, {'AUDIT_FAKE_LOCAL_REFS': '1'}), self.assertRaises(ContractError) as caught:
+                self.stage(backend, 'valid', stage='review')
+            self.assertEqual(caught.exception.details['code'], 'UNKNOWN_EVIDENCE_REFERENCE')
+            self.assertFalse((self.destination / 'attempt-001/normalized.json').exists())
+
     def test_legacy_contract_never_triggers_invented_registry_repair(self):
         for backend in ('xxx', 'opencode'):
             for policy in ('strict', 'compromise'):

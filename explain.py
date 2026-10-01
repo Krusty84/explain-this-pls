@@ -41,6 +41,7 @@ import xxx
 from structured_output import blocked_comparison, repair_prompt, required_unresolved, retry_policy, validate_repair
 from final_report import recoverable_material, stage_document, usable_study, report_entries, comparison_possible, render_final_report
 from ledger import prepare_result, review_context
+from study_normalization import normalize_study, normalization_provenance
 from evidence import source_catalog, SourceChanged, open_source_directory
 from contracts import CONTRACT_VERSION, ARTIFACT_VERSION, has_ledger_structure, validate_schema
 from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
@@ -1213,8 +1214,15 @@ class Runner:
                         and meta.get('validation_failed') and meta.get('backend_result_valid')
                         and exc.failure_kind in ('SCHEMA_ERROR', 'SEMANTIC_ERROR')):
                     invalid = strict_json((attempt / 'extracted.json').read_text())
+                    validation = strict_json((attempt / 'validation.json').read_text())
+                    checked = (strict_json((attempt / 'normalized.json').read_text())
+                               if validation.get('validated_object') == 'normalized.json' else invalid)
                     candidate = recoverable_material(stage, invalid, context, self.mode,
-                        result_diagnostics(stage, invalid, context, self.mode))
+                        result_diagnostics(stage, checked, context, self.mode))
+                    if candidate is not None:
+                        candidate['contract_failure'] = asdict(diagnostic(exc))
+                        if meta.get('normalization_provenance'):
+                            candidate['normalization_provenance'] = meta['normalization_provenance']
                     candidate_attempt = str(attempt)
                 can_repair = (exc.failure_kind == 'SCHEMA_ERROR' and repair_index < limit
                               and meta.get('native_envelope_valid'))
@@ -1252,22 +1260,39 @@ class Runner:
                 correction = repair_prompt(context, self.schemas[stage], invalid, details, original=repair_source)
 
     def validate_attempt(self, stage, data, context, attempt, meta, repair_source=None):
-        details = schema_diagnostics(data, self.schemas[stage], private=True)
-        validation = result_diagnostics(stage, data, context, self.mode) | {'schema_diagnostics': details, 'valid': False}
+        candidate = data
+        validation = {'valid': False, 'validated_object': 'extracted.json'}
         try:
-            validate_result(stage, data, context, self.mode)
+            if stage == 'study':
+                candidate, changes = normalize_study(data, context, self.mode)
+                provenance = normalization_provenance(data, candidate, changes)
+                # Required artifacts precede validation/publication; extracted.json
+                # remains the adapter's original object, including on failure.
+                save_json(attempt / 'normalized.json', candidate)
+                save_json(attempt / 'normalization.json', provenance | {'changes': changes})
+                meta['normalization_provenance'] = provenance
+                validation.update(validated_object='normalized.json', normalization_provenance=provenance)
+                if changes:
+                    self.reporter.emit('study_normalized', **self.stage_context(stage, context),
+                                       rule=provenance['rule'], replacement_count=len(changes))
+            validate_result(stage, candidate, context, self.mode)
             if repair_source is not None:
+                # Compare model outputs, not edits made by our deterministic rule.
                 validate_repair(repair_source, data, self.schemas[stage])
             validation['valid'] = True
         except BaseException as exc:
+            validation.update(result_diagnostics(stage, candidate, context, self.mode))
+            validation['schema_diagnostics'] = schema_diagnostics(candidate, self.schemas[stage], private=True)
             validation['error'] = asdict(diagnostic(exc))
             meta['local_validation'] = False
             meta['validation_failed'] = True
             with contextlib.suppress(OSError):
                 save_json(attempt / 'validation.json', validation)
             raise
+        validation.update(result_diagnostics(stage, candidate, context, self.mode))
         meta['local_validation'] = True
         save_json(attempt / 'validation.json', validation)
+        return candidate
 
     def store_stage(self, item, stage, data, meta, context):
         item[stage], item[stage + '_invocation'] = data, meta
@@ -1277,7 +1302,9 @@ class Runner:
             detail = meta['error'] | self.stage_context(stage, context) | {'phase': 'stage'}
             self.manifest.setdefault('diagnostics', []).append(detail)
             self.reporter.emit('stage_recovered', level=30, **self.stage_context(stage, context),
-                               message='Unvalidated text retained with explicit caveats.')
+                               message=material['contract_failure']['message'] +
+                               ' Text retained; policy checks not completed. Agent self-assessment: ' +
+                               (material['completion_status'] or 'UNAVAILABLE') + '.')
         item[stage + '_usable'] = usable_study(item) if stage == 'study' else bool(stage_document(item, stage))
         if material is not None and not self.cfg['continue_on_error']:
             raise ContractError('Stopped after retaining unvalidated material (continue_on_error=false).')
@@ -1425,7 +1452,7 @@ class Runner:
                                                  native_retries)
                             meta['native_envelope_valid'] = True
                             meta['backend_result_valid'] = True
-                            self.validate_attempt(stage, data, context, attempt, meta, repair_source)
+                            data = self.validate_attempt(stage, data, context, attempt, meta, repair_source)
                         except BaseException as exc:
                             error = exc
                             raise
@@ -1457,7 +1484,7 @@ class Runner:
                                 meta['model_actual'] = next(iter(model_usage))
                             meta['model_actual_source'] = 'backend modelUsage; may include multiple models'
                         save_json(attempt / 'extracted.json', data)
-                        self.validate_attempt(stage, data, context, attempt, meta)
+                        data = self.validate_attempt(stage, data, context, attempt, meta)
                 finally:
                     if self.folder:
                         self.folder.assert_snapshot(context['source_fingerprint'])
@@ -1468,6 +1495,8 @@ class Runner:
             # Publish after the CLI exits and temporary invocation files are removed.
             try:
                 data = prepare_result(stage, data, context, evidence_pins)
+                if stage == 'study':
+                    data['normalization_provenance'] = meta['normalization_provenance']
             except SourceChanged as exc:
                 meta['source_integrity_verified'] = False
                 meta['source_check_status'] = 'CHANGED_DURING_EVIDENCE_RESOLUTION'

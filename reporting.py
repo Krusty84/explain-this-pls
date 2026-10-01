@@ -481,6 +481,11 @@ class Reporter(NullReporter):
     def render(self, item):
         c, name = item.context, item.event
         s = self.display
+        if name == 'study_normalized':
+            return [f"[RUN] Study evidence references normalized: {s(c['replacement_count'])} replacement(s); "
+                    'contract, source and policy checks remain required.']
+        if name == 'stage_recovered':
+            return ['[WARN] ' + s(c['message'])]
         stage = ' / '.join(s(value) for value in (c.get('source_name') or c.get('branch'),
                                                 c.get('stage'), c.get('backend')) if value)
         checks = {'configuration': 'Configuration', 'git': 'Git version and selected branches',
@@ -532,7 +537,7 @@ class Reporter(NullReporter):
                        'No material issues reported for required registry; policy checks satisfied'
                        if c.get('stage') == 'review' and status == 'COMPLETE' else
                        'Reports-only comparison generated; agent reports completion'
-                       if status == 'COMPLETE' else 'Processing incomplete or evidence insufficient')
+                       if status == 'COMPLETE' else 'Policy checks not completed or not satisfied; see diagnostics')
             return [label + stage + ' — ' + self.status(status, self.stderr) + ': ' + meaning +
                     ' | Elapsed: ' + duration(c['elapsed_seconds'])]
         if name == 'stage_skipped':
@@ -575,7 +580,7 @@ class Reporter(NullReporter):
         status = lambda value: self.status(value, self.stdout)
         meaning = ('Local launch prerequisites checked. Source analysis was not performed.' if result['status'] == 'PREFLIGHT_OK' else
                    'Policy checks satisfied; factual correctness is not established.' if result['status'] == 'COMPLETE' else
-                   'Processing incomplete or evidence insufficient; see limitations and diagnostics.')
+                   'Policy checks not completed or not satisfied; see limitations and diagnostics.')
         lines = [status('PREFLIGHT PASSED' if result['status'] == 'PREFLIGHT_OK' else result['status']) + ': ' + meaning,
                  'Elapsed: ' + duration(elapsed)]
         if result['status'] == 'PREFLIGHT_OK':
