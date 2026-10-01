@@ -21,6 +21,8 @@ import xxx
 from structured_output import blocked_comparison, required_unresolved
 import test_opencode_http as http_fixtures
 from test_explain import doc, review
+from fixtures.ledger_response import response
+from ledger import review_context
 import test_xxx as xxx_fixtures
 
 
@@ -40,7 +42,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
         context = {'source_mode': 'folder', 'source_directory': str(self.source),
                    'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
         if stage == 'review':
-            context['architecture_document'] = {'report_markdown': '# Synthetic input'}
+            context = review_context(response(context), context)
         self.destination = destination
         self.last_runner = runner
         env = self.env | {'AUDIT_FAKE_BACKEND': backend, 'AUDIT_FAKE_CASE': scenario}
@@ -51,6 +53,23 @@ class NativeStructuredOutputTests(unittest.TestCase):
     def prompts(self):
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
         return [c for c in calls if c['method'] == 'POST' and c['path'].endswith('/message')]
+
+    def test_legacy_contract_never_triggers_invented_registry_repair(self):
+        for backend in ('xxx', 'opencode'):
+            for policy in ('strict', 'compromise'):
+                config = self.config() | {'result_policy': policy}
+                before = len(self.prompts())
+                with self.subTest(backend=backend, policy=policy), patch.object(self, 'config', return_value=config):
+                    if policy == 'strict':
+                        with self.assertRaises(ContractError) as caught:
+                            self.stage(backend, 'legacy', repairs=2)
+                        self.assertIn('Expected the current evidence ledger structure', caught.exception.safe_message)
+                    else:
+                        data, meta = self.stage(backend, 'legacy', repairs=2)
+                        self.assertIsNone(data)
+                        self.assertNotIn('claims', meta['usable_material'])
+                        self.assertFalse(meta['local_validation'])
+                self.assertEqual(len(self.prompts()) - before, 1)
 
     def test_claim_counts_and_no_normalization_even_empty(self):
         for backend in ('xxx', 'opencode'):
@@ -77,8 +96,8 @@ class NativeStructuredOutputTests(unittest.TestCase):
                     ('repair-ok', 1, None, 2),
                     ('repair-invalid', 1, 'SCHEMA_ERROR', 2),
                     ('repair-invalid', 2, 'SCHEMA_ERROR', 3),
-                    ('repair-semantic', 1, 'SEMANTIC_ERROR', 2),
-                    ('wrong-identity', 2, 'SEMANTIC_ERROR', 1),
+                    ('repair-semantic', 1, 'IDENTITY_MISMATCH', 2),
+                    ('wrong-identity', 2, 'IDENTITY_MISMATCH', 1),
                     ('foreign-request', 2, 'TRANSPORT_ERROR', 1),
                     ('backend-error', 2, 'BACKEND_ERROR', 1),
                     ('prose-only', 2, 'INCOMPLETE_OUTPUT', 1)):
@@ -248,7 +267,9 @@ class ComparisonAcceptanceTests(unittest.TestCase):
         context = self.context()
         for item in context['branches'][1:]:
             item['review'] = review(item['branch'], 'abc')
-        self.assertEqual(required_unresolved(context), ['master'])
+        # Raw wire fixtures have no orchestrator checks/publication record and
+        # cannot be promoted merely by attaching a review response.
+        self.assertEqual(required_unresolved(context), context['requested_branches'])
         data = blocked_comparison(context)
         data['unresolved_branches'] = []
         with self.assertRaises(ContractError):
@@ -300,8 +321,11 @@ class NativeGitComparisonTests(unittest.TestCase):
                 inputs = json.loads((self.run_dir / 'comparison/inputs.json').read_text())
                 self.assertEqual(inputs['required_unresolved_branches'], ['main', 'other'])
                 self.assertTrue(all(not b['accepted'] for b in inputs['branches']))
-                validate_result('compare', result, inputs)
-                self.assertEqual((self.run_dir / 'comparison/BRANCH_COMPARISON.md').read_text(), result['report_markdown'])
+                wire = {k: result[k] for k in SCHEMAS['compare']['properties']}
+                validate_result('compare', wire, inputs)
+                from presentation import render_stage
+                self.assertEqual((self.run_dir / 'comparison/BRANCH_COMPARISON.md').read_text(), render_stage('compare', result, 'Russian'))
+                self.assertEqual((self.run_dir / 'comparison/compare.original.md').read_text(), result['report_markdown'])
                 self.assertEqual(self.git('rev-parse', 'HEAD'), original)
                 self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
                 self.assertEqual(self.git('status', '--porcelain'), '')

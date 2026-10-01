@@ -73,7 +73,36 @@
           "evidence_refs": {
             "type": "array",
             "items": {
-              "type": "string"
+              "type": "object",
+              "properties": {
+                "branch": {
+                  "type": "string"
+                },
+                "artifact": {
+                  "type": "string",
+                  "enum": [
+                    "study",
+                    "review"
+                  ]
+                },
+                "claim_id": {
+                  "type": "string"
+                },
+                "document_sha256": {
+                  "type": "string"
+                },
+                "registry_sha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "branch",
+                "artifact",
+                "claim_id",
+                "document_sha256",
+                "registry_sha256"
+              ],
+              "additionalProperties": false
             }
           },
           "explanation": {

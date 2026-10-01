@@ -107,7 +107,7 @@ class XXXTests(unittest.TestCase):
                 self.assertIn(manifest['diagnostics'][0]['failure_kind'], ('BACKEND_INCOMPATIBLE', 'TRANSPORT_ERROR'))
 
     def test_invalid_results_are_never_repaired_or_published(self):
-        for scenario, kind in (('schema-error', 'SCHEMA_ERROR'), ('wrong-identity', 'SEMANTIC_ERROR'),
+        for scenario, kind in (('schema-error', 'SCHEMA_ERROR'), ('wrong-identity', 'IDENTITY_MISMATCH'),
                 ('backend-error', 'BACKEND_ERROR'), ('no-final', 'INCOMPLETE_OUTPUT'),
                 ('foreign-request', 'TRANSPORT_ERROR'), ('prose-only', 'INCOMPLETE_OUTPUT')):
             with self.subTest(scenario=scenario):

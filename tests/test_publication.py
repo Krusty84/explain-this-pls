@@ -13,6 +13,7 @@ from unittest.mock import patch
 from contracts import ContractError
 from explain import Folder, Runner, atomic
 from test_folder import FolderFixture
+from fixtures.ledger_response import response
 
 
 class PublicationTests(FolderFixture):
@@ -20,8 +21,7 @@ class PublicationTests(FolderFixture):
         runner = Runner(self.config(), self.base / 'run')
         context = {'source_directory': str(self.source),
                    'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
-        data = context | {'task': 'architecture_documentation', 'completion_status': 'COMPLETE',
-                          'report_markdown': '# Report', 'limitations': []}
+        data = response(context)
         return runner, context, data
 
     @staticmethod
@@ -71,9 +71,65 @@ class PublicationTests(FolderFixture):
         self.assertEqual(code, 1)
         self.assertEqual(manifest['status'], 'FAILED')
         self.assertFalse(manifest['accepted'])
+        self.assertFalse(manifest['publication_complete'])
         self.assertIsNone(manifest['study'])
         summary = json.loads((runner.run_dir / 'study.logs/invocation.json').read_text())
         self.assertEqual(summary['status'], 'FAILED')
+
+    def test_document_bytes_plan_and_wire_are_separate(self):
+        runner, context, data = self.prepare()
+        # Keep CRLF and final blank lines exactly; locator uses normalized LF.
+        data['report_markdown'] = data['report_markdown'].replace('\n', '\r\n') + '\r\n'
+        with patch('explain.process', return_value=self.result(data)):
+            saved, meta = runner.invoke('study', context, runner.run_dir / 'study.logs')
+        import hashlib
+        self.assertEqual((runner.run_dir / 'ARCHITECTURE.md').read_bytes(), data['report_markdown'].encode())
+        self.assertEqual(saved['review_plan']['document_sha256'], hashlib.sha256(data['report_markdown'].encode()).hexdigest())
+        wire = json.loads((runner.run_dir / 'study.logs/attempt-001/extracted.json').read_text())
+        self.assertEqual(wire, data)
+        self.assertNotIn('program_checks', wire)
+        self.assertNotIn('contract_version', wire)
+        self.assertNotIn('contract_version', saved)
+        self.assertNotIn('artifact_version', saved)
+        self.assertNotIn('contract_version', saved['review_plan'])
+        self.assertEqual(meta['contract_version'], 'evidence-ledger-v1')
+        self.assertEqual(meta['artifact_version'], 'evidence-ledger-artifacts-v1')
+        self.assertTrue(meta['publication_complete'])
+
+    def test_forged_review_target_is_not_recovered_even_with_schema_error(self):
+        from final_report import recoverable_material
+        from ledger import review_context, prepare_result
+        from contracts import result_diagnostics
+        runner, context, data = self.prepare()
+        doc = prepare_result('study', data, context)
+        ctx = review_context(doc, context)
+        review = response(ctx)
+        review['target']['document_sha256'] = 'wrong'
+        review['extra'] = True
+        self.assertIsNone(recoverable_material('review', review, ctx, 'folder',
+                          result_diagnostics('review', review, ctx, 'folder')))
+
+    def test_changed_document_or_frozen_files_cannot_receive_old_review(self):
+        from explain import AuditError
+        runner, context, data = self.prepare()
+        with patch('explain.process', return_value=self.result(data)):
+            saved, _ = runner.invoke('study', context, runner.run_dir / 'study.logs')
+        ctx = runner.freeze_review(saved, context, runner.run_dir)
+        for name in ('ARCHITECTURE.md', 'claim.registry.json', 'review.plan.json'):
+            path = runner.run_dir / name
+            original = path.read_bytes()
+            path.write_bytes(original + b' ')
+            with self.assertRaises(AuditError): runner.assert_review_files(ctx, runner.run_dir)
+            path.write_bytes(original)
+        raw = response(ctx)
+        def tamper(*args, **kwargs):
+            (runner.run_dir / 'ARCHITECTURE.md').write_text('changed during review')
+            return self.result(raw)
+        with patch('explain.process', side_effect=tamper), self.assertRaises(AuditError):
+            runner.invoke('review', ctx, runner.run_dir / 'review.logs')
+        self.assertFalse((runner.run_dir / 'review.json').exists())
+        meta = json.loads((runner.run_dir / 'review.logs/invocation.json').read_text())
+        self.assertFalse(meta['publication_complete'])
 
 
 if __name__ == '__main__':

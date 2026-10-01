@@ -60,8 +60,8 @@ processes/startup, module boundaries, runtime scenarios, data/schema/writers,
 integrations, configuration/feature flags, dependencies, constraints and exceptions.
 
 Classify each material difference:
-CONFIRMED_DIFFERENCE: supplied, independently supported evidence establishes both
-sides and their difference. This is confirmed within the supplied reports, not by
+CONFIRMED_DIFFERENCE: according to your assessment, supplied report evidence supports both
+sides and their difference. This is an agent assessment within the supplied reports, without
 new source inspection. Include baseline and branch evidence references.
 REPORTED_UNVERIFIED: reports suggest a difference but verification or one side is
 insufficient. Say what must be checked.
@@ -97,7 +97,7 @@ Do not claim to have run tests, inspected deployments, or read source in this st
 ## Output contract
 
 Return the object specified by the appended schema through the output mechanism
-specified by the orchestrator. Do not add schema_version. Put the entire
+specified by the orchestrator. Put the entire
 comparison in report_markdown. compared_branches must list every requested non-
 baseline branch exactly once, including branches you can only discuss as unresolved.
 Return structured differences with IDs D-001 etc., branch, category, classification,
@@ -111,3 +111,15 @@ input/coverage is missing. BLOCKED means no meaningful baseline comparison is po
 Do not report COMPLETE when any required branch lacks a complete accepted document
 and review. Review PASS is necessary but not sufficient to confirm an individual
 contrast. Include concrete limitations for PARTIAL/BLOCKED.
+
+Structured evidence_refs must resolve on both sides: branch, artifact ("study"
+or "review"), claim_id, document_sha256 and registry_sha256 from that branch's
+frozen plan. Two references to one side do not justify a strong contrast.
+Each side needs a referenced FACT assessed as SUPPORTED in its review. An accepted
+hypothesis/unknown caveat is not factual support for a strong implementation contrast.
+Legacy, recovered and incomplete inputs cannot support CONFIRMED_DIFFERENCE.
+Empty evidence_refs are allowed for explicitly insufficient/unverified material.
+Do not return computed fields. Python renders the difference table from JSON;
+do not duplicate it in Markdown. All support is according to the comparing agent,
+using supplied reports only; no source inspection occurs here. Policy satisfaction
+does not establish factual correctness. Missing comparison is not "no differences".

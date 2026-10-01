@@ -40,6 +40,11 @@ import opencode
 import xxx
 from structured_output import blocked_comparison, repair_prompt, required_unresolved, retry_policy, validate_repair
 from final_report import recoverable_material, stage_document, usable_study, report_entries, comparison_possible, render_final_report
+from ledger import prepare_result, review_context
+from evidence import source_catalog, SourceChanged, open_source_directory
+from contracts import CONTRACT_VERSION, ARTIFACT_VERSION, has_ledger_structure, validate_schema
+from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
+from presentation import render_stage
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ('study', 'review', 'compare')
@@ -802,10 +807,10 @@ class Repository:
                             'Gitlink/submodule SHA changes are not file diffs of the nested repositories.']}
 
 class Folder:
-    def __init__(self, path: Path):
-        self.path = path.resolve()
+    def __init__(self, path: Path, *, canonical=False):
+        self.path = path if canonical else path.resolve()
 
-    def snapshot(self) -> dict:
+    def snapshot(self, *, exclude_git=False) -> dict:
         """Inventory without following links; stream file contents through SHA-256."""
         entries = []
 
@@ -822,6 +827,8 @@ class Folder:
             entries.append({'path': relative, 'type': 'directory',
                             'mode': format(stat.S_IMODE(before.st_mode), '04o')})
             for name in sorted(os.listdir(fd)):
+                if exclude_git and name == '.git':
+                    continue
                 child = name if relative == '.' else relative + '/' + name
                 info = os.stat(name, dir_fd=fd, follow_symlinks=False)
                 entry = {'path': child, 'mode': format(stat.S_IMODE(info.st_mode), '04o')}
@@ -852,7 +859,7 @@ class Folder:
             unchanged(before, os.fstat(fd), relative)
 
         try:
-            fd = os.open(self.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            fd = open_source_directory(self.path)
             try:
                 before = os.fstat(fd)
                 directory(fd, '.')
@@ -1064,6 +1071,8 @@ class Runner:
         status = data['completion_status']
         if stage == 'review' and data['verdict'] != 'PASS':
             status = 'PARTIAL'
+        if stage == 'compare' and status == 'COMPLETE' and not data.get('program_checks', {}).get('policy_satisfied'):
+            status = 'PARTIAL'
         self.reporter.emit('stage_completed', **self.stage_context(stage, context), status=status,
                            elapsed_seconds=self.reporter.clock() - started)
         self.active_stage = {}
@@ -1163,7 +1172,22 @@ class Runner:
                          code='BACKEND_INCOMPATIBLE')
 
     def invoke(self, stage: str, context: dict, destination: Path) -> tuple[dict | None, dict]:
+        context = dict(context)
+        if stage != 'compare':
+            context['sources'] = source_catalog(context)
         budget = Budget(self.execution['stage_timeout_seconds'], self.execution['idle_timeout_seconds'])
+        evidence_pins = None
+        if stage != 'compare':
+            # Pin actual checkout bytes (including Git's legitimate EOL transforms),
+            # not blob bytes. No Git control/history files enter this inventory.
+            if self.repo:
+                self.repo.assert_expected()
+            inventory = (self.folder or Folder(self.source_path, canonical=True)).snapshot(exclude_git=self.repo is not None)
+            if self.folder and inventory['source_fingerprint'] != context['source_fingerprint']:
+                raise UnsafeRepository('Source folder changed from the pinned snapshot before invocation.')
+            if self.repo:
+                self.repo.assert_expected()
+            evidence_pins = {e['path']: e['sha256'] for e in inventory['entries'] if e['type'] == 'file'}
         native = self.cfg['_agents'][stage]['backend'] in ('xxx', 'opencode')
         limit = self.execution['structured_output_repair_attempts'] if native else 0
         correction = None
@@ -1175,7 +1199,7 @@ class Runner:
             try:
                 return self._invoke_once(stage, context, destination, budget=budget,
                                          repair_index=repair_index, correction=correction,
-                                         repair_model=repair_model, repair_source=repair_source)
+                                         repair_model=repair_model, repair_source=repair_source, evidence_pins=evidence_pins)
             except ContractError as exc:
                 if not (destination / 'invocation.json').is_file():
                     raise
@@ -1194,6 +1218,14 @@ class Runner:
                     candidate_attempt = str(attempt)
                 can_repair = (exc.failure_kind == 'SCHEMA_ERROR' and repair_index < limit
                               and meta.get('native_envelope_valid'))
+                if can_repair:
+                    invalid = strict_json((attempt / 'extracted.json').read_text())
+                    keys = (('source_directory', 'source_fingerprint') if self.mode == 'folder' else
+                            ('baseline_branch', 'baseline_commit') if stage == 'compare' else ('branch', 'source_commit'))
+                    can_repair = (has_ledger_structure(stage, invalid)
+                        and invalid.get('task') == self.schemas[stage]['properties']['task']['enum'][0]
+                        and all(invalid.get(key) == context.get(key) for key in keys)
+                        and (stage != 'review' or invalid.get('target') == context.get('review_target')))
                 if not can_repair:
                     if candidate is None:
                         raise
@@ -1251,10 +1283,43 @@ class Runner:
             raise ContractError('Stopped after retaining unvalidated material (continue_on_error=false).')
 
     def publish_result(self, stage, data, destination):
-        report = data['report_markdown'].rstrip() + '\n'
+        try:
+            validate_schema(data, (SAVED_FOLDER_SCHEMAS if self.mode == 'folder' else SAVED_SCHEMAS)[stage])
+        except ContractError as exc:
+            raise AuditError('Computed artifact failed local validation.', code='ARTIFACT_CONTRACT_ERROR',
+                             failure_layer='publication') from exc
+        # Study bytes are the reviewed document identity; never normalize them.
+        report = data['report_markdown'] if stage == 'study' else render_stage(stage, data, self.cfg.get('output_language'))
         atomic(destination.parent / ARTIFACTS[stage], report)
+        atomic(destination.parent / (stage + '.original.md'), data['report_markdown'])
+        if stage == 'study':
+            atomic(destination.parent / 'study.annotated.md', render_stage(stage, data, self.cfg.get('output_language')))
+            save_json(destination.parent / 'claim.registry.json', data['claims'])
+            save_json(destination.parent / 'review.plan.json', data['review_plan'])
         save_json(destination.parent / (stage + '.json'), data)
         return digest(report.encode())
+
+    def assert_review_files(self, context, directory):
+        if not context.get('document_strictly_valid'):
+            return
+        expected = {'ARCHITECTURE.md': context['architecture_document']['report_markdown'].encode('utf-8'),
+            'claim.registry.json': (json.dumps(context['claim_registry'], ensure_ascii=False, indent=2) + '\n').encode(),
+            'review.plan.json': (json.dumps(context['review_plan'], ensure_ascii=False, indent=2) + '\n').encode()}
+        for name, content in expected.items():
+            fd = os.open(directory / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'rb') as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode) or stream.read(len(content) + 1) != content:
+                    raise AuditError('Published document, registry or review plan changed.',
+                                     code='REVIEW_TARGET_CHANGED', failure_layer='integrity')
+
+    def freeze_review(self, doc, context, directory):
+        result = review_context(doc, context)
+        if result['document_strictly_valid']:
+            self.assert_review_files(result, directory)
+        else:
+            save_json(directory / 'claim.registry.json', result['claim_registry'])
+            save_json(directory / 'review.plan.json', result['review_plan'])
+        return result
 
     def publish_blocked_comparison(self, context, destination):
         data = blocked_comparison(context)
@@ -1267,18 +1332,19 @@ class Runner:
             validate_result('compare', data, context)
             meta['local_validation'] = True
             self.repo.assert_expected()
+            data = prepare_result('compare', data, context | {'generated_by': 'orchestrator'})
             meta['report_sha256'] = self.publish_result('compare', data, destination)
-            meta.update(status='SUCCEEDED', finished_at=now())
+            meta.update(status='SUCCEEDED', finished_at=now(), publication_complete=True)
             save_json(destination / 'invocation.json', meta)
             return data, meta
         except BaseException as exc:
-            meta.update(status='FAILED', error=asdict(diagnostic(exc)), finished_at=now())
+            meta.update(status='FAILED', error=asdict(diagnostic(exc)), finished_at=now(), publication_complete=False)
             with contextlib.suppress(OSError):
                 save_json(destination / 'invocation.json', meta)
             raise
 
     def _invoke_once(self, stage, context, destination, *, budget, repair_index=0,
-                     correction=None, repair_model=None, repair_source=None):
+                     correction=None, repair_model=None, repair_source=None, evidence_pins=None):
         agent = self.cfg['_agents'][stage]
         template = Path(self.cfg['_prompt_paths'][stage]).read_text()
         output_instruction = ('Use the StructuredOutput tool with the supplied schema. Do not duplicate the result in ordinary text.'
@@ -1311,6 +1377,9 @@ class Runner:
         meta.update(attempt=attempt.name, artifact_directory=str(attempt), api_version=None,
                     model_actual=None, request_id=None, session_id=None, message_id=None,
                     finish_reason=None, output_bytes=None, execution=self.execution)
+        meta.update(contract_version=CONTRACT_VERSION, artifact_version=ARTIFACT_VERSION,
+                    model_actual_source='unknown: backend has not reported model identity',
+                    review_quality='NOT_MEASURED', publication_complete=False)
         native_retries = 0 if agent['backend'] == 'xxx' else self.execution['opencode_format_retries']
         if agent['backend'] in ('xxx', 'opencode'):
             meta['retry_policy'] = retry_policy(self.execution['structured_output_repair_attempts'],
@@ -1381,6 +1450,12 @@ class Runner:
                         data, provider_meta = parse_backend(agent['backend'], r['stdout'].decode('utf-8'))
                         meta['backend_result_valid'] = True
                         meta['provider_metadata'] = provider_meta
+                        model_usage = provider_meta.get('modelUsage')
+                        if type(model_usage) is dict and model_usage:
+                            meta['models_reported'] = list(model_usage)
+                            if len(model_usage) == 1:
+                                meta['model_actual'] = next(iter(model_usage))
+                            meta['model_actual_source'] = 'backend modelUsage; may include multiple models'
                         save_json(attempt / 'extracted.json', data)
                         self.validate_attempt(stage, data, context, attempt, meta)
                 finally:
@@ -1391,8 +1466,25 @@ class Runner:
                     meta['source_integrity_verified'] = True
                 budget.check()
             # Publish after the CLI exits and temporary invocation files are removed.
+            try:
+                data = prepare_result(stage, data, context, evidence_pins)
+            except SourceChanged as exc:
+                meta['source_integrity_verified'] = False
+                meta['source_check_status'] = 'CHANGED_DURING_EVIDENCE_RESOLUTION'
+                raise UnsafeRepository('Source changed during evidence resolution.', code='SOURCE_CHANGED',
+                                       failure_kind='SOURCE_CHANGED', failure_layer='integrity') from exc
+            if self.folder:
+                self.folder.assert_snapshot(context['source_fingerprint'])
+            else:
+                self.repo.assert_expected()
+            meta['source_check_status'] = 'MATCHED_AT_BOUNDARIES'
+            budget.check()
+            if agent['backend'] in ('xxx', 'opencode') and meta.get('model_actual'):
+                meta['model_actual_source'] = 'backend assistant-message metadata'
+            if stage == 'review':
+                self.assert_review_files(context, destination.parent)
             report_hash = self.publish_result(stage, data, destination)
-            meta.update(status='SUCCEEDED', finished_at=now(), report_sha256=report_hash)
+            meta.update(status='SUCCEEDED', finished_at=now(), report_sha256=report_hash, publication_complete=True)
             meta['duration_seconds'] = round(budget.clock() - budget.started, 3)
             save_json(attempt / 'invocation.json', meta)
             save_json(destination / 'invocation.json', meta)
@@ -1405,7 +1497,7 @@ class Runner:
                 meta['retry_policy'] = retry_policy(self.execution['structured_output_repair_attempts'],
                                                   repair_index - 1, native_retries)
             meta.update(status='FAILED', finished_at=now(), error=asdict(diagnostic(exc)),
-                        duration_seconds=round(budget.clock() - budget.started, 3))
+                        publication_complete=False, duration_seconds=round(budget.clock() - budget.started, 3))
             # A failing diagnostic write must not mask the original exception.
             with contextlib.suppress(OSError):
                 save_json(attempt / 'invocation.json', meta)
@@ -1423,6 +1515,9 @@ class Runner:
                 except OSError as exc:
                     self.record_error(self.manifest, exc, phase='restoration')
         manifest['result_policy'] = 'compromise' if self.compromise else 'strict'
+        manifest.update(contract_version=CONTRACT_VERSION, artifact_version=ARTIFACT_VERSION,
+            acceptance_meaning='accepted=true means policy checks satisfied; factual correctness is not established.',
+            review_quality='NOT_MEASURED', source_check_meaning='MATCHED_AT_BOUNDARIES means source state matched at performed checks only.')
         manifest['critical_failure'] = self.critical_failure
         if not check_only:
             entries = report_entries(manifest, self.source, self.mode)
@@ -1431,7 +1526,8 @@ class Runner:
                     manifest['status'], code = 'FAILED', 1
                 elif (all(accepted(b) for b in entries) and not manifest.get('diagnostics')
                       and (self.mode == 'folder' or len(entries) == 1
-                           or manifest.get('comparison', {}).get('completion_status') == 'COMPLETE')):
+                           or (manifest.get('comparison', {}).get('program_checks', {}).get('policy_satisfied')
+                               and manifest.get('comparison_invocation', {}).get('publication_complete')))):
                     manifest['status'], code = 'COMPLETE', 0
                 else:
                     manifest['status'], code = 'PARTIAL', 2
@@ -1448,6 +1544,11 @@ class Runner:
                 manifest.update(status='FAILED', critical_failure=True)
                 code = 130 if code == 130 else 1
         manifest['exit_code'] = code
+        # This last manifest write commits the run's publication record. Individual
+        # file replacements above are atomic; the group is not a transaction.
+        manifest['publication_complete'] = code in (0, 2)
+        if self.critical_failure and 'accepted' in manifest:
+            manifest['accepted'] = False
         save_json(self.run_dir / 'manifest.json', manifest)
         return manifest, code
 
@@ -1458,6 +1559,7 @@ class Runner:
             'baseline_branch': self.source['baseline_branch'], 'status': 'RUNNING',
             'isolation': 'cli-native-permissions', 'platform': sys.platform,
             'branches': [], 'errors': []}
+        manifest['publication_complete'] = False
         self.manifest = manifest
         def persist():
             if hasattr(self.repo, 'journal'):
@@ -1534,9 +1636,7 @@ class Runner:
                         stage_context = dict(context)
                         if stage == 'review':
                             doc = stage_document(item, 'study')
-                            stage_context['architecture_document'] = doc
-                            stage_context['document_strictly_valid'] = item['study'] is not None
-                            stage_context['document_sha256'] = digest((doc['report_markdown'].rstrip() + '\n').encode())
+                            stage_context = self.freeze_review(doc, context, branch_dir)
                         try:
                             started = self.stage_started(stage, context)
                             self.repo.assert_snapshot(commit)
@@ -1593,7 +1693,11 @@ class Runner:
                     'scope': 'reports-only comparison; source inspection is outside task scope',
                     'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'submodules', 'study', 'review',
                                                        'study_material', 'review_material', 'errors')} |
-                                 {'accepted': accepted(b)} for b in entries],
+                                 {'accepted': accepted(b)} |
+                                 {stage + '_invocation': {k: (b.get(stage + '_invocation') or {}).get(k) for k in
+                                    ('publication_complete', 'contract_version', 'artifact_version', 'status', 'model_requested', 'model_actual',
+                                     'model_actual_source', 'source_check_status', 'review_quality')}
+                                  for stage in ('study', 'review')} for b in entries],
                     'git_deltas': {b: self.repo.delta(pins[baseline], pins[b]) for b in self.source['branches'] if b != baseline}}
                 bundle['required_unresolved_branches'] = required_unresolved(bundle)
                 comp_dir = self.run_dir / 'comparison'
@@ -1619,7 +1723,7 @@ class Runner:
                 manifest['comparison'] = comparison
                 manifest['comparison_invocation'] = meta
                 self.stage_finished('compare', bundle, comparison, started)
-                quality_ok = quality_ok and comparison['completion_status'] == 'COMPLETE'
+                quality_ok = quality_ok and comparison['program_checks']['policy_satisfied'] and meta['publication_complete']
             failed = any(b['errors'] for b in entries)
             manifest['status'] = 'FAILED' if failed else 'COMPLETE' if quality_ok else 'PARTIAL'
             code = 1 if failed else 0 if quality_ok else 2
@@ -1646,6 +1750,7 @@ class Runner:
             'isolation': 'cli-native-permissions', 'platform': sys.platform,
             'integrity': 'Fingerprints at stage boundaries; not a backup or continuous immutability guarantee.',
             'study': None, 'review': None, 'accepted': False, 'errors': []}
+        manifest['publication_complete'] = False
         self.manifest = manifest
         def persist():
             save_json(self.run_dir / 'manifest.json', manifest)
@@ -1681,9 +1786,7 @@ class Runner:
                             manifest['review_skipped'] = 'No usable architecture document.'
                             self.reporter.emit('stage_skipped', **self.stage_context(stage, context))
                             break
-                        stage_context.update(architecture_document=doc,
-                            document_strictly_valid=manifest['study'] is not None,
-                            document_sha256=digest((doc['report_markdown'].rstrip() + '\n').encode()))
+                        stage_context = self.freeze_review(doc, context, self.run_dir)
                     started = self.stage_started(stage, context)
                     data, meta = self.invoke(stage, stage_context, self.run_dir / (stage + '.logs'))
                     self.folder.assert_snapshot(fingerprint)
@@ -1790,7 +1893,7 @@ def main() -> int:
         header()
         manifest = getattr(runner, 'manifest', manifest)
         code = 130 if isinstance(exc, KeyboardInterrupt) or manifest.get('exit_code') == 130 else 1
-        manifest.update(run_id=run_id, status='FAILED', exit_code=code, finished_at=now())
+        manifest.update(run_id=run_id, status='FAILED', exit_code=code, finished_at=now(), publication_complete=False)
         manifest.setdefault('errors', []).append(str(exc) or type(exc).__name__)
         if runner:
             runner.record_error(manifest, exc, phase='run' if runner.analysis_started else 'preflight')
@@ -1819,6 +1922,11 @@ def main() -> int:
                   'final_report': manifest.get('final_report'),
                   'has_usable_material': manifest.get('has_usable_material', False),
                   'exit_code': code}
+        result['status_meaning'] = ('Local launch prerequisites checked. Source analysis was not performed; '
+            'model availability and provider authorization were not tested.' if result['status'] == 'PREFLIGHT_OK' else
+            'Policy checks satisfied; factual correctness is not established.' if result['status'] == 'COMPLETE' else
+            'Processing incomplete or evidence insufficient; consult limitations and diagnostics.')
+        result['review_quality'] = 'NOT_MEASURED'
         try:
             reporter.finish(result, manifest, check_only=args.check, config_path=args.config,
                             run_dir=run_dir, trust=args.trust_repository)

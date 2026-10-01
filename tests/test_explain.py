@@ -17,25 +17,26 @@ from explain import AuditError, Repository, Runner, UnsafeRepository, cli_env, l
 from reporting import Reporter
 from opencode import prepare_environment
 from contracts import ContractError, parse_backend, review_verdict, strict_json, validate_result
+from fixtures.ledger_response import response
+from ledger import review_context, prepare_result
 
 BASE = {'completion_status': 'COMPLETE',
         'report_markdown': '# Report\nC-001\n', 'limitations': []}
 
 def doc(branch, commit):
-    return dict(BASE, task='architecture_documentation', branch=branch, source_commit=commit)
+    return response({'branch': branch, 'source_commit': commit})
 
-def review(branch, commit):
-    return dict(BASE, task='architecture_review', branch=branch, source_commit=commit,
-        verdict='PASS', claim_inventory_complete=True,
-        claims=[{'id': 'C-001', 'location': 'overview', 'statement': 'Has an entry point',
-        'outcome': 'SUPPORTED', 'evidence': ['app.py:main'], 'limitation': '', 'finding_ids': []}], findings=[])
+def review(branch, commit, context=None):
+    context = context or review_context(doc(branch, commit), {'branch': branch, 'source_commit': commit})
+    return response(context)
 
 class ContractTests(unittest.TestCase):
-    def test_results_without_schema_version_and_rejection_of_legacy_field(self):
+    def test_wire_contract_without_versions_and_rejection_of_unexpected_fields(self):
         git_context = {'branch': 'master', 'source_commit': 'abc'}
         folder_context = {'source_directory': '/source', 'source_fingerprint': 'abc'}
         comparison = dict(BASE, task='architecture_comparison', baseline_branch='master',
-            baseline_commit='abc', compared_branches=[], unresolved_branches=[], differences=[])
+            baseline_commit='abc', compared_branches=[], unresolved_branches=['master'], differences=[],
+            completion_status='PARTIAL', limitations=['Unpublished wire fixtures'])
         comparison_context = {'baseline_branch': 'master', 'baseline_commit': 'abc',
                               'requested_branches': ['master'], 'branches': [
                                   {'branch': 'master', 'study': doc('master', 'abc'), 'review': review('master', 'abc')}]}
@@ -45,16 +46,23 @@ class ContractTests(unittest.TestCase):
                 if mode == 'folder':
                     del data['branch']; del data['source_commit']
                     data.update(context)
-                cases.append((stage, data, context, mode))
+                if stage == 'review':
+                    document = response(context)
+                    review_ctx = review_context(document, context)
+                    data = response(review_ctx)
+                    cases.append((stage, data, review_ctx, mode))
+                else:
+                    cases.append((stage, data, context, mode))
         for stage, data, context, mode in cases:
             with self.subTest(stage=stage, mode=mode):
                 validate_result(stage, data, context, mode)
-                with self.assertRaises(ContractError) as caught:
-                    validate_result(stage, data | {'schema_version': '3.0' if mode == 'folder' else '2.0'},
-                                    context, mode)
-                self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')
-                self.assertEqual(caught.exception.details['path'], '$')
-                self.assertEqual(caught.exception.details['extra_key_count'], 1)
+                for key in ('schema_version', 'contract_version', 'artifact_version'):
+                    self.assertNotIn(key, data)
+                    with self.assertRaises(ContractError) as caught:
+                        validate_result(stage, data | {key: 'obsolete'}, context, mode)
+                    self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')
+                    self.assertEqual(caught.exception.details['path'], '$')
+                    self.assertEqual(caught.exception.details['extra_key_count'], 1)
 
     def test_duplicate_keys_rejected(self):
         with self.assertRaises(ContractError):
@@ -91,16 +99,17 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_result('study',doc('master','wrong'),{'branch':'master','source_commit':'abc'})
     def test_partial_review_cannot_pass(self):
-        data = review('master','abc')
+        context = review_context(doc('master', 'abc'), {'branch':'master','source_commit':'abc'})
+        data = response(context)
         data.update(completion_status='PARTIAL',limitations=['coverage incomplete'])
-        with self.assertRaises(ContractError):
-            validate_result('review',data,{'branch':'master','source_commit':'abc'})
+        validate_result('review',data,context)
         self.assertEqual(review_verdict(data),'INCONCLUSIVE')
     def test_complete_review_cannot_have_unchecked_claim(self):
-        data=review('master','abc')
+        context = review_context(doc('master', 'abc'), {'branch':'master','source_commit':'abc'})
+        data=response(context)
         data['claims'][0].update(outcome='NOT_CHECKED',limitation='not inspected')
-        with self.assertRaises(ContractError):
-            validate_result('review',data,{'branch':'master','source_commit':'abc'})
+        validate_result('review',data,context)
+        self.assertEqual(review_verdict(data), 'INCONCLUSIVE')
     def test_slugs_do_not_collide(self):
         self.assertNotEqual(slug('customer/a'),slug('customer_a'))
         self.assertNotIn('/',slug('../../customer/a'))
@@ -301,7 +310,7 @@ class FakeRunner(Runner):
         elif stage=='review':
             assert 'branches' not in context
             assert context['architecture_document']['branch']==context['branch']
-            data=review(context['branch'],context['source_commit'])
+            data=review(context['branch'],context['source_commit'],context)
         else:
             unresolved=[b['branch'] for b in context['branches'] if not b['study'] or not b['review']]
             data=dict(BASE,task='architecture_comparison',baseline_branch=context['baseline_branch'],
@@ -310,7 +319,11 @@ class FakeRunner(Runner):
                 unresolved_branches=unresolved,differences=[])
             if unresolved:data.update(completion_status='PARTIAL',limitations=['missing input'])
         validate_result(stage,data,context)
-        return data,{'TEST_ONLY':'mock invocation'}
+        data = prepare_result(stage, data, context)
+        self.publish_result(stage, data, destination)
+        from contracts import CONTRACT_VERSION, ARTIFACT_VERSION
+        return data,{'TEST_ONLY':'mock invocation', 'publication_complete': True,
+                     'contract_version': CONTRACT_VERSION, 'artifact_version': ARTIFACT_VERSION}
 
 class ProcessTests(unittest.TestCase):
     def test_pipe_capture(self):
@@ -521,7 +534,7 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
         home=self.base/'configured-home';home.mkdir()
         (home/'audit-profile.json').write_text(json.dumps({'model':'configured-model'}))
         cli=self.base/'fake-cli'
-        cli.write_text('#!'+sys.executable+'\n'+(root/'tests/fixtures/fake_cli.py').read_text())
+        cli.write_text('#!'+sys.executable+'\n'+('import sys; sys.path.insert(0, ' + repr(str(root / 'tests/fixtures')) + ')' + '\n' + (root/'tests/fixtures/fake_cli.py').read_text()))
         cli.chmod(0o700)
         calls_path=self.base/'calls.jsonl'
         env={'HOME':str(home),'PATH':os.environ.get('PATH',os.defpath),

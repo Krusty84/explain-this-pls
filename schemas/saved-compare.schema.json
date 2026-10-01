@@ -1,0 +1,310 @@
+{
+  "type": "object",
+  "properties": {
+    "completion_status": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "PARTIAL",
+        "BLOCKED"
+      ]
+    },
+    "report_markdown": {
+      "type": "string"
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "task": {
+      "type": "string",
+      "enum": [
+        "architecture_comparison"
+      ]
+    },
+    "baseline_branch": {
+      "type": "string"
+    },
+    "baseline_commit": {
+      "type": "string"
+    },
+    "compared_branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unresolved_branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "differences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "CONFIRMED_DIFFERENCE",
+              "REPORTED_UNVERIFIED",
+              "INSUFFICIENT_EVIDENCE"
+            ]
+          },
+          "baseline_statement": {
+            "type": "string"
+          },
+          "branch_statement": {
+            "type": "string"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "branch": {
+                  "type": "string"
+                },
+                "artifact": {
+                  "type": "string",
+                  "enum": [
+                    "study",
+                    "review"
+                  ]
+                },
+                "claim_id": {
+                  "type": "string"
+                },
+                "document_sha256": {
+                  "type": "string"
+                },
+                "registry_sha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "branch",
+                "artifact",
+                "claim_id",
+                "document_sha256",
+                "registry_sha256"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "explanation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "branch",
+          "category",
+          "classification",
+          "baseline_statement",
+          "branch_statement",
+          "evidence_refs",
+          "explanation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "program_checks": {
+      "type": "object",
+      "properties": {
+        "execution": {
+          "type": "string",
+          "enum": [
+            "COMPLETED"
+          ]
+        },
+        "contract": {
+          "type": "string",
+          "enum": [
+            "VALID"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "MATCHED_AT_BOUNDARIES",
+            "NOT_INSPECTED_IN_COMPARISON"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "source_id": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "start_line": {
+                "type": "integer"
+              },
+              "end_line": {
+                "type": "integer"
+              },
+              "source_identity": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "git",
+                      "folder"
+                    ]
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "commit": {
+                    "type": "string"
+                  },
+                  "directory": {
+                    "type": "string"
+                  },
+                  "fingerprint": {
+                    "type": "string"
+                  },
+                  "parent_commit": {
+                    "type": "string"
+                  },
+                  "submodule_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "additionalProperties": false
+              },
+              "file_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fragment_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fragment_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "RESOLVED",
+                  "INVALID_POINTER",
+                  "UNKNOWN_SOURCE",
+                  "SOURCE_SCOPE_MISMATCH",
+                  "UNSAFE_PATH",
+                  "NOT_FOUND",
+                  "ACCESS_DENIED",
+                  "READ_ERROR",
+                  "OUT_OF_RANGE",
+                  "DECODE_ERROR",
+                  "QUOTE_MISMATCH",
+                  "LIMIT_EXCEEDED"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "source_id",
+              "path",
+              "start_line",
+              "end_line",
+              "source_identity",
+              "file_sha256",
+              "fragment_sha256",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "policy_satisfied": {
+          "type": "boolean"
+        },
+        "semantic_quality": {
+          "type": "string",
+          "enum": [
+            "NOT_MEASURED"
+          ]
+        },
+        "completion_self_assessment": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "BLOCKED",
+            null
+          ]
+        },
+        "meaning": {
+          "type": "string"
+        },
+        "evidence_scope": {
+          "type": "string",
+          "enum": [
+            "SUPPLIED_REPORTS_ONLY"
+          ]
+        }
+      },
+      "required": [
+        "execution",
+        "contract",
+        "source",
+        "evidence",
+        "policy_satisfied",
+        "semantic_quality",
+        "completion_self_assessment",
+        "meaning",
+        "evidence_scope"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "completion_status",
+    "report_markdown",
+    "limitations",
+    "task",
+    "baseline_branch",
+    "baseline_commit",
+    "compared_branches",
+    "unresolved_branches",
+    "differences",
+    "program_checks"
+  ],
+  "additionalProperties": false
+}

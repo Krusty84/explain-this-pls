@@ -2,10 +2,10 @@
 
 ## What is this?
 
-Analyzes legacy code and explains how the damn thing actually works.
+Generates architecture descriptions from source and records agent review assessments.
 
 explain-this-pls uses your coding agent to document an existing codebase, then
-independently reviews the report against the code. Analyze a folder, study a Git
+reviews a frozen claim registry against the code in a separate session. Analyze a folder, study a Git
 branch, or compare several branches. Agents are instructed to read the code
 without running the project's builds or tests.
 
@@ -13,7 +13,7 @@ without running the project's builds or tests.
 
 - **Architecture reports** explaining the system's main parts and workflows,
   with references to the source code.
-- **Independent review** highlighting unsupported claims and missing information.
+- **Registry review** recording agent assessments, unresolved claims and reported omissions.
 - **Branch comparison** showing differences from a branch you choose as a baseline.
 - **Folder analysis** for source code that does not need to be in Git.
 - **Shareable results** in Markdown and JSON, in your preferred language.
@@ -252,8 +252,6 @@ individual stages fail. The orchestrator assembles `FINAL_REPORT.md` without an
 additional model request, in both folder and Git modes. Original reports are not
 rewritten. A study without a completed review is explicitly unverified review
 inconsistencies and missing inputs appear before the affected material.
-
-Strictly validated results retain their existing filenames and JSON contracts.
 Completed study/review text with a valid task and source identity but other contract
 defects is retained separately in `study.material.json` / `review.material.json`.
 It never becomes an accepted result. Malformed JSON, foreign identities, incomplete
@@ -265,7 +263,8 @@ remain unverified. If comparison fails or inputs are missing, the final report s
 contains the available studies and reviews. With no usable study, it is explicitly
 a diagnostic summary. `--check` does not create a final report.
 
-Compromise exit codes: `0` / `COMPLETE` for full strict acceptance, `2` / `PARTIAL`
+Compromise exit codes: `0` / `COMPLETE` means processing and review policy checks
+satisfied factual correctness is not established. `2` / `PARTIAL` is
 for usable material with caveats or individual stage failures, `1` / `FAILED` for no
 usable study or critical source-integrity, restoration, cleanup, or publication
 failure. Interruption remains `130`. `continue_on_error: false` stops further agent

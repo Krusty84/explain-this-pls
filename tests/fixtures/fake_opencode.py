@@ -35,29 +35,9 @@ messages = []
 scenario = os.environ.get('AUDIT_FAKE_CASE')
 
 
-def result(context):
-    data = {'completion_status': 'COMPLETE', 'report_markdown': '# Fixture\nC-001', 'limitations': []}
-    if 'baseline_branch' in context:
-        unresolved = context['required_unresolved_branches']
-        data.update(task='architecture_comparison', baseline_branch=context['baseline_branch'],
-            baseline_commit=context['baseline_commit'],
-            compared_branches=[b for b in context['requested_branches'] if b != context['baseline_branch']],
-            unresolved_branches=unresolved, differences=[])
-        if unresolved:
-            data.update(completion_status='PARTIAL', limitations=['Missing fixture input.'])
-    else:
-        if context.get('source_mode') == 'folder':
-            data.update(source_directory=context['source_directory'], source_fingerprint=context['source_fingerprint'])
-        else:
-            data.update(branch=context['branch'], source_commit=context['source_commit'])
-        if 'architecture_document' in context:
-            data.update(task='architecture_review', verdict='PASS', claim_inventory_complete=True,
-                claims=[{'id': 'C-001', 'location': 'overview', 'statement': 'Fixture statement',
-                         'outcome': 'SUPPORTED', 'evidence': ['app.py:main'], 'limitation': '', 'finding_ids': []}], findings=[])
-        else:
-            data['task'] = 'architecture_documentation'
-    return data
-
+sys.path.insert(0, str(Path(__file__).parent))
+sys.dont_write_bytecode = True
+from ledger_response import response as result
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
@@ -132,6 +112,8 @@ class Handler(BaseHTTPRequestHandler):
             if scenario == 'source-change':
                 (Path.cwd() / 'app.py').write_text('unexpected fixture mutation\n')
             data = result(context)
+            if scenario == 'legacy':
+                del data['claims']
             if scenario in ('repair-ok', 'repair-invalid', 'repair-semantic', 'repair-timeout'):
                 if not repair or scenario == 'repair-invalid':
                     data['extra_private_key'] = ['private value']
@@ -143,16 +125,16 @@ class Handler(BaseHTTPRequestHandler):
                 if not repair:
                     data['extra_private_key'] = []
                     if scenario == 'repair-verdict':
-                        data['verdict'] = 'INCONCLUSIVE'
+                        data['completion_status'] = 'PARTIAL'; data['limitations'] = ['Original partial self-assessment']
                 elif scenario == 'repair-evidence':
-                    data['claims'][0]['evidence'] = ['invented.py:fake']
+                    data['evidence'][0]['path'] = 'invented.py'
             if scenario in ('claims-44', 'claims-40', 'claims-empty') and 'architecture_document' in context:
                 count = 40 if scenario == 'claims-40' else 44
                 data['claims'] = [dict(data['claims'][0], id=f'C-{i + 1:03d}',
                     claim_ids=[] if scenario == 'claims-empty' else ['C-PRIVATE']) for i in range(count)]
                 data['report_markdown'] = '\n'.join(c['id'] for c in data['claims'])
             if scenario == 'partial-review' and 'architecture_document' in context:
-                data.update(completion_status='PARTIAL', verdict='INCONCLUSIVE', limitations=['Synthetic incomplete review'])
+                data.update(completion_status='PARTIAL', limitations=['Synthetic incomplete review'])
             if scenario == 'material-review' and 'architecture_document' in context:
                 data['claims'][0].update(outcome='UNVERIFIABLE', limitation='Insufficient static evidence')
             if scenario == 'wrong-identity':

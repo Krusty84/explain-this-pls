@@ -39,15 +39,19 @@ class ResultRegressions(unittest.TestCase):
             self.assertEqual(diagnostic(caught.exception).failure_kind, 'TRANSPORT_ERROR')
 
     def test_public_schemas_equal_python_source(self):
+        from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
         root = Path(__file__).resolve().parents[1]
-        for prefix, schemas in (('', SCHEMAS), ('folder-', FOLDER_SCHEMAS)):
+        for prefix, schemas in (('', SCHEMAS), ('folder-', FOLDER_SCHEMAS),
+                                ('saved-', SAVED_SCHEMAS), ('saved-folder-', SAVED_FOLDER_SCHEMAS)):
             for stage, schema in schemas.items():
                 saved = json.loads((root / 'schemas' / f'{prefix}{stage}.schema.json').read_text())
                 self.assertEqual(saved, schema)
+                self.assertNotRegex(json.dumps(saved), r'"(?:contract|artifact)_version"')
 
     def test_prompt_has_no_obsolete_schema_versions(self):
         for path in (Path(__file__).resolve().parents[1] / 'prompts').glob('*.md'):
             self.assertNotRegex(path.read_text(), r'(?:schema version|using version) [23]\.0')
+            self.assertNotIn('contract_version', path.read_text())
 
     def test_json_cause_is_not_logged_as_internal_error_or_response_excerpt(self):
         text = '{"private_key": "DO_NOT_PRINT_REPORT", invalid}'

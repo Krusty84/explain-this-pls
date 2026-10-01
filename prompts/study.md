@@ -74,7 +74,7 @@ record a specific gap rather than asking for permissions or inventing evidence.
 A material claim affects boundaries, execution, data ownership, dependencies,
 constraints, or where a change should be made.
 
-CONFIRMED: inspected evidence supports this exact scoped statement. This does not
+CONFIRMED (human label: supported by cited sources according to the authoring agent): your assessment of this exact scoped statement. This does not
 mean production/runtime verification. HYPOTHESIS: label it at the point of use,
 provide supporting clues and a missing falsifiable check. UNKNOWN: say what was
 investigated, what is unavailable, and why it matters.
@@ -110,7 +110,7 @@ paths, symbols, and enum values. Keep explanations architectural, not file-by-fi
    and relevant test locations where found. Do not imply tests were run.
 9. Unknowns and coverage: per-area INSPECTED, PARTIALLY_INSPECTED, NOT_INSPECTED,
    OUT_OF_SCOPE; reasons, missing evidence, and concrete next verification steps.
-10. Evidence index: ID, kind, exact locator, what it establishes, limitations.
+10. Evidence basis and limitations: explain why cited sources are relevant. The orchestrator renders the evidence index from structured locators.
 
 Each material relationship in prose, tables, and scenarios needs supporting evidence
 or a visible uncertainty label. Explain non-applicable sections rather than filling
@@ -118,16 +118,37 @@ them with boilerplate. The report may be useful and incomplete; never fake compl
 
 ## Output contract
 
-Return the object specified by the appended schema through the output mechanism
-specified by the orchestrator. Put the complete document in report_markdown. Do not
-create ARCHITECTURE.md or any other file yourself. In git mode, echo branch and
-source_commit exactly. In folder mode, echo source_directory
-and source_fingerprint exactly; do not invent a branch or commit. Do not add schema_version.
+Return the object specified by the appended wire schema.
+Put the unchanged architecture narrative in report_markdown. Preserve the ten
+thematic sections. Do not write files or calculate hashes. Echo the supplied
+source identity exactly. Do not supply program_checks, accepted or policy verdicts.
 
-COMPLETE means all required feasible investigation passes and applicable sections
-are finished within the declared scope, with evidence checked and limits disclosed.
-It does not certify correctness. PARTIAL means required investigation/validation is
-unfinished. BLOCKED means a useful evidence-based document cannot be produced.
-Unknown production facts do not alone force PARTIAL when explicitly out of scope.
-Do not silently reduce the requested scope to report COMPLETE. For PARTIAL/BLOCKED,
-include specific limitations; a blocked report must explain the actual blocker.
+Register each material assertion, including relationships in tables, scenarios,
+and summaries, in claims: id C-001 etc., statement, scope (conditions and limits),
+epistemic_kind FACT | HYPOTHESIS | UNKNOWN, evidence_ids, uncertainty and
+document_locator. Keep assertions narrow enough to assess individually.
+Use exact start_line/end_line (1-based LF lines, CRLF normalized), and quote the
+entire selected line range including trailing LF if present. No fuzzy matching.
+The program checks registered links; it cannot discover all factual assertions
+in free prose. The registry will be frozen before review. Never renumber claims
+to avoid review. HYPOTHESIS/UNKNOWN must name concrete missing checks in uncertainty;
+FACT uses "" unless a scoped uncertainty must be stated.
+
+Return structured evidence with local IDs E-001 etc., source_id from context.sources,
+path relative to that source's root, start_line, end_line and quote. Use "" for
+quote unless quoting the complete normalized range exactly. Do not calculate
+hashes. Reference evidence as study:E-001. A nested submodule uses its own source_id
+and paths relative to that submodule; do not cite it through the main source ID.
+Use positive integer lines, no absolute paths or links. Limits: 256 pointers,
+16 KiB per record, 200 lines and 64 KiB per fragment, 8 MiB per file and 32 MiB
+total file bytes read per stage (repeated files count). Disclose inaccessible,
+undecodable or oversized evidence; never invent a smaller supporting range.
+
+completion_status is your self-assessment: COMPLETE means you report completing
+the investigation in its stated scope, not that architecture is fully established.
+PARTIAL/BLOCKED require concrete limitations. The program's execution, contract,
+source-boundary checks, evidence resolution and policy results are separate.
+Use "supported according to the agent" for semantic conclusions, not "proved".
+Respond in output_language with equivalent meaning. A resolved locator does not
+establish semantic support. Do not repeat mandatory ledger/evidence tables or
+counts in Markdown; Python renders them from the single structured record.

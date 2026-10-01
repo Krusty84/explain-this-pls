@@ -527,7 +527,13 @@ class Reporter(NullReporter):
         if name == 'stage_completed':
             status = c['status']
             label = '[OK] ' if status == 'COMPLETE' else '[FAIL] ' if status == 'FAILED' else '[WARN] '
-            return [label + stage + ' — ' + self.status(status, self.stderr) +
+            meaning = ('Description generated; agent reports investigation complete in its stated scope'
+                       if c.get('stage') == 'study' and status == 'COMPLETE' else
+                       'No material issues reported for required registry; policy checks satisfied'
+                       if c.get('stage') == 'review' and status == 'COMPLETE' else
+                       'Reports-only comparison generated; agent reports completion'
+                       if status == 'COMPLETE' else 'Processing incomplete or evidence insufficient')
+            return [label + stage + ' — ' + self.status(status, self.stderr) + ': ' + meaning +
                     ' | Elapsed: ' + duration(c['elapsed_seconds'])]
         if name == 'stage_skipped':
             return ['[SKIP] ' + stage + ': No usable architecture document.']
@@ -567,33 +573,43 @@ class Reporter(NullReporter):
             return
         s = self.display
         status = lambda value: self.status(value, self.stdout)
-        lines = [status('PREFLIGHT PASSED' if result['status'] == 'PREFLIGHT_OK' else result['status']),
+        meaning = ('Local launch prerequisites checked. Source analysis was not performed.' if result['status'] == 'PREFLIGHT_OK' else
+                   'Policy checks satisfied; factual correctness is not established.' if result['status'] == 'COMPLETE' else
+                   'Processing incomplete or evidence insufficient; see limitations and diagnostics.')
+        lines = [status('PREFLIGHT PASSED' if result['status'] == 'PREFLIGHT_OK' else result['status']) + ': ' + meaning,
                  'Elapsed: ' + duration(elapsed)]
         if result['status'] == 'PREFLIGHT_OK':
             command = ['python3', 'explain.py', '--config', str(config_path)]
             if trust:
                 command.append('--trust-repository')
             lines += ['', 'No model calls were made. Source analysis has not started.', '',
+                      'Checked: configuration, local source prerequisites, executable version and required CLI options.',
+                      'Model availability and provider authorization were not tested.', '',
                       'Start analysis:', '  ' + s(shlex.join(command))]
         elif not check_only:
             for branch in manifest.get('branches', []):
                 partial_material = manifest.get('result_policy') == 'compromise' and branch.get('study_usable')
                 lines += ['Branch ' + s(branch['branch']) + ': ' +
                           status('COMPLETE' if branch.get('accepted') else 'PARTIAL' if partial_material
-                                 else 'FAILED' if branch['errors'] else 'PARTIAL')]
+                                 else 'FAILED' if branch['errors'] else 'PARTIAL') +
+                          (' — processing/review policy satisfied' if branch.get('accepted') else
+                           ' — processing incomplete or evidence insufficient')]
             analyzed = {branch['branch'] for branch in manifest.get('branches', [])}
             for branch in manifest.get('pins', {}):
                 if branch not in analyzed:
                     lines += ['Branch ' + s(branch) + ': ' + status('not started')]
             if manifest.get('mode') == 'folder':
-                lines += ['Source result: ' + status('COMPLETE' if manifest.get('accepted') else result['status']),
+                lines += ['Source result: ' + status('COMPLETE' if manifest.get('accepted') else result['status']) +
+                          (' — processing/review policy satisfied' if manifest.get('accepted') else
+                           ' — processing incomplete or evidence insufficient'),
                           'Comparison: ' + status('not applicable') + ' (folder mode)',
                           'Restoration: ' + status('not applicable') + ' (folder mode)']
             else:
                 if 'comparison' not in manifest and len(manifest.get('pins', {})) == 1:
                     lines += ['Comparison: ' + status('not applicable') + ' (single branch)']
                 else:
-                    lines += ['Comparison: ' + status(manifest.get('comparison', {}).get('completion_status', 'not completed'))]
+                    lines += ['Comparison: ' + status(manifest.get('comparison', {}).get('completion_status', 'not completed')) +
+                              ' — supplied reports only; no source inspection in this stage']
                 restoration = manifest.get('restoration')
                 lines += ['Restoration: ' + status('verified' if restoration and restoration['restored'] else
                           'FAILED' if restoration else 'not performed')]
@@ -606,9 +622,13 @@ class Reporter(NullReporter):
                               Path(manifest['final_report'])))
             for branch in manifest.get('branches', []):
                 for name in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md'):
-                    paths.append(('Report (' + s(branch['branch']) + ')', run_dir / branch['directory'] / name))
+                    stage = 'study' if name == 'ARCHITECTURE.md' else 'review'
+                    if branch.get(stage + '_invocation', {}).get('publication_complete'):
+                        paths.append(('Report (' + s(branch['branch']) + ')', run_dir / branch['directory'] / name))
             for relative in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md', 'comparison/BRANCH_COMPARISON.md'):
-                paths.append(('Report', run_dir / relative))
+                stage = {'ARCHITECTURE.md': 'study', 'ARCHITECTURE_REVIEW.md': 'review'}.get(relative, 'comparison')
+                if manifest.get(stage + '_invocation', {}).get('publication_complete'):
+                    paths.append(('Report', run_dir / relative))
         for title, path in paths:
             if existing_file(path):
                 lines += ['', title + ':', '  ' + s(path)]

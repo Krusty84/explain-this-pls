@@ -103,30 +103,14 @@ else:
     if stage != 'compare' and context.get('source_mode') == 'git':
         inspect_sources(context)
     action(stage)
-    data = {'completion_status': 'COMPLETE',
-            'report_markdown': '# Report: configured-model\nC-001\n', 'limitations': []}
+    sys.path.insert(0, str(Path(__file__).parent))
+    sys.dont_write_bytecode = True
+    from ledger_response import response
+    data = response(context)
     if os.environ.get('AUDIT_TEST_PARTIAL') and stage == 'study':
         data.update(completion_status='PARTIAL', limitations=['Fixture coverage is incomplete.'])
-    if 'baseline_branch' in context:
-        data.update(task='architecture_comparison', baseline_branch=context['baseline_branch'],
-                    baseline_commit=context['baseline_commit'], unresolved_branches=[], differences=[],
-                    compared_branches=[b for b in context['requested_branches'] if b != context['baseline_branch']])
-    else:
-        if context.get('source_mode') == 'folder':
-            data.update(source_directory=context['source_directory'],
-                        source_fingerprint=context['source_fingerprint'])
-            # Exercise rejection of a changed tree using an actual subprocess.
-            if os.environ.get('AUDIT_TEST_MUTATE_SOURCE'):
-                (Path(context['source_directory']) / 'modified.txt').write_text('agent modification')
-        else:
-            data.update(branch=context['branch'], source_commit=context['source_commit'])
-        if 'architecture_document' in context:
-            data.update(task='architecture_review', verdict='PASS', claim_inventory_complete=True,
-                        claims=[{'id': 'C-001', 'location': 'overview', 'statement': 'Has an entry point',
-                                 'outcome': 'SUPPORTED', 'evidence': ['app.py:main'],
-                                 'limitation': '', 'finding_ids': []}], findings=[])
-        else:
-            data['task'] = 'architecture_documentation'
+    if context.get('source_mode') == 'folder' and os.environ.get('AUDIT_TEST_MUTATE_SOURCE'):
+        (Path(context['source_directory']) / 'modified.txt').write_text('agent modification')
     if '--format' in args:
         config = json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])
         name = args[args.index('--agent') + 1]

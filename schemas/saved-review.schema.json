@@ -1,0 +1,763 @@
+{
+  "type": "object",
+  "properties": {
+    "completion_status": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "PARTIAL",
+        "BLOCKED"
+      ]
+    },
+    "report_markdown": {
+      "type": "string"
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "task": {
+      "type": "string",
+      "enum": [
+        "architecture_review"
+      ]
+    },
+    "branch": {
+      "type": "string"
+    },
+    "source_commit": {
+      "type": "string"
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "source_sha256": {
+          "type": "string"
+        },
+        "document_sha256": {
+          "type": "string"
+        },
+        "registry_sha256": {
+          "type": "string"
+        },
+        "plan_sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_sha256",
+        "document_sha256",
+        "registry_sha256",
+        "plan_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "start_line": {
+            "type": "integer"
+          },
+          "end_line": {
+            "type": "integer"
+          },
+          "quote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source_id",
+          "path",
+          "start_line",
+          "end_line",
+          "quote"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "SUPPORTED",
+              "CONTRADICTED",
+              "UNVERIFIABLE",
+              "NOT_CHECKED",
+              "CAVEAT_ACCEPTABLE",
+              "CAVEAT_INADEQUATE"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limitation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "outcome",
+          "evidence_ids",
+          "limitation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "HIGH",
+              "MEDIUM",
+              "LOW"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "FACTUAL_ERROR",
+              "UNSUPPORTED_ASSERTION",
+              "MATERIAL_OMISSION",
+              "SCOPE_MISMATCH",
+              "CONTRACT_VIOLATION"
+            ]
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "location": {
+            "type": "string"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "impact": {
+            "type": "string"
+          },
+          "proposed_correction": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "type",
+          "claim_ids",
+          "location",
+          "evidence_ids",
+          "impact",
+          "proposed_correction"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "omission_search": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "area_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "INSPECTED",
+              "PARTIALLY_INSPECTED",
+              "NOT_INSPECTED"
+            ]
+          },
+          "limitation": {
+            "type": "string"
+          },
+          "finding_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "area_id",
+          "status",
+          "limitation",
+          "finding_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "program_checks": {
+      "type": "object",
+      "properties": {
+        "execution": {
+          "type": "string",
+          "enum": [
+            "COMPLETED"
+          ]
+        },
+        "contract": {
+          "type": "string",
+          "enum": [
+            "VALID"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "MATCHED_AT_BOUNDARIES",
+            "NOT_INSPECTED_IN_COMPARISON"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "source_id": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "start_line": {
+                "type": "integer"
+              },
+              "end_line": {
+                "type": "integer"
+              },
+              "source_identity": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "git",
+                      "folder"
+                    ]
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "commit": {
+                    "type": "string"
+                  },
+                  "directory": {
+                    "type": "string"
+                  },
+                  "fingerprint": {
+                    "type": "string"
+                  },
+                  "parent_commit": {
+                    "type": "string"
+                  },
+                  "submodule_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "additionalProperties": false
+              },
+              "file_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fragment_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fragment_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "RESOLVED",
+                  "INVALID_POINTER",
+                  "UNKNOWN_SOURCE",
+                  "SOURCE_SCOPE_MISMATCH",
+                  "UNSAFE_PATH",
+                  "NOT_FOUND",
+                  "ACCESS_DENIED",
+                  "READ_ERROR",
+                  "OUT_OF_RANGE",
+                  "DECODE_ERROR",
+                  "QUOTE_MISMATCH",
+                  "LIMIT_EXCEEDED"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "source_id",
+              "path",
+              "start_line",
+              "end_line",
+              "source_identity",
+              "file_sha256",
+              "fragment_sha256",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "policy_satisfied": {
+          "type": "boolean"
+        },
+        "semantic_quality": {
+          "type": "string",
+          "enum": [
+            "NOT_MEASURED"
+          ]
+        },
+        "completion_self_assessment": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "BLOCKED",
+            null
+          ]
+        },
+        "meaning": {
+          "type": "string"
+        },
+        "evidence_counts": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "document_links": {
+          "type": "object",
+          "properties": {
+            "registered": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "matched": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "REGISTERED_CLAIMS_ONLY"
+              ]
+            }
+          },
+          "required": [
+            "registered",
+            "matched",
+            "scope"
+          ],
+          "additionalProperties": false
+        },
+        "outcome_counts": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "finding_ids_by_claim": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "registry_coverage": {
+          "type": "object",
+          "properties": {
+            "expected_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "received_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "assessed_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "not_checked_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "missing_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "expected_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "received_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "assessed_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "fraction": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "FROZEN_REGISTRY_ONLY"
+              ]
+            }
+          },
+          "required": [
+            "expected_ids",
+            "received_ids",
+            "assessed_ids",
+            "not_checked_ids",
+            "missing_ids",
+            "expected_count",
+            "received_count",
+            "assessed_count",
+            "fraction",
+            "scope"
+          ],
+          "additionalProperties": false
+        },
+        "omission_coverage": {
+          "type": "object",
+          "properties": {
+            "expected_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "missing_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "unfinished_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reported_by": {
+              "type": "string",
+              "enum": [
+                "AGENT"
+              ]
+            },
+            "completeness_measured": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "expected_ids",
+            "missing_ids",
+            "unfinished_ids",
+            "reported_by",
+            "completeness_measured"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "execution",
+        "contract",
+        "source",
+        "evidence",
+        "policy_satisfied",
+        "semantic_quality",
+        "completion_self_assessment",
+        "meaning",
+        "evidence_counts",
+        "document_links",
+        "outcome_counts",
+        "finding_ids_by_claim",
+        "registry_coverage",
+        "omission_coverage"
+      ],
+      "additionalProperties": false
+    },
+    "review_plan": {
+      "type": "object",
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "root": {
+                "type": "string"
+              },
+              "identity": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "git",
+                      "folder"
+                    ]
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "commit": {
+                    "type": "string"
+                  },
+                  "directory": {
+                    "type": "string"
+                  },
+                  "fingerprint": {
+                    "type": "string"
+                  },
+                  "parent_commit": {
+                    "type": "string"
+                  },
+                  "submodule_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "id",
+              "root",
+              "identity"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "source_sha256": {
+          "type": "string"
+        },
+        "document_sha256": {
+          "type": "string"
+        },
+        "registry_sha256": {
+          "type": "string"
+        },
+        "plan_sha256": {
+          "type": "string"
+        },
+        "required_claim_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "omission_areas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "scope": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "scope"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "eligible_study": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sources",
+        "source_sha256",
+        "document_sha256",
+        "registry_sha256",
+        "plan_sha256",
+        "required_claim_ids",
+        "omission_areas",
+        "eligible_study"
+      ],
+      "additionalProperties": false
+    },
+    "claim_registry": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "statement": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "epistemic_kind": {
+            "type": "string",
+            "enum": [
+              "FACT",
+              "HYPOTHESIS",
+              "UNKNOWN"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "uncertainty": {
+            "type": "string"
+          },
+          "document_locator": {
+            "type": "object",
+            "properties": {
+              "start_line": {
+                "type": "integer"
+              },
+              "end_line": {
+                "type": "integer"
+              },
+              "quote": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "start_line",
+              "end_line",
+              "quote"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "statement",
+          "scope",
+          "epistemic_kind",
+          "evidence_ids",
+          "uncertainty",
+          "document_locator"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "CHANGES_REQUIRED",
+        "INCONCLUSIVE"
+      ]
+    }
+  },
+  "required": [
+    "completion_status",
+    "report_markdown",
+    "limitations",
+    "task",
+    "branch",
+    "source_commit",
+    "target",
+    "evidence",
+    "claims",
+    "findings",
+    "omission_search",
+    "program_checks",
+    "review_plan",
+    "claim_registry",
+    "verdict"
+  ],
+  "additionalProperties": false
+}

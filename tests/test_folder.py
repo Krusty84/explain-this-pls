@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS, jsonc, validate_result
 from explain import AuditError, Folder, Runner, load_config, repository_lock
 from test_explain import review
+from fixtures.ledger_response import response as ledger_response
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -254,10 +255,10 @@ class FolderInventoryTests(FolderFixture):
 
 class FolderContractTests(unittest.TestCase):
     def test_identity_is_checked(self):
-        data = review('unused', 'unused')
-        del data['branch']; del data['source_commit']
-        data.update(source_directory='/source', source_fingerprint='abc')
+        from ledger import review_context
         context = {'source_directory': '/source', 'source_fingerprint': 'abc'}
+        context = review_context(ledger_response(context), context)
+        data = ledger_response(context)
         validate_result('review', data, context, 'folder')
         for changed in ({'source_directory': '/other'}, {'source_fingerprint': 'wrong'}):
             with self.subTest(changed=changed), self.assertRaises(ContractError):
@@ -283,10 +284,10 @@ class FolderPipelineTests(FolderFixture):
             if stage == fail_stage:
                 return {'returncode': 1, 'duration_seconds': 0,
                         'stdout': b'', 'stderr': b'failed'}
-            data = review('unused', 'unused') if stage == 'review' else {
-                'task': 'architecture_documentation', 'completion_status': doc_status,
-                'report_markdown': '# Architecture',
-                'limitations': [] if doc_status == 'COMPLETE' else ['Investigation incomplete.']}
+            data = ledger_response(context)
+            if stage == 'study':
+                data.update(completion_status=doc_status,
+                    limitations=[] if doc_status == 'COMPLETE' else ['Investigation incomplete.'])
             data.pop('branch', None); data.pop('source_commit', None)
             data.update(source_directory=context['source_directory'],
                         source_fingerprint=context['source_fingerprint'])
@@ -345,7 +346,7 @@ class FolderCLIIntegrationTests(FolderFixture):
         home = self.base / 'home'; home.mkdir()
         (home / 'audit-profile.json').write_text(json.dumps({'model': 'configured-model'}))
         self.cli = self.base / 'cli'
-        self.cli.write_text('#!' + sys.executable + '\n' + (ROOT / 'tests/fixtures/fake_cli.py').read_text())
+        self.cli.write_text('#!' + sys.executable + '\n' + ('import sys; sys.path.insert(0, ' + repr(str(ROOT / 'tests/fixtures')) + ')' + '\n' + (ROOT / 'tests/fixtures/fake_cli.py').read_text()))
         self.cli.chmod(0o700)
         self.calls = self.base / 'calls.jsonl'
         # An empty PATH makes any accidental Git invocation fail.

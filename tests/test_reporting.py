@@ -111,7 +111,7 @@ class ReporterTests(unittest.TestCase):
             reporter.emit('stage_completed', branch='folder', source_name='COMPLETE 深い [FAIL]',
                           stage='study', backend='codex', status=status, elapsed_seconds=1)
             self.assertIn(f'[{label}]\x1b[0m COMPLETE 深い [FAIL] / study / codex — '
-                          f'\x1b[{color}m{status}\x1b[0m | Elapsed: 00:01', self.err.getvalue())
+                          f'\x1b[{color}m{status}\x1b[0m:', self.err.getvalue())
         records = [json.loads(line) for line in (self.base / 'run.log').read_text().splitlines()]
         self.assertEqual([r['status'] for r in records], ['COMPLETE', 'PARTIAL', 'BLOCKED', 'FAILED'])
         self.assertTrue(all(r['branch'] == 'folder' for r in records))
@@ -160,7 +160,7 @@ class ReporterTests(unittest.TestCase):
                 r.finish(result | {'manifest': None, 'exit_code': 0}, manifest,
                          check_only=False, config_path=Path('config.jsonc'))
                 for line in expected:
-                    self.assertIn(line + '\n', out.getvalue())
+                    self.assertIn(line, out.getvalue())
 
     def test_colored_verbose_and_log_warning_preserve_escaping_and_file_data(self):
         with patch.dict(os.environ, {'TERM': 'xterm'}, clear=True), \
@@ -585,7 +585,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.assertEqual(summary['status'], 'COMPLETE')
         self.assertNotIn('\x1b', result.stdout)
         self.assertIn('\x1b[36m[RUN]\x1b[0m source folder / study / codex', console)
-        self.assertIn('— \x1b[32mCOMPLETE\x1b[0m | Elapsed:', console)
+        self.assertIn('— \x1b[32mCOMPLETE\x1b[0m: Description generated; agent reports investigation complete in its stated scope | Elapsed:', console)
         self.assertIn('\x1b[32m[OK]\x1b[0m Configuration', console)
         run_dir = Path(summary['manifest']).parent
         logs = [run_dir / 'run.log', *run_dir.glob('*.logs/attempt-001/stdout.log'), *run_dir.glob('*.logs/attempt-001/stderr.log')]
@@ -775,7 +775,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.env['AUDIT_TEST_PARTIAL'] = '1'
         result = self.run_cli(args + ['--output', 'text'])
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertTrue(result.stdout.startswith('PARTIAL\n'))
+        self.assertTrue(result.stdout.startswith('PARTIAL: Processing incomplete or evidence insufficient;'))
         self.assertIn('[WARN] source folder / study / codex — PARTIAL', result.stderr)
         del self.env['AUDIT_TEST_PARTIAL']
         self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': 'invalid', 'value': 'PRIVATE_MODEL_VALUE'})

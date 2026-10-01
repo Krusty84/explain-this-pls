@@ -14,6 +14,7 @@ from explain import AuditError, Runner, atomic, load_config
 from reporting import Reporter
 from structured_output import blocked_comparison
 from test_explain import doc, review
+from fixtures.ledger_response import response
 import test_explain as git_fixtures
 import test_folder as folder_fixtures
 import test_structured_output as native_fixtures
@@ -32,11 +33,7 @@ def response_for(context):
         data.update(completion_status='PARTIAL' if data['unresolved_branches'] else 'COMPLETE',
                     report_markdown='# Compared available inputs', limitations=data['limitations'] if data['unresolved_branches'] else [])
         return data
-    data = (review if 'architecture_document' in context else doc)(context.get('branch', ''), context.get('source_commit', ''))
-    if context.get('source_mode') == 'folder':
-        del data['branch'], data['source_commit']
-        data.update(source_directory=context['source_directory'], source_fingerprint=context['source_fingerprint'])
-    return data
+    return response(context)
 
 
 class CompromiseFolder(folder_fixtures.FolderFixture):
@@ -84,9 +81,10 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
                 self.assertFalse((self.run_dir / 'review.json').exists())
                 self.assertFalse((self.run_dir / 'ARCHITECTURE_REVIEW.md').exists())
                 text = Path(manifest['final_report']).read_text()
-                self.assertIn('Независимая проверка не завершена', text)
+                self.assertIn('Проверка реестра не завершена', text)
                 self.assertIn('C-001', text)
                 self.assertIn('Operational evidence was unavailable.', text)
+                self.assertIn('По оценке агента данных недостаточно', text)
                 self.assertIn(self.originals['study']['report_markdown'], text)
                 self.assertIn(self.originals['review']['report_markdown'], text)
                 self.assertEqual([s for s, _ in self.calls], ['study', 'review'])
@@ -111,7 +109,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
     def test_malformed_ledger_is_not_used_as_structured_evidence(self):
         def change(stage, data):
             if stage == 'review':
-                data['claims'][0]['evidence'] = {'secret': 'not an evidence array'}
+                data['claims'][0]['evidence_ids'] = {'secret': 'not an evidence array'}
             return data
         manifest, code = self.run_case(change)
         self.assertEqual(code, 2)
@@ -130,8 +128,11 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             return data
         manifest, code = self.run_case(change)
         self.assertEqual(code, 2)
-        issues = manifest['review_material']['validation_issues']['semantic_diagnostics']['violations']
-        self.assertTrue({'UNKNOWN_FINDING', 'MISSING_MATERIAL_FINDING', 'INCONSISTENT_VERDICT', 'MISSING_REPORT_ID'} <= {i['code'] for i in issues})
+        # The new wire contract rejects both the reverse links and agent-authored
+        # verdict outright. Canonical relations/derived verdicts are tested separately.
+        issues = manifest['review_material']['validation_issues']['schema_diagnostics']
+        self.assertGreaterEqual(issues['total_violations'], 3)
+        self.assertFalse(manifest['accepted'])
         self.assertEqual(self.originals['review']['findings'][0]['severity'], 'LOW')
 
     def test_failed_review_preserves_study_for_both_continuation_settings(self):
@@ -229,6 +230,21 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         with self.assertRaisesRegex(AuditError, 'result_policy'):
             load_config(self.config_path)
 
+    def test_legacy_cli_text_has_no_new_registry_or_positive_acceptance(self):
+        def legacy(stage, data):
+            data.pop('claims')
+            return data
+        for backend in ('codex', 'claude-code'):
+            for policy in ('strict', 'compromise'):
+                with self.subTest(backend=backend, policy=policy):
+                    manifest, code = self.run_case(legacy, backend=backend, policy=policy)
+                    self.assertEqual(code, 2 if policy == 'compromise' else 1)
+                    self.assertFalse(manifest['accepted'])
+                    if policy == 'compromise':
+                        self.assertNotIn('claims', manifest['study_material'])
+                        self.assertEqual(self.calls[1][1]['claim_registry'], [])
+                        self.assertIn('Старый формат', Path(manifest['final_report']).read_text())
+
 
 class CompromiseGit(unittest.TestCase):
     setUp = git_fixtures.RepoFixture.setUp
@@ -313,7 +329,7 @@ class CompromiseGit(unittest.TestCase):
         data['report_markdown'] += '\nD-001'
         data['differences'] = [{'id': 'D-001', 'branch': 'other', 'category': 'runtime',
             'classification': 'CONFIRMED_DIFFERENCE', 'baseline_statement': 'A', 'branch_statement': 'B',
-            'evidence_refs': ['master/a.py', 'other/b.py'], 'explanation': 'Change'}]
+            'evidence_refs': [], 'explanation': 'Change'}]
         with self.assertRaisesRegex(ContractError, 'accepted inputs'):
             validate_result('compare', data, context)
 

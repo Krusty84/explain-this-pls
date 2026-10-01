@@ -79,7 +79,7 @@ class RecursiveFixture:
         self.home.mkdir()
         (self.home / 'audit-profile.json').write_text('{"model":"configured-model"}')
         self.cli = self.base / 'fake-cli'
-        self.cli.write_text('#!' + sys.executable + '\n' + (ROOT / 'tests/fixtures/fake_cli.py').read_text())
+        self.cli.write_text('#!' + sys.executable + '\n' + ('import sys; sys.path.insert(0, ' + repr(str(ROOT / 'tests/fixtures')) + ')' + '\n' + (ROOT / 'tests/fixtures/fake_cli.py').read_text()))
         self.cli.chmod(0o700)
         self.calls = self.base / 'calls.jsonl'
         self.expected_file = self.base / 'expected.json'

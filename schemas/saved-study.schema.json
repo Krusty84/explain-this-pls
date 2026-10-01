@@ -1,0 +1,456 @@
+{
+  "type": "object",
+  "properties": {
+    "completion_status": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "PARTIAL",
+        "BLOCKED"
+      ]
+    },
+    "report_markdown": {
+      "type": "string"
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "task": {
+      "type": "string",
+      "enum": [
+        "architecture_documentation"
+      ]
+    },
+    "branch": {
+      "type": "string"
+    },
+    "source_commit": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "start_line": {
+            "type": "integer"
+          },
+          "end_line": {
+            "type": "integer"
+          },
+          "quote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source_id",
+          "path",
+          "start_line",
+          "end_line",
+          "quote"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "statement": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "epistemic_kind": {
+            "type": "string",
+            "enum": [
+              "FACT",
+              "HYPOTHESIS",
+              "UNKNOWN"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "uncertainty": {
+            "type": "string"
+          },
+          "document_locator": {
+            "type": "object",
+            "properties": {
+              "start_line": {
+                "type": "integer"
+              },
+              "end_line": {
+                "type": "integer"
+              },
+              "quote": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "start_line",
+              "end_line",
+              "quote"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "statement",
+          "scope",
+          "epistemic_kind",
+          "evidence_ids",
+          "uncertainty",
+          "document_locator"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "program_checks": {
+      "type": "object",
+      "properties": {
+        "execution": {
+          "type": "string",
+          "enum": [
+            "COMPLETED"
+          ]
+        },
+        "contract": {
+          "type": "string",
+          "enum": [
+            "VALID"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "MATCHED_AT_BOUNDARIES",
+            "NOT_INSPECTED_IN_COMPARISON"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "source_id": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "start_line": {
+                "type": "integer"
+              },
+              "end_line": {
+                "type": "integer"
+              },
+              "source_identity": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "git",
+                      "folder"
+                    ]
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "commit": {
+                    "type": "string"
+                  },
+                  "directory": {
+                    "type": "string"
+                  },
+                  "fingerprint": {
+                    "type": "string"
+                  },
+                  "parent_commit": {
+                    "type": "string"
+                  },
+                  "submodule_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "additionalProperties": false
+              },
+              "file_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fragment_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fragment_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "RESOLVED",
+                  "INVALID_POINTER",
+                  "UNKNOWN_SOURCE",
+                  "SOURCE_SCOPE_MISMATCH",
+                  "UNSAFE_PATH",
+                  "NOT_FOUND",
+                  "ACCESS_DENIED",
+                  "READ_ERROR",
+                  "OUT_OF_RANGE",
+                  "DECODE_ERROR",
+                  "QUOTE_MISMATCH",
+                  "LIMIT_EXCEEDED"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "source_id",
+              "path",
+              "start_line",
+              "end_line",
+              "source_identity",
+              "file_sha256",
+              "fragment_sha256",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "policy_satisfied": {
+          "type": "boolean"
+        },
+        "semantic_quality": {
+          "type": "string",
+          "enum": [
+            "NOT_MEASURED"
+          ]
+        },
+        "completion_self_assessment": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "BLOCKED",
+            null
+          ]
+        },
+        "meaning": {
+          "type": "string"
+        },
+        "evidence_counts": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "document_links": {
+          "type": "object",
+          "properties": {
+            "registered": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "matched": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "REGISTERED_CLAIMS_ONLY"
+              ]
+            }
+          },
+          "required": [
+            "registered",
+            "matched",
+            "scope"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "execution",
+        "contract",
+        "source",
+        "evidence",
+        "policy_satisfied",
+        "semantic_quality",
+        "completion_self_assessment",
+        "meaning",
+        "evidence_counts",
+        "document_links"
+      ],
+      "additionalProperties": false
+    },
+    "review_plan": {
+      "type": "object",
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "root": {
+                "type": "string"
+              },
+              "identity": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "git",
+                      "folder"
+                    ]
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "commit": {
+                    "type": "string"
+                  },
+                  "directory": {
+                    "type": "string"
+                  },
+                  "fingerprint": {
+                    "type": "string"
+                  },
+                  "parent_commit": {
+                    "type": "string"
+                  },
+                  "submodule_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "id",
+              "root",
+              "identity"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "source_sha256": {
+          "type": "string"
+        },
+        "document_sha256": {
+          "type": "string"
+        },
+        "registry_sha256": {
+          "type": "string"
+        },
+        "plan_sha256": {
+          "type": "string"
+        },
+        "required_claim_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "omission_areas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "scope": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "scope"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "eligible_study": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sources",
+        "source_sha256",
+        "document_sha256",
+        "registry_sha256",
+        "plan_sha256",
+        "required_claim_ids",
+        "omission_areas",
+        "eligible_study"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "completion_status",
+    "report_markdown",
+    "limitations",
+    "task",
+    "branch",
+    "source_commit",
+    "evidence",
+    "claims",
+    "program_checks",
+    "review_plan"
+  ],
+  "additionalProperties": false
+}

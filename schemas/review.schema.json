@@ -3,7 +3,11 @@
   "properties": {
     "completion_status": {
       "type": "string",
-      "enum": ["COMPLETE", "PARTIAL", "BLOCKED"]
+      "enum": [
+        "COMPLETE",
+        "PARTIAL",
+        "BLOCKED"
+      ]
     },
     "report_markdown": {
       "type": "string"
@@ -16,7 +20,9 @@
     },
     "task": {
       "type": "string",
-      "enum": ["architecture_review"]
+      "enum": [
+        "architecture_review"
+      ]
     },
     "branch": {
       "type": "string"
@@ -24,12 +30,64 @@
     "source_commit": {
       "type": "string"
     },
-    "verdict": {
-      "type": "string",
-      "enum": ["PASS", "CHANGES_REQUIRED", "INCONCLUSIVE"]
+    "target": {
+      "type": "object",
+      "properties": {
+        "source_sha256": {
+          "type": "string"
+        },
+        "document_sha256": {
+          "type": "string"
+        },
+        "registry_sha256": {
+          "type": "string"
+        },
+        "plan_sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_sha256",
+        "document_sha256",
+        "registry_sha256",
+        "plan_sha256"
+      ],
+      "additionalProperties": false
     },
-    "claim_inventory_complete": {
-      "type": "boolean"
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "start_line": {
+            "type": "integer"
+          },
+          "end_line": {
+            "type": "integer"
+          },
+          "quote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source_id",
+          "path",
+          "start_line",
+          "end_line",
+          "quote"
+        ],
+        "additionalProperties": false
+      }
     },
     "claims": {
       "type": "array",
@@ -39,42 +97,32 @@
           "id": {
             "type": "string"
           },
-          "location": {
-            "type": "string"
-          },
-          "statement": {
-            "type": "string"
-          },
           "outcome": {
             "type": "string",
-            "enum": ["SUPPORTED", "CONTRADICTED", "UNVERIFIABLE", "NOT_CHECKED"]
+            "enum": [
+              "SUPPORTED",
+              "CONTRADICTED",
+              "UNVERIFIABLE",
+              "NOT_CHECKED",
+              "CAVEAT_ACCEPTABLE",
+              "CAVEAT_INADEQUATE"
+            ]
           },
-          "evidence": {
+          "evidence_ids": {
             "type": "array",
             "items": {
               "type": "string"
             }
           },
           "limitation": {
-            "type": "string",
-            "description": "Required. Use an empty string when no limitation applies; unchecked/unverifiable claims require a reason."
-          },
-          "finding_ids": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Required links to findings (F-...). Use [] when none. Never put claim_ids in a claim."
+            "type": "string"
           }
         },
         "required": [
           "id",
-          "location",
-          "statement",
           "outcome",
-          "evidence",
-          "limitation",
-          "finding_ids"
+          "evidence_ids",
+          "limitation"
         ],
         "additionalProperties": false
       }
@@ -89,7 +137,11 @@
           },
           "severity": {
             "type": "string",
-            "enum": ["HIGH", "MEDIUM", "LOW"]
+            "enum": [
+              "HIGH",
+              "MEDIUM",
+              "LOW"
+            ]
           },
           "type": {
             "type": "string",
@@ -105,13 +157,12 @@
             "type": "array",
             "items": {
               "type": "string"
-            },
-            "description": "Required links to claims (C-...). Use [] when no existing claim applies. Only findings have claim_ids."
+            }
           },
           "location": {
             "type": "string"
           },
-          "evidence": {
+          "evidence_ids": {
             "type": "array",
             "items": {
               "type": "string"
@@ -130,9 +181,44 @@
           "type",
           "claim_ids",
           "location",
-          "evidence",
+          "evidence_ids",
           "impact",
           "proposed_correction"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "omission_search": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "area_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "INSPECTED",
+              "PARTIALLY_INSPECTED",
+              "NOT_INSPECTED"
+            ]
+          },
+          "limitation": {
+            "type": "string"
+          },
+          "finding_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "area_id",
+          "status",
+          "limitation",
+          "finding_ids"
         ],
         "additionalProperties": false
       }
@@ -145,10 +231,11 @@
     "task",
     "branch",
     "source_commit",
-    "verdict",
-    "claim_inventory_complete",
+    "target",
+    "evidence",
     "claims",
-    "findings"
+    "findings",
+    "omission_search"
   ],
   "additionalProperties": false
 }

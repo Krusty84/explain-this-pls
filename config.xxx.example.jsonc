@@ -1,5 +1,5 @@
 {
-  // Default: retain useful text with caveats; use "strict" for previous acceptance rules.
+  // Default: retain useful text with caveats; use "strict" to reject contract violations. Policy success is not factual proof.
   "result_policy": "compromise",
   "project_description": "Legacy application architecture audit using XXX",
   "mode": "folder",

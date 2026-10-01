@@ -86,7 +86,7 @@ class ProgressTests(unittest.TestCase):
         before = self.err.getvalue()
         r._tick_progress(state)
         self.assertEqual(self.err.getvalue(), before)
-        self.assertTrue(before.endswith('[OK] master / study / xxx — COMPLETE | Elapsed: 01:01:01\n'))
+        self.assertTrue(before.endswith('[OK] master / study / xxx — COMPLETE: Description generated; agent reports investigation complete in its stated scope | Elapsed: 01:01:01\n'))
 
     def test_short_stage_has_only_initial_frame(self):
         r = self.reporter()
@@ -94,7 +94,7 @@ class ProgressTests(unittest.TestCase):
         self.tick(r, .4)
         r.emit('stage_completed', **CONTEXT, status='PARTIAL', elapsed_seconds=.4)
         self.assertEqual(sum(self.err.getvalue().count(c) for c in SPINNER), 1)
-        self.assertIn('— PARTIAL | Elapsed: 00:00\n', self.err.getvalue())
+        self.assertIn('— PARTIAL: Processing incomplete or evidence insufficient | Elapsed: 00:00\n', self.err.getvalue())
 
     def test_runner_context_retries_and_next_stage_reset(self):
         r = self.reporter()
@@ -314,7 +314,7 @@ class ProgressTests(unittest.TestCase):
         self.tick(r, .75)
         r.emit('stage_completed', **CONTEXT, status='COMPLETE', elapsed_seconds=.75)
         self.assertIn(b'  \\ 00:00', buffer.getvalue())
-        self.assertIn(b'COMPLETE | Elapsed: 00:00\n', buffer.getvalue())
+        self.assertIn(b'COMPLETE: Description generated; agent reports investigation complete in its stated scope | Elapsed: 00:00\n', buffer.getvalue())
         self.assertNotIn(id(stream), r.failed_streams)
         state = self.start(r)
         stream.close()
@@ -426,8 +426,8 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         self.assertEqual(result['status'], 'COMPLETE')
         self.assertNotIn(b'\x1b', stdout)
         self.assertNotRegex(text, SGR)
-        self.assertIn('[OK] master / study / xxx — COMPLETE | Elapsed:', text)
-        self.assertIn('[OK] master / review / xxx — COMPLETE | Elapsed:', text)
+        self.assertIn('[OK] master / study / xxx — COMPLETE: Description generated; agent reports investigation complete in its stated scope | Elapsed:', text)
+        self.assertIn('[OK] master / review / xxx — COMPLETE: No material issues reported for required registry; policy checks satisfied | Elapsed:', text)
         self.assertIn('[OK] Original checkout hierarchy restored.', text)
         self.assertNotIn('      Elapsed:', text)
         self.assertNotIn('\x1b[?25', text)
