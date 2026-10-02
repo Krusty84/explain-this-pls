@@ -13,13 +13,20 @@ def recoverable_material(stage, data, context, mode, diagnostics):
     if stage not in ('study', 'review') or type(data) is not dict:
         return None
     identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
+    narrative = data.get('report_markdown')
+    narrative_origin = 'LEGACY_MODEL_MARKDOWN' if stage == 'study' else 'MODEL_MARKDOWN'
+    if stage == 'study' and 'report_sections' in data:
+        from document_rendering import recover_sections
+        narrative = recover_sections(data['report_sections'])
+        narrative_origin = 'PROGRAM_ASSEMBLED_AUTHOR_BLOCKS'
     if (data.get('task') != SCHEMAS[stage]['properties']['task']['enum'][0]
             or any(type(data.get(k)) is not str or data[k] != context.get(k) for k in identity)
-            or type(data.get('report_markdown')) is not str or not data['report_markdown'].strip()):
+            or type(narrative) is not str or not narrative.strip()):
         return None
     if stage == 'review' and 'target' in data and data['target'] != context.get('review_target'):
         return None
-    material = {k: data[k] for k in ('task', 'report_markdown', *identity)}
+    material = {k: data[k] for k in ('task', *identity)}
+    material.update(report_markdown=narrative, narrative_origin=narrative_origin)
     material.update(strict_valid=False, validation_issues=diagnostics,
                     completion_status=data.get('completion_status') if data.get('completion_status') in
                     ('COMPLETE', 'PARTIAL', 'BLOCKED') else None)
@@ -128,7 +135,10 @@ def render_final_report(manifest, source, mode, language='Russian'):
                 for group in doc['validation_issues'].values():
                     for issue in group.get('violations', []):
                         out += ['- ' + cell(issue['path']) + ': ' + cell(issue.get('message', issue.get('violation')))]
-            out += ['', '### ' + t('Исходный текст агента: ', 'Original agent text: ') + stage, '',
+            assembled = stage == 'study' and ('materialization_provenance' in doc or
+                doc.get('narrative_origin') == 'PROGRAM_ASSEMBLED_AUTHOR_BLOCKS')
+            out += ['', '### ' + (t('Программная сборка авторских блоков: ', 'Program assembly of authored blocks: ')
+                if assembled else t('Исходный текст агента: ', 'Original agent text: ')) + stage, '',
                     t('Ниже сохранены оценки и формулировки агента без исправлений; применяйте ограничения выше.',
                       'Agent assessments and wording below are preserved unchanged; apply the limitations above.'), '',
                     doc['report_markdown'], '']

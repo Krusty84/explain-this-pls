@@ -6,6 +6,7 @@ import copy
 import io
 import json
 import unittest
+from document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 
 from contracts import ContractError, result_diagnostics, validate_result, strict_json
@@ -36,6 +37,7 @@ class PureNormalizationTests(unittest.TestCase):
     def test_exact_edits_deep_copy_order_and_idempotence(self):
         self.data['evidence'].append(dict(self.data['evidence'][0], id='E-0001'))
         self.data['claims'].append(copy.deepcopy(self.data['claims'][0]) | {'id': 'C-002'})
+        self.data['report_sections'][0]['blocks'][0]['claim_ids'].append('C-002')
         self.data['claims'][0]['evidence_ids'] += ['study:E-0001']
         self.data['claims'][1]['evidence_ids'] = ['E-0001', 'study:E-001']
         original = copy.deepcopy(self.data)
@@ -68,8 +70,8 @@ class PureNormalizationTests(unittest.TestCase):
                 self.assertNotIn(ref, str(diagnostic(exc)))
 
     def test_ambiguous_and_invalid_definitions_block_all_changes(self):
-        for identifier, code in (('E-001', 'DUPLICATE_RECORD_ID'), ('E-01', 'INVALID_RECORD_ID'),
-                                 ('study:E-002', 'INVALID_RECORD_ID'), ('secret', 'INVALID_RECORD_ID')):
+        for identifier, code in (('E-001', 'DUPLICATE_RECORD_ID'), ('E-01', 'EVIDENCE_ID_COLLISION'),
+                                 ('review:E-002', 'INVALID_RECORD_ID'), ('secret', 'INVALID_RECORD_ID')):
             data = copy.deepcopy(self.data)
             data['evidence'].append(dict(data['evidence'][0], id=identifier))
             with self.subTest(identifier=identifier), self.assertRaises(ContractError) as caught:
@@ -120,15 +122,16 @@ class PureNormalizationTests(unittest.TestCase):
         self.assertTrue(caught.exception.details['truncated'])
         self.assertNotIn('SECRET_INVALID_REGISTRY', caught.exception.safe_message)
 
-    def test_full_validation_still_checks_locator_ids_and_completion(self):
-        self.data['claims'][0]['document_locator']['quote'] = 'SECRET not the document'
+    def test_full_validation_still_checks_block_links_ids_and_completion(self):
+        self.data['report_sections'][0]['blocks'][0]['claim_ids'] = ['C-999']
         candidate, changes = normalize_study(self.data, self.context)
         self.assertEqual(len(changes), 1)
-        self.error(candidate, 'DOCUMENT_LOCATOR_MISMATCH', '$.claims[0].document_locator')
+        self.error(candidate, 'UNKNOWN_REFERENCE', '$.report_sections[0].blocks[0].claim_ids[0]')
         self.data['claims'][0]['id'] = 'bad'
         candidate, _ = normalize_study(self.data, self.context)
         self.error(candidate, 'INVALID_RECORD_ID', '$.claims[0].id')
         self.data['claims'][0]['id'] = 'C-001'
+        self.data['report_sections'][0]['blocks'][0]['claim_ids'] = ['C-001']
         self.data.update(completion_status='PARTIAL', limitations=['Incomplete.'])
         candidate, _ = normalize_study(self.data, self.context)
         self.assertEqual(candidate['completion_status'], 'PARTIAL')
@@ -152,6 +155,28 @@ class PureNormalizationTests(unittest.TestCase):
 
 
 class NormalizationPipelineTests(FolderFixture):
+    def test_cli_review_normalization_preserves_frozen_study_in_both_policies(self):
+        for backend in ('codex', 'claude-code'):
+            for policy in ('strict', 'compromise'):
+                runner, context, raw = self.prepare(backend, policy)
+                doc, _ = self.invoke(runner, context, raw)
+                original = copy.deepcopy(doc)
+                ctx = review_context(doc, context)
+                wire = response(ctx)
+                wire['evidence'][0]['id'] = 'review:E-01'
+                wire['claims'][0]['evidence_ids'] = ['review:E-01', 'study:E-001']
+                runner.cfg['_agents']['review']['backend'] = backend
+                envelope = wire if backend == 'codex' else {'is_error': False, 'structured_output': wire}
+                with patch('explain.process', return_value={'returncode': 0, 'stdout': json.dumps(envelope).encode(), 'stderr': b''}) as process:
+                    saved, meta = runner.invoke('review', ctx, runner.run_dir / 'review.logs')
+                self.assertEqual(process.call_count, 1)
+                self.assertTrue(saved['program_checks']['policy_satisfied'])
+                self.assertEqual(doc, original)
+                self.assertEqual(saved['claim_registry'], original['claims'])
+                self.assertEqual(saved['target'], ctx['review_target'])
+                self.assertEqual(saved['normalization_provenance']['replacement_count'], 2)
+                self.assertTrue(meta['publication_complete'])
+
     def prepare(self, backend='codex', policy='strict', local=True):
         cfg = self.config() | {'result_policy': policy}
         cfg['_agents']['study']['backend'] = backend
@@ -193,9 +218,9 @@ class NormalizationPipelineTests(FolderFixture):
                 self.assertEqual(provenance['normalized_sha256'], sha(canonical(normalized)))
                 self.assertEqual(saved['normalization_provenance'], provenance)
                 self.assertEqual(meta['normalization_provenance'], provenance)
-                self.assertEqual(saved['claims'], candidate['claims'])
-                self.assertEqual(saved['review_plan']['registry_sha256'], sha(canonical(candidate['claims'])))
-                self.assertEqual((runner.run_dir / 'ARCHITECTURE.md').read_bytes(), raw['report_markdown'].encode())
+                self.assertEqual(saved['claims'], materialize_study(candidate)['claims'])
+                self.assertEqual(saved['review_plan']['registry_sha256'], sha(canonical(saved['claims'])))
+                self.assertEqual((runner.run_dir / 'ARCHITECTURE.md').read_bytes(), materialize_study(raw)['report_markdown'].encode())
                 self.assertTrue(meta['publication_complete'])
                 self.assertEqual(saved['program_checks']['semantic_quality'], 'NOT_MEASURED')
                 self.assertEqual('study_normalized' in runner.reporter.stderr.getvalue(), local)
@@ -203,21 +228,21 @@ class NormalizationPipelineTests(FolderFixture):
     def test_contract_failure_after_normalization_has_candidate_diagnostic(self):
         for policy in ('strict', 'compromise'):
             runner, context, data = self.prepare(policy=policy)
-            data['claims'][0]['document_locator']['quote'] = 'SECRET_LOCATOR'
+            data['report_sections'][0]['blocks'][0]['claim_ids'] = ['SECRET_LOCATOR']
             if policy == 'strict':
                 with self.assertRaises(ContractError) as caught: self.invoke(runner, context, data)
-                self.assertEqual(caught.exception.details['code'], 'DOCUMENT_LOCATOR_MISMATCH')
+                self.assertEqual(caught.exception.details['code'], 'UNKNOWN_REFERENCE')
             else:
                 saved, meta = self.invoke(runner, context, data)
                 self.assertIsNone(saved)
-                self.assertIn('DOCUMENT_LOCATOR_MISMATCH', meta['usable_material']['contract_failure']['message'])
+                self.assertIn('UNKNOWN_REFERENCE', meta['usable_material']['contract_failure']['message'])
                 self.assertNotIn('UNKNOWN_EVIDENCE_REFERENCE', json.dumps(meta['usable_material']['validation_issues']))
             attempt = runner.run_dir / 'study.logs/attempt-001'
             validation = strict_json((attempt / 'validation.json').read_text())
             self.assertFalse(validation['valid'])
             self.assertEqual(validation['validated_object'], 'normalized.json')
             self.assertEqual(validation['normalization_provenance']['replacement_count'], 1)
-            self.assertEqual(validation['error']['details']['path'], '$.claims[0].document_locator')
+            self.assertEqual(validation['error']['details']['path'], '$.report_sections[0].blocks[0].claim_ids[0]')
             self.assertNotIn('SECRET_LOCATOR', json.dumps(validation))
             self.assertFalse((runner.run_dir / 'study.json').exists())
 
@@ -232,7 +257,7 @@ class NormalizationPipelineTests(FolderFixture):
                 saved, meta = self.invoke(runner, context, data)
                 self.assertIsNone(saved)
                 material = meta['usable_material']
-                self.assertEqual(material['report_markdown'], data['report_markdown'])
+                self.assertEqual(material['report_markdown'], recover_sections(data['report_sections']))
                 self.assertNotIn('claims', material)
                 runner.manifest = {}
                 runner.store_stage({}, 'study', None, meta, context)
@@ -245,7 +270,7 @@ class NormalizationPipelineTests(FolderFixture):
 
     def test_required_artifact_writes_and_source_guards_cannot_publish(self):
         for policy in ('strict', 'compromise'):
-            for filename in ('normalized.json', 'normalization.json', 'validation.json', 'study.json', 'invocation.json'):
+            for filename in ('normalized.json', 'normalization.json', 'materialized.json', 'provenance.json', 'validation.json', 'study.json', 'invocation.json'):
                 runner, context, data = self.prepare(policy=policy)
                 def fail(path, content):
                     # Fail the post-validation write, not the initial diagnostics.
@@ -264,10 +289,16 @@ class NormalizationPipelineTests(FolderFixture):
             self.assertFalse((runner.run_dir / 'study.json').exists())
 
     def test_normalization_does_not_satisfy_evidence_or_completion_policy(self):
-        for mutation in ('missing-evidence-file', 'partial'):
+        for mutation in ('missing-evidence-file', 'unsafe-path', 'source-quote', 'unknown-source', 'partial'):
             runner, context, data = self.prepare()
             if mutation == 'partial':
                 data.update(completion_status='PARTIAL', limitations=['Not finished.'])
+            elif mutation == 'unsafe-path':
+                data['evidence'][0]['path'] = '../outside.py'
+            elif mutation == 'source-quote':
+                data['evidence'][0]['quote'] = 'Synthetic wrong source quotation'
+            elif mutation == 'unknown-source':
+                data['evidence'][0]['source_id'] = 'source-999'
             else:
                 data['evidence'][0]['path'] = 'missing.py'
             saved, meta = self.invoke(runner, context, data)
@@ -276,6 +307,8 @@ class NormalizationPipelineTests(FolderFixture):
             self.assertFalse(saved['program_checks']['policy_satisfied'])
             if mutation == 'missing-evidence-file':
                 self.assertEqual(saved['program_checks']['evidence'][0]['status'], 'NOT_FOUND')
+            elif mutation != 'partial':
+                self.assertNotEqual(saved['program_checks']['evidence'][0]['status'], 'RESOLVED')
 
 
 if __name__ == '__main__':

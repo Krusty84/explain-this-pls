@@ -62,8 +62,8 @@ def obj(**properties: dict) -> dict:
 # Wire schemas deliberately use only type/enum/properties/required/items and
 # additionalProperties. Local semantic checks enforce nonblank strings, bounds
 # and graph constraints regardless of a backend's JSON Schema dialect.
-CONTRACT_VERSION = 'evidence-ledger-v1'
-ARTIFACT_VERSION = 'evidence-ledger-artifacts-v1'
+CONTRACT_VERSION = 'evidence-ledger-v2'
+ARTIFACT_VERSION = 'evidence-ledger-artifacts-v2'
 STRINGS = array(string())
 STATUS = string('COMPLETE', 'PARTIAL', 'BLOCKED')
 BASE = dict(completion_status=STATUS, report_markdown=string(), limitations=STRINGS)
@@ -72,10 +72,16 @@ EVIDENCE = array(obj(id=string(), source_id=string(), path=string(),
                      start_line={'type': 'integer'}, end_line={'type': 'integer'}, quote=string()))
 CLAIM = obj(id=string(), statement=string(), scope=string(),
     epistemic_kind=string('FACT', 'HYPOTHESIS', 'UNKNOWN'), evidence_ids=STRINGS,
-    uncertainty=string(), document_locator=LOCATOR)
+    uncertainty=string())
+MATERIALIZED_CLAIM = obj(**CLAIM['properties'], document_locators=array(LOCATOR))
+SECTION_KEYS = ('scope', 'context', 'components', 'startup_and_flows', 'data_and_state',
+                'cross_cutting', 'constraints', 'change_navigation', 'unknowns', 'evidence_basis')
+SECTIONS = array(obj(key=string(*SECTION_KEYS), title=string(),
+                     blocks=array(obj(markdown=string(), claim_ids=STRINGS))))
+STUDY_BASE = dict(completion_status=STATUS, report_sections=SECTIONS, limitations=STRINGS)
 TARGET = obj(source_sha256=string(), document_sha256=string(), registry_sha256=string(), plan_sha256=string())
 SCHEMAS = {
-    'study': obj(**BASE, task=string('architecture_documentation'), branch=string(), source_commit=string(),
+    'study': obj(**STUDY_BASE, task=string('architecture_documentation'), branch=string(), source_commit=string(),
                  evidence=EVIDENCE, claims=array(CLAIM)),
     'review': obj(**BASE, task=string('architecture_review'), branch=string(), source_commit=string(),
         target=TARGET, evidence=EVIDENCE,
@@ -242,13 +248,18 @@ def validate_schema(value: Any, schema: dict, where: str = '$') -> None:
             **first, **details)
 
 
-def has_ledger_structure(stage, value):
+def has_ledger_structure(stage, value, *, representation='materialized'):
     """Recognize substantive ledger fields without a model-supplied version tag."""
     fields = {'study': ('claims', 'evidence'),
               'review': ('claims', 'evidence', 'target', 'omission_search'),
               'compare': ('differences', 'unresolved_branches')}
+    specs = dict(SCHEMAS[stage]['properties'])
+    if stage == 'study' and representation != 'wire':
+        specs['claims'] = array(MATERIALIZED_CLAIM)
+        if type(value) is not dict or type(value.get('report_markdown')) is not str:
+            return False
     return type(value) is dict and all(not schema_diagnostics(
-        value.get(key), SCHEMAS[stage]['properties'][key], limit=0)['total_violations']
+        value.get(key), specs[key], limit=0)['total_violations']
         for key in fields[stage])
 
 
@@ -313,10 +324,14 @@ def validate_wire_identity(stage, value, context, mode='git'):
     try:
         validate_schema(value, (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage])
     except ContractError as exc:
-        if (type(value) is dict and not has_ledger_structure(stage, value)
+        if (type(value) is dict and (not has_ledger_structure(stage, value, representation='wire')
+                or (stage == 'study' and 'report_markdown' in value))
                 and not exc.details.get('code')):
             exc.safe_message = ('Expected the current evidence ledger structure. Legacy output/custom prompts '
-                                'must be updated; new checks cannot be inferred from old fields.')
+                                + ('must be updated to v2 report_sections with blocks[].claim_ids and no '
+                                   'report_markdown/document_locator; ' if stage == 'study' else
+                                   'must be updated to the current ' + stage + ' wire schema; ')
+                                + 'new checks cannot be inferred from old fields.')
         raise
     if stage in ('study', 'review'):
         identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
@@ -324,11 +339,16 @@ def validate_wire_identity(stage, value, context, mode='git'):
             if value[key] != context.get(key):
                 raise contract_violation('SOURCE_IDENTITY_MISMATCH', '$.' + key,
                                          kind='IDENTITY_MISMATCH', layer='identity')
+    if stage == 'review':
+        from ledger import verify_review_context
+        verify_review_context(context)
+        if value['target'] != context['review_target']:
+            key = next(k for k in TARGET['properties'] if value['target'][k] != context['review_target'][k])
+            raise contract_violation('TARGET_IDENTITY_MISMATCH', '$.target.' + key,
+                                     kind='IDENTITY_MISMATCH', layer='identity')
 
 
 def validate_result(stage, value, context, mode='git'):
-    from evidence import lines, source_catalog
-    from ledger import verify_review_context
     validate_wire_identity(stage, value, context, mode)
     nonblank(value)
     if value['completion_status'] != 'COMPLETE' and not value['limitations']:
@@ -343,21 +363,13 @@ def validate_result(stage, value, context, mode='git'):
         evidence_ids = {stage + ':' + e['id'] for e in value['evidence']}
         unique_ids(value['claims'], r'C-[0-9]{3,}', '$.claims')
     if stage == 'study':
-        document = lines(value['report_markdown'])
+        from document_rendering import validate_sections
+        validate_sections(value['report_sections'], value['claims'])
         for i, claim in enumerate(value['claims']):
             references(claim['evidence_ids'], evidence_ids, f'$.claims[{i}].evidence_ids', namespaces={'study'})
-            loc = claim['document_locator']
-            a, b = loc['start_line'], loc['end_line']
-            if a < 1 or b < a or b > len(document) or not loc['quote'].strip() or ''.join(document[a-1:b]) != loc['quote']:
-                raise contract_violation('DOCUMENT_LOCATOR_MISMATCH', f'$.claims[{i}].document_locator')
             if claim['epistemic_kind'] != 'FACT' and not claim['uncertainty'].strip():
                 raise ContractError('Hypothesis/unknown requires a concrete missing check or limitation')
     elif stage == 'review':
-        verify_review_context(context)
-        if value['target'] != context['review_target']:
-            key = next(k for k in TARGET['properties'] if value['target'][k] != context['review_target'][k])
-            raise contract_violation('TARGET_IDENTITY_MISMATCH', '$.target.' + key,
-                                     kind='IDENTITY_MISMATCH', layer='identity')
         registry = {c['id']: c for c in context['claim_registry']}
         for i, c in enumerate(value['claims']):
             if c['id'] not in registry:

@@ -5,7 +5,7 @@
 from __future__ import annotations
 import copy
 from collections import Counter
-from contracts import CONTRACT_VERSION, ARTIFACT_VERSION, ContractError, has_ledger_structure, has_program_checks, review_verdict
+from contracts import CONTRACT_VERSION, ARTIFACT_VERSION, ContractError, contract_violation, has_ledger_structure, has_program_checks, review_verdict
 from evidence import canonical, sha, source_catalog, resolve_evidence
 
 OMISSION_AREAS = ('context', 'components', 'startup_and_flows', 'data_and_state',
@@ -13,6 +13,11 @@ OMISSION_AREAS = ('context', 'components', 'startup_and_flows', 'data_and_state'
 
 
 def freeze_plan(document, context):
+    if 'report_sections' in document:
+        raise contract_violation('UNMATERIALIZED_STUDY', '$.report_sections')
+    if has_ledger_structure('study', document) or 'materialization_provenance' in document or has_program_checks(document):
+        from document_rendering import validate_materialized
+        validate_materialized(document)
     registry = copy.deepcopy(document.get('claims', [])) if has_ledger_structure('study', document) else []
     areas = [{'id': 'A-' + str(i + 1).zfill(3), 'scope': name} for i, name in enumerate(OMISSION_AREAS)]
     areas += [{'id': 'P-' + str(i + 1).zfill(3), 'scope': name}
@@ -45,6 +50,8 @@ def verify_review_context(context):
     try:
         expected = freeze_plan(context['architecture_document'], context)
         if (context['review_plan'] != expected or context['review_target'] != target(expected) or
+                context['document_sha256'] != expected['document_sha256'] or
+                context['document_strictly_valid'] != has_program_checks(context['architecture_document']) or
                 sha(canonical(context['claim_registry'])) != expected['registry_sha256']):
             raise ContractError('Frozen review context changed')
     except KeyError:
@@ -52,11 +59,21 @@ def verify_review_context(context):
 
 
 def prepare_result(stage, data, context, expected_files=None):
-    """Caller must validate the wire object and pass source/cleanup guards first.
+    """Caller must pass source/cleanup guards and validate its input first.
+
+    Runner supplies materialized study (wire review/compare). Library callers may
+    supply study wire; that path validates and materializes before any source read.
 
     Returns a separate saved representation. Never mutates the extracted response.
     Resolver reads are performed by the orchestrator, not credited to an agent.
     """
+    if stage == 'study':
+        from document_rendering import materialize_study, validate_materialized
+        if 'report_sections' in data:
+            from contracts import validate_result
+            validate_result(stage, data, context, 'folder' if 'source_directory' in context else 'git')
+            data = materialize_study(data)
+        validate_materialized(data)
     result = copy.deepcopy(data)
     checks = {'execution': 'COMPLETED', 'contract': 'VALID', 'source': 'MATCHED_AT_BOUNDARIES',
         'evidence': [], 'policy_satisfied': False, 'semantic_quality': 'NOT_MEASURED',
@@ -119,6 +136,11 @@ def prepare_result(stage, data, context, expected_files=None):
 def accepted_pair(item):
     doc, rev = item.get('study'), item.get('review')
     if not doc or not rev:
+        return False
+    try:
+        from document_rendering import validate_materialized
+        validate_materialized(doc)
+    except (ContractError, KeyError, TypeError):
         return False
     if any(k in item and item[k] != doc.get(k) for k in ('branch', 'source_commit', 'source_directory', 'source_fingerprint')):
         return False

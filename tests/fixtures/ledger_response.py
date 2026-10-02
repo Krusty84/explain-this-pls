@@ -1,8 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Model wire fixture only. Does not fabricate orchestrator checks."""
+"""Synthetic model wire fixture, not a response from the user's historical run."""
 import copy
+# Keep the child-process fixture self-contained; production checks enforce keys.
+SECTION_KEYS = ('scope', 'context', 'components', 'startup_and_flows', 'data_and_state',
+                'cross_cutting', 'constraints', 'change_navigation', 'unknowns', 'evidence_basis')
+
+
+def sections(markdown='C-001: Has an entry point\n'):
+    return [dict(key=key, title='Report: configured-model' if i == 0 else key,
+                 blocks=[dict(markdown=markdown if i == 0 else 'Not applicable in this synthetic fixture.',
+                              claim_ids=['C-001'] if i == 0 else [])]) for i, key in enumerate(SECTION_KEYS)]
 
 def response(context):
     data = {'completion_status': 'COMPLETE',
@@ -27,7 +36,8 @@ def response(context):
             omission_search=[dict(area_id=a['id'], status='INSPECTED', limitation='', finding_ids=[])
                              for a in context['review_plan']['omission_areas']])
     else:
+        del data['report_markdown']
+        data['report_sections'] = sections()
         data.update(task='architecture_documentation', claims=[dict(id='C-001', statement='Has an entry point',
-            scope='Static source inspection.', epistemic_kind='FACT', evidence_ids=['study:E-001'], uncertainty='',
-            document_locator=dict(start_line=2, end_line=2, quote='C-001: Has an entry point\n'))])
+            scope='Static source inspection.', epistemic_kind='FACT', evidence_ids=['study:E-001'], uncertainty='')])
     return data

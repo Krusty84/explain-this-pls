@@ -144,6 +144,10 @@ class Handler(BaseHTTPRequestHandler):
                 data['completion_status'] = 'INVALID'
             if os.environ.get('AUDIT_FAKE_LOCAL_REFS'):
                 data['claims'][0]['evidence_ids'] = ['E-001']
+            if os.environ.get('AUDIT_FAKE_SHORT_IDS'):
+                namespace = 'review' if 'architecture_document' in context else 'study'
+                data['evidence'][0]['id'] = namespace + ':E-1'
+                data['claims'][0]['evidence_ids'] = [namespace + ':E-1']
             if scenario == 'claims-string':
                 data['claims'] = '[{"private":"' + 'x' * 21295
             model = body.get('model', {'providerID': 'fixture', 'modelID': 'configured-model'})
@@ -169,6 +173,8 @@ class Handler(BaseHTTPRequestHandler):
                 del info['structured']
             if scenario == 'no-final':
                 del info['time']['completed']
+            if scenario == 'unknown-compare-finish' and 'baseline_branch' in context:
+                info['finish'] = 'SYNTHETIC_PRIVATE_UNKNOWN_FINISH'
             if scenario == 'tool-input-mismatch':
                 different = json.loads(json.dumps(data))
                 different['claims'][0]['evidence_ids'] = ['study:E-001']

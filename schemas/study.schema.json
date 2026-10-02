@@ -9,8 +9,59 @@
         "BLOCKED"
       ]
     },
-    "report_markdown": {
-      "type": "string"
+    "report_sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "scope",
+              "context",
+              "components",
+              "startup_and_flows",
+              "data_and_state",
+              "cross_cutting",
+              "constraints",
+              "change_navigation",
+              "unknowns",
+              "evidence_basis"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "markdown": {
+                  "type": "string"
+                },
+                "claim_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "markdown",
+                "claim_ids"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "key",
+          "title",
+          "blocks"
+        ],
+        "additionalProperties": false
+      }
     },
     "limitations": {
       "type": "array",
@@ -95,26 +146,6 @@
           },
           "uncertainty": {
             "type": "string"
-          },
-          "document_locator": {
-            "type": "object",
-            "properties": {
-              "start_line": {
-                "type": "integer"
-              },
-              "end_line": {
-                "type": "integer"
-              },
-              "quote": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "start_line",
-              "end_line",
-              "quote"
-            ],
-            "additionalProperties": false
           }
         },
         "required": [
@@ -123,8 +154,7 @@
           "scope",
           "epistemic_kind",
           "evidence_ids",
-          "uncertainty",
-          "document_locator"
+          "uncertainty"
         ],
         "additionalProperties": false
       }
@@ -132,7 +162,7 @@
   },
   "required": [
     "completion_status",
-    "report_markdown",
+    "report_sections",
     "limitations",
     "task",
     "branch",

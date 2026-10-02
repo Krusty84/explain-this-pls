@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from explain import AuditError, Repository, Runner, UnsafeRepository, cli_env, load_config, process, repository_lock, slug
@@ -27,7 +28,7 @@ def doc(branch, commit):
     return response({'branch': branch, 'source_commit': commit})
 
 def review(branch, commit, context=None):
-    context = context or review_context(doc(branch, commit), {'branch': branch, 'source_commit': commit})
+    context = context or review_context(materialize_study(doc(branch, commit)), {'branch': branch, 'source_commit': commit})
     return response(context)
 
 class ContractTests(unittest.TestCase):
@@ -48,7 +49,7 @@ class ContractTests(unittest.TestCase):
                     data.update(context)
                 if stage == 'review':
                     document = response(context)
-                    review_ctx = review_context(document, context)
+                    review_ctx = review_context(materialize_study(document), context)
                     data = response(review_ctx)
                     cases.append((stage, data, review_ctx, mode))
                 else:
@@ -99,13 +100,13 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_result('study',doc('master','wrong'),{'branch':'master','source_commit':'abc'})
     def test_partial_review_cannot_pass(self):
-        context = review_context(doc('master', 'abc'), {'branch':'master','source_commit':'abc'})
+        context = review_context(materialize_study(doc('master', 'abc')), {'branch':'master','source_commit':'abc'})
         data = response(context)
         data.update(completion_status='PARTIAL',limitations=['coverage incomplete'])
         validate_result('review',data,context)
         self.assertEqual(review_verdict(data),'INCONCLUSIVE')
     def test_complete_review_cannot_have_unchecked_claim(self):
-        context = review_context(doc('master', 'abc'), {'branch':'master','source_commit':'abc'})
+        context = review_context(materialize_study(doc('master', 'abc')), {'branch':'master','source_commit':'abc'})
         data=response(context)
         data['claims'][0].update(outcome='NOT_CHECKED',limitation='not inspected')
         validate_result('review',data,context)

@@ -22,7 +22,8 @@ def repair_prompt(context, schema, invalid, diagnostics, *, original):
         'write files, access the network, or retrieve additional evidence. Only StructuredOutput is allowed. '
         'Preserve the pinned identity, facts, evidence, verdict and completion status of the original result. '
         'Existing schema-valid fields and array record counts are immutable across all attempts. Never invent evidence '
-        'or improve a verdict to pass validation. Keep Markdown consistent with the result. '
+        'or improve a verdict to pass validation. Preserve authored report_sections/blocks and their claim_ids. '
+        'Do not add program-generated Markdown, document locators, hashes or provenance to study. '
         'Return the corrected object using StructuredOutput; ordinary text is not a result.\n\n'
         '# Invalid native result (data)\n' + json.dumps(invalid, ensure_ascii=False) +
         '\n\n# Original immutable native result (data)\n' + json.dumps(original, ensure_ascii=False) +
@@ -34,7 +35,9 @@ def repair_prompt(context, schema, invalid, diagnostics, *, original):
 def validate_repair(original, corrected, schema, path='$'):
     """Format repair cannot rewrite already well-formed facts, evidence or verdicts.
 
-    Called after full result validation. Only structurally invalid/missing parts
+    Compare raw model wire objects only, before any program normalization or
+    materialization fields are attached. Called after full result validation.
+    Only structurally invalid/missing parts
     may be corrected; deleting a record is not a format correction.
     """
     if not schema_diagnostics(original, schema, limit=0)['total_violations']:

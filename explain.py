@@ -41,7 +41,8 @@ import xxx
 from structured_output import blocked_comparison, repair_prompt, required_unresolved, retry_policy, validate_repair
 from final_report import recoverable_material, stage_document, usable_study, report_entries, comparison_possible, render_final_report
 from ledger import prepare_result, review_context
-from study_normalization import normalize_study, normalization_provenance
+from study_normalization import normalize_evidence, normalization_provenance
+from document_rendering import materialize_study, validate_materialized
 from evidence import source_catalog, SourceChanged, open_source_directory
 from contracts import CONTRACT_VERSION, ARTIFACT_VERSION, has_ledger_structure, validate_schema
 from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
@@ -1024,6 +1025,13 @@ class Runner:
         self.analysis_started = False
         self.active_stage = {}
         self.cfg, self.run_dir = config, run_dir.resolve()
+        existing_manifest = self.run_dir / 'manifest.json'
+        if existing_manifest.exists():
+            previous = strict_json(existing_manifest.read_text(encoding='utf-8'))
+            if (previous.get('contract_version') != CONTRACT_VERSION or
+                    previous.get('artifact_version') != ARTIFACT_VERSION):
+                raise AuditError('Historical run artifacts are read-only; select a new run directory.',
+                                 code='LEGACY_ARTIFACT_READ_ONLY', failure_layer='publication')
         self.compromise = config.get('result_policy', 'compromise') == 'compromise'
         self.critical_failure = False
         self.execution = execution_settings(config.get('execution'))
@@ -1230,7 +1238,7 @@ class Runner:
                     invalid = strict_json((attempt / 'extracted.json').read_text())
                     keys = (('source_directory', 'source_fingerprint') if self.mode == 'folder' else
                             ('baseline_branch', 'baseline_commit') if stage == 'compare' else ('branch', 'source_commit'))
-                    can_repair = (has_ledger_structure(stage, invalid)
+                    can_repair = (has_ledger_structure(stage, invalid, representation='wire')
                         and invalid.get('task') == self.schemas[stage]['properties']['task']['enum'][0]
                         and all(invalid.get(key) == context.get(key) for key in keys)
                         and (stage != 'review' or invalid.get('target') == context.get('review_target')))
@@ -1263,8 +1271,8 @@ class Runner:
         candidate = data
         validation = {'valid': False, 'validated_object': 'extracted.json'}
         try:
-            if stage == 'study':
-                candidate, changes = normalize_study(data, context, self.mode)
+            if stage in ('study', 'review'):
+                candidate, changes = normalize_evidence(stage, data, context, self.mode)
                 provenance = normalization_provenance(data, candidate, changes)
                 # Required artifacts precede validation/publication; extracted.json
                 # remains the adapter's original object, including on failure.
@@ -1273,7 +1281,7 @@ class Runner:
                 meta['normalization_provenance'] = provenance
                 validation.update(validated_object='normalized.json', normalization_provenance=provenance)
                 if changes:
-                    self.reporter.emit('study_normalized', **self.stage_context(stage, context),
+                    self.reporter.emit(stage + '_normalized', **self.stage_context(stage, context),
                                        rule=provenance['rule'], replacement_count=len(changes))
             validate_result(stage, candidate, context, self.mode)
             if repair_source is not None:
@@ -1292,6 +1300,16 @@ class Runner:
         validation.update(result_diagnostics(stage, candidate, context, self.mode))
         meta['local_validation'] = True
         save_json(attempt / 'validation.json', validation)
+        if stage == 'study':
+            try:
+                candidate = materialize_study(candidate)
+            except ContractError as exc:
+                raise AuditError('Program document assembly failed its invariant checks.',
+                                 code='MATERIALIZATION_ERROR', failure_layer='materialization') from exc
+            save_json(attempt / 'materialized.json', candidate)
+            save_json(attempt / 'provenance.json', {
+                'normalization': meta['normalization_provenance'],
+                'materialization': candidate['materialization_provenance']})
         return candidate
 
     def store_stage(self, item, stage, data, meta, context):
@@ -1311,12 +1329,23 @@ class Runner:
 
     def publish_result(self, stage, data, destination):
         try:
+            if stage == 'study':
+                validate_materialized(data)
             validate_schema(data, (SAVED_FOLDER_SCHEMAS if self.mode == 'folder' else SAVED_SCHEMAS)[stage])
         except ContractError as exc:
             raise AuditError('Computed artifact failed local validation.', code='ARTIFACT_CONTRACT_ERROR',
                              failure_layer='publication') from exc
         # Study bytes are the reviewed document identity; never normalize them.
         report = data['report_markdown'] if stage == 'study' else render_stage(stage, data, self.cfg.get('output_language'))
+        if stage == 'study':
+            frozen = {'ARCHITECTURE.md': report.encode('utf-8'),
+                'claim.registry.json': (json.dumps(data['claims'], ensure_ascii=False, indent=2) + '\n').encode('utf-8'),
+                'review.plan.json': (json.dumps(data['review_plan'], ensure_ascii=False, indent=2) + '\n').encode('utf-8')}
+            for name, expected in frozen.items():
+                path = destination.parent / name
+                if path.exists() and path.read_bytes() != expected:
+                    raise AuditError('Frozen study artifacts cannot be replaced; select a new run directory.',
+                                     code='REVIEW_TARGET_CHANGED', failure_layer='publication')
         atomic(destination.parent / ARTIFACTS[stage], report)
         atomic(destination.parent / (stage + '.original.md'), data['report_markdown'])
         if stage == 'study':
@@ -1344,8 +1373,16 @@ class Runner:
         if result['document_strictly_valid']:
             self.assert_review_files(result, directory)
         else:
-            save_json(directory / 'claim.registry.json', result['claim_registry'])
-            save_json(directory / 'review.plan.json', result['review_plan'])
+            pending = {'claim.registry.json': result['claim_registry'], 'review.plan.json': result['review_plan']}
+            for name, value in pending.items():
+                path = directory / name
+                expected = (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+                if path.exists() and path.read_bytes() != expected:
+                    raise AuditError('Recovered material cannot replace an existing frozen registry or plan.',
+                                     code='REVIEW_TARGET_CHANGED', failure_layer='publication')
+            for name, value in pending.items():
+                if not (directory / name).exists():
+                    save_json(directory / name, value)
         return result
 
     def publish_blocked_comparison(self, context, destination):
@@ -1495,7 +1532,7 @@ class Runner:
             # Publish after the CLI exits and temporary invocation files are removed.
             try:
                 data = prepare_result(stage, data, context, evidence_pins)
-                if stage == 'study':
+                if stage in ('study', 'review'):
                     data['normalization_provenance'] = meta['normalization_provenance']
             except SourceChanged as exc:
                 meta['source_integrity_verified'] = False

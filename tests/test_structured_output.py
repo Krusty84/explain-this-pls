@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import time
 import unittest
+from document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 
 from contracts import ContractError, SCHEMAS, schema_diagnostics, validate_result
@@ -42,7 +43,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
         context = {'source_mode': 'folder', 'source_directory': str(self.source),
                    'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
         if stage == 'review':
-            context = review_context(response(context), context)
+            context = review_context(materialize_study(response(context)), context)
         self.destination = destination
         self.last_runner = runner
         env = self.env | {'AUDIT_FAKE_BACKEND': backend, 'AUDIT_FAKE_CASE': scenario}
@@ -68,9 +69,9 @@ class NativeStructuredOutputTests(unittest.TestCase):
             self.assertEqual(envelope['info']['structured'], extracted)
             self.assertEqual(envelope['parts'][1]['state']['input'], extracted)
             self.assertEqual(candidate['claims'][0]['evidence_ids'], ['study:E-001'])
-            self.assertEqual(saved['claims'], candidate['claims'])
+            self.assertEqual(saved['claims'], materialize_study(candidate)['claims'])
             self.assertEqual(saved['normalization_provenance']['replacement_count'], 1)
-            self.assertEqual(saved['review_plan']['registry_sha256'], sha(canonical(candidate['claims'])))
+            self.assertEqual(saved['review_plan']['registry_sha256'], sha(canonical(saved['claims'])))
             self.assertTrue(meta['publication_complete'])
             self.assertEqual(len(self.prompts()) - start, 1)
             self.assertEqual(meta['retry_policy']['orchestrator_repair_attempts_performed'], 0)
@@ -99,6 +100,25 @@ class NativeStructuredOutputTests(unittest.TestCase):
                 if scenario not in ('cleanup', 'source-change'):
                     self.assertFalse((self.destination / 'attempt-001/normalized.json').exists())
 
+    def test_native_review_definition_normalization_keeps_target_and_raw_envelope(self):
+        for backend in ('xxx', 'opencode'):
+            before = len(self.prompts())
+            with patch.dict(os.environ, {'AUDIT_FAKE_SHORT_IDS': '1'}):
+                saved, meta = self.stage(backend, 'valid', repairs=2, stage='review')
+            attempt = self.destination / 'attempt-001'
+            extracted = json.loads((attempt / 'extracted.json').read_text())
+            normalized = json.loads((attempt / 'normalized.json').read_text())
+            envelope = json.loads((attempt / 'response.json').read_text())
+            self.assertEqual(extracted, envelope['info']['structured'])
+            self.assertEqual(extracted, envelope['parts'][1]['state']['input'])
+            self.assertEqual(extracted['evidence'][0]['id'], 'review:E-1')
+            self.assertEqual(normalized['evidence'][0]['id'], 'E-001')
+            self.assertEqual(saved['claims'][0]['evidence_ids'], ['review:E-001'])
+            self.assertEqual(saved['target'], extracted['target'])
+            self.assertEqual(meta['normalization_provenance']['replacement_count'], 2)
+            self.assertEqual(len(self.prompts()) - before, 1)
+            self.assertTrue(meta['publication_complete'])
+
     def test_native_string_claims_are_retained_and_never_model_repaired(self):
         for backend in ('xxx', 'opencode'):
             for policy in ('strict', 'compromise'):
@@ -122,7 +142,10 @@ class NativeStructuredOutputTests(unittest.TestCase):
             with patch.dict(os.environ, {'AUDIT_FAKE_LOCAL_REFS': '1'}), self.assertRaises(ContractError) as caught:
                 self.stage(backend, 'valid', stage='review')
             self.assertEqual(caught.exception.details['code'], 'UNKNOWN_EVIDENCE_REFERENCE')
-            self.assertFalse((self.destination / 'attempt-001/normalized.json').exists())
+            attempt = self.destination / 'attempt-001'
+            self.assertEqual(json.loads((attempt / 'normalized.json').read_text()),
+                             json.loads((attempt / 'extracted.json').read_text()))
+            self.assertEqual(json.loads((attempt / 'normalization.json').read_text())['replacement_count'], 0)
 
     def test_legacy_contract_never_triggers_invented_registry_repair(self):
         for backend in ('xxx', 'opencode'):
@@ -365,6 +388,35 @@ class NativeGitComparisonTests(unittest.TestCase):
     run_case = xxx_fixtures.XXXTests.run_case
     recorded = xxx_fixtures.XXXTests.recorded
     prompts = xxx_fixtures.XXXTests.prompts
+
+    def test_unknown_compare_finish_preserves_fixed_study_review_and_diagnostics(self):
+        self.init_git(['main', 'other'])
+        for backend in ('xxx', 'opencode'):
+            for policy in ('strict', 'compromise'):
+                self.value.update(result_policy=policy)
+                self.value['agent']['backend'] = backend
+                self.env['AUDIT_FAKE_BACKEND'] = backend
+                before = len(self.prompts())
+                with patch('opencode.verify_native_retries'):
+                    manifest, code = self.run_case('unknown-compare-finish')
+                self.assertNotEqual(code, 0)
+                self.assertEqual(len(self.prompts()) - before, 5)
+                self.assertTrue(all(b['accepted'] for b in manifest['branches']))
+                self.assertNotIn('comparison', manifest)
+                final = Path(manifest['final_report']).read_text()
+                self.assertIn('FINISH_UNKNOWN', final)
+                self.assertNotIn('SYNTHETIC_PRIVATE_UNKNOWN_FINISH', final)
+                self.assertIn('не означает отсутствия различий', final)
+                attempt = self.run_dir / 'comparison/compare.logs/attempt-001'
+                meta = json.loads((attempt / 'invocation.json').read_text())
+                self.assertFalse(meta['publication_complete'])
+                self.assertEqual(meta['finish_reason_raw'], 'SYNTHETIC_PRIVATE_UNKNOWN_FINISH')
+                self.assertEqual(meta['finish_classification'], 'FINISH_UNKNOWN')
+                self.assertFalse((attempt / 'extracted.json').exists())
+                self.assertFalse((self.run_dir / 'comparison/compare.json').exists())
+                for branch in manifest['branches']:
+                    for stage in ('study', 'review'):
+                        self.assertTrue(branch[stage + '_invocation']['publication_complete'])
 
     def test_no_accepted_inputs_never_call_compare_and_keep_failure_exit_code(self):
         self.init_git(['main', 'other'])

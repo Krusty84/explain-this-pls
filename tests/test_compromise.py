@@ -7,6 +7,7 @@ import io
 import json
 from pathlib import Path
 import unittest
+from document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 
 from contracts import ContractError, validate_result
@@ -108,7 +109,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
                 self.assertIn('C-001', text)
                 self.assertIn('Operational evidence was unavailable.', text)
                 self.assertIn('По оценке агента данных недостаточно', text)
-                self.assertIn(self.originals['study']['report_markdown'], text)
+                self.assertIn(materialize_study(self.originals['study'])['report_markdown'], text)
                 self.assertIn(self.originals['review']['report_markdown'], text)
                 self.assertEqual([s for s, _ in self.calls], ['study', 'review'])
                 raw = json.loads((self.run_dir / 'review.logs/attempt-001/extracted.json').read_text())
@@ -331,6 +332,13 @@ class CompromiseGit(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertNotIn('comparison', manifest)
         self.assertTrue(manifest['has_usable_material'])
+        for item in manifest['branches']:
+            if item.get('study'):
+                self.assertTrue(item['study_invocation']['publication_complete'])
+                self.assertTrue(item.get('review_material'))
+        report = Path(manifest['final_report']).read_text()
+        self.assertIn('INVALID_JSON', report)
+        self.assertIn('не означает отсутствия различий', report)
 
     def test_single_branch_and_stop_after_recovered_review(self):
         manifest, code, calls = self.pipeline(single=True, cont=False)

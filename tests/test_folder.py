@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -257,7 +258,7 @@ class FolderContractTests(unittest.TestCase):
     def test_identity_is_checked(self):
         from ledger import review_context
         context = {'source_directory': '/source', 'source_fingerprint': 'abc'}
-        context = review_context(ledger_response(context), context)
+        context = review_context(materialize_study(ledger_response(context)), context)
         data = ledger_response(context)
         validate_result('review', data, context, 'folder')
         for changed in ({'source_directory': '/other'}, {'source_fingerprint': 'wrong'}):

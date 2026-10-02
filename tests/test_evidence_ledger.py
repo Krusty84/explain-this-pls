@@ -15,16 +15,17 @@ from evidence import resolve_evidence, SourceChanged, MAX_FILE_BYTES
 from ledger import freeze_plan, prepare_result, review_context, CONTRACT_VERSION, ARTIFACT_VERSION
 from presentation import render_stage, label
 from final_report import render_final_report, recoverable_material
+from document_rendering import materialize_study, validate_materialized
+from fixtures.ledger_response import sections
 
 
 def study(context):
     return dict(task='architecture_documentation',
         branch=context['branch'], source_commit=context['source_commit'],
-        completion_status='COMPLETE', limitations=[], report_markdown='# Scope\nA claim.\n',
+        completion_status='COMPLETE', limitations=[], report_sections=sections('A claim.\n'),
         evidence=[dict(id='E-001', source_id='source-001', path='app.py', start_line=1, end_line=1, quote='')],
         claims=[dict(id='C-001', statement='A claim.', scope='Static fixture.', epistemic_kind='FACT',
-            evidence_ids=['study:E-001'], uncertainty='',
-            document_locator=dict(start_line=2, end_line=2, quote='A claim.\n'))])
+            evidence_ids=['study:E-001'], uncertainty='')])
 
 
 def review(context):
@@ -62,8 +63,7 @@ class LedgerTests(unittest.TestCase):
         # assertion. We test provenance separation, not automated truth detection.
         data = study(self.context)
         data['claims'][0]['statement'] = 'All writes use distributed transactions.'
-        data['report_markdown'] = '# Scope\n' + data['claims'][0]['statement'] + '\n'
-        data['claims'][0]['document_locator']['quote'] = data['claims'][0]['statement'] + '\n'
+        data['report_sections'][0]['blocks'][0]['markdown'] = data['claims'][0]['statement'] + '\n'
         validate_result('study', data, self.context)
         saved = prepare_result('study', data, self.context)
         self.assertEqual(saved['program_checks']['evidence'][0]['status'], 'RESOLVED')
@@ -120,6 +120,7 @@ class LedgerTests(unittest.TestCase):
     def test_missing_claim_cannot_disappear_from_denominator(self):
         data = study(self.context)
         data['claims'].append(copy.deepcopy(data['claims'][0]) | {'id': 'C-002'})
+        data['report_sections'][0]['blocks'][0]['claim_ids'].append('C-002')
         saved = prepare_result('study', data, self.context)
         ctx = review_context(saved, self.context)
         response = review(ctx); response['claims'].pop()
@@ -134,11 +135,11 @@ class LedgerTests(unittest.TestCase):
             response = review(ctx); response['target'][field] = 'wrong'
             with self.assertRaises(ContractError): validate_result('review', response, ctx)
             ctx = review_context(saved, self.context)
-        data = study(self.context); data['claims'][0]['document_locator']['quote'] = 'different'
-        with self.assertRaises(ContractError): validate_result('study', data, self.context)
+        data = materialize_study(study(self.context)); data['claims'][0]['document_locators'][0]['quote'] = 'different'
+        with self.assertRaises(ContractError): validate_materialized(data)
         for key in ('statement', 'scope'):
             changed = copy.deepcopy(saved); changed['claims'][0][key] += ' changed'
-            self.assertNotEqual(freeze_plan(changed, self.context)['registry_sha256'], ctx['review_target']['registry_sha256'])
+            with self.assertRaises(ContractError): freeze_plan(changed, self.context)
 
     def test_computed_fields_duplicates_and_wrong_types_rejected(self):
         saved, ctx = self.prepared()
@@ -178,6 +179,7 @@ class LedgerTests(unittest.TestCase):
                 response['omission_search'][0].update(status='PARTIALLY_INSPECTED', limitation='Search budget.')
             else:
                 doc = study(self.context); doc['claims'] = []
+                doc['report_sections'][0]['blocks'][0]['claim_ids'] = []
                 ctx = review_context(prepare_result('study', doc, self.context), self.context)
                 response = review(ctx)
             validate_result('review', response, ctx)
@@ -317,6 +319,17 @@ class LedgerTests(unittest.TestCase):
         self.assertFalse(accepted({'study': legacy, 'review': legacy}))
         report, _ = render_final_report({'status': 'COMPLETE', 'study': legacy, 'review': legacy}, {'path': '/old'}, 'folder', 'English')
         self.assertIn('Legacy', report); self.assertIn('# Historical PASS', report)
+        old = copy.deepcopy(pair)
+        old['study'].pop('materialization_provenance')
+        old['study'].pop('block_map')
+        for records in (old['study']['claims'], old['review']['claim_registry']):
+            for claim in records:
+                claim['document_locator'] = claim.pop('document_locators')[0]
+        original = copy.deepcopy(old)
+        for stage in ('study', 'review'):
+            self.assertIn('Historical v1 checks', render_stage(stage, old[stage], 'English'))
+        self.assertFalse(accepted(old))
+        self.assertEqual(old, original)
         pair['study']['claims'][0]['scope'] += ' modified'
         self.assertFalse(accepted(pair))
 

@@ -26,9 +26,10 @@ new checks were not performed”. They cannot receive positive acceptance.
 An attempt's private `extracted.json` preserves the original wire object.
 Transport/stdout and stderr remain private attempt artifacts. A saved `study.json`,
 `review.json` or `compare.json` is a separate representation with processed wire
-fields and `program_checks`. Study changes only the references allowed below.
+fields and `program_checks`. Study narrative is authored as sections/blocks;
+the program computes the Markdown, block map and every document locator.
 Contract/artifact identifiers (`contract_version:
-"evidence-ledger-v1"`, `artifact_version: "evidence-ledger-artifacts-v1"`) belong only
+"evidence-ledger-v2"`, `artifact_version: "evidence-ledger-artifacts-v2"`) belong only
 to invocation metadata and the manifest, not agent responses, saved-result schemas,
 or the review plan. Study adds `review_plan` and `normalization_provenance` (including
 the normalization rule version). Review also adds `review_plan`, the
@@ -45,12 +46,22 @@ successful result. Source guards compare state at prescribed boundaries; they
 are not a continuous immutability guarantee. Orchestrator reads do not establish
 which files the agent read.
 
-`ARCHITECTURE.md` contains exactly the UTF-8 bytes of study `report_markdown`.
-No trailing whitespace or newline normalization is applied before hashing or
-publication. `study.annotated.md` contains generated checks and the registry.
+`ARCHITECTURE.md` contains exactly the UTF-8 bytes of materialized study
+`report_markdown`. The pure serializer normalizes CRLF to LF in authored blocks,
+preserving internal spaces, tabs, bare CR and Unicode without NFC/NFKC. It writes
+`## N. title` followed by two LF, then each block with a final LF if absent and
+one additional separator LF. Existing blank lines are preserved. Coordinates are
+counted while writing, using `evidence.lines()` semantics. Locators cover only
+serialized blocks, including their final LF, never headings or separators.
+Quotes use that same normalized line view of the serialized fragment, including
+the edge case where an authored trailing bare CR touches a program-added LF.
+After materialization no whitespace or newline changes are allowed before hashing,
+review or publication. `study.annotated.md` contains generated checks and the registry.
 `ARCHITECTURE_REVIEW.md` and `BRANCH_COMPARISON.md` contain generated tables;
-`study.original.md`, `review.original.md` and `compare.original.md` preserve original
-prose. The final report places limitations and assessments before original prose,
+`study.original.md` retains the canonical program assembly of authored blocks
+(the historical filename does not mean model-authored Markdown).
+`review.original.md` and `compare.original.md` preserve original prose.
+The final report places limitations and assessments before narrative,
 and keeps contradictory assessments visible. It is a study and automated review
 summary, not an automatically corrected architecture.
 
@@ -112,21 +123,31 @@ that the locator resolved. Other statuses distinguish `INVALID_POINTER`,
 without discarding an otherwise well-formed report. A real fragment may be
 irrelevant to its architecture claim; the resolver never assigns `SUPPORTED`.
 
-## Study reference compatibility and diagnostics
+## Evidence ID compatibility and diagnostics
 
-`study_normalization.normalize_study(value, context, mode='git')` is a pure
+`study_normalization.normalize_evidence(stage, value, context, mode='git')` is a pure
 function returning `(candidate, changes)`. The candidate is a deep copy, including
-when no changes are needed. It first requires the complete study wire schema,
-the `architecture_documentation` task, matching pinned Git/folder identity, and
-valid unique evidence definition IDs (`E-[0-9]{3,}`). It never repairs the schema.
-Only `claims[i].evidence_ids[j]` exactly equal to an existing local evidence ID
-changes, for example `E-001` to `study:E-001`. The rule is
-`STUDY_LOCAL_EVIDENCE_REF_V1`.
+when no changes are needed. It first requires the complete stage wire schema,
+task, matching pinned Git/folder identity and, for review, unchanged frozen
+context and exact target. The caller verifies transport before calling it.
+It never repairs the schema. `normalize_study` remains a convenience wrapper.
+The rule version is `EVIDENCE_IDS_V2` in both strict and compromise.
 
-All other fields, evidence definitions, Markdown, locators, source identities,
+Evidence definitions may pad one/two numeric digits (`E-1`, `E-01` -> `E-001`)
+and remove the stage's own namespace (`study:E-001` in study or `review:E-001`
+in review -> `E-001`). Three or more digits are preserved (`E-0001` stays so).
+An explicit original-definition -> canonical-ID mapping is built first. Duplicate
+definitions and collisions (including `E-1` plus `E-001`) reject the entire
+transformation. Structured references to mapped definitions are updated atomically,
+including review findings. References already using the canonical ID are retained.
+Study alone also qualifies bare references to defined local IDs with `study:`.
+Review requires explicit namespaces and never changes frozen study evidence or C-*.
+
+All other fields, authored blocks, source quotations/code, source identities,
 claim content and record/reference order and counts stay unchanged. Unknown IDs,
-case, whitespace, digit counts, punctuation and foreign namespaces are never
-guessed or corrected. Already prefixed references are preserved. Repeated
+case, whitespace, punctuation and foreign namespaces are never
+guessed or corrected. Aliases must derive from actual definitions; an unmatched
+short spelling of an otherwise canonical definition is not invented. Repeated
 normalization is idempotent and returns no changes. References are never
 deduplicated: `["E-001", "study:E-001"]` becomes two identical references and is
 then rejected by strict validation. `validate_result()` itself remains strict
@@ -136,14 +157,17 @@ Live processing preserves the existing source/cleanup guards:
 
 1. Check backend completion, transport/session/request identity, and native
    StructuredOutput equality with the original completed tool input. Native
-   adapters can retain untrusted extracted data even on envelope failure for
-   diagnostics, but cannot normalize it or admit it to local validation.
-2. Retain the original object in private `extracted.json`. For study only, check
+   failures retain the raw envelope privately in `response.json`; they cannot
+   normalize it or admit it to local validation.
+2. Retain the original object in private `extracted.json`. For study/review, check
    prerequisites, create the candidate, and write private `normalized.json` and
    `normalization.json` separately. These files are required even for zero edits.
-3. Fully validate the candidate, including document links. `validation.json`
+3. Fully validate the wire candidate, including the study block/claim graph.
+   Materialize study into required `materialized.json` and `provenance.json` and
+   strictly check all computed links and hashes. A failure on a valid wire input
+   is a program materialization defect, not a model line-counting error. `validation.json`
    identifies `validated_object` and includes the normalization provenance when
-   available. A successful normalization is the separate `study_normalized`
+   available. A successful normalization is the separate `study_normalized` / `review_normalized`
    event with its replacement count, never a schema/semantic failure or model
    repair request. A later failure retains the candidate and its actual error.
 4. Finish cleanup and source guards, resolve evidence against pinned bytes,
@@ -155,7 +179,7 @@ The private journal is a provenance object plus `changes`, for example:
 
 ```json
 {
-  "rule": "STUDY_LOCAL_EVIDENCE_REF_V1",
+  "rule": "EVIDENCE_IDS_V2",
   "path": "$.claims[0].evidence_ids[0]",
   "before": "E-001",
   "after": "study:E-001"
@@ -170,7 +194,9 @@ separators=(',', ':'), allow_nan=False)` and UTF-8 encoded, without BOM or trail
 newline. They do not hash the pretty-printed artifact file bytes. Unicode and
 array order are unchanged. With zero edits both hashes are identical.
 The same provenance summary is carried in invocation metadata and every new
-published `study.json`; it is optional in the saved schema for older artifacts.
+published study/review; direct library callers may omit that summary, but every
+new Runner publication requires the normalization artifacts. Older artifacts are
+viewed in their historical format, not validated against the v2 saved schema.
 It is never requested from the model or admitted by the wire schema. Successful
 normalization does not change `completion_status`, establish content accuracy,
 satisfy policy, or imply publication.
@@ -199,7 +225,8 @@ self-assessment; they do not infer insufficient architectural evidence from a
 structure error.
 
 A string-valued `claims`, including large strings that strict JSON parsing cannot
-decode, stays a string in private `extracted.json` alongside original Markdown.
+decode, stays a string in private `extracted.json` alongside original authored blocks
+(or legacy Markdown).
 It is rejected with `CLAIMS_TYPE_MISMATCH at $.claims; expected array, got string`.
 No nested decoding, partial extraction, empty-array substitution or model registry
 reconstruction is performed. In compromise mode only the existing unvalidated
@@ -235,10 +262,40 @@ whether the architecture conclusions are correct.
 ## Frozen registry and review plan
 
 Study claims have `id`, `statement`, `scope`, `epistemic_kind`, `evidence_ids`,
-`uncertainty`, `document_locator`. All material narrative/table/scenario claims
+`uncertainty` on the wire. `report_sections` has exactly ten sections, with keys
+`scope`, `context`, `components`, `startup_and_flows`, `data_and_state`,
+`cross_cutting`, `constraints`, `change_navigation`, `unknowns`, `evidence_basis`
+in that order. Each has `title` and `blocks`, each block `markdown` and `claim_ids`.
+Titles and narrative use output_language. There are no model block IDs, reverse
+claim.block_ids, hashes, provenance, report_markdown or document locators.
+Sections and Markdown together are rejected as a hybrid wire response.
+
+All material narrative/table/scenario claims
 must be registered by the authoring agent. This requirement is not a claim that
-Python can find every factual assertion in free text. A document locator is an
-exact line range and quotation; no Markdown AST or fuzzy match is used.
+Python can find every factual assertion in free text, or prove a block's semantic
+correspondence to its claims. Definitions must be unique, block references must
+exist and be unique within each block, and every claim must be linked. Multiple
+claims per block and multiple occurrences per claim are supported. Empty claim_ids
+are allowed for nonmaterial prose; they do not waive the registration requirement.
+
+`document_rendering.py` purely produces materialized `report_markdown`, `block_map`
+and claims with `document_locators: [...]`, one exact line range/quote per linked
+block. No Markdown AST, quote search or fuzzy match is used. `report_sections` is
+not retained as a second narrative in the materialized/saved result. Its original
+and normalized objects remain in the private wire artifacts.
+
+For example, the first section `{key: "scope", title: "Область", blocks:
+[{markdown: "Вход — Dispatcher.", claim_ids: ["C-001"]}]}` writes
+`## 1. Область\n\nВход — Dispatcher.\n\n`; C-001 receives
+`document_locators: [{start_line: 3, end_line: 3, quote: "Вход — Dispatcher.\n"}]`.
+Further occurrences receive separate locators, never a spanning range.
+Always `quote == "".join(lines(report_markdown)[start_line-1:end_line])`.
+
+Materialization provenance uses `study-blocks-lf-v1` and records distinct hashes
+of normalized wire, exact UTF-8 document, final registry and block map. Combined
+private provenance also records extracted/normalized wire hashes and the ID edit
+journal separately. Identical canonical input yields identical text/locators/hashes.
+Saved schemas use MATERIALIZED_CLAIM, never the locator-free wire CLAIM.
 
 Before review, `claim.registry.json` and `review.plan.json` fix the source catalog,
 document SHA-256, registry SHA-256, required IDs, mandatory omission areas, and
@@ -307,10 +364,35 @@ with matching task/source identity as unvalidated material, but never invents
 claims/evidence/positive assessments. A wrong review target, incomplete transport,
 source mutation or cleanup failure cannot be repaired into usable acceptance.
 Custom prompts that still emit legacy objects receive an explicit expected-contract
-diagnostic. Ordinary successful execution still uses study → review → compare
+diagnostic. Migrate study prompts to ten structured sections and blocks[].claim_ids;
+remove report_markdown and claims[].document_locator, keep source evidence ranges
+and quotation rules. Review/compare keep their own Markdown. In compromise a legacy
+Markdown or usable new blocks may be retained only as unvalidated narrative; new
+blocks are labeled program assembly of authored blocks. No partial registry is
+presented as accepted, and empty-registry review is explicitly limited/ineligible.
+Historical v1 manifest, registry, target and acceptance records are read-only.
+Use a new run directory; no automatic reacceptance/import is implemented.
+Ordinary successful execution still uses study → review → compare
 (comparison only for multiple Git branches). Format repairs stay bounded and may
 not change already valid facts/evidence/assessments. Backend eligibility gates are
 unchanged, including the unavailable OpenCode native retry capability.
+
+For run `20261002T091648Z-95474db027`, only the reported error codes/paths and
+generic unsupported-finish message are known. Actual bad ID spellings, Markdown /
+locator pairs and `info.finish` were not supplied. `E-1`, `E-01` and prefixed
+definitions in regression tests are synthetic, not observations from that run.
+Its specific finish incompatibility remains unverified.
+
+XXX uses the shared inspected OpenCode envelope checks: successful `stop` and
+`tool-calls` were already supported. Closed diagnostics distinguish FINISH_MISSING,
+FINISH_INVALID_TYPE, FINISH_UNKNOWN, FINISH_TRUNCATED (`length`), FINISH_ERROR
+(`error`) and UNFINISHED_TOOL_CALL. No other success reason is enabled. Raw finish
+and envelope remain private; classification is separate. Session/request/agent,
+completion timestamp, errors, pending tools, native structured result, completed
+StructuredOutput/input equality and exact final history snapshot equality remain mandatory.
+A complete-looking JSON never overrides these checks. Compare failure preserves
+prior study/review and the diagnostic summary with a nonzero exit and no assertion
+that differences are absent.
 
 The small local schema subset implements exact object/array/string/boolean/integer
 types, enum, required/properties/additionalProperties, items, minLength, minimum,

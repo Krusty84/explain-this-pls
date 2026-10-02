@@ -8,15 +8,29 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
+from document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 
 from contracts import ContractError
-from explain import Folder, Runner, atomic
+from explain import AuditError, Folder, Runner, atomic
 from test_folder import FolderFixture
 from fixtures.ledger_response import response
 
 
 class PublicationTests(FolderFixture):
+    def test_v1_manifest_registry_and_acceptance_are_read_only(self):
+        directory = self.base / 'historical'
+        directory.mkdir()
+        historical = {'contract_version': 'evidence-ledger-v1',
+                      'artifact_version': 'evidence-ledger-artifacts-v1', 'accepted': True}
+        (directory / 'manifest.json').write_text(json.dumps(historical))
+        for name in ('claim.registry.json', 'review.plan.json', 'study.json', 'ARCHITECTURE.md'):
+            (directory / name).write_bytes(b'historical bytes')
+        before = {p.name: p.read_bytes() for p in directory.iterdir()}
+        with self.assertRaises(AuditError) as caught: Runner(self.config(), directory)
+        self.assertEqual(caught.exception.code, 'LEGACY_ARTIFACT_READ_ONLY')
+        self.assertEqual(before, {p.name: p.read_bytes() for p in directory.iterdir()})
+
     def prepare(self):
         runner = Runner(self.config(), self.base / 'run')
         context = {'source_directory': str(self.source),
@@ -55,6 +69,18 @@ class PublicationTests(FolderFixture):
         self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
         self.assertFalse((runner.run_dir / 'study.json').exists())
 
+    def test_recovered_material_cannot_replace_a_previously_frozen_registry(self):
+        from final_report import recoverable_material
+        runner, context, data = self.prepare()
+        with patch('explain.process', return_value=self.result(data)):
+            runner.invoke('study', context, runner.run_dir / 'study.logs')
+        frozen = {name: (runner.run_dir / name).read_bytes()
+                  for name in ('ARCHITECTURE.md', 'claim.registry.json', 'review.plan.json', 'study.json')}
+        material = recoverable_material('study', data | {'claims': 'invalid'}, context, 'folder', {})
+        with self.assertRaises(AuditError) as caught: runner.freeze_review(material, context, runner.run_dir)
+        self.assertEqual(caught.exception.code, 'REVIEW_TARGET_CHANGED')
+        self.assertEqual(frozen, {name: (runner.run_dir / name).read_bytes() for name in frozen})
+
     def test_publication_write_failure_never_accepts_manifest(self):
         runner, context, data = self.prepare()
         def process(command, cwd, env, payload, **kwargs):
@@ -78,13 +104,14 @@ class PublicationTests(FolderFixture):
 
     def test_document_bytes_plan_and_wire_are_separate(self):
         runner, context, data = self.prepare()
-        # Keep CRLF and final blank lines exactly; locator uses normalized LF.
-        data['report_markdown'] = data['report_markdown'].replace('\n', '\r\n') + '\r\n'
+        # Canonicalize authored CRLF; retain final blank lines.
+        data['report_sections'][0]['blocks'][0]['markdown'] += '\r\n'
+        expected = materialize_study(data)['report_markdown']
         with patch('explain.process', return_value=self.result(data)):
             saved, meta = runner.invoke('study', context, runner.run_dir / 'study.logs')
         import hashlib
-        self.assertEqual((runner.run_dir / 'ARCHITECTURE.md').read_bytes(), data['report_markdown'].encode())
-        self.assertEqual(saved['review_plan']['document_sha256'], hashlib.sha256(data['report_markdown'].encode()).hexdigest())
+        self.assertEqual((runner.run_dir / 'ARCHITECTURE.md').read_bytes(), expected.encode())
+        self.assertEqual(saved['review_plan']['document_sha256'], hashlib.sha256(expected.encode()).hexdigest())
         wire = json.loads((runner.run_dir / 'study.logs/attempt-001/extracted.json').read_text())
         self.assertEqual(wire, data)
         self.assertNotIn('program_checks', wire)
@@ -92,8 +119,8 @@ class PublicationTests(FolderFixture):
         self.assertNotIn('contract_version', saved)
         self.assertNotIn('artifact_version', saved)
         self.assertNotIn('contract_version', saved['review_plan'])
-        self.assertEqual(meta['contract_version'], 'evidence-ledger-v1')
-        self.assertEqual(meta['artifact_version'], 'evidence-ledger-artifacts-v1')
+        self.assertEqual(meta['contract_version'], 'evidence-ledger-v2')
+        self.assertEqual(meta['artifact_version'], 'evidence-ledger-artifacts-v2')
         self.assertTrue(meta['publication_complete'])
 
     def test_forged_review_target_is_not_recovered_even_with_schema_error(self):

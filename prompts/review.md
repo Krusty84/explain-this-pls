@@ -95,6 +95,15 @@ normalized; quote must equal the complete selected range.
 
 ## Report and completion
 
+Study report_markdown and every claim.document_locators entry are computed by
+Python from authored blocks. Inspect each relevant occurrence in the frozen
+document. Structural linkage does not establish semantic correspondence or full
+registration of material prose. Do not change the frozen registry or renumber
+claims. Keep your evidence definitions local (E-001) and all evidence references
+explicitly namespaced (study:E-001 or review:E-001). Own short numeric evidence IDs
+can be canonicalized only when definitions are unambiguous; bare review references
+and foreign namespaces remain invalid.
+
 Return concise report_markdown explaining scope, argument, limitations and
 proposed corrections. Python renders mandatory claim, evidence and omission
 tables, counts, reverse links and policy verdict; do not duplicate them in prose.

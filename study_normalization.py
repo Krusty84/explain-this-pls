@@ -1,15 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Pure study wire compatibility. No source reads, model calls or acceptance."""
+"""Pure evidence-ID compatibility. No source reads, model calls or acceptance."""
 from __future__ import annotations
 
 import copy
+import re
 
-from contracts import unique_ids, validate_wire_identity
+from contracts import contract_violation, validate_wire_identity
 from evidence import canonical, sha
 
-RULE = 'STUDY_LOCAL_EVIDENCE_REF_V1'
+RULE = 'EVIDENCE_IDS_V2'
 HASH_FORMAT = 'canonical-json-utf8-v1'
 
 
@@ -20,17 +21,44 @@ def normalize_study(value, context, mode='git'):
     consistency must already have been checked by a live caller. Offline callers
     get no assertion about transport, sources, policy or publication.
     """
-    validate_wire_identity('study', value, context, mode)
-    local_ids = unique_ids(value['evidence'], r'E-[0-9]{3,}', '$.evidence')
+    return normalize_evidence('study', value, context, mode)
+
+
+def normalize_evidence(stage, value, context, mode='git'):
+    if stage not in ('study', 'review'):
+        raise ValueError('Evidence normalization requires study or review')
+    validate_wire_identity(stage, value, context, mode)
+    definitions, seen, aliases = {}, set(), {}
+    for i, evidence in enumerate(value['evidence']):
+        original = evidence['id']
+        match = re.fullmatch(r'(?:' + stage + r':)?E-([0-9]+)', original)
+        if not match:
+            raise contract_violation('INVALID_RECORD_ID', f'$.evidence[{i}].id')
+        identifier = 'E-' + match[1].zfill(3)
+        if identifier in seen:
+            code = 'DUPLICATE_RECORD_ID' if original in definitions else 'EVIDENCE_ID_COLLISION'
+            raise contract_violation(code, f'$.evidence[{i}].id')
+        definitions[original] = identifier
+        seen.add(identifier)
+        local = original.removeprefix(stage + ':')
+        aliases[stage + ':' + local] = stage + ':' + identifier
+        aliases[stage + ':' + identifier] = stage + ':' + identifier
+        if stage == 'study':
+            aliases[local] = stage + ':' + identifier
+            aliases[identifier] = stage + ':' + identifier
     candidate = copy.deepcopy(value)
     changes = []
-    for i, claim in enumerate(candidate['claims']):
-        for j, ref in enumerate(claim['evidence_ids']):
-            if ref in local_ids:
-                after = 'study:' + ref
-                claim['evidence_ids'][j] = after
-                changes.append({'rule': RULE, 'path': f'$.claims[{i}].evidence_ids[{j}]',
-                                'before': ref, 'after': after})
+    def change(container, key, after, path):
+        before = container[key]
+        if before != after:
+            container[key] = after
+            changes.append(dict(rule=RULE, path=path, before=before, after=after))
+    for i, evidence in enumerate(candidate['evidence']):
+        change(evidence, 'id', definitions[evidence['id']], f'$.evidence[{i}].id')
+    for field in ('claims', 'findings') if stage == 'review' else ('claims',):
+        for i, record in enumerate(candidate[field]):
+            for j, ref in enumerate(record['evidence_ids']):
+                change(record['evidence_ids'], j, aliases.get(ref, ref), f'$.{field}[{i}].evidence_ids[{j}]')
     return candidate, changes
 
 

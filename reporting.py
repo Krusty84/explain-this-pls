@@ -481,8 +481,9 @@ class Reporter(NullReporter):
     def render(self, item):
         c, name = item.context, item.event
         s = self.display
-        if name == 'study_normalized':
-            return [f"[RUN] Study evidence references normalized: {s(c['replacement_count'])} replacement(s); "
+        if name in ('study_normalized', 'review_normalized'):
+            stage_label = 'Study' if name == 'study_normalized' else 'Review'
+            return [f"[RUN] {stage_label} evidence IDs/references normalized: {s(c['replacement_count'])} replacement(s); "
                     'contract, source and policy checks remain required.']
         if name == 'stage_recovered':
             return ['[WARN] ' + s(c['message'])]

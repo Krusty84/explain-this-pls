@@ -6,6 +6,8 @@
 
 This profile makes no native format-retry guarantee.
 It does not enable or change the upstream OpenCode capability gate.
+The shared envelope classifier accepts only the already inspected stop/tool-calls
+finish reasons. Raw finish metadata stays private; unknown reasons stay rejected.
 """
 from __future__ import annotations
 import base64

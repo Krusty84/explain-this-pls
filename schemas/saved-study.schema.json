@@ -9,9 +9,6 @@
         "BLOCKED"
       ]
     },
-    "report_markdown": {
-      "type": "string"
-    },
     "limitations": {
       "type": "array",
       "items": {
@@ -65,6 +62,9 @@
         "additionalProperties": false
       }
     },
+    "report_markdown": {
+      "type": "string"
+    },
     "claims": {
       "type": "array",
       "items": {
@@ -96,7 +96,66 @@
           "uncertainty": {
             "type": "string"
           },
-          "document_locator": {
+          "document_locators": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "start_line": {
+                  "type": "integer"
+                },
+                "end_line": {
+                  "type": "integer"
+                },
+                "quote": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "start_line",
+                "end_line",
+                "quote"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "statement",
+          "scope",
+          "epistemic_kind",
+          "evidence_ids",
+          "uncertainty",
+          "document_locators"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "block_map": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "section_key": {
+            "type": "string"
+          },
+          "section_index": {
+            "type": "integer"
+          },
+          "block_index": {
+            "type": "integer"
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "locator": {
             "type": "object",
             "properties": {
               "start_line": {
@@ -119,15 +178,45 @@
         },
         "required": [
           "id",
-          "statement",
-          "scope",
-          "epistemic_kind",
-          "evidence_ids",
-          "uncertainty",
-          "document_locator"
+          "section_key",
+          "section_index",
+          "block_index",
+          "claim_ids",
+          "locator"
         ],
         "additionalProperties": false
       }
+    },
+    "materialization_provenance": {
+      "type": "object",
+      "properties": {
+        "rule": {
+          "type": "string",
+          "enum": [
+            "study-blocks-lf-v1"
+          ]
+        },
+        "normalized_sha256": {
+          "type": "string"
+        },
+        "document_sha256": {
+          "type": "string"
+        },
+        "registry_sha256": {
+          "type": "string"
+        },
+        "block_map_sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule",
+        "normalized_sha256",
+        "document_sha256",
+        "registry_sha256",
+        "block_map_sha256"
+      ],
+      "additionalProperties": false
     },
     "program_checks": {
       "type": "object",
@@ -445,7 +534,7 @@
         "rule": {
           "type": "string",
           "enum": [
-            "STUDY_LOCAL_EVIDENCE_REF_V1"
+            "EVIDENCE_IDS_V2"
           ]
         },
         "hash_format": {
@@ -477,13 +566,15 @@
   },
   "required": [
     "completion_status",
-    "report_markdown",
     "limitations",
     "task",
     "branch",
     "source_commit",
     "evidence",
+    "report_markdown",
     "claims",
+    "block_map",
+    "materialization_provenance",
     "program_checks",
     "review_plan"
   ],

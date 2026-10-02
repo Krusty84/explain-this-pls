@@ -88,10 +88,13 @@ test source from executed tests, deployment configuration from live deployment,
 and observed implementation from historical design intent. Give historical reasons
 only with a specific historical source. Preserve contradictions.
 
-## Required Markdown report
+## Required structured report sections
 
-Use the following numbered sections, translated into output_language; retain IDs,
+Use the following sections, translated into output_language; retain IDs,
 paths, symbols, and enum values. Keep explanations architectural, not file-by-file.
+Use these stable keys in exactly this order: scope, context, components,
+startup_and_flows, data_and_state, cross_cutting, constraints, change_navigation,
+unknowns, evidence_basis. Return unnumbered titles; Python adds heading numbers.
 
 1. Scope and evidence basis: source mode and identity (branch/commit for git,
    directory/fingerprint for folder), static inspection, exclusions, completion
@@ -119,17 +122,28 @@ them with boilerplate. The report may be useful and incomplete; never fake compl
 ## Output contract
 
 Return the object specified by the appended wire schema.
-Put the unchanged architecture narrative in report_markdown. Preserve the ten
-thematic sections. Do not write files or calculate hashes. Echo the supplied
+Put the architecture narrative only in report_sections. Each section contains
+key, title and blocks. Each block contains markdown and claim_ids, for example:
+{"key":"components","title":"Components","blocks":[{"markdown":"Requests reach Dispatcher.","claim_ids":["C-001"]}]}
+This is a section fragment, not a complete response. Preserve all ten thematic
+sections. A block is a coherent paragraph, list, table, fenced code fragment or
+other independent Markdown fragment; multiline content is allowed. Split content
+reasonably by subject and evidence; never pack the report into a single block to
+satisfy links. Do not return report_markdown, block IDs, claim.block_ids, document
+coordinates, quotes of report ranges, or computed provenance. Python serializes
+the document and computes all report locators. Do not write files or calculate hashes. Echo the supplied
 source identity exactly. Do not supply program_checks, accepted or policy verdicts.
 
 Register each material assertion, including relationships in tables, scenarios,
 and summaries, in claims: id C-001 etc., statement, scope (conditions and limits),
-epistemic_kind FACT | HYPOTHESIS | UNKNOWN, evidence_ids, uncertainty and
-document_locator. Keep assertions narrow enough to assess individually.
-Use exact start_line/end_line (1-based LF lines, CRLF normalized), and quote the
-entire selected line range including trailing LF if present. No fuzzy matching.
-The program checks registered links; it cannot discover all factual assertions
+epistemic_kind FACT | HYPOTHESIS | UNKNOWN, evidence_ids and uncertainty.
+Define every claim once, and link it through blocks[].claim_ids at every relevant
+block. A claim can appear in several blocks; a block can link several claims.
+Never repeat an ID within a block or leave a registered claim unlinked.
+claim_ids: [] is allowed for introductory and nonmaterial text, not to conceal
+material assertions. Keep assertions narrow enough to assess individually.
+The program checks structural links, not their semantic correspondence or completeness;
+it cannot discover all factual assertions
 in free prose. The registry will be frozen before review. Never renumber claims
 to avoid review. HYPOTHESIS/UNKNOWN must name concrete missing checks in uncertainty;
 FACT uses "" unless a scoped uncertainty must be stated.
@@ -138,9 +152,10 @@ Return structured evidence with local IDs E-001 etc., source_id from context.sou
 path relative to that source's root, start_line, end_line and quote. Use "" for
 quote unless quoting the complete normalized range exactly. Do not calculate
 hashes. The canonical reference form is study:E-001; keep evidence definitions
-local (E-001). Only in study, the program supports exact unprefixed references to
-unique, valid local evidence IDs as deterministic compatibility. It does not
-repair unknown IDs, spelling, whitespace, foreign namespaces or duplicates.
+local (E-001). The program can pad short numeric IDs and remove an own-namespace
+prefix on definitions when unambiguous. Only in study, it also supports exact
+unprefixed references to unique local definitions. It never repairs unknown IDs,
+spelling, whitespace, foreign namespaces or duplicates.
 Return claims and evidence as arrays of records, never JSON encoded in strings.
 A nested submodule uses its own source_id
 and paths relative to that submodule; do not cite it through the main source ID.

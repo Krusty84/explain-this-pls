@@ -87,7 +87,8 @@ class HTTPFixture(unittest.TestCase):
             self.invoke('backend-error')
         self.assertEqual(caught.exception.failure_kind, 'BACKEND_ERROR')
         self.assertNotIn('SECRET_RESPONSE', str(caught.exception))
-        self.assertTrue((self.artifacts / 'extracted.json').exists())
+        self.assertFalse((self.artifacts / 'extracted.json').exists())
+        self.assertTrue((self.artifacts / 'response.json').exists())
 
     def test_malformed_transport_is_not_json_result_failure(self):
         with self.assertRaises(ContractError) as caught:
@@ -156,6 +157,42 @@ class HTTPFixture(unittest.TestCase):
         with self.assertRaises(ContractError) as caught:
             validate_history([envelope, newer], info['sessionID'], info['parentID'], info['id'])
         self.assertEqual(caught.exception.failure_kind, 'INCOMPLETE_OUTPUT')
+
+    def test_closed_finish_diagnostics_preserve_existing_success_and_envelope_gates(self):
+        self.invoke()
+        envelope = json.loads((self.artifacts / 'response.json').read_text())
+        info = envelope['info']
+        def extract(value):
+            return extract_result(value, info['sessionID'], info['parentID'], info['agent'])
+        for finish in ('stop', 'tool-calls'):
+            value = copy.deepcopy(envelope); value['info']['finish'] = finish
+            data, meta = extract(value)
+            self.assertEqual(data, info['structured'])
+            self.assertEqual(meta['finish_reason'], finish)
+            self.assertEqual(meta['finish_classification'], 'SUCCESS')
+            for mutation in ('pending', 'mismatch', 'foreign', 'missing-tool', 'missing-native'):
+                invalid = copy.deepcopy(value)
+                if mutation == 'pending': invalid['parts'][1]['state']['status'] = 'running'
+                if mutation == 'mismatch': invalid['parts'][1]['state']['input'] = {}
+                if mutation == 'foreign': invalid['info']['sessionID'] = 'ses_foreign'
+                if mutation == 'missing-tool': invalid['parts'] = invalid['parts'][:1]
+                if mutation == 'missing-native': del invalid['info']['structured']
+                with self.subTest(finish=finish, mutation=mutation), self.assertRaises(ContractError): extract(invalid)
+        for finish, code in ((None, 'FINISH_INVALID_TYPE'), ([], 'FINISH_INVALID_TYPE'),
+                ('length', 'FINISH_TRUNCATED'), ('error', 'FINISH_ERROR'),
+                ('SECRET_FINISH\n\x1b[31m', 'FINISH_UNKNOWN'), ('', 'FINISH_UNKNOWN')):
+            invalid = copy.deepcopy(envelope); invalid['info']['finish'] = finish
+            with self.assertRaises(ContractError) as caught: extract(invalid)
+            self.assertEqual(caught.exception.details, {'code': code})
+            self.assertNotIn('SECRET_FINISH', caught.exception.safe_message)
+        invalid = copy.deepcopy(envelope); del invalid['info']['finish']
+        with self.assertRaises(ContractError) as caught: extract(invalid)
+        self.assertEqual(caught.exception.details['code'], 'FINISH_MISSING')
+        changed_history = copy.deepcopy(envelope)
+        changed_history['parts'][1]['state']['status'] = 'pending'
+        with self.assertRaises(ContractError) as caught:
+            validate_history([changed_history], info['sessionID'], info['parentID'], info['id'], envelope)
+        self.assertEqual(caught.exception.details['code'], 'FINAL_SNAPSHOT_MISMATCH')
 
     def config(self):
         return {'result_policy': 'strict', 'mode': 'folder', 'folder_mode': {'path': str(self.source)},

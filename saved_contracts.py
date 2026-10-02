@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: MIT
 
 """Artifact-only schemas. These are never sent to a backend as wire schemas."""
-from contracts import SCHEMAS, FOLDER_SCHEMAS, CLAIM, STRINGS, obj, array, string
+from contracts import SCHEMAS, FOLDER_SCHEMAS, MATERIALIZED_CLAIM, STRINGS, obj, array, string
+from document_rendering import materialized_schema
 
 INTEGER = {'type': 'integer', 'minimum': 0}
 NULL_STRING = {'type': ['string', 'null']}
-NORMALIZATION_PROVENANCE = obj(rule=string('STUDY_LOCAL_EVIDENCE_REF_V1'),
+NORMALIZATION_PROVENANCE = obj(rule=string('EVIDENCE_IDS_V2'),
     hash_format=string('canonical-json-utf8-v1'), extracted_sha256=string(),
     normalized_sha256=string(), replacement_count=INTEGER)
 
@@ -50,14 +51,16 @@ CHECKS = {
 def artifact_schemas(wire):
     result = {}
     for stage, spec in wire.items():
+        if stage == 'study':
+            spec = materialized_schema(spec)
         properties = dict(spec['properties'], program_checks=CHECKS[stage])
         if stage in ('study', 'review'):
             properties['review_plan'] = PLAN
         if stage == 'review':
-            properties.update(claim_registry=array(CLAIM), verdict=string('PASS', 'CHANGES_REQUIRED', 'INCONCLUSIVE'))
+            properties.update(claim_registry=array(MATERIALIZED_CLAIM), verdict=string('PASS', 'CHANGES_REQUIRED', 'INCONCLUSIVE'))
         result[stage] = obj(**properties)
-        if stage == 'study':
-            # Optional for older saved artifacts and direct prepare_result callers;
+        if stage in ('study', 'review'):
+            # Optional for direct prepare_result callers;
             # every new Runner publication writes this orchestrator-only record.
             result[stage]['properties']['normalization_provenance'] = NORMALIZATION_PROVENANCE
     return result

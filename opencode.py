@@ -81,6 +81,22 @@ def native_error(error):
     raise response_error('BACKEND_ERROR', 'backend', 'OpenCode reported a backend error.')
 
 
+def classify_finish(info):
+    """Closed inspected profile: no speculative success reasons."""
+    if 'finish' not in info:
+        return 'FINISH_MISSING'
+    finish = info['finish']
+    if type(finish) is not str:
+        return 'FINISH_INVALID_TYPE'
+    if finish in ('stop', 'tool-calls'):
+        return 'SUCCESS'
+    if finish == 'length':
+        return 'FINISH_TRUNCATED'
+    if finish == 'error':
+        return 'FINISH_ERROR'
+    return 'FINISH_UNKNOWN'
+
+
 def extract_result(value, session_id, request_id, agent_name):
     envelope = object_value(value, 'message envelope')
     info = object_value(envelope.get('info'), 'assistant info')
@@ -101,8 +117,10 @@ def extract_result(value, session_id, request_id, agent_name):
         raise response_error('TRANSPORT_ERROR', 'transport', 'Invalid message creation time.')
     if type(timing.get('completed')) not in (int, float) or timing['completed'] < timing['created']:
         raise response_error('INCOMPLETE_OUTPUT', 'result', 'Assistant message has no completed timestamp.')
-    if info.get('finish') not in ('stop', 'tool-calls'):
-        raise response_error('INCOMPLETE_OUTPUT', 'result', 'Assistant message has no supported final finish reason.')
+    finish_class = classify_finish(info)
+    if finish_class != 'SUCCESS':
+        raise response_error('INCOMPLETE_OUTPUT', 'result',
+                             'Assistant completion rejected: ' + finish_class + '.', code=finish_class)
     for key in ('providerID', 'modelID', 'mode', 'agent'):
         if type(info.get(key)) is not str or not info[key]:
             raise response_error('TRANSPORT_ERROR', 'transport', 'Missing assistant model/agent metadata.')
@@ -135,7 +153,8 @@ def extract_result(value, session_id, request_id, agent_name):
             if state.get('status') not in ('pending', 'running', 'completed', 'error'):
                 raise response_error('TRANSPORT_ERROR', 'transport', 'Invalid tool state status.')
             if state.get('status') in ('pending', 'running'):
-                raise response_error('INCOMPLETE_OUTPUT', 'result', 'Response still contains an unfinished tool call.')
+                raise response_error('INCOMPLETE_OUTPUT', 'result', 'Response still contains an unfinished tool call.',
+                                     code='UNFINISHED_TOOL_CALL')
             if part.get('tool') == 'StructuredOutput' and state.get('status') == 'completed':
                 timing = object_value(state.get('time'), 'tool time')
                 if any(type(timing.get(k)) not in (int, float) for k in ('start', 'end')):
@@ -152,12 +171,13 @@ def extract_result(value, session_id, request_id, agent_name):
         raise response_error('TRANSPORT_ERROR', 'transport', 'Native result differs from its completed tool input.')
     # Its type and contents are checked by validate_result, independently of upstream.
     return info['structured'], {'session_id': session_id, 'request_id': request_id,
-        'message_id': mid, 'finish_reason': info['finish'], 'model_actual': info['providerID'] + '/' + info['modelID'],
+        'message_id': mid, 'finish_reason': info['finish'], 'finish_classification': finish_class,
+        'model_actual': info['providerID'] + '/' + info['modelID'],
         'usage': tokens, 'native_retries_reported': None,
         'structured_tool_calls_in_final_message': len(structured_calls)}
 
 
-def validate_history(messages, session_id, request_id, final_id=None):
+def validate_history(messages, session_id, request_id, final_id=None, final_envelope=None):
     if type(messages) is not list:
         raise response_error('TRANSPORT_ERROR', 'transport', 'Expected session message list.')
     seen = set()
@@ -183,6 +203,11 @@ def validate_history(messages, session_id, request_id, final_id=None):
                 raise response_error('TRANSPORT_ERROR', 'transport', 'Foreign part in session history.')
     if final_id is not None and (not assistants or assistants[-1] != final_id):
         raise response_error('INCOMPLETE_OUTPUT', 'result', 'Returned result is not the latest assistant response.')
+    if final_envelope is not None:
+        final = next((m for m in messages if m['info']['id'] == final_id), None)
+        if final != final_envelope:
+            raise response_error('TRANSPORT_ERROR', 'transport',
+                                 'Returned result differs from the final history snapshot.', code='FINAL_SNAPSHOT_MISMATCH')
 
 
 def prepare_environment(env, stage):
@@ -455,6 +480,9 @@ class Server:
         envelope = self.finish(pending)
         info = envelope.get('info') if type(envelope) is dict else None
         if type(info) is dict:
+            self.meta['finish_classification'] = classify_finish(info)
+            if 'finish' in info:
+                self.meta['finish_reason_raw'] = info['finish']
             # Private metadata, never rendered as a provider error message.
             for source, target in (('id', 'message_id'), ('finish', 'finish_reason')):
                 if type(info.get(source)) is str:
@@ -466,11 +494,10 @@ class Server:
                 detail = error.get('data')
                 if type(detail) is dict and type(detail.get('retries')) in (int, float):
                     self.meta['native_retries_reported'] = detail['retries']
-        if type(info) is dict and 'structured' in info:
-            self.save(self.artifacts / 'extracted.json', json.dumps(info['structured']))
         data, details = extract_result(envelope, self.session_id, request_id, agent_name)
         history = self.request('GET', f'/session/{self.session_id}/message')
-        validate_history(history, self.session_id, request_id, details['message_id'])
+        validate_history(history, self.session_id, request_id, details['message_id'], envelope)
+        self.save(self.artifacts / 'extracted.json', json.dumps(data))
         self.meta.update(details, output_bytes=len(pending.body))
         return data
 

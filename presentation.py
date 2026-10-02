@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Deterministic bilingual labels and tables, separate from unchanged agent prose."""
+"""Deterministic bilingual tables, separate from canonical narrative bytes."""
 import html
 import unicodedata
 from contracts import has_program_checks
@@ -58,6 +58,11 @@ def render_stage(stage, data, language='English'):
         t('Качество содержательного ревью не измерено. Разрешение ссылки не проверяет смысл вывода.',
           'Semantic review quality is not measured. Resolving a locator does not validate the conclusion.'), '']
     out += ['- ' + cell(x) for x in data.get('limitations', [])]
+    historical = ((stage == 'study' and 'materialization_provenance' not in data) or
+                  (stage == 'review' and any('document_locator' in c for c in data.get('claim_registry', []))))
+    if historical:
+        out += ['> ' + t('Исторические проверки v1; повторная приёмка по v2 не выполнялась.',
+                        'Historical v1 checks; no reacceptance under v2 was performed.'), '']
     if stage == 'study':
         out += [t('Самооценка исследования агентом: ', 'Study completion reported by the agent: ') + data['completion_status'], '']
     elif stage == 'review':
@@ -91,9 +96,10 @@ def render_stage(stage, data, language='English'):
             reply = replies.get(claim['id'], {})
             linked = checks.get('finding_ids_by_claim', {}).get(claim['id'], [])
             issues = '; '.join(fid + ': ' + findings[fid]['impact'] for fid in linked)
-            location = claim['document_locator']
+            locations = claim.get('document_locators', [claim['document_locator']] if 'document_locator' in claim else [])
             evidence_refs = claim['evidence_ids'] + reply.get('evidence_ids', [])
-            out.append('| ' + ' | '.join(cell(v) for v in (claim['id'], f"L{location['start_line']}-L{location['end_line']}",
+            out.append('| ' + ' | '.join(cell(v) for v in (claim['id'],
+                ', '.join(f"L{location['start_line']}-L{location['end_line']}" for location in locations),
                 claim['statement'] + ' / ' + claim['scope'],
                 claim['epistemic_kind'], label(reply.get('outcome', 'MISSING'), language) if stage == 'review' else
                 t('Самооценка автора; оценки ревью показаны отдельно', 'Author assessment; review assessments are shown separately'),

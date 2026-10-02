@@ -700,25 +700,28 @@
           "uncertainty": {
             "type": "string"
           },
-          "document_locator": {
-            "type": "object",
-            "properties": {
-              "start_line": {
-                "type": "integer"
+          "document_locators": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "start_line": {
+                  "type": "integer"
+                },
+                "end_line": {
+                  "type": "integer"
+                },
+                "quote": {
+                  "type": "string"
+                }
               },
-              "end_line": {
-                "type": "integer"
-              },
-              "quote": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "start_line",
-              "end_line",
-              "quote"
-            ],
-            "additionalProperties": false
+              "required": [
+                "start_line",
+                "end_line",
+                "quote"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -728,7 +731,7 @@
           "epistemic_kind",
           "evidence_ids",
           "uncertainty",
-          "document_locator"
+          "document_locators"
         ],
         "additionalProperties": false
       }
@@ -740,6 +743,41 @@
         "CHANGES_REQUIRED",
         "INCONCLUSIVE"
       ]
+    },
+    "normalization_provenance": {
+      "type": "object",
+      "properties": {
+        "rule": {
+          "type": "string",
+          "enum": [
+            "EVIDENCE_IDS_V2"
+          ]
+        },
+        "hash_format": {
+          "type": "string",
+          "enum": [
+            "canonical-json-utf8-v1"
+          ]
+        },
+        "extracted_sha256": {
+          "type": "string"
+        },
+        "normalized_sha256": {
+          "type": "string"
+        },
+        "replacement_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "rule",
+        "hash_format",
+        "extracted_sha256",
+        "normalized_sha256",
+        "replacement_count"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [
