@@ -30,30 +30,6 @@
     "source_commit": {
       "type": "string"
     },
-    "target": {
-      "type": "object",
-      "properties": {
-        "source_sha256": {
-          "type": "string"
-        },
-        "document_sha256": {
-          "type": "string"
-        },
-        "registry_sha256": {
-          "type": "string"
-        },
-        "plan_sha256": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "source_sha256",
-        "document_sha256",
-        "registry_sha256",
-        "plan_sha256"
-      ],
-      "additionalProperties": false
-    },
     "evidence": {
       "type": "array",
       "items": {
@@ -254,6 +230,9 @@
         ],
         "additionalProperties": false
       }
+    },
+    "review_target_id": {
+      "type": "string"
     }
   },
   "required": [
@@ -263,12 +242,12 @@
     "task",
     "branch",
     "source_commit",
-    "target",
     "evidence",
     "claims",
     "findings",
     "omission_search",
-    "prior_findings"
+    "prior_findings",
+    "review_target_id"
   ],
   "additionalProperties": false
 }

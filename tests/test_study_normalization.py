@@ -17,7 +17,7 @@ from reporting import Reporter, diagnostic
 from study_normalization import normalize_study, normalization_provenance, RULE
 from test_evidence_ledger import study, review
 from test_folder import FolderFixture
-from fixtures.ledger_response import response
+from fixtures.ledger_response import response, model_wire, prompt_context
 
 
 class PureNormalizationTests(unittest.TestCase):
@@ -166,8 +166,11 @@ class NormalizationPipelineTests(FolderFixture):
                 wire['evidence'][0]['id'] = 'review:E-01'
                 wire['claims'][0]['evidence_ids'] = ['review:E-01', 'study:E-001']
                 runner.cfg['_agents']['review']['backend'] = backend
-                envelope = wire if backend == 'codex' else {'is_error': False, 'structured_output': wire}
-                with patch('explain.process', return_value={'returncode': 0, 'stdout': json.dumps(envelope).encode(), 'stderr': b''}) as process:
+                def answer(command, cwd, env, payload, **kwargs):
+                    model_data = model_wire(wire, prompt_context(payload), ctx)
+                    envelope = model_data if backend == 'codex' else {'is_error': False, 'structured_output': model_data}
+                    return {'returncode': 0, 'stdout': json.dumps(envelope).encode(), 'stderr': b''}
+                with patch('explain.process', side_effect=answer) as process:
                     saved, meta = runner.invoke('review', ctx, runner.run_dir / 'review.logs')
                 self.assertEqual(process.call_count, 1)
                 self.assertTrue(saved['program_checks']['policy_satisfied'])
@@ -190,9 +193,12 @@ class NormalizationPipelineTests(FolderFixture):
         return runner, context, data
 
     def invoke(self, runner, context, data):
-        envelope = data if runner.cfg['_agents']['study']['backend'] == 'codex' else {
-            'is_error': False, 'structured_output': data}
-        with patch('explain.process', return_value={'returncode': 0, 'stdout': json.dumps(envelope).encode(), 'stderr': b''}):
+        def process(command, cwd, env, payload, **kwargs):
+            model_data = model_wire(data, prompt_context(payload), context)
+            envelope = model_data if runner.cfg['_agents']['study']['backend'] == 'codex' else {
+                'is_error': False, 'structured_output': model_data}
+            return {'returncode': 0, 'stdout': json.dumps(envelope).encode(), 'stderr': b''}
+        with patch('explain.process', side_effect=process):
             return runner.invoke('study', context, runner.run_dir / 'study.logs')
 
     def test_both_cli_backends_preserve_extracted_and_publish_provenance(self):
@@ -204,17 +210,19 @@ class NormalizationPipelineTests(FolderFixture):
                 attempt = runner.run_dir / 'study.logs/attempt-001'
                 extracted_bytes = (attempt / 'extracted.json').read_bytes()
                 extracted = strict_json(extracted_bytes.decode())
+                expanded = strict_json((attempt / 'expanded.json').read_text())
                 normalized = strict_json((attempt / 'normalized.json').read_text())
                 journal = strict_json((attempt / 'normalization.json').read_text())
-                self.assertEqual(extracted, original)
+                self.assertEqual(extracted, model_wire(original, prompt_context((attempt / 'input.prompt.txt').read_bytes()), context))
+                self.assertEqual(expanded, original)
                 self.assertEqual(raw, original)
-                candidate, changes = normalize_study(extracted, context, 'folder')
+                candidate, changes = normalize_study(expanded, context, 'folder')
                 self.assertEqual(normalized, candidate)
                 self.assertEqual((attempt / 'extracted.json').read_bytes(), extracted_bytes)
-                provenance = normalization_provenance(extracted, candidate, changes)
+                provenance = normalization_provenance(expanded, candidate, changes)
                 self.assertEqual(journal, provenance | {'changes': changes})
                 self.assertEqual(provenance['replacement_count'], int(local))
-                self.assertEqual(provenance['extracted_sha256'], sha(canonical(original)))
+                self.assertEqual(provenance['input_sha256'], sha(canonical(original)))
                 self.assertEqual(provenance['normalized_sha256'], sha(canonical(normalized)))
                 self.assertEqual(saved['normalization_provenance'], provenance)
                 self.assertEqual(meta['normalization_provenance'], provenance)
@@ -264,13 +272,14 @@ class NormalizationPipelineTests(FolderFixture):
                 self.assertIn('Text retained; policy checks not completed. Agent self-assessment: COMPLETE.',
                               runner.reporter.stderr.getvalue())
             attempt = runner.run_dir / 'study.logs/attempt-001'
-            self.assertEqual(strict_json((attempt / 'extracted.json').read_text()), data)
+            self.assertEqual(strict_json((attempt / 'extracted.json').read_text()),
+                             model_wire(data, prompt_context((attempt / 'input.prompt.txt').read_bytes()), context))
             self.assertFalse((attempt / 'normalized.json').exists())
             self.assertFalse((runner.run_dir / 'study.json').exists())
 
     def test_required_artifact_writes_and_source_guards_cannot_publish(self):
         for policy in ('strict', 'compromise'):
-            for filename in ('normalized.json', 'normalization.json', 'materialized.json', 'provenance.json', 'validation.json', 'study.json', 'invocation.json'):
+            for filename in ('expanded.json', 'binding.json', 'normalized.json', 'normalization.json', 'materialized.json', 'provenance.json', 'validation.json', 'study.json', 'invocation.json'):
                 runner, context, data = self.prepare(policy=policy)
                 def fail(path, content):
                     # Fail the post-validation write, not the initial diagnostics.

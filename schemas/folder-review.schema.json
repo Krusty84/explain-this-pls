@@ -24,30 +24,6 @@
         "architecture_review"
       ]
     },
-    "target": {
-      "type": "object",
-      "properties": {
-        "source_sha256": {
-          "type": "string"
-        },
-        "document_sha256": {
-          "type": "string"
-        },
-        "registry_sha256": {
-          "type": "string"
-        },
-        "plan_sha256": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "source_sha256",
-        "document_sha256",
-        "registry_sha256",
-        "plan_sha256"
-      ],
-      "additionalProperties": false
-    },
     "evidence": {
       "type": "array",
       "items": {
@@ -252,7 +228,10 @@
     "source_directory": {
       "type": "string"
     },
-    "source_fingerprint": {
+    "source_snapshot_id": {
+      "type": "string"
+    },
+    "review_target_id": {
       "type": "string"
     }
   },
@@ -261,14 +240,14 @@
     "report_markdown",
     "limitations",
     "task",
-    "target",
     "evidence",
     "claims",
     "findings",
     "omission_search",
     "prior_findings",
     "source_directory",
-    "source_fingerprint"
+    "source_snapshot_id",
+    "review_target_id"
   ],
   "additionalProperties": false
 }

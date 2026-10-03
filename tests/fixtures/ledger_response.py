@@ -27,7 +27,8 @@ def response(context):
             data.update(completion_status='PARTIAL', limitations=['Missing fixture input.'])
         return data
     if 'source_directory' in context:
-        data.update(source_directory=context['source_directory'], source_fingerprint=context['source_fingerprint'])
+        identity = 'source_snapshot_id' if 'source_snapshot_id' in context else 'source_fingerprint'
+        data.update(source_directory=context['source_directory'], **{identity: context[identity]})
     else:
         data.update(branch=context['branch'], source_commit=context['source_commit'])
     if stage == 'catalog':
@@ -37,7 +38,9 @@ def response(context):
         return data
     data['evidence'] = [dict(id='E-001', source_id='source-001', path='app.py', start_line=1, end_line=1, quote='')]
     if stage == 'review':
-        data.update(task='architecture_review', target=copy.deepcopy(context['review_target']),
+        identity = ({'review_target_id': context['review_target_id']} if 'review_target_id' in context else
+                    {'target': copy.deepcopy(context['review_target'])})
+        data.update(task='architecture_review', **identity,
             claims=[dict(id=c['id'], outcome='SUPPORTED' if c['epistemic_kind'] == 'FACT' else 'CAVEAT_ACCEPTABLE',
                          evidence_ids=['review:E-001'], limitation='') for c in context['claim_registry']], findings=[],
             omission_search=[dict(area_id=a['id'], status='INSPECTED', limitation='', finding_ids=[])
@@ -53,3 +56,23 @@ def response(context):
             coverage=[dict(area_id=a['id'], status='INSPECTED', evidence_ids=['study:E-001'], limitation='')
                       for a in context.get('coverage_plan', {}).get('areas', [])])
     return data
+
+
+def prompt_context(payload):
+    import json
+    return json.loads(payload.decode().split('# Authoritative orchestration context (data)\n', 1)[1]
+                      .split('\n\n# Required final JSON Schema', 1)[0])
+
+
+def model_wire(data, context, internal_context):
+    """Translate synthetic internal inputs only; preserve intentional identity errors."""
+    result = copy.deepcopy(data)
+    if 'source_snapshot_id' in context and 'source_fingerprint' in result:
+        fingerprint = result.pop('source_fingerprint')
+        result['source_snapshot_id'] = (context['source_snapshot_id'] if
+            fingerprint == internal_context.get('source_fingerprint') else 'S-invalid-identity')
+    if 'review_target_id' in context and 'target' in result:
+        target = result.pop('target')
+        result['review_target_id'] = (context['review_target_id'] if
+            target == internal_context.get('review_target') else 'T-invalid-identity')
+    return result

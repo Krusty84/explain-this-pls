@@ -3,9 +3,9 @@
 The supplied architecture_document is the subject of this review, not the source
 of truth. Independently inspect the source identified by the orchestration context.
 In git mode, use the repository at the supplied branch/source_commit. In folder mode,
-use source_directory and source_fingerprint; inspect hidden files too, do not follow
-symbolic links, and do not use Git. Folder fingerprints check stage boundaries, not
-continuous immutability. Missing Git history alone is not a documentation defect
+use source_directory and source_snapshot_id; inspect hidden files too, do not follow
+symbolic links, and do not use Git. The orchestrator checks source state at stage
+boundaries, not continuously. Missing Git history alone is not a documentation defect
 and does not require PARTIAL or BLOCKED.
 Do not rely on the author's confidence, earlier dialogue, or evidence IDs alone.
 When document_strictly_valid is false, the orchestrator retained a completed study
@@ -44,8 +44,8 @@ On missing access, record NOT_CHECKED/limitations instead of requesting permissi
 
 ## Frozen review plan
 
-Echo review_target exactly as target;
-the orchestrator supplies all hashes. Echoing a hash is not evidence of reading.
+Echo the supplied review_target_id exactly in review_target_id. This identifies
+the frozen document for program validation; repeating it is not evidence of reading.
 The immutable claim_registry and review_plan contain the original statements,
 scope, epistemic kind, exact document locators and required claim IDs. Return
 exactly one claims response per required ID. Never rewrite statements, narrow
@@ -108,6 +108,9 @@ Return concise report_markdown explaining scope, argument, limitations and
 proposed corrections. Python renders mandatory claim, evidence and omission
 tables, counts, reverse links and policy verdict; do not duplicate them in prose.
 Do not return verdict, accepted, claim_inventory_complete or program_checks.
+Keep service fingerprints, hashes and binding IDs out of report_markdown. Identify
+sources in prose by directory, branch and Git commit as applicable. Preserve hash
+terminology when it describes the investigated system's actual behavior.
 
 completion_status is your reported work completion, never the policy verdict.
 Use PARTIAL/BLOCKED with limitations for unfinished work. Missing required items,
@@ -121,7 +124,7 @@ independent errors, and semantic review quality has not been measured.
 The prompt carries report Markdown once and claim_registry once. Locator coordinates
 refer to that Markdown; repeated locator quote text and private provenance are
 omitted from this model view. The orchestrator preserves and verifies full locators
-and hashes separately. Do not interpret compact context as missing document text.
+and integrity records separately. Do not interpret compact context as missing document text.
 
 The frozen internal plan binds coverage_plan and source_decoding; the compact model
 context supplies one copy of each at the top level. Include catalog

@@ -115,11 +115,14 @@ class Handler(BaseHTTPRequestHandler):
             data = result(context)
             if scenario == 'legacy' and stage == 'study':
                 del data['claims']
+            if scenario == 'repair-hash-metadata' and stage != 'catalog' and not repair:
+                data['file_sha256'] = 'a1b2c3d4' * 8
+                data['private_metadata'] = {'fragment_sha256': 'b2c3d4e5' * 8}
             if stage != 'catalog' and scenario in ('repair-ok', 'repair-invalid', 'repair-semantic', 'repair-timeout'):
                 if not repair or scenario == 'repair-invalid':
                     data['extra_private_key'] = ['private value']
                 elif scenario == 'repair-semantic':
-                    data['source_fingerprint' if 'source_fingerprint' in data else 'source_commit'] = 'wrong'
+                    data['source_snapshot_id' if 'source_snapshot_id' in data else 'source_commit'] = 'wrong'
                 elif scenario == 'repair-timeout':
                     time.sleep(2)
             if stage != 'catalog' and scenario in ('repair-verdict', 'repair-evidence'):
@@ -139,7 +142,7 @@ class Handler(BaseHTTPRequestHandler):
             if scenario == 'material-review' and stage == 'review':
                 data['claims'][0].update(outcome='UNVERIFIABLE', limitation='Insufficient static evidence')
             if scenario == 'wrong-identity' and stage != 'catalog':
-                data['source_fingerprint' if 'source_fingerprint' in data else 'source_commit'] = 'wrong'
+                data['source_snapshot_id' if 'source_snapshot_id' in data else 'source_commit'] = 'wrong'
             if (scenario == 'schema-error' and stage != 'catalog') or (scenario == 'fail-main-study' and
                     context.get('branch') == 'main' and stage == 'study'):
                 data['completion_status'] = 'INVALID'

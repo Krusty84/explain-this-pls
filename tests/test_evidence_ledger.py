@@ -330,7 +330,7 @@ class LedgerTests(unittest.TestCase):
                 claim['document_locator'] = claim.pop('document_locators')[0]
         original = copy.deepcopy(old)
         for stage in ('study', 'review'):
-            self.assertIn('Historical checks; no reacceptance under v3', render_stage(stage, old[stage], 'English'))
+            self.assertIn('Historical checks; no reacceptance under v4', render_stage(stage, old[stage], 'English'))
         self.assertFalse(accepted(old))
         self.assertEqual(old, original)
         pair['study']['claims'][0]['scope'] += ' modified'

@@ -8,8 +8,8 @@ from document_rendering import materialized_schema
 
 INTEGER = {'type': 'integer', 'minimum': 0}
 NULL_STRING = {'type': ['string', 'null']}
-NORMALIZATION_PROVENANCE = obj(rule=string('EVIDENCE_IDS_V3'),
-    hash_format=string('canonical-json-utf8-v1'), extracted_sha256=string(),
+NORMALIZATION_PROVENANCE = obj(rule=string('EVIDENCE_IDS_V4'),
+    hash_format=string('canonical-json-utf8-v1'), input_sha256=string(),
     normalized_sha256=string(), replacement_count=INTEGER)
 
 

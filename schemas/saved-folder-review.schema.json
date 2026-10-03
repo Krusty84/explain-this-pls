@@ -776,7 +776,7 @@
             "contract_version": {
               "type": "string",
               "enum": [
-                "evidence-ledger-v3"
+                "evidence-ledger-v4"
               ]
             },
             "origin": {
@@ -1223,7 +1223,7 @@
         "rule": {
           "type": "string",
           "enum": [
-            "EVIDENCE_IDS_V3"
+            "EVIDENCE_IDS_V4"
           ]
         },
         "hash_format": {
@@ -1232,7 +1232,7 @@
             "canonical-json-utf8-v1"
           ]
         },
-        "extracted_sha256": {
+        "input_sha256": {
           "type": "string"
         },
         "normalized_sha256": {
@@ -1246,7 +1246,7 @@
       "required": [
         "rule",
         "hash_format",
-        "extracted_sha256",
+        "input_sha256",
         "normalized_sha256",
         "replacement_count"
       ],

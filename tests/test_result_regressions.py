@@ -39,9 +39,10 @@ class ResultRegressions(unittest.TestCase):
             self.assertEqual(diagnostic(caught.exception).failure_kind, 'TRANSPORT_ERROR')
 
     def test_public_schemas_equal_python_source(self):
+        from contracts import MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS
         from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
         root = Path(__file__).resolve().parents[1]
-        for prefix, schemas in (('', SCHEMAS), ('folder-', FOLDER_SCHEMAS),
+        for prefix, schemas in (('', MODEL_SCHEMAS), ('folder-', MODEL_FOLDER_SCHEMAS),
                                 ('saved-', SAVED_SCHEMAS), ('saved-folder-', SAVED_FOLDER_SCHEMAS)):
             for stage, schema in schemas.items():
                 saved = json.loads((root / 'schemas' / f'{prefix}{stage}.schema.json').read_text())

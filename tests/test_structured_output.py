@@ -113,7 +113,10 @@ class NativeStructuredOutputTests(unittest.TestCase):
             self.assertEqual(extracted['evidence'][0]['id'], 'review:E-1')
             self.assertEqual(normalized['evidence'][0]['id'], 'E-001')
             self.assertEqual(saved['claims'][0]['evidence_ids'], ['review:E-001'])
-            self.assertEqual(saved['target'], extracted['target'])
+            expanded = json.loads((attempt / 'expanded.json').read_text())
+            self.assertEqual(saved['target'], expanded['target'])
+            self.assertNotIn('target', extracted)
+            self.assertIn('review_target_id', extracted)
             self.assertEqual(meta['normalization_provenance']['replacement_count'], 2)
             self.assertEqual(len(self.prompts()) - before, 1)
             self.assertTrue(meta['publication_complete'])
@@ -143,7 +146,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
             self.assertEqual(caught.exception.details['code'], 'UNKNOWN_EVIDENCE_REFERENCE')
             attempt = self.destination / 'attempt-001'
             self.assertEqual(json.loads((attempt / 'normalized.json').read_text()),
-                             json.loads((attempt / 'extracted.json').read_text()))
+                             json.loads((attempt / 'expanded.json').read_text()))
             self.assertEqual(json.loads((attempt / 'normalization.json').read_text())['replacement_count'], 0)
 
     def test_legacy_contract_never_triggers_invented_registry_repair(self):

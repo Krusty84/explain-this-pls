@@ -3,6 +3,7 @@
 
 """Output schemas and deterministic semantic gates (stdlib only)."""
 from __future__ import annotations
+import copy
 import json
 import math
 import re
@@ -62,8 +63,8 @@ def obj(**properties: dict) -> dict:
 # Wire schemas deliberately use only type/enum/properties/required/items and
 # additionalProperties. Local semantic checks enforce nonblank strings, bounds
 # and graph constraints regardless of a backend's JSON Schema dialect.
-CONTRACT_VERSION = 'evidence-ledger-v3'
-ARTIFACT_VERSION = 'evidence-ledger-artifacts-v3'
+CONTRACT_VERSION = 'evidence-ledger-v4'
+ARTIFACT_VERSION = 'evidence-ledger-artifacts-v4'
 STRINGS = array(string())
 STATUS = string('COMPLETE', 'PARTIAL', 'BLOCKED')
 BASE = dict(completion_status=STATUS, report_markdown=string(), limitations=STRINGS)
@@ -116,6 +117,30 @@ FOLDER_SCHEMAS = {
                  {'source_directory': string(), 'source_fingerprint': string()}))
     for stage in ('catalog', 'study', 'review')
 }
+
+def model_schemas(internal):
+    """Backend contracts contain opaque bindings; internal schemas retain hashes."""
+    schemas = copy.deepcopy(internal)
+    for stage, schema in schemas.items():
+        properties = schema['properties']
+        if 'source_fingerprint' in properties:
+            properties.pop('source_fingerprint')
+            properties['source_snapshot_id'] = string()
+        if stage == 'review':
+            properties.pop('target')
+            properties['review_target_id'] = string()
+        if stage == 'compare':
+            ref = properties['differences']['items']['properties']['evidence_refs']['items']
+            ref['properties'].pop('document_sha256')
+            ref['properties'].pop('registry_sha256')
+            ref['properties']['review_target_id'] = string()
+            ref['required'] = list(ref['properties'])
+        schema['required'] = list(properties)
+    return schemas
+
+
+MODEL_SCHEMAS = model_schemas(SCHEMAS)
+MODEL_FOLDER_SCHEMAS = model_schemas(FOLDER_SCHEMAS)
 
 def strict_json(text: str) -> Any:
     def pairs(items):
@@ -337,7 +362,7 @@ def validate_wire_identity(stage, value, context, mode='git'):
                 or (stage == 'study' and 'report_markdown' in value))
                 and not exc.details.get('code')):
             exc.safe_message = ('Expected the current evidence ledger structure. Legacy output/custom prompts '
-                                + ('must be updated to v3 report_sections, coverage and blocks[].claim_ids with no '
+                                + ('must be updated to v4 report_sections, coverage and blocks[].claim_ids with no '
                                    'report_markdown/document_locator; ' if stage == 'study' else
                                    'must be updated to the current ' + stage + ' wire schema; ')
                                 + 'new checks cannot be inferred from old fields.')

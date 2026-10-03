@@ -10,7 +10,7 @@ import re
 from contracts import contract_violation, validate_wire_identity
 from evidence import canonical, sha
 
-RULE = 'EVIDENCE_IDS_V3'
+RULE = 'EVIDENCE_IDS_V4'
 HASH_FORMAT = 'canonical-json-utf8-v1'
 
 
@@ -65,5 +65,5 @@ def normalize_evidence(stage, value, context, mode='git'):
 def normalization_provenance(original, candidate, changes):
     """Hashes cover canonical objects, not pretty-printed artifact file bytes."""
     return {'rule': RULE, 'hash_format': HASH_FORMAT,
-            'extracted_sha256': sha(canonical(original)),
+            'input_sha256': sha(canonical(original)),
             'normalized_sha256': sha(canonical(candidate)), 'replacement_count': len(changes)}

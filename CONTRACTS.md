@@ -3,7 +3,9 @@
 Response schemas contain no version fields. The orchestrator
 selects the required schema for each stage and validates its structure locally.
 `schemas/{catalog,study,review,compare}.schema.json` and their `folder-` variants
-are **wire** schemas generated from `contracts.py`. Separate `saved-*.schema.json`
+are **model wire** schemas generated from `MODEL_SCHEMAS` / `MODEL_FOLDER_SCHEMAS`
+in `contracts.py`. Internal `SCHEMAS` / `FOLDER_SCHEMAS` validate the expanded
+representation, which retains full integrity identities. Separate `saved-*.schema.json`
 files are generated from `saved_contracts.py` and locally validated before publication.
 Historical formats without the required ledger structure are legacy. Absence of a
 version field is normal and does not identify a legacy response. There is no
@@ -23,13 +25,21 @@ new checks were not performed”. They cannot receive positive acceptance.
 | `model_actual`, `model_actual_source` | Backend metadata, or null with a reason; never inferred from executable or model prose |
 | `review_quality` / `semantic_quality: NOT_MEASURED` | No substantive evaluation of this execution profile has been performed |
 
-An attempt's private `extracted.json` preserves the original wire object.
+An attempt's private `extracted.json` preserves the original model wire object.
+The orchestrator verifies opaque identity bindings and writes `expanded.json`
+with full internal identities before evidence normalization. `binding.json`
+records `rule: "MODEL_BINDING_V1"`, `hash_format: "canonical-json-utf8-v1"`,
+`stage`, `mode`, ID `mappings` with role/ID/identity, permitted `reference_scope`,
+`wire_sha256` and `expanded_sha256`. Both digests are null before the model call;
+after verified expansion they cover the whole original wire and expanded canonical
+objects, not pretty-printed artifact bytes. Binding records are private
+and do not enter model context. Expanding an ID adds no facts or positive status.
 Transport/stdout and stderr remain private attempt artifacts. A saved `study.json`,
 `review.json` or `compare.json` is a separate representation with processed wire
 fields and `program_checks`. Study narrative is authored as sections/blocks;
 the program computes the Markdown, block map and every document locator.
 Contract/artifact identifiers (`contract_version:
-"evidence-ledger-v3"`, `artifact_version: "evidence-ledger-artifacts-v3"`) belong only
+"evidence-ledger-v4"`, `artifact_version: "evidence-ledger-artifacts-v4"`) belong only
 to invocation metadata and the manifest, not agent responses or the root of saved
 results. The immutable coverage plan also records contract_version and is embedded
 in saved review plans. Study adds `review_plan` and `normalization_provenance` (including
@@ -65,6 +75,11 @@ review or publication. `study.annotated.md` contains generated checks and the re
 The final report places limitations and assessments before narrative,
 and keeps contradictory assessments visible. It is a study and automated review
 summary of the selected architecture revision and its corresponding review.
+Generated Markdown evidence tables include ID, source, path and lines, resolution
+status and encoding, without service hash columns or values. JSON keeps the full
+hashes. Prompts prohibit service fingerprints, hashes and binding IDs in narrative;
+source-system hash semantics and Git commit IDs remain meaningful content.
+No regular-expression cleanup or other postprocessing rewrites authored prose.
 
 Each file is replaced atomically with private permissions. Multiple files are
 **not** one atomic transaction. A stage is published only after all stage writes
@@ -84,8 +99,9 @@ evidence and study evidence are available.
 The orchestrator assigns `source-001` to the main source and subsequent IDs to
 submodules sorted by root-relative path. Each nested source has its exact commit,
 root path and containing main commit; it must be cited through its own source ID.
-The folder identity is its fingerprint and canonical directory; folder mode does
-not call Git. The resolver uses no network.
+The internal folder identity is its fingerprint and canonical directory; the model
+receives `source_directory` and `source_snapshot_id` instead. Folder mode does not
+call Git. The resolver uses no network.
 
 Paths use `/`, relative to the selected source root. Empty components, `.`, `..`,
 absolute paths, drive paths, backslashes, NUL/control characters and `.git`
@@ -147,11 +163,11 @@ or branches. Pinned raw hashes and stage-boundary source guards remain mandatory
 
 `study_normalization.normalize_evidence(stage, value, context, mode='git')` is a pure
 function returning `(candidate, changes)`. The candidate is a deep copy, including
-when no changes are needed. It first requires the complete stage wire schema,
+when no changes are needed. It first requires the complete internal stage schema,
 task, matching pinned Git/folder identity and, for review, unchanged frozen
 context and exact target. The caller verifies transport before calling it.
 It never repairs the schema. `normalize_study` remains a convenience wrapper.
-The rule version is `EVIDENCE_IDS_V3` in both strict and compromise.
+The rule version is `EVIDENCE_IDS_V4` in both strict and compromise.
 
 Evidence definitions may pad one/two numeric digits (`E-1`, `E-01` -> `E-001`)
 and remove the stage's own namespace (`study:E-001` in study or `review:E-001`
@@ -179,10 +195,13 @@ Live processing preserves the existing source/cleanup guards:
    StructuredOutput equality with the original completed tool input. Native
    failures retain the raw envelope privately in `response.json`; they cannot
    normalize it or admit it to local validation.
-2. Retain the original object in private `extracted.json`. For study/review, check
-   prerequisites, create the candidate, and write private `normalized.json` and
-   `normalization.json` separately. These files are required even for zero edits.
-3. Fully validate the wire candidate, including the study block/claim graph.
+2. Retain the original object in private `extracted.json`. Verify model identity
+   bindings and write `expanded.json` and `binding.json`. An unknown, foreign or
+   stale binding is an identity failure and cannot be repaired or recovered.
+   For study/review, check prerequisites on the expanded object, create the
+   candidate, and write private `normalized.json` and `normalization.json`
+   separately. These files are required even for zero edits.
+3. Fully validate the internal candidate, including the study block/claim graph.
    Materialize study into required `materialized.json` and `provenance.json` and
    strictly check all computed links and hashes. A failure on a valid wire input
    is a program materialization defect, not a model line-counting error. `validation.json`
@@ -199,7 +218,7 @@ The private journal is a provenance object plus `changes`, for example:
 
 ```json
 {
-  "rule": "EVIDENCE_IDS_V3",
+  "rule": "EVIDENCE_IDS_V4",
   "path": "$.claims[0].evidence_ids[0]",
   "before": "E-001",
   "after": "study:E-001"
@@ -207,16 +226,17 @@ The private journal is a provenance object plus `changes`, for example:
 ```
 
 Each change has the above shape. The provenance object contains `rule`,
-`hash_format: "canonical-json-utf8-v1"`, `replacement_count`, `extracted_sha256`
-and `normalized_sha256`. Both SHA-256 hashes cover the respective **entire wire
-objects**, serialized with Python `json.dumps(ensure_ascii=False, sort_keys=True,
+`hash_format: "canonical-json-utf8-v1"`, `replacement_count`, `input_sha256`
+and `normalized_sha256`. The input is `expanded.json`, after verified identity
+expansion. Both SHA-256 hashes cover the respective **entire internal objects**,
+serialized with Python `json.dumps(ensure_ascii=False, sort_keys=True,
 separators=(',', ':'), allow_nan=False)` and UTF-8 encoded, without BOM or trailing
 newline. They do not hash the pretty-printed artifact file bytes. Unicode and
 array order are unchanged. With zero edits both hashes are identical.
 The same provenance summary is carried in invocation metadata and every new
 published study/review; direct library callers may omit that summary, but every
 new Runner publication requires the normalization artifacts. Older artifacts are
-viewed in their historical format, not validated against the v3 saved schema.
+viewed in their historical format, not validated against the v4 saved schema.
 It is never requested from the model or admitted by the wire schema. Successful
 normalization does not change `completion_status`, establish content accuracy,
 satisfy policy, or imply publication.
@@ -234,6 +254,7 @@ closed `details.code` values and schema-owned JSON paths distinguish:
 | `INVALID_RECORD_ID`, `DUPLICATE_RECORD_ID`, `UNKNOWN_CLAIM_ID` | Invalid, repeated or unregistered record identity |
 | `DOCUMENT_LOCATOR_MISMATCH`, `INVALID_EVIDENCE_LINE_RANGE` | Invalid document binding or evidence line range |
 | `TASK_IDENTITY_MISMATCH`, `SOURCE_IDENTITY_MISMATCH`, `TARGET_IDENTITY_MISMATCH` | Task, source or frozen review target mismatch |
+| `MODEL_BINDING_IDENTITY_MISMATCH` | Unknown, foreign, stale or incorrectly scoped model identity |
 | `UNKNOWN_REFERENCE`, `DUPLICATE_REFERENCE` | Non-evidence relations such as finding/claim links |
 | `UNKNOWN_OMISSION_AREA_ID`, `DUPLICATE_OMISSION_AREA_ID` | Unknown or repeated review-plan area |
 
@@ -257,7 +278,7 @@ separate result revision with full review.
 
 ### Offline candidate checking versus a new acceptance pass
 
-An offline caller may load a saved **wire** study using `strict_json`, supply its
+An offline caller may load an **expanded internal** study using `strict_json`, supply its
 expected identity, call `normalize_study`, and run `validate_result('study',
 candidate, context, mode)`. This reads no sources, calls no model, publishes
 nothing and grants no new COMPLETE. Keep any outputs in a separate location;
@@ -313,15 +334,16 @@ Always `quote == "".join(lines(report_markdown)[start_line-1:end_line])`.
 
 Materialization provenance uses `study-blocks-lf-v1` and records distinct hashes
 of normalized wire, exact UTF-8 document, final registry and block map. Combined
-private provenance also records extracted/normalized wire hashes and the ID edit
+private provenance also records expanded/normalized object hashes and the ID edit
 journal separately. Identical canonical input yields identical text/locators/hashes.
 Saved schemas use MATERIALIZED_CLAIM, never the locator-free wire CLAIM.
 
 Before review, `claim.registry.json` and `review.plan.json` fix the source catalog,
 document SHA-256, registry SHA-256, required IDs, mandatory omission areas, and
 study eligibility, normalized decoding rules and immutable coverage plan. Every configured priority scenario becomes another mandatory
-omission area. The response `target` must match all four hashes (source, document,
-registry, plan). Repeating a hash does not prove reading the document.
+omission area. The model echoes `review_target_id`, which the orchestrator resolves
+to the internal `target` containing all four hashes (source, document, registry,
+plan). Repeating the opaque ID does not prove reading the document.
 
 Canonical JSON uses Python `json.dumps(ensure_ascii=False, sort_keys=True,
 separators=(',', ':'), allow_nan=False)` encoded as UTF-8, without a BOM/newline.
@@ -369,7 +391,9 @@ cannot pass. Neither policy nor these offline tests measure factual correctness.
 ## Comparison, compatibility and validation
 
 Comparison is reports-only. A structured reference identifies branch, artifact
-(`study`/`review`), selected revision ID, claim ID, document hash and registry hash. Strong differences
+(`study`/`review`), selected revision ID, claim ID and `review_target_id`. The
+orchestrator verifies the branch, selected revision and artifact role, then expands
+the binding to the internal document and registry hashes. Strong differences
 need references resolving on **both distinct sides** and policy-accepted inputs
 on both sides. Each side needs a referenced FACT assessed as SUPPORTED; acceptance
 of a hypothesis's caveat is not factual support for a strong contrast.
@@ -390,7 +414,7 @@ and quotation rules. Review/compare keep their own Markdown. In compromise a leg
 Markdown or usable new blocks may be retained only as unvalidated narrative; new
 blocks are labeled program assembly of authored blocks. No partial registry is
 presented as accepted, and empty-registry review is explicitly limited/ineligible.
-Historical v1 manifest, registry, target and acceptance records are read-only.
+Historical v1–v3 manifest, registry, target and acceptance records are read-only.
 Use a new run directory; no automatic reacceptance/import is implemented.
 Ordinary successful execution uses catalog → study → review, optionally one
 revised study → full review, then selection → compare (comparison only for
@@ -407,8 +431,30 @@ registries and private provenance are omitted. Comparison, substantive revision
 and format-repair contexts use the same principle. Findings, evidence, limitations,
 identifiers and diagnostics remain available; narrative is neither truncated nor
 summarized. Full saved locators, registry hashes and document hashes remain intact.
-Invocation metadata records the compact-context format version, and input.prompt.txt
-contains the exact request actually sent.
+Projection removes service hash fields by structure throughout nested documents,
+evidence resolutions, plans, previous revisions, comparison inputs and private
+provenance; it never searches prose for hexadecimal strings. Git commit IDs,
+including commits from repositories using SHA-256, remain unchanged.
+
+Model folder identities use `source_snapshot_id`; model reviews and comparison
+references use `review_target_id`. The orchestrator generates opaque random IDs
+with `S-` / `T-` prefixes and 16 following characters outside the pure projection.
+Bindings are stable within a run and across format attempts for the same snapshot
+or frozen revision. New runs receive new IDs. Private mappings retain full source
+and target identities. An ID must match its purpose, source, revision and reference
+role; unknown, foreign or stale IDs fail identity checks without repair or recovery.
+
+Format repair compares original model responses before binding expansion and cannot
+change facts. Full original and invalid responses remain private; the repair prompt
+removes known service hash fields even from malformed response objects, preserving
+prose, quotes and diagnostics. Equal original/invalid objects are sent once with
+both roles identified. Recovery uses only the first original response after its
+identity has been verified; it never promotes contract-invalid text to acceptance.
+
+Invocation metadata records `context_format_version: "compact-context-v2"`.
+`input.prompt.txt` contains the exact request actually sent, with its hash recorded
+in invocation metadata. The backend receives the model schema, while local
+validation and publication use expanded internal and saved schemas.
 
 ## Subsystem catalog and coverage
 
@@ -471,8 +517,8 @@ The manifest records selected_revision and revision history. Comparison uses onl
 selected pairs. Top-level ARCHITECTURE.md, study.json and companion files are exact
 copies of the selected artifacts, published after selection. Frozen-document checks
 run within each revision; a new study can never inherit an older review.
-Historical v1/v2 results remain readable without automatic hash migration or status
-promotion. Custom prompts must adopt the v3 wire schemas; old outputs stay legacy
+Historical v1–v3 results remain readable without automatic hash migration or status
+promotion. Custom prompts must adopt the v4 model wire schemas; old outputs stay legacy
 or explicitly unvalidated material under the existing policy.
 
 For run `20261002T091648Z-95474db027`, only the reported error codes/paths and

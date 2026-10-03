@@ -91,10 +91,7 @@
                 "revision_id": {
                   "type": "string"
                 },
-                "document_sha256": {
-                  "type": "string"
-                },
-                "registry_sha256": {
+                "review_target_id": {
                   "type": "string"
                 }
               },
@@ -103,8 +100,7 @@
                 "artifact",
                 "claim_id",
                 "revision_id",
-                "document_sha256",
-                "registry_sha256"
+                "review_target_id"
               ],
               "additionalProperties": false
             }

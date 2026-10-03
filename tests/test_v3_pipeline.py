@@ -402,12 +402,23 @@ class V3GitPipelineTests(unittest.TestCase):
                     data['claims'][0]['statement'] = 'Revised master behavior'
                     data['report_sections'][0]['blocks'][0]['markdown'] = 'Revised master behavior\n'
             if stage == 'compare':
+                prompt = payload.decode()
+                for published in runner.manifest['branches']:
+                    self.assertIn(published['source_commit'], prompt)
+                    for artifact in ('study', 'review'):
+                        document = published[artifact]
+                        for key, value in document['review_plan'].items():
+                            if key.endswith('_sha256') and value:
+                                self.assertNotIn(value, prompt)
+                        for evidence in document['program_checks']['evidence']:
+                            for key in ('file_sha256', 'fragment_sha256'):
+                                self.assertNotIn(evidence[key], prompt)
                 refs = []
                 for branch in context['branches']:
                     plan = branch['study']['review_plan']
                     refs.append(dict(branch=branch['branch'], revision_id=branch['selected_revision'],
                         artifact='study', claim_id='C-001',
-                        document_sha256=plan['document_sha256'], registry_sha256=plan['registry_sha256']))
+                        review_target_id=plan['review_target_id']))
                 data['differences'] = [dict(id='D-001', branch='test01', category='execution',
                     classification='CONFIRMED_DIFFERENCE', baseline_statement='Revised master behavior',
                     branch_statement='Test branch behavior', evidence_refs=refs,
@@ -427,7 +438,10 @@ class V3GitPipelineTests(unittest.TestCase):
         self.assertNotIn('revisions', master)
         self.assertNotIn('previous_revision', master)
         first_plan = manifest['branches'][0]['revisions'][0]['study']['review_plan']
-        selected_plan = master['study']['review_plan']
+        selected_plan = manifest['branches'][0]['study']['review_plan']
+        self.assertNotIn('registry_sha256', master['study']['review_plan'])
+        self.assertNotIn('document_sha256', master['study']['review_plan'])
+        self.assertEqual(master['study']['review_plan']['review_target_id'], master['review']['review_target_id'])
         self.assertNotEqual(first_plan['registry_sha256'], selected_plan['registry_sha256'])
         self.assertNotEqual(first_plan['document_sha256'], selected_plan['document_sha256'])
         self.assertEqual(manifest['comparison']['differences'][0]['evidence_refs'][0]['registry_sha256'],

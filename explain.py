@@ -31,7 +31,7 @@ import time
 import uuid
 from typing import Any
 from urllib.parse import urlsplit
-from contracts import FOLDER_SCHEMAS, SCHEMAS, ContractError, accepted, jsonc, parse_backend, strict_json, validate_result, schema_diagnostics, result_diagnostics
+from contracts import MODEL_FOLDER_SCHEMAS, MODEL_SCHEMAS, ContractError, accepted, jsonc, parse_backend, strict_json, validate_result, schema_diagnostics, result_diagnostics
 from reporting import Diagnostic, NullReporter, Reporter, diagnostic, existing_file, output_mode
 from execution import Budget, execution_settings
 import codex
@@ -47,7 +47,8 @@ from evidence import source_catalog, SourceChanged, open_source_directory, read_
 from contracts import CONTRACT_VERSION, ARTIFACT_VERSION, has_ledger_structure, validate_schema
 from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
 from presentation import render_stage
-from model_context import CONTEXT_FORMAT_VERSION, project_model_context
+from model_context import CONTEXT_FORMAT_VERSION
+from model_boundary import BindingRegistry
 from source_decoding import normalize_source_decoding
 from coverage_plan import build_coverage_plan, inventory_summary, verify_coverage_plan
 from revisions import revision_inputs, choose_revision, completed_pair
@@ -1049,7 +1050,8 @@ class Runner:
         self.folder = Folder(self.source_path) if self.mode == 'folder' else None
         self.repo = Repository(self.source_path, trust_repository=trust_repository,
                                reporter=self.reporter) if self.mode == 'git' else None
-        self.schemas = FOLDER_SCHEMAS if self.mode == 'folder' else SCHEMAS
+        self.schemas = MODEL_FOLDER_SCHEMAS if self.mode == 'folder' else MODEL_SCHEMAS
+        self.bindings = BindingRegistry()
         self.versions: dict[str, str] = {}
 
     def record_error(self, manifest, exc, *, phase='run', **context):
@@ -1212,6 +1214,9 @@ class Runner:
             if self.repo:
                 self.repo.assert_expected()
             evidence_pins = {e['path']: e['sha256'] for e in inventory['entries'] if e['type'] == 'file'}
+        binding = self.bindings.bind(stage, context, self.mode)
+        binding_hashes = {}
+        attempt_hashes = {}
         native = self.cfg['_agents'][stage]['backend'] in ('xxx', 'opencode')
         limit = self.execution['structured_output_repair_attempts'] if native else 0
         correction = None
@@ -1223,8 +1228,10 @@ class Runner:
             try:
                 return self._invoke_once(stage, context, destination, budget=budget,
                                          repair_index=repair_index, correction=correction,
-                                         repair_model=repair_model, repair_source=repair_source, evidence_pins=evidence_pins)
+                                         repair_model=repair_model, repair_source=repair_source, evidence_pins=evidence_pins,
+                                         binding=binding, binding_hashes=binding_hashes, attempt_hashes=attempt_hashes)
             except ContractError as exc:
+                self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
                 if not (destination / 'invocation.json').is_file():
                     raise
                 meta = strict_json((destination / 'invocation.json').read_text())
@@ -1235,10 +1242,11 @@ class Runner:
                 # Recover only the original response, never facts rewritten by a format repair.
                 if (self.compromise and repair_index == 0 and meta.get('source_integrity_verified')
                         and meta.get('validation_failed') and meta.get('backend_result_valid')
+                        and meta.get('model_identity_verified')
                         and exc.failure_kind in ('SCHEMA_ERROR', 'SEMANTIC_ERROR')):
-                    invalid = strict_json((attempt / 'extracted.json').read_text())
-                    validation = strict_json((attempt / 'validation.json').read_text())
-                    checked = (strict_json((attempt / 'normalized.json').read_text())
+                    invalid = self.read_attempt_value(attempt, 'expanded.json', attempt_hashes)
+                    validation = self.read_attempt_value(attempt, 'validation.json', attempt_hashes)
+                    checked = (self.read_attempt_value(attempt, 'normalized.json', attempt_hashes)
                                if validation.get('validated_object') == 'normalized.json' else invalid)
                     candidate = recoverable_material(stage, invalid, context, self.mode,
                         result_diagnostics(stage, checked, context, self.mode))
@@ -1248,15 +1256,11 @@ class Runner:
                             candidate['normalization_provenance'] = meta['normalization_provenance']
                     candidate_attempt = str(attempt)
                 can_repair = (exc.failure_kind == 'SCHEMA_ERROR' and repair_index < limit
-                              and meta.get('native_envelope_valid'))
+                              and meta.get('native_envelope_valid') and meta.get('model_identity_verified'))
                 if can_repair:
-                    invalid = strict_json((attempt / 'extracted.json').read_text())
-                    keys = (('source_directory', 'source_fingerprint') if self.mode == 'folder' else
-                            ('baseline_branch', 'baseline_commit') if stage == 'compare' else ('branch', 'source_commit'))
-                    can_repair = (has_ledger_structure(stage, invalid, representation='wire')
-                        and invalid.get('task') == self.schemas[stage]['properties']['task']['enum'][0]
-                        and all(invalid.get(key) == context.get(key) for key in keys)
-                        and (stage != 'review' or invalid.get('target') == context.get('review_target')))
+                    expanded = self.read_attempt_value(attempt, 'expanded.json', attempt_hashes)
+                    can_repair = (expanded.get('task') == self.schemas[stage]['properties']['task']['enum'][0]
+                                  and has_ledger_structure(stage, expanded, representation='wire'))
                 if not can_repair:
                     if candidate is None:
                         raise
@@ -1279,23 +1283,40 @@ class Runner:
                 # A neutral repair cwd must not silently select another profile model.
                 if repair_model is None:
                     repair_model = meta['model_actual']
-                invalid = strict_json((attempt / 'extracted.json').read_text())
+                invalid = self.read_attempt_value(attempt, 'extracted.json', attempt_hashes)
                 if repair_source is None:
                     repair_source = invalid
-                details = strict_json((attempt / 'validation.json').read_text())['schema_diagnostics']
-                correction = repair_prompt(context, self.schemas[stage], invalid, details, original=repair_source)
+                details = self.read_attempt_value(attempt, 'validation.json', attempt_hashes)['schema_diagnostics']
+                correction = repair_prompt(binding.project(context), self.schemas[stage], invalid, details, original=repair_source)
 
-    def validate_attempt(self, stage, data, context, attempt, meta, repair_source=None):
+    def validate_attempt(self, stage, data, context, attempt, meta, binding, repair_source=None):
         candidate = data
         validation = {'valid': False, 'validated_object': 'extracted.json'}
         try:
+            self.pin_attempt_value(attempt, 'extracted.json', data, meta,
+                                   compact=meta['backend'] in ('opencode', 'xxx'))
+            self.save_binding(binding, data, None, attempt, meta)
+            binding.validate_identity(data)
+            meta['model_identity_verified'] = True
+            candidate = binding.expand(data, allow_invalid=True)
+            self.save_attempt_value(attempt, 'expanded.json', candidate, meta)
+            self.save_binding(binding, data, candidate, attempt, meta)
+            validation['validated_object'] = 'expanded.json'
+            try:
+                validate_schema(data, self.schemas[stage])
+            except ContractError as exc:
+                if not has_ledger_structure(stage, candidate, representation='wire') and not exc.details.get('code'):
+                    exc.safe_message = ('Expected the current evidence ledger structure. Legacy output/custom prompts '
+                                        'must use the v4 model schema; missing facts cannot be inferred from old fields.')
+                raise
+            expanded = candidate
             if stage in ('study', 'review'):
-                candidate, changes = normalize_evidence(stage, data, context, self.mode)
-                provenance = normalization_provenance(data, candidate, changes)
+                candidate, changes = normalize_evidence(stage, expanded, context, self.mode)
+                provenance = normalization_provenance(expanded, candidate, changes)
                 # Required artifacts precede validation/publication; extracted.json
                 # remains the adapter's original object, including on failure.
-                save_json(attempt / 'normalized.json', candidate)
-                save_json(attempt / 'normalization.json', provenance | {'changes': changes})
+                self.save_attempt_value(attempt, 'normalized.json', candidate, meta)
+                self.save_attempt_value(attempt, 'normalization.json', provenance | {'changes': changes}, meta)
                 meta['normalization_provenance'] = provenance
                 validation.update(validated_object='normalized.json', normalization_provenance=provenance)
                 if changes:
@@ -1308,27 +1329,72 @@ class Runner:
             validation['valid'] = True
         except BaseException as exc:
             validation.update(result_diagnostics(stage, candidate, context, self.mode))
-            validation['schema_diagnostics'] = schema_diagnostics(candidate, self.schemas[stage], private=True)
+            validation['schema_diagnostics'] = schema_diagnostics(data, self.schemas[stage], private=True)
             validation['error'] = asdict(diagnostic(exc))
             meta['local_validation'] = False
             meta['validation_failed'] = True
             with contextlib.suppress(OSError):
-                save_json(attempt / 'validation.json', validation)
+                self.save_attempt_value(attempt, 'validation.json', validation, meta)
             raise
         validation.update(result_diagnostics(stage, candidate, context, self.mode))
         meta['local_validation'] = True
-        save_json(attempt / 'validation.json', validation)
+        self.save_attempt_value(attempt, 'validation.json', validation, meta)
         if stage == 'study':
             try:
                 candidate = materialize_study(candidate)
             except ContractError as exc:
                 raise AuditError('Program document assembly failed its invariant checks.',
                                  code='MATERIALIZATION_ERROR', failure_layer='materialization') from exc
-            save_json(attempt / 'materialized.json', candidate)
-            save_json(attempt / 'provenance.json', {
+            self.save_attempt_value(attempt, 'materialized.json', candidate, meta)
+            self.save_attempt_value(attempt, 'provenance.json', {
+                'binding': binding.record(data, expanded),
                 'normalization': meta['normalization_provenance'],
-                'materialization': candidate['materialization_provenance']})
+                'materialization': candidate['materialization_provenance']}, meta)
         return candidate
+
+    def pin_attempt_value(self, attempt, name, value, meta, *, compact=False):
+        content = (json.dumps(value) if compact else json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        relative = str((attempt / name).relative_to(attempt.parent.parent))
+        meta['attempt_hashes'][relative] = {'sha256': digest(content), 'bytes': len(content)}
+
+    def save_attempt_value(self, attempt, name, value, meta):
+        # Pin the program's value, not a reread of bytes writable by a subprocess.
+        save_json(attempt / name, value)
+        self.pin_attempt_value(attempt, name, value, meta)
+
+    def read_attempt_value(self, attempt, name, hashes):
+        relative = str((attempt / name).relative_to(attempt.parent.parent))
+        expected = hashes[relative]
+        try:
+            content = read_confined(self.run_dir, str((attempt / name).relative_to(self.run_dir)), expected['bytes'])
+            if len(content) != expected['bytes'] or digest(content) != expected['sha256']:
+                raise ValueError('changed')
+        except (OSError, ValueError, SourceChanged) as exc:
+            self.critical_failure = True
+            raise AuditError('Private attempt artifact changed.', code='MODEL_BINDING_CHANGED',
+                             failure_layer='integrity') from exc
+        return strict_json(content.decode('utf-8'))
+
+    def save_binding(self, binding, raw, expanded, attempt, meta):
+        record = binding.record(raw, expanded)
+        content = (json.dumps(record, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        path = attempt / 'binding.json'
+        atomic(path, content)
+        relative = str(path.relative_to(attempt.parent.parent))
+        meta['binding_hashes'][relative] = {'sha256': digest(content), 'bytes': len(content)}
+
+    def assert_binding_files(self, binding, context, directory, hashes):
+        try:
+            binding.assert_unchanged(context)
+            for name, expected in hashes.items():
+                relative = str((directory / name).relative_to(self.run_dir))
+                content = read_confined(self.run_dir, relative, expected['bytes'])
+                if len(content) != expected['bytes'] or digest(content) != expected['sha256']:
+                    raise ValueError('changed')
+        except (ContractError, OSError, ValueError, SourceChanged) as exc:
+            self.critical_failure = True
+            raise AuditError('Model binding changed during invocation.', code='MODEL_BINDING_CHANGED',
+                             failure_layer='integrity') from exc
 
     def store_stage(self, item, stage, data, meta, context):
         item[stage], item[stage + '_invocation'] = data, meta
@@ -1419,13 +1485,16 @@ class Runner:
                                        '_coverage_plan_path': str(self.run_dir / directory / 'coverage.plan.json')})
         states.append({'directory': directory, 'catalog_invocation': item.get('catalog_invocation')})
         if item.get('selection_publication_complete'):
-            states.append(item | {'directory': directory})
+            states.append(item | {'directory': directory, 'selected_aliases': True})
         for revision in states:
             for stage in ('catalog', 'study', 'review'):
                 meta = revision.get(stage + '_invocation') or {}
                 hashes = dict(meta.get('artifact_hashes', {})) if meta.get('publication_complete') else {}
                 if meta.get('material_retained'):
                     hashes.update(meta.get('material_hashes', {}))
+                if not revision.get('selected_aliases'):
+                    hashes.update(meta.get('binding_hashes', {}))
+                    hashes.update(meta.get('attempt_hashes', {}))
                 for name, expected in hashes.items():
                     relative = str(Path(revision['directory']) / name)
                     try:
@@ -1654,7 +1723,9 @@ class Runner:
             raise
 
     def _invoke_once(self, stage, context, destination, *, budget, repair_index=0,
-                     correction=None, repair_model=None, repair_source=None, evidence_pins=None):
+                     correction=None, repair_model=None, repair_source=None, evidence_pins=None,
+                     binding, binding_hashes, attempt_hashes):
+        self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
         agent = self.cfg['_agents'][stage]
         template = Path(self.cfg['_prompt_paths'][context.get('prompt_variant', stage)]).read_text()
         output_instruction = ('Use the StructuredOutput tool with the supplied schema. Do not duplicate the result in ordinary text.'
@@ -1663,7 +1734,7 @@ class Runner:
         # Assemble only this stage's inputs; the configured CLI profile remains available.
         prompt = (template + '\n\n# Backend output instruction\n' + output_instruction +
                   '\n\n# Authoritative orchestration context (data)\n' +
-                  json.dumps(project_model_context(stage, context), ensure_ascii=False) + '\n\n# Required final JSON Schema\n' +
+                  json.dumps(binding.project(context), ensure_ascii=False) + '\n\n# Required final JSON Schema\n' +
                   json.dumps(self.schemas[stage], ensure_ascii=False))
         if correction is not None:
             prompt = correction
@@ -1687,6 +1758,8 @@ class Runner:
         meta.update(attempt=attempt.name, artifact_directory=str(attempt), api_version=None,
                     model_actual=None, request_id=None, session_id=None, message_id=None,
                     finish_reason=None, output_bytes=None, execution=self.execution)
+        meta['binding_hashes'] = binding_hashes
+        meta['attempt_hashes'] = attempt_hashes
         meta.update(contract_version=CONTRACT_VERSION, artifact_version=ARTIFACT_VERSION,
                     context_format_version=CONTEXT_FORMAT_VERSION,
                     revision_id=context.get('revision_id'), prompt_variant=context.get('prompt_variant', stage),
@@ -1709,6 +1782,7 @@ class Runner:
         save_json(attempt / 'schema.json', self.schemas[stage])
         save_json(attempt / 'validation.json', {'valid': False, 'status': 'not_run'})
         try:
+            self.save_binding(binding, None, None, attempt, meta)
             budget.check()
             self.assert_coverage_file(context)
             if self.folder:
@@ -1738,7 +1812,8 @@ class Runner:
                                                  native_retries)
                             meta['native_envelope_valid'] = True
                             meta['backend_result_valid'] = True
-                            data = self.validate_attempt(stage, data, context, attempt, meta, repair_source)
+                            self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
+                            data = self.validate_attempt(stage, data, context, attempt, meta, binding, repair_source)
                         except BaseException as exc:
                             error = exc
                             raise
@@ -1770,8 +1845,10 @@ class Runner:
                                 meta['model_actual'] = next(iter(model_usage))
                             meta['model_actual_source'] = 'backend modelUsage; may include multiple models'
                         save_json(attempt / 'extracted.json', data)
-                        data = self.validate_attempt(stage, data, context, attempt, meta)
+                        self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
+                        data = self.validate_attempt(stage, data, context, attempt, meta, binding)
                 finally:
+                    self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
                     self.assert_coverage_file(context)
                     if self.folder:
                         self.folder.assert_snapshot(context['source_fingerprint'])
@@ -1800,6 +1877,7 @@ class Runner:
             if stage == 'review':
                 self.assert_review_files(context, destination.parent)
             self.assert_coverage_file(context)
+            self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
             report_hash = self.publish_result(stage, data, destination)
             artifact_hashes = {name: {'sha256': digest(blob), 'bytes': len(blob)}
                                for name, blob in self.artifact_contents(stage, data).items()}

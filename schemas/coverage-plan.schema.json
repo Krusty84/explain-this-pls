@@ -4,7 +4,7 @@
     "contract_version": {
       "type": "string",
       "enum": [
-        "evidence-ledger-v3"
+        "evidence-ledger-v4"
       ]
     },
     "origin": {

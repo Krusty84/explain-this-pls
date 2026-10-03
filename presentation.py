@@ -4,7 +4,7 @@
 """Deterministic English tables, separate from canonical narrative bytes."""
 import html
 import unicodedata
-from contracts import has_program_checks
+from contracts import CONTRACT_VERSION, has_program_checks
 
 LABELS = {
     'SUPPORTED': 'Supported according to the reviewing agent',
@@ -88,10 +88,12 @@ def render_stage(stage, data, language='English'):
         'Semantic review quality is not measured. Resolving a locator does not validate the conclusion.', '']
     out += ['- ' + cell(x) for x in data.get('limitations', [])]
     historical = ((stage in ('study', 'review') and 'revision_id' not in data) or
+                  ((data.get('review_plan', {}).get('coverage_plan') or {}).get('contract_version', CONTRACT_VERSION) != CONTRACT_VERSION) or
+                  (data.get('normalization_provenance', {}).get('rule') == 'EVIDENCE_IDS_V3') or
                   (stage == 'study' and 'materialization_provenance' not in data) or
                   (stage == 'review' and any('document_locator' in c for c in data.get('claim_registry', []))))
     if historical:
-        out += ['> Historical checks; no reacceptance under v3 was performed.', '']
+        out += ['> Historical checks; no reacceptance under v4 was performed.', '']
     if stage == 'study':
         out += ['Study completion reported by the agent: ' + data['completion_status'], '']
         out += [render_coverage(data.get('review_plan', {}).get('coverage_plan'), data.get('coverage', []),
@@ -134,11 +136,11 @@ def render_stage(stage, data, language='English'):
                 ', '.join(evidence_refs), issues + ' ' + reply.get('limitation', '') + ' ' + claim['uncertainty'])) + ' |')
         out += ['', 'Source state matched at checked boundaries. This is not continuous immutability.', '',
                 'Locators were resolved by the orchestrator; this is not a record of agent file reads.', '',
-                '| ID | Source | Path : lines | Locator status | Encoding | File SHA-256 | Fragment SHA-256 |',
-                '| --- | --- | --- | --- | --- | --- | --- |']
+                '| ID | Source | Path : lines | Locator status | Encoding |',
+                '| --- | --- | --- | --- | --- |']
         for e in checks['evidence']:
             out.append('| ' + ' | '.join(cell(v) for v in (e['id'], e['source_id'],
-                f"{e['path']}:{e['start_line']}-{e['end_line']}", e['status'], e.get('encoding'), e['file_sha256'], e['fragment_sha256'])) + ' |')
+                f"{e['path']}:{e['start_line']}-{e['end_line']}", e['status'], e.get('encoding'))) + ' |')
         if stage == 'review':
             out += ['', '## Omission search — agent reports', '',
                     '| Area | Status | Limitation |', '| --- | --- | --- |']

@@ -8,6 +8,10 @@ Directory names alone do not establish architectural responsibilities.
 
 Return only the appended wire schema: task architecture_catalog, exact supplied
 source identity, completion_status, limitations, subsystems and exclusions.
+In folder mode echo source_directory and source_snapshot_id. Keep service
+fingerprints, hashes and binding IDs out of descriptions; identify sources in prose
+by directory, branch and Git commit as applicable. Hash terminology describing
+the investigated system's actual behavior remains relevant.
 Each subsystem has a unique stable id (S-001 etc.), name, purpose and paths.
 Paths are relative to the common source root, including submodules. A directory
 selects its contents; "." selects the source root. Select meaningful responsibility

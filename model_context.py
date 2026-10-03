@@ -4,7 +4,7 @@
 """Lossless content projection for model input; never used for validation/hashing."""
 import copy
 
-CONTEXT_FORMAT_VERSION = 'compact-context-v1'
+CONTEXT_FORMAT_VERSION = 'compact-context-v2'
 
 
 def _registry(claims):
@@ -66,7 +66,7 @@ def project_model_context(stage, context):
         _pair(branch)
     _pair(result.get('previous_revision'))
     # Frozen plans retain the full objects locally. Shared prompt data has one
-    # authoritative occurrence, with its original hash retained in each plan.
+    # authoritative occurrence, without duplicated internal plan data.
     plans = [result.get('review_plan')]
     previous = result.get('previous_revision') or {}
     plans.append((previous.get('study') or {}).get('review_plan'))
@@ -87,4 +87,33 @@ def project_model_context(stage, context):
     for branch in result.get('branches', []):
         _coverage(branch.get('coverage_plan'))
         _coverage(((branch.get('study') or {}).get('review_plan') or {}).get('coverage_plan'))
-    return result
+    return project_model_response(result)
+
+
+_SERVICE_KEYS = {'fingerprint', 'source_fingerprint', 'sha256', 'hash_format',
+                 'artifact_hashes', 'material_hashes', 'binding_hashes', 'attempt_hashes', 'binding', 'binding_provenance',
+                 'materialization_provenance', 'normalization_provenance'}
+
+
+def project_model_response(value):
+    """Strip structured service metadata, preserving every string verbatim.
+
+    This also handles malformed native objects in a format-repair prompt. It
+    never searches prose, commits, quotes or paths for hexadecimal substrings.
+    """
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if key in _SERVICE_KEYS or key.endswith('_sha256'):
+                continue
+            # Complete internal targets are replaced by Binding.project before
+            # this projection. An unbound/invalid target is private metadata.
+            if (key == 'review_target' or (key == 'target' and
+                    (value.get('task') == 'architecture_review' or
+                     isinstance(item, dict) and any(k.endswith('_sha256') for k in item)))):
+                continue
+            result[key] = project_model_response(item)
+        return result
+    if isinstance(value, list):
+        return [project_model_response(item) for item in value]
+    return copy.deepcopy(value)

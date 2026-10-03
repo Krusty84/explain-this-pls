@@ -109,7 +109,9 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
                 self.assertIn('C-001', text)
                 self.assertIn('Operational evidence was unavailable.', text)
                 self.assertIn('Insufficient evidence according to the agent', text)
-                self.assertIn(materialize_study(self.originals['study'])['report_markdown'], text)
+                expanded = json.loads((self.run_dir / 'revisions/001/study.logs/attempt-001/expanded.json').read_text())
+                self.assertEqual(expanded['report_sections'], self.originals['study']['report_sections'])
+                self.assertIn(materialize_study(expanded)['report_markdown'], text)
                 self.assertIn(self.originals['review']['report_markdown'], text)
                 self.assertEqual([s for s, _ in self.calls], ['catalog', 'study', 'review'])
                 raw = json.loads((self.run_dir / 'revisions/001/review.logs/attempt-001/extracted.json').read_text())
@@ -182,7 +184,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             def change(stage, data):
                 if kind in ('malformed', 'failure'):
                     return kind
-                data['source_fingerprint' if kind == 'identity' else 'task'] = 'wrong'
+                data['source_snapshot_id' if kind == 'identity' else 'task'] = 'wrong'
                 return data
             manifest, code = self.run_case(change)
             self.assertEqual((manifest['status'], code), ('FAILED', 1))

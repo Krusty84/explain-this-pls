@@ -602,8 +602,12 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                             self.assertNotIn('architecture_document',invocations[index*3]['context'])
                             review_context=invocations[index*3+2]['context']
                             self.assertEqual(review_context['architecture_document']['report_markdown'],branch['study']['report_markdown'])
-                            self.assertEqual(review_context['document_sha256'],branch['study_invocation']['report_sha256'])
                             branch_dir=run_dir/branch['directory']
+                            self.assertNotIn('document_sha256', review_context)
+                            bindings=json.loads((branch_dir/'revisions/001/review.logs/attempt-001/binding.json').read_text())
+                            target=next(mapping['identity'] for mapping in bindings['mappings']
+                                        if mapping['id']==review_context['review_target_id'])
+                            self.assertEqual(target['document_sha256'],branch['study_invocation']['report_sha256'])
                             self.assertEqual(json.loads((branch_dir/'study.json').read_text()),branch['study'])
                             meta=json.loads((branch_dir/'revisions/001/study.logs/invocation.json').read_text())
                             self.assertEqual(meta['stage'],'study')

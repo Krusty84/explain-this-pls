@@ -5,6 +5,10 @@ Return a complete replacement architecture study for the same pinned source, wit
 all ten report_sections, a complete claims registry, evidence and coverage. Echo
 the supplied source identity exactly. Do not return saved-artifact fields, hashes,
 document coordinates, program_checks or acceptance decisions.
+In folder mode echo source_directory and source_snapshot_id. Keep service
+fingerprints, hashes and binding IDs out of narrative blocks. Identify sources in
+prose by directory, branch and Git commit as applicable; retain hash terminology
+when it describes the investigated system's actual behavior.
 
 The context contains the previous study, its completed review, substantive findings
 and the unchanged coverage_plan. Address every HIGH/MEDIUM finding by inspecting

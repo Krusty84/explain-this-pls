@@ -15,7 +15,7 @@ from document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS, jsonc, validate_result
+from contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS, MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS, jsonc, validate_result
 from explain import AuditError, Folder, Runner, load_config, repository_lock
 from test_explain import review
 from fixtures.ledger_response import response as ledger_response
@@ -268,7 +268,7 @@ class FolderContractTests(unittest.TestCase):
             validate_result('review', data | {'branch': 'invented'}, context, 'folder')
 
     def test_checked_in_schemas_match_runtime(self):
-        for prefix, schemas in (('', SCHEMAS), ('folder-', FOLDER_SCHEMAS)):
+        for prefix, schemas in (('', MODEL_SCHEMAS), ('folder-', MODEL_FOLDER_SCHEMAS)):
             for stage, schema in schemas.items():
                 self.assertEqual(json.loads((ROOT / f'schemas/{prefix}{stage}.schema.json').read_text()), schema)
 
@@ -290,8 +290,6 @@ class FolderPipelineTests(FolderFixture):
                 data.update(completion_status=doc_status,
                     limitations=[] if doc_status == 'COMPLETE' else ['Investigation incomplete.'])
             data.pop('branch', None); data.pop('source_commit', None)
-            data.update(source_directory=context['source_directory'],
-                        source_fingerprint=context['source_fingerprint'])
             if stage == 'review' and mutate_review:
                 (self.source / 'app.py').unlink()
             return {'returncode': 0, 'duration_seconds': 0,
@@ -420,8 +418,14 @@ class FolderCLIIntegrationTests(FolderFixture):
                     if not check:
                         self.assertNotIn('architecture_document', invocations[0]['context'])
                         self.assertEqual(invocations[2]['context']['architecture_document']['report_markdown'], manifest['study']['report_markdown'])
-                        self.assertEqual(invocations[2]['context']['document_sha256'],
-                                         manifest['study_invocation']['report_sha256'])
+                        review_context = invocations[2]['context']
+                        self.assertNotIn('document_sha256', review_context)
+                        self.assertNotIn('source_fingerprint', review_context)
+                        bindings = json.loads((run / 'revisions/001/review.logs/attempt-001/binding.json').read_text())
+                        target = next(mapping['identity'] for mapping in bindings['mappings']
+                                      if mapping['id'] == review_context['review_target_id'])
+                        self.assertEqual(target['document_sha256'], manifest['study_invocation']['report_sha256'])
+                        self.assertEqual(len({call['context']['source_snapshot_id'] for call in invocations}), 1)
                         self.assertEqual(manifest['study_invocation']['stage'], 'study')
                         self.assertNotIn('document', manifest)
                         self.assertNotIn('document_invocation', manifest)

@@ -14,11 +14,11 @@ Inspect those pinned sources. Never initialize, update, fetch, or switch a submo
 For submodule evidence cite the main branch/source_commit, root-relative file path,
 and the containing submodule's expected_commit so the snapshot is unambiguous.
 Never reproduce credentials or secret parameters from repository/submodule URLs.
-In folder mode, it supplies source_directory and source_fingerprint. Inspect that
+In folder mode, it supplies source_directory and source_snapshot_id. Inspect that
 directory in place, including hidden files; do not use Git or follow symbolic links.
-The fingerprint covers paths, types, permissions, regular-file contents, and link
-targets. It is checked at stage boundaries, not a backup or a guarantee of continuous
-immutability. An absent Git history is not by itself grounds for PARTIAL or BLOCKED.
+The orchestrator checks source state at stage boundaries; this is not a backup or
+a guarantee of continuous immutability. An absent Git history is not by itself
+grounds for PARTIAL or BLOCKED.
 Analyze only this snapshot. Do not use earlier architecture reports, conversations,
 shared memory, unrelated directories, or external services. Do not write a report
 to disk: the orchestrator alone persists your final response.
@@ -97,7 +97,7 @@ startup_and_flows, data_and_state, cross_cutting, constraints, change_navigation
 unknowns, evidence_basis. Return unnumbered titles; Python adds heading numbers.
 
 1. Scope and evidence basis: source mode and identity (branch/commit for git,
-   directory/fingerprint for folder), static inspection, exclusions, completion
+   directory for folder), static inspection, exclusions, completion
    status, and applicable limits. Disclose material gaps caused by unfollowed links.
 2. System context and overview: purpose, external boundaries, processes, integrations.
 3. Component map: name, responsibility, code locations, interfaces/entry points,
@@ -133,6 +133,9 @@ satisfy links. Do not return report_markdown, block IDs, claim.block_ids, docume
 coordinates, quotes of report ranges, or computed provenance. Python serializes
 the document and computes all report locators. Do not write files or calculate hashes. Echo the supplied
 source identity exactly. Do not supply program_checks, accepted or policy verdicts.
+Keep service fingerprints, hashes and binding IDs out of narrative blocks; source
+identity in prose uses the directory, branch and Git commit as applicable. Preserve
+hash terminology when it describes the investigated system's actual behavior.
 
 Register each material assertion, including relationships in tables, scenarios,
 and summaries, in claims: id C-001 etc., statement, scope (conditions and limits),

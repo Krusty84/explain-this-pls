@@ -191,7 +191,7 @@
     "source_directory": {
       "type": "string"
     },
-    "source_fingerprint": {
+    "source_snapshot_id": {
       "type": "string"
     }
   },
@@ -204,7 +204,7 @@
     "claims",
     "coverage",
     "source_directory",
-    "source_fingerprint"
+    "source_snapshot_id"
   ],
   "additionalProperties": false
 }

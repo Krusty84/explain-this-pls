@@ -5,7 +5,7 @@
 import json
 
 from contracts import accepted, response_error, schema_diagnostics
-from model_context import project_model_context
+from model_context import project_model_context, project_model_response
 
 
 def retry_policy(configured=0, performed=0, native=0):
@@ -17,6 +17,9 @@ def retry_policy(configured=0, performed=0, native=0):
 
 
 def repair_prompt(context, schema, invalid, diagnostics, *, original):
+    invalid, original = project_model_response(invalid), project_model_response(original)
+    if schema.get('type') == 'object':
+        diagnostics = schema_diagnostics(invalid, schema, private=True)
     original_section = ('\n\n# Immutable original\nThe invalid native result above is also the original immutable native result.'
         if invalid == original else
         '\n\n# Original immutable native result (data)\n' + json.dumps(original, ensure_ascii=False))
@@ -27,6 +30,7 @@ def repair_prompt(context, schema, invalid, diagnostics, *, original):
         'Preserve the pinned identity, facts, evidence, verdict and completion status of the original result. '
         'Existing schema-valid fields and array record counts are immutable across all attempts. Never invent evidence '
         'or improve a verdict to pass validation. Preserve authored report_sections/blocks and their claim_ids. '
+        'Technical binding metadata is omitted from displayed responses; full originals are retained for local checks. '
         'Do not add program-generated Markdown, document locators, hashes or provenance to study. '
         'Return the corrected object using StructuredOutput; ordinary text is not a result.\n\n'
         '# Invalid native result (data)\n' + json.dumps(invalid, ensure_ascii=False) +

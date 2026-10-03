@@ -2,11 +2,10 @@
 
 ## What is this?
 
-Generates architecture descriptions from source and records agent review assessments.
+Analyzes legacy code and explains how the damn thing actually works.
 
-explain-this-pls catalogs the source into subsystems, uses your coding agent to
-document the codebase, then reviews a frozen claim registry in a separate session.
-One optional revision and full review address material findings. Analyze a folder, study a Git
+explain-this-pls uses your coding agent to document an existing codebase, then
+reviews a frozen claim registry against the code in a separate session. Analyze a folder, study a Git
 branch, or compare several branches. Agents are instructed to read the code
 without running the project's builds or tests.
 
@@ -17,7 +16,6 @@ without running the project's builds or tests.
 - **Registry review** recording agent assessments, unresolved claims and reported omissions.
 - **Subsystem coverage** separating file distribution from agents' reported inspection.
 - **Bounded revisions** retaining the original report and one corrected version with a full review.
-- **Legacy encoding support** checking evidence with explicit path-based decoding rules.
 - **Branch comparison** showing differences from a branch you choose as a baseline.
 - **Folder analysis** for source code that does not need to be in Git.
 - **Shareable results** in Markdown and JSON, in your preferred language.
@@ -133,22 +131,22 @@ Folder mode catalogs the source and creates an architecture report and review;
 
 #### Project and execution settings
 
-| Field                      | What to enter                                                                     |
-| -------------------------- | --------------------------------------------------------------------------------- |
-| `mode`                     | `"git"` to analyze one or more branches or `"folder"` for source outside Git.     |
-| `git_mode.repository`      | Path to your standalone local clone, required in Git mode.                        |
-| `git_mode.branches`        | One or more distinct local branch names, required in Git mode.                    |
-| `git_mode.baseline_branch` | Required member of `branches` used as the baseline when comparing branches.       |
-| `folder_mode.path`         | Path to your source directory, required in folder mode.                           |
-| `reports_dir`              | Required destination for reports. Each run gets its own subfolder.                |
-| `project_description`      | A short description of the system's purpose and history. Optional.                |
-| `output_language`          | Report language, such as `"English"`. Default: `"Russian"`.                       |
-| `agent`                    | Required settings for your coding agent see below.                               |
-| `stage_agents`             | Optional agent settings for individual stages. Default: `{}`.                     |
-| `priority_scenarios`       | Workflows or areas to focus on. Default: `[]`.                                    |
+| Field                      | What to enter                                                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `mode`                     | `"git"` to analyze one or more branches or `"folder"` for source outside Git.                                |
+| `git_mode.repository`      | Path to your standalone local clone, required in Git mode.                                                   |
+| `git_mode.branches`        | One or more distinct local branch names, required in Git mode.                                               |
+| `git_mode.baseline_branch` | Required member of `branches` used as the baseline when comparing branches.                                  |
+| `folder_mode.path`         | Path to your source directory, required in folder mode.                                                      |
+| `reports_dir`              | Required destination for reports. Each run gets its own subfolder.                                           |
+| `project_description`      | A short description of the system's purpose and history. Optional.                                           |
+| `output_language`          | Report language, such as `"English"`. Default: `"Russian"`.                                                  |
+| `agent`                    | Required settings for your coding agent see below.                                                           |
+| `stage_agents`             | Optional agent settings for individual stages. Default: `{}`.                                                |
+| `priority_scenarios`       | Workflows or areas to focus on. Default: `[]`.                                                               |
 | `continue_on_error`        | Continue after recoverable stage failures; `false` stops further agent calls in both modes. Default: `true`. |
-| `prompts`                  | Optional paths to your own analysis instructions. Default: `{}`.                  |
-| `source_decoding.rules`    | Explicit source encodings by common-root-relative path. Default: `[]`.            |
+| `prompts`                  | Optional paths to your own analysis instructions. Default: `{}`.                                             |
+| `source_decoding.rules`    | Explicit source encodings by common-root-relative path. Default: `[]`.                                       |
 
 Detected source changes always stop the run, even with `continue_on_error` enabled.
 
@@ -239,11 +237,19 @@ The included prompts are ready to use. To customize them, copy an existing
 template, keep its required response format, and set its path in `prompts`.
 Store custom templates outside the source directory. See the
 [commented configuration](config.example.jsonc) for examples.
-Custom prompts must follow the v3 schemas, including study coverage and review
-closure assessments for previous material findings. Context sent to the model
-contains the full report text once and one claim registry; duplicate locator
-quotes and internal provenance are omitted. Full stored locators and hashes are
-unchanged by this projection, and the exact sent prompt is retained privately.
+Custom prompts must follow the v4 model schemas, including study coverage and review
+closure assessments for previous material findings. Folder responses echo
+`source_snapshot_id`; review responses and comparison references use
+`review_target_id`. These opaque IDs bind responses to the expected snapshot and
+selected revision. Old wire responses are not automatically converted.
+
+The `compact-context-v2` model view contains the full report text once and one
+claim registry. Duplicate locator quotes, service hashes and private provenance
+are omitted from all stages and format repairs. Git commit IDs remain available.
+Full stored locators and integrity hashes are unchanged, and the exact sent prompt
+is retained privately. Each attempt preserves `extracted.json`, records verified
+ID expansion in `expanded.json` and `binding.json`, then normalizes evidence in a
+separate `normalized.json`. These private records do not enter model context.
 
 ### Run explain-this-pls
 
@@ -274,7 +280,7 @@ Add these optional flags to either command as needed:
 | `--output text`      | Always show a readable final summary.                                       |
 | `--output json`      | Return the final result as JSON for scripts.                                |
 | `--verbose`          | Show extra diagnostic details.                                              |
-| `--no-progress`      | Hide the spinner and waiting messages keep stage updates and errors.      |
+| `--no-progress`      | Hide the spinner and waiting messages keep stage updates and errors.        |
 | `--trust-repository` | Allow a Git checkout owned by another user, if you trust it. Git mode only. |
 
 Each run saves results in a new subfolder of `reports_dir`. Start with these files:
@@ -298,6 +304,12 @@ short history. Compatibility report files are exact copies of the selected versi
 Comparison receives only the selected pair. A failed revision/review retains the
 previous completed pair; a newer unreviewed study is shown separately. With no
 completed review, the latest usable study is explicitly unverified.
+
+Generated evidence tables show ID, source, path and lines, resolution status and
+encoding. They omit file and fragment hashes; the corresponding JSON records keep
+both for integrity checks. Prompts keep service fingerprints, hashes and binding
+IDs out of narrative. Source-system descriptions of hashing and Git commit IDs
+remain intact; authored Markdown is never scrubbed or rewritten after rendering.
 
 The final report separates catalog file allocation from INSPECTED,
 PARTIALLY_INSPECTED and NOT_INSPECTED assessments. A citation supports a reported
@@ -332,6 +344,6 @@ mode. Catalog failure in strict mode stops that source; continuation to other
 branches follows the same setting. Source integrity, cleanup and publication
 failures stop both policies. Configured format repairs remain bounded. Substantive
 revision is a separate, explicitly bounded cycle, and every old HIGH/MEDIUM finding
-must be assessed again before acceptance. Historical v1/v2 artifacts stay readable
+must be assessed again before acceptance. Historical v1–v3 artifacts stay readable
 without migrating their hashes or granting new acceptance. Semantic quality remains
 `NOT_MEASURED`.

@@ -14,7 +14,7 @@ from unittest.mock import patch
 from contracts import ContractError
 from explain import AuditError, Folder, Runner, atomic
 from test_folder import FolderFixture
-from fixtures.ledger_response import response
+from fixtures.ledger_response import response, model_wire, prompt_context
 
 
 class PublicationTests(FolderFixture):
@@ -42,13 +42,18 @@ class PublicationTests(FolderFixture):
     def result(data):
         return {'returncode': 0, 'stdout': json.dumps(data).encode(), 'stderr': b''}
 
+    def process_for(self, data, context):
+        def process(command, cwd, env, payload, **kwargs):
+            return self.result(model_wire(data, prompt_context(payload), context))
+        return process
+
     def test_attempts_are_immutable_and_validation_precedes_publication(self):
         runner, context, data = self.prepare()
         destination = runner.run_dir / 'study.logs'
-        with patch('explain.process', return_value=self.result(data)):
+        with patch('explain.process', side_effect=self.process_for(data, context)):
             runner.invoke('study', context, destination)
         first = {p.name: p.read_bytes() for p in (destination / 'attempt-001').iterdir()}
-        with patch('explain.process', return_value=self.result(data | {'schema_version': 'legacy'})):
+        with patch('explain.process', side_effect=self.process_for(data | {'schema_version': 'legacy'}, context)):
             with self.assertRaises(ContractError):
                 runner.invoke('study', context, destination)
         self.assertEqual(first, {p.name: p.read_bytes() for p in (destination / 'attempt-001').iterdir()})
@@ -63,7 +68,7 @@ class PublicationTests(FolderFixture):
 
     def test_first_invalid_result_never_publishes(self):
         runner, context, data = self.prepare()
-        with patch('explain.process', return_value=self.result(data | {'source_fingerprint': 'wrong'})):
+        with patch('explain.process', side_effect=self.process_for(data | {'source_fingerprint': 'wrong'}, context)):
             with self.assertRaises(ContractError):
                 runner.invoke('study', context, runner.run_dir / 'study.logs')
         self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
@@ -72,7 +77,7 @@ class PublicationTests(FolderFixture):
     def test_recovered_material_cannot_replace_a_previously_frozen_registry(self):
         from final_report import recoverable_material
         runner, context, data = self.prepare()
-        with patch('explain.process', return_value=self.result(data)):
+        with patch('explain.process', side_effect=self.process_for(data, context)):
             runner.invoke('study', context, runner.run_dir / 'study.logs')
         frozen = {name: (runner.run_dir / name).read_bytes()
                   for name in ('ARCHITECTURE.md', 'claim.registry.json', 'review.plan.json', 'study.json')}
@@ -107,20 +112,22 @@ class PublicationTests(FolderFixture):
         # Canonicalize authored CRLF; retain final blank lines.
         data['report_sections'][0]['blocks'][0]['markdown'] += '\r\n'
         expected = materialize_study(data)['report_markdown']
-        with patch('explain.process', return_value=self.result(data)):
+        with patch('explain.process', side_effect=self.process_for(data, context)):
             saved, meta = runner.invoke('study', context, runner.run_dir / 'study.logs')
         import hashlib
         self.assertEqual((runner.run_dir / 'ARCHITECTURE.md').read_bytes(), expected.encode())
         self.assertEqual(saved['review_plan']['document_sha256'], hashlib.sha256(expected.encode()).hexdigest())
         wire = json.loads((runner.run_dir / 'study.logs/attempt-001/extracted.json').read_text())
-        self.assertEqual(wire, data)
+        model_context = prompt_context((runner.run_dir / 'study.logs/attempt-001/input.prompt.txt').read_bytes())
+        self.assertEqual(wire, model_wire(data, model_context, context))
+        self.assertEqual(json.loads((runner.run_dir / 'study.logs/attempt-001/expanded.json').read_text()), data)
         self.assertNotIn('program_checks', wire)
         self.assertNotIn('contract_version', wire)
         self.assertNotIn('contract_version', saved)
         self.assertNotIn('artifact_version', saved)
         self.assertNotIn('contract_version', saved['review_plan'])
-        self.assertEqual(meta['contract_version'], 'evidence-ledger-v3')
-        self.assertEqual(meta['artifact_version'], 'evidence-ledger-artifacts-v3')
+        self.assertEqual(meta['contract_version'], 'evidence-ledger-v4')
+        self.assertEqual(meta['artifact_version'], 'evidence-ledger-artifacts-v4')
         self.assertTrue(meta['publication_complete'])
 
     def test_forged_review_target_is_not_recovered_even_with_schema_error(self):
@@ -139,7 +146,7 @@ class PublicationTests(FolderFixture):
     def test_changed_document_or_frozen_files_cannot_receive_old_review(self):
         from explain import AuditError
         runner, context, data = self.prepare()
-        with patch('explain.process', return_value=self.result(data)):
+        with patch('explain.process', side_effect=self.process_for(data, context)):
             saved, _ = runner.invoke('study', context, runner.run_dir / 'study.logs')
         ctx = runner.freeze_review(saved, context, runner.run_dir)
         for name in ('ARCHITECTURE.md', 'claim.registry.json', 'review.plan.json'):
@@ -149,9 +156,9 @@ class PublicationTests(FolderFixture):
             with self.assertRaises(AuditError): runner.assert_review_files(ctx, runner.run_dir)
             path.write_bytes(original)
         raw = response(ctx)
-        def tamper(*args, **kwargs):
+        def tamper(command, cwd, env, payload, **kwargs):
             (runner.run_dir / 'ARCHITECTURE.md').write_text('changed during review')
-            return self.result(raw)
+            return self.result(model_wire(raw, prompt_context(payload), ctx))
         with patch('explain.process', side_effect=tamper), self.assertRaises(AuditError):
             runner.invoke('review', ctx, runner.run_dir / 'review.logs')
         self.assertFalse((runner.run_dir / 'review.json').exists())
