@@ -88,6 +88,9 @@
                 "claim_id": {
                   "type": "string"
                 },
+                "revision_id": {
+                  "type": "string"
+                },
                 "document_sha256": {
                   "type": "string"
                 },
@@ -99,6 +102,7 @@
                 "branch",
                 "artifact",
                 "claim_id",
+                "revision_id",
                 "document_sha256",
                 "registry_sha256"
               ],

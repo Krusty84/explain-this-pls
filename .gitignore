@@ -1,3 +1,4 @@
+__pycache__/
 agent_probe_provider.py
 diff_agent_openapi.py
 opencode_tester.zip
@@ -18,3 +19,4 @@ docs/validation-results.md
 docs/structured-output-protocol.md
 docs/validation-results.md
 patches/opencode-v1.2.27-structured-output-validation.patch
+config.jsonc

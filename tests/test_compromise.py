@@ -59,7 +59,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         self.assertNotIn('Review incomplete or evidence insufficient', final)
         self.assertNotIn('Проверка не завершена или данных недостаточно', final)
         self.assertNotIn('Старый', final)
-        self.assertFalse(manifest['review']['program_checks']['policy_satisfied'])
+        self.assertFalse(manifest['revisions'][0]['review']['program_checks']['policy_satisfied'])
 
     def run_case(self, change=None, *, backend='codex', policy=None, continue_on_error=True, atomic_override=None):
         config = self.config()
@@ -76,10 +76,10 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         def process(command, cwd, env, payload, **kwargs):
             context = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n')[1]
                                  .split('\n\n# Required final JSON Schema')[0])
-            stage = 'review' if 'architecture_document' in context else 'study'
+            stage = context.get('stage') or ('review' if 'architecture_document' in context else 'study')
             calls.append((stage, context))
             data = response_for(context)
-            outcome = change(stage, data) if change else data
+            outcome = change(stage, data) if change and stage != 'catalog' else data
             if outcome == 'failure':
                 return {'returncode': 17, 'stdout': b'', 'stderr': b'private backend error'}
             if outcome == 'malformed':
@@ -101,20 +101,20 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
                 self.assertEqual((manifest['status'], code), ('PARTIAL', 2))
                 self.assertFalse(manifest['accepted'])
                 self.assertIsNone(manifest['review'])
-                self.assertTrue(manifest['review_usable'])
+                self.assertTrue(manifest['revisions'][0]['review_usable'])
                 self.assertFalse((self.run_dir / 'review.json').exists())
                 self.assertFalse((self.run_dir / 'ARCHITECTURE_REVIEW.md').exists())
                 text = Path(manifest['final_report']).read_text()
                 self.assertIn('Проверка реестра не завершена', text)
                 self.assertIn('C-001', text)
                 self.assertIn('Operational evidence was unavailable.', text)
-                self.assertIn('По оценке агента данных недостаточно', text)
+                self.assertIn('Insufficient evidence according to the agent', text)
                 self.assertIn(materialize_study(self.originals['study'])['report_markdown'], text)
                 self.assertIn(self.originals['review']['report_markdown'], text)
-                self.assertEqual([s for s, _ in self.calls], ['study', 'review'])
-                raw = json.loads((self.run_dir / 'review.logs/attempt-001/extracted.json').read_text())
+                self.assertEqual([s for s, _ in self.calls], ['catalog', 'study', 'review'])
+                raw = json.loads((self.run_dir / 'revisions/001/review.logs/attempt-001/extracted.json').read_text())
                 self.assertEqual(raw, self.originals['review'])
-                self.assertEqual(json.loads((self.run_dir / 'review.logs/attempt-001/invocation.json').read_text())['status'], 'FAILED')
+                self.assertEqual(json.loads((self.run_dir / 'revisions/001/review.logs/attempt-001/invocation.json').read_text())['status'], 'FAILED')
 
     def test_missing_study_field_is_reviewed_without_promoting_original(self):
         def change(stage, data):
@@ -124,10 +124,11 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         manifest, code = self.run_case(change)
         self.assertEqual(code, 2)
         self.assertIsNone(manifest['study'])
-        self.assertIsNotNone(manifest['review'])
+        self.assertIsNone(manifest['review'])
+        self.assertIsNotNone(manifest['revisions'][0]['review'])
         self.assertFalse(manifest['accepted'])
-        self.assertFalse(self.calls[1][1]['document_strictly_valid'])
-        self.assertIn('validation_issues', self.calls[1][1]['architecture_document'])
+        self.assertFalse(self.calls[2][1]['document_strictly_valid'])
+        self.assertIn('validation_issues', self.calls[2][1]['architecture_document'])
         self.assertFalse((self.run_dir / 'study.json').exists())
 
     def test_malformed_ledger_is_not_used_as_structured_evidence(self):
@@ -137,7 +138,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             return data
         manifest, code = self.run_case(change)
         self.assertEqual(code, 2)
-        self.assertNotIn('review_ledger', manifest['review_material'])
+        self.assertNotIn('review_ledger', manifest['revisions'][0]['review_material'])
         self.assertNotIn('not an evidence array', Path(manifest['final_report']).read_text())
 
     def test_low_finding_unknown_link_and_wrong_verdict_are_all_visible(self):
@@ -154,7 +155,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         self.assertEqual(code, 2)
         # The new wire contract rejects both the reverse links and agent-authored
         # verdict outright. Canonical relations/derived verdicts are tested separately.
-        issues = manifest['review_material']['validation_issues']['schema_diagnostics']
+        issues = manifest['revisions'][0]['review_material']['validation_issues']['schema_diagnostics']
         self.assertGreaterEqual(issues['total_violations'], 3)
         self.assertFalse(manifest['accepted'])
         self.assertEqual(self.originals['review']['findings'][0]['severity'], 'LOW')
@@ -173,7 +174,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             return data
         manifest, code = self.run_case(change, continue_on_error=False)
         self.assertEqual(code, 2)
-        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(len(self.calls), 2)
         self.assertIn('study_material', manifest)
 
     def test_broken_json_wrong_identity_and_wrong_task_are_not_recovered(self):
@@ -188,7 +189,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             self.assertNotIn('study_material', manifest)
             self.assertFalse(manifest['has_usable_material'])
             self.assertIn('Диагностическая сводка', Path(manifest['final_report']).read_text())
-            self.assertEqual(len(self.calls), 1)
+            self.assertEqual(len(self.calls), 2)
 
     def test_changed_source_remains_fatal_and_current_response_unpublished(self):
         def change(stage, data):
@@ -266,7 +267,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
                     self.assertFalse(manifest['accepted'])
                     if policy == 'compromise':
                         self.assertNotIn('claims', manifest['study_material'])
-                        self.assertEqual(self.calls[1][1]['claim_registry'], [])
+                        self.assertEqual(self.calls[2][1]['claim_registry'], [])
                         self.assertIn('Старый формат', Path(manifest['final_report']).read_text())
 
 
@@ -293,9 +294,9 @@ class CompromiseGit(unittest.TestCase):
         def process(command, cwd, env, payload, **kwargs):
             context = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n')[1]
                                  .split('\n\n# Required final JSON Schema')[0])
-            stage = 'compare' if 'baseline_branch' in context else 'review' if 'architecture_document' in context else 'study'
+            stage = context.get('stage') or ('compare' if 'baseline_branch' in context else 'review' if 'architecture_document' in context else 'study')
             calls.append((stage, context))
-            if context.get('branch') == failure_branch or (stage == 'compare' and compare_failure):
+            if (stage != 'catalog' and context.get('branch') == failure_branch) or (stage == 'compare' and compare_failure):
                 return {'returncode': 0, 'stdout': b'{broken', 'stderr': b''}
             data = response_for(context)
             if stage == 'review':
@@ -312,7 +313,7 @@ class CompromiseGit(unittest.TestCase):
         manifest, code, calls = self.pipeline()
         self.assertEqual((manifest['status'], code), ('PARTIAL', 2))
         self.assertFalse(any(b['accepted'] for b in manifest['branches']))
-        self.assertEqual(len(calls), 6)
+        self.assertEqual(len(calls), 9)
         self.assertEqual(calls[-1][0], 'compare')
         self.assertEqual(set(manifest['comparison']['unresolved_branches']), set(self.config()['branches']))
         text = Path(manifest['final_report']).read_text()
@@ -335,7 +336,7 @@ class CompromiseGit(unittest.TestCase):
         for item in manifest['branches']:
             if item.get('study'):
                 self.assertTrue(item['study_invocation']['publication_complete'])
-                self.assertTrue(item.get('review_material'))
+                self.assertTrue(item['revisions'][0].get('review_material'))
         report = Path(manifest['final_report']).read_text()
         self.assertIn('INVALID_JSON', report)
         self.assertIn('не означает отсутствия различий', report)
@@ -343,7 +344,7 @@ class CompromiseGit(unittest.TestCase):
     def test_single_branch_and_stop_after_recovered_review(self):
         manifest, code, calls = self.pipeline(single=True, cont=False)
         self.assertEqual(code, 2)
-        self.assertEqual([s for s, _ in calls], ['study', 'review'])
+        self.assertEqual([s for s, _ in calls], ['catalog', 'study', 'review'])
         self.assertNotIn('comparison', manifest)
 
     def test_restoration_failure_stays_failed_with_prior_material(self):
@@ -439,11 +440,11 @@ class NativeFinalPipeline(unittest.TestCase):
                 with patch('opencode.verify_native_retries'):
                     manifest, code = self.run_case(scenario)
                 self.assertEqual(code, 2)
-                self.assertEqual(len(self.prompts()) - before, 2)
+                self.assertEqual(len(self.prompts()) - before, 3)
                 self.assertTrue(Path(manifest['final_report']).is_file())
                 if scenario == 'material-review':
                     self.assertIsNone(manifest['review'])
-                    self.assertIn('review_material', manifest)
+                    self.assertIn('review_material', manifest['revisions'][0])
 
     def test_cleanup_failure_remains_fatal_even_with_a_study(self):
         import opencode

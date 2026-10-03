@@ -3,9 +3,10 @@
 
 """Bounded, descriptor-relative source locators. Resolution never implies support.
 
-UTF-8 strictly decoded; lines split on LF only, CRLF normalized to LF, final
-unterminated line retained. File hashes cover original bytes; fragment hashes
-cover normalized UTF-8. No source text is retained in the resolution result.
+Explicit rules or a Unicode BOM select strict decoding; UTF-8 is the default.
+Lines split on LF only, CRLF normalized to LF, final unterminated line retained.
+File hashes cover original bytes; fragment hashes cover normalized UTF-8.
+No source text is retained in the resolution result.
 """
 from __future__ import annotations
 import errno
@@ -15,12 +16,13 @@ import os
 from pathlib import Path
 import re
 import stat
+from source_decoding import normalize_source_decoding, decode_source, SourceDecodeError
 
 MAX_RECORD_BYTES = 16 * 1024
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_RANGE_LINES = 200
 MAX_FRAGMENT_BYTES = 64 * 1024
-MAX_TOTAL_BYTES = 32 * 1024 * 1024  # all file bytes read, including repeated files
+MAX_TOTAL_BYTES = 32 * 1024 * 1024  # unique source paths read within one resolver call
 MAX_EVIDENCE = 256
 
 
@@ -84,13 +86,17 @@ def open_source_directory(root):
 
 
 def read_confined(root, relative, limit):
+    return _read_confined(root, relative, limit)[0]
+
+
+def _read_confined(root, relative, limit, *, expected=None, read=True):
     """Walk absolute root and relative components with openat + O_NOFOLLOW.
 
     Directory handles stay open until final validation. Component replacement
     cannot redirect a subsequent open to an outside tree, including during races.
     Root is the orchestrator's canonical absolute path, never a model path.
     """
-    fds, chain = [], []
+    fds, chain, identity = [], [], []
     try:
         fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         fds.append(fd)
@@ -98,6 +104,10 @@ def read_confined(root, relative, limit):
         for index, name in enumerate(components):
             before = os.stat(name, dir_fd=fd, follow_symlinks=False)
             is_file = index == len(components) - 1
+            component_identity = stamp(before) if is_file else stamp(before)[:3]
+            if expected is not None and component_identity != expected[index]:
+                raise SourceChanged('Previously read source path changed during evidence resolution.')
+            identity.append(component_identity)
             if not (stat.S_ISREG(before.st_mode) if is_file else stat.S_ISDIR(before.st_mode)):
                 raise PointerError('UNSAFE_PATH')
             flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
@@ -112,13 +122,14 @@ def read_confined(root, relative, limit):
             fd = child
         if stamp(before) != stamp(os.fstat(fd)):
             raise SourceChanged('Source changed before evidence read.')
-        if before.st_size > limit:
+        if read and before.st_size > limit:
             raise PointerError('LIMIT_EXCEEDED')
         data = bytearray()
-        while chunk := os.read(fd, min(65536, limit + 1 - len(data))):
-            data.extend(chunk)
-            if len(data) > limit:
-                raise SourceChanged('Source grew beyond the pinned evidence read size.')
+        if read:
+            while chunk := os.read(fd, min(65536, limit + 1 - len(data))):
+                data.extend(chunk)
+                if len(data) > limit:
+                    raise SourceChanged('Source grew beyond the pinned evidence read size.')
         for parent, name, child, before, is_file in chain:
             # Ancestor mtimes may change due to unrelated /tmp peers; identity
             # checks are sufficient for directories, full stamps for the file.
@@ -129,7 +140,11 @@ def read_confined(root, relative, limit):
             for after in (os.fstat(child), current):
                 if (stamp(before) if is_file else stamp(before)[:3]) != (stamp(after) if is_file else stamp(after)[:3]):
                     raise SourceChanged('Source changed during evidence resolution.')
-        return bytes(data)
+        return bytes(data), tuple(identity)
+    except (OSError, PointerError):
+        if expected is not None:
+            raise SourceChanged('Previously read source path became unavailable or unsafe.') from None
+        raise
     finally:
         for fd in reversed(fds):
             os.close(fd)
@@ -138,11 +153,12 @@ def read_confined(root, relative, limit):
 def resolve_evidence(stage, pointers, context, expected_files=None):
     catalog = {s['id']: s for s in source_catalog(context)}
     root = context.get('source_directory', context.get('repository'))
-    results, total = [], 0
+    decoding = normalize_source_decoding(context.get('source_decoding'))
+    results, total, cache, read_paths = [], 0, {}, {}
     for index, pointer in enumerate(pointers):
         result = {k: pointer.get(k) for k in ('source_id', 'path', 'start_line', 'end_line')}
         result.update(id=stage + ':' + str(pointer.get('id', '')), source_identity=None,
-                      file_sha256=None, fragment_sha256=None, status='INVALID_POINTER')
+                      file_sha256=None, fragment_sha256=None, encoding=None, status='INVALID_POINTER')
         results.append(result)
         try:
             if index >= MAX_EVIDENCE or len(canonical(pointer)) > MAX_RECORD_BYTES:
@@ -166,17 +182,28 @@ def resolve_evidence(stage, pointers, context, expected_files=None):
             # Repository control files are not architectural source evidence.
             if '.git' in relative.split('/'):
                 raise PointerError('INVALID_POINTER')
-            if total >= MAX_TOTAL_BYTES:
-                raise PointerError('LIMIT_EXCEEDED')
-            blob = read_confined(root, relative, min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total))
-            total += len(blob)
-            result['file_sha256'] = sha(blob)
+            if relative in cache:
+                cached = cache[relative]
+                _read_confined(root, relative, MAX_FILE_BYTES, expected=read_paths[relative], read=False)
+                source_lines, result['file_sha256'], result['encoding'] = cached
+            else:
+                limit = MAX_FILE_BYTES if relative in read_paths else min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total)
+                blob, identity = _read_confined(root, relative, limit, expected=read_paths.get(relative))
+                if relative not in read_paths:
+                    total += len(blob)
+                    read_paths[relative] = identity
+                result['file_sha256'] = sha(blob)
+                if expected_files is not None and result['file_sha256'] != expected_files.get(relative):
+                    raise SourceChanged('Evidence bytes differ from the pinned source inventory.')
+                try:
+                    text, result['encoding'] = decode_source(blob, relative, decoding)
+                except SourceDecodeError as exc:
+                    result['encoding'] = exc.encoding
+                    raise PointerError(str(exc)) from None
+                source_lines = lines(text)
+                cache[relative] = source_lines, result['file_sha256'], result['encoding']
             if expected_files is not None and result['file_sha256'] != expected_files.get(relative):
                 raise SourceChanged('Evidence bytes differ from the pinned source inventory.')
-            try:
-                source_lines = lines(blob.decode('utf-8', errors='strict'))
-            except UnicodeError:
-                raise PointerError('DECODE_ERROR') from None
             if end > len(source_lines):
                 raise PointerError('OUT_OF_RANGE')
             fragment = ''.join(source_lines[start - 1:end])

@@ -4,8 +4,9 @@
 
 Generates architecture descriptions from source and records agent review assessments.
 
-explain-this-pls uses your coding agent to document an existing codebase, then
-reviews a frozen claim registry against the code in a separate session. Analyze a folder, study a Git
+explain-this-pls catalogs the source into subsystems, uses your coding agent to
+document the codebase, then reviews a frozen claim registry in a separate session.
+One optional revision and full review address material findings. Analyze a folder, study a Git
 branch, or compare several branches. Agents are instructed to read the code
 without running the project's builds or tests.
 
@@ -14,6 +15,9 @@ without running the project's builds or tests.
 - **Architecture reports** explaining the system's main parts and workflows,
   with references to the source code.
 - **Registry review** recording agent assessments, unresolved claims and reported omissions.
+- **Subsystem coverage** separating file distribution from agents' reported inspection.
+- **Bounded revisions** retaining the original report and one corrected version with a full review.
+- **Legacy encoding support** checking evidence with explicit path-based decoding rules.
 - **Branch comparison** showing differences from a branch you choose as a baseline.
 - **Folder analysis** for source code that does not need to be in Git.
 - **Shareable results** in Markdown and JSON, in your preferred language.
@@ -124,7 +128,8 @@ This creates an architecture report and review, then restores the original Git
 checkout. `baseline_branch` must match the selected branch. Comparison is skipped.
 
 For source code outside Git, change `mode` to `"folder"` and set `folder_mode.path`.
-Folder mode creates an architecture report and review `git_mode` settings are ignored.
+Folder mode catalogs the source and creates an architecture report and review;
+`git_mode` settings are ignored.
 
 #### Project and execution settings
 
@@ -141,8 +146,9 @@ Folder mode creates an architecture report and review `git_mode` settings are ig
 | `agent`                    | Required settings for your coding agent see below.                               |
 | `stage_agents`             | Optional agent settings for individual stages. Default: `{}`.                     |
 | `priority_scenarios`       | Workflows or areas to focus on. Default: `[]`.                                    |
-| `continue_on_error`        | Continue with other branches after a stage fails. Default: `true`. Git mode only. |
+| `continue_on_error`        | Continue after recoverable stage failures; `false` stops further agent calls in both modes. Default: `true`. |
 | `prompts`                  | Optional paths to your own analysis instructions. Default: `{}`.                  |
+| `source_decoding.rules`    | Explicit source encodings by common-root-relative path. Default: `[]`.            |
 
 Detected source changes always stop the run, even with `continue_on_error` enabled.
 
@@ -150,6 +156,7 @@ Optional execution settings and their defaults:
 
 ```json
 "execution": {
+  "max_revision_rounds": 1,
   "stage_timeout_seconds": 3600,
   "idle_timeout_seconds": null,
   "opencode_format_retries": 2,
@@ -161,7 +168,10 @@ Optional execution settings and their defaults:
 
 Timeouts are in seconds and must be greater than zero.
 
-- `stage_timeout_seconds`: maximum time for each analysis, review or comparison stage.
+- `stage_timeout_seconds`: maximum time for each catalog, study, review, revision or comparison stage.
+- `max_revision_rounds`: `1` (default) allows one revised study and full review after
+  a completed, valid review reports HIGH/MEDIUM findings; `0` disables revision.
+  LOW findings, incomplete reviews and transport/contract errors do not trigger it.
 - `idle_timeout_seconds`: stop after this much inactivity `null` disables this limit.
 - `http_timeout_seconds`: time allowed for service requests to XXX or OpenCode.
 - `api_doc_timeout_seconds`: time allowed to check the agent's API compatibility.
@@ -171,6 +181,31 @@ Timeouts are in seconds and must be greater than zero.
 
 The XXX and OpenCode examples enable one correction attempt. Extra requests may
 increase model usage, but must fit within the original stage time limit.
+Each substantive revision and repeat review receives its own stage time limit.
+At most five substantive stages run per snapshot: catalog, study, review, revised
+study and repeat review. A format correction cannot change facts.
+
+#### Source encodings
+
+```json
+"source_decoding": {
+  "rules": [{"path": "src/legacy", "encoding": "cp1251"}]
+}
+```
+
+Rule paths are relative to the common source root, including submodules. A rule
+matches a file or directory subtree; the most specific component path wins.
+Use `"."` for a whole-tree default. Duplicate or unsafe paths and unknown encodings
+are configuration errors. Supported encodings are UTF-8, UTF-16/32 with BOM or
+explicit LE/BE, CP1251, CP1252, CP866 and Latin-1. Without a rule, a Unicode BOM
+selects the encoding; otherwise strict UTF-8 is used. No automatic guessing or
+replacement characters are allowed. An incompatible BOM returns ENCODING_MISMATCH.
+
+These rules configure evidence verification only. Whether an agent can read those
+files depends on its CLI; the runner does not create transcoded UTF-8 copies.
+File hashes include the original BOM and bytes; fragment hashes use decoded,
+normalized lines. A resolver reuses successful reads within one call while
+checking path/file integrity again. The 32 MiB limit counts unique files.
 
 #### Agent settings
 
@@ -187,20 +222,28 @@ in this configuration.
 #### Per-stage overrides
 
 Leave `stage_agents` empty to use one agent throughout. To choose a different agent
-for analysis (`study`), review (`review`), or comparison (`compare`), edit the
+for catalog (`catalog`), analysis (`study`), review (`review`), or comparison (`compare`), edit the
 corresponding block in the [commented example](config.example.jsonc).
 
 Unspecified settings use the values from `agent`. When changing the backend, also
 update `executable` and clear or replace any inherited `model` and `expected_version`.
 The `compare` stage is used only in Git mode with two or more selected branches.
+Catalog inherits the effective study settings unless explicitly overridden.
+Revision uses the study agent; there is no separate revision backend profile.
 
 #### Custom prompts
 
 The included prompts are ready to use. To customize them, copy an existing
-[study](prompts/study.md), [review](prompts/review.md), or [comparison](prompts/compare.md)
+[catalog](prompts/catalog.md), [study](prompts/study.md), [revision](prompts/revise.md),
+[review](prompts/review.md), or [comparison](prompts/compare.md)
 template, keep its required response format, and set its path in `prompts`.
 Store custom templates outside the source directory. See the
 [commented configuration](config.example.jsonc) for examples.
+Custom prompts must follow the v3 schemas, including study coverage and review
+closure assessments for previous material findings. Context sent to the model
+contains the full report text once and one claim registry; duplicate locator
+quotes and internal provenance are omitted. Full stored locators and hashes are
+unchanged by this projection, and the exact sent prompt is retained privately.
 
 ### Run explain-this-pls
 
@@ -243,9 +286,25 @@ Each run saves results in a new subfolder of `reports_dir`. Start with these fil
 | `ARCHITECTURE_REVIEW.md` | Review findings and gaps in the architecture report.                   |
 | `BRANCH_COMPARISON.md`   | Differences from the baseline, with two or more selected Git branches. |
 
-In Git mode, the first two reports are under `branches/<branch-id>/`, and the
-comparison, when applicable, is under `comparison/`. In folder mode, the first two
-reports are directly in the run folder.
+`FINAL_REPORT.md` is directly in the run folder. In Git mode, `ARCHITECTURE.md`
+and `ARCHITECTURE_REVIEW.md` are under `branches/<branch-id>/`, and the comparison,
+when applicable, is under `comparison/`. In folder mode, the architecture report
+and review are directly in the run folder.
+
+Each snapshot has an immutable `coverage.plan.json`. Versions are stored separately
+under `revisions/001` and, when created, `revisions/002`, each with its own study,
+review and invocation artifacts. The manifest records `selected_revision` and a
+short history. Compatibility report files are exact copies of the selected version.
+Comparison receives only the selected pair. A failed revision/review retains the
+previous completed pair; a newer unreviewed study is shown separately. With no
+completed review, the latest usable study is explicitly unverified.
+
+The final report separates catalog file allocation from INSPECTED,
+PARTIALLY_INSPECTED and NOT_INSPECTED assessments. A citation supports a reported
+inspection; neither indicator proves complete system understanding. Unassigned
+entries remain UNCLASSIFIED; exclusions and symlinks stay explicit. In compromise
+mode an invalid catalog can fall back to top directories and root files, marked
+DIRECTORY_FALLBACK. Incomplete/fallback catalogs and UNCLASSIFIED prevent COMPLETE.
 
 The default `"result_policy": "compromise"` preserves usable material even when
 individual stages fail. The orchestrator assembles `FINAL_REPORT.md` without an
@@ -268,5 +327,11 @@ satisfied factual correctness is not established. `2` / `PARTIAL` is
 for usable material with caveats or individual stage failures, `1` / `FAILED` for no
 usable study or critical source-integrity, restoration, cleanup, or publication
 failure. Interruption remains `130`. `continue_on_error: false` stops further agent
-calls but still assembles previously completed material. Configured format repairs
-remain bounded semantic errors do not trigger extra model requests.
+calls but still assembles previously completed material, including in compromise
+mode. Catalog failure in strict mode stops that source; continuation to other
+branches follows the same setting. Source integrity, cleanup and publication
+failures stop both policies. Configured format repairs remain bounded. Substantive
+revision is a separate, explicitly bounded cycle, and every old HIGH/MEDIUM finding
+must be assessed again before acceptance. Historical v1/v2 artifacts stay readable
+without migrating their hashes or granting new acceptance. Semantic quality remains
+`NOT_MEASURED`.

@@ -158,6 +158,41 @@
         ],
         "additionalProperties": false
       }
+    },
+    "coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "area_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "INSPECTED",
+              "PARTIALLY_INSPECTED",
+              "NOT_INSPECTED"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limitation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "area_id",
+          "status",
+          "evidence_ids",
+          "limitation"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [
@@ -168,7 +203,8 @@
     "branch",
     "source_commit",
     "evidence",
-    "claims"
+    "claims",
+    "coverage"
   ],
   "additionalProperties": false
 }

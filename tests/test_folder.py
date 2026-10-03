@@ -111,8 +111,8 @@ class ModeConfigTests(FolderFixture):
             prompts={'compare': '/missing/prompt'})
         cfg = self.config()
         self.assertEqual(cfg['folder_mode']['path'], str(self.source))
-        self.assertEqual(set(cfg['_agents']), {'study', 'review'})
-        self.assertEqual(set(cfg['_prompt_paths']), {'study', 'review'})
+        self.assertEqual(set(cfg['_agents']), {'catalog', 'study', 'review'})
+        self.assertEqual(set(cfg['_prompt_paths']), {'catalog', 'study', 'review', 'revise'})
 
     def test_git_grouped_and_legacy_formats(self):
         git = {'repository': './source', 'branches': ['master', 'customer'], 'baseline_branch': 'master'}
@@ -123,7 +123,7 @@ class ModeConfigTests(FolderFixture):
         self.value.update(git)
         legacy = self.config()
         self.assertEqual(legacy['repository'], str(self.source))
-        self.assertEqual(set(legacy['_agents']), {'study', 'review', 'compare'})
+        self.assertEqual(set(legacy['_agents']), {'catalog', 'study', 'review', 'compare'})
 
     def test_invalid_modes_sections_and_mixed_formats(self):
         original = copy.deepcopy(self.value)
@@ -164,7 +164,7 @@ class ModeConfigTests(FolderFixture):
                 self.value['mode'] = 'folder'
                 self.value['folder_mode']['path'] = str(self.source)
                 with patch('explain.shutil.which', return_value=sys.executable):
-                    self.assertEqual(set(self.config()['_agents']), {'study', 'review'})
+                    self.assertEqual(set(self.config()['_agents']), {'catalog', 'study', 'review'})
 
 
 class FolderInventoryTests(FolderFixture):
@@ -280,7 +280,7 @@ class FolderPipelineTests(FolderFixture):
         def response(command, cwd, env, payload, **options):
             context = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n')[1]
                                  .split('\n\n# Required final JSON Schema')[0])
-            stage = 'review' if 'architecture_document' in context else 'study'
+            stage = context.get('stage') or ('review' if 'architecture_document' in context else 'study')
             stages.append(stage)
             if stage == fail_stage:
                 return {'returncode': 1, 'duration_seconds': 0,
@@ -304,14 +304,14 @@ class FolderPipelineTests(FolderFixture):
         manifest, code, stages = self.run_pipeline(doc_status='BLOCKED')
         self.assertEqual(code, 2)
         self.assertEqual(manifest['status'], 'PARTIAL')
-        self.assertEqual(stages, ['study'])
+        self.assertEqual(stages, ['catalog', 'study'])
         self.assertEqual(manifest['errors'], [])
 
     def test_partial_document_is_reviewed_but_not_accepted(self):
         manifest, code, stages = self.run_pipeline(doc_status='PARTIAL')
         self.assertEqual(code, 2)
         self.assertFalse(manifest['accepted'])
-        self.assertEqual(stages, ['study', 'review'])
+        self.assertEqual(stages, ['catalog', 'study', 'review'])
 
     def test_stage_failure_stops_even_with_continue_on_error(self):
         for stage in ('study', 'review'):
@@ -397,8 +397,8 @@ class FolderCLIIntegrationTests(FolderFixture):
                     self.assertEqual(snapshot['folder_mode']['path'], str(self.source))
                     calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
                     invocations = [c for c in calls if 'context' in c]
-                    self.assertEqual(len(calls), 2 if check else 4)
-                    self.assertEqual(len(invocations), 0 if check else 2)
+                    self.assertEqual(len(calls), 2 if check else 5)
+                    self.assertEqual(len(invocations), 0 if check else 3)
                     self.assertFalse((run / 'comparison').exists())
                     self.assertFalse((self.source / '.git').exists())
                     for call in invocations:
@@ -419,8 +419,8 @@ class FolderCLIIntegrationTests(FolderFixture):
                                 'glob': 'allow', 'grep': 'allow', 'list': 'allow'})
                     if not check:
                         self.assertNotIn('architecture_document', invocations[0]['context'])
-                        self.assertEqual(invocations[1]['context']['architecture_document'], manifest['study'])
-                        self.assertEqual(invocations[1]['context']['document_sha256'],
+                        self.assertEqual(invocations[2]['context']['architecture_document']['report_markdown'], manifest['study']['report_markdown'])
+                        self.assertEqual(invocations[2]['context']['document_sha256'],
                                          manifest['study_invocation']['report_sha256'])
                         self.assertEqual(manifest['study_invocation']['stage'], 'study')
                         self.assertNotIn('document', manifest)
@@ -432,7 +432,7 @@ class FolderCLIIntegrationTests(FolderFixture):
                         for stage in ('study', 'review'):
                             data = json.loads((run / f'{stage}.json').read_text())
                             self.assertEqual(data, manifest[stage])
-                            meta = json.loads((run / f'{stage}.logs/invocation.json').read_text())
+                            meta = json.loads((run / 'revisions/001' / f'{stage}.logs/invocation.json').read_text())
                             self.assertEqual(meta['stage'], stage)
                             self.assertNotIn('schema_version', data)
                             self.assertEqual(data['source_fingerprint'], before['source_fingerprint'])
@@ -450,7 +450,7 @@ class FolderCLIIntegrationTests(FolderFixture):
         manifest = json.loads((run / 'manifest.json').read_text())
         self.assertIsNone(manifest['study'])
         self.assertIsNone(manifest['review'])
-        meta = json.loads((run / 'study.logs/invocation.json').read_text())
+        meta = json.loads((run / 'catalog.logs/invocation.json').read_text())
         self.assertEqual(meta['status'], 'FAILED')
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         self.assertEqual(len([c for c in calls if 'context' in c]), 1)

@@ -14,9 +14,11 @@ def sections(markdown='C-001: Has an entry point\n'):
                               claim_ids=['C-001'] if i == 0 else [])]) for i, key in enumerate(SECTION_KEYS)]
 
 def response(context):
+    stage = context.get('stage') or ('compare' if 'baseline_branch' in context else
+                                    'review' if 'architecture_document' in context else 'study')
     data = {'completion_status': 'COMPLETE',
             'report_markdown': '# Report: configured-model\nC-001: Has an entry point\n', 'limitations': []}
-    if 'baseline_branch' in context:
+    if stage == 'compare':
         unresolved = context.get('required_unresolved_branches', [])
         data.update(task='architecture_comparison', baseline_branch=context['baseline_branch'],
                     baseline_commit=context['baseline_commit'], unresolved_branches=unresolved,
@@ -28,16 +30,26 @@ def response(context):
         data.update(source_directory=context['source_directory'], source_fingerprint=context['source_fingerprint'])
     else:
         data.update(branch=context['branch'], source_commit=context['source_commit'])
+    if stage == 'catalog':
+        data.pop('report_markdown')
+        data.update(task='architecture_catalog', subsystems=[dict(id='S-001',
+            name='Fixture system', purpose='Synthetic fixture source tree.', paths=['.'])], exclusions=[])
+        return data
     data['evidence'] = [dict(id='E-001', source_id='source-001', path='app.py', start_line=1, end_line=1, quote='')]
-    if 'architecture_document' in context:
+    if stage == 'review':
         data.update(task='architecture_review', target=copy.deepcopy(context['review_target']),
             claims=[dict(id=c['id'], outcome='SUPPORTED' if c['epistemic_kind'] == 'FACT' else 'CAVEAT_ACCEPTABLE',
                          evidence_ids=['review:E-001'], limitation='') for c in context['claim_registry']], findings=[],
             omission_search=[dict(area_id=a['id'], status='INSPECTED', limitation='', finding_ids=[])
-                             for a in context['review_plan']['omission_areas']])
+                             for a in context['review_plan']['omission_areas']],
+            prior_findings=[dict(revision_id=f['revision_id'], finding_id=f['finding_id'],
+                status='RESOLVED', explanation='The revised fixture addresses this finding.')
+                for f in context.get('prior_findings', [])])
     else:
         del data['report_markdown']
         data['report_sections'] = sections()
         data.update(task='architecture_documentation', claims=[dict(id='C-001', statement='Has an entry point',
-            scope='Static source inspection.', epistemic_kind='FACT', evidence_ids=['study:E-001'], uncertainty='')])
+            scope='Static source inspection.', epistemic_kind='FACT', evidence_ids=['study:E-001'], uncertainty='')],
+            coverage=[dict(area_id=a['id'], status='INSPECTED', evidence_ids=['study:E-001'], limitation='')
+                      for a in context.get('coverage_plan', {}).get('areas', [])])
     return data

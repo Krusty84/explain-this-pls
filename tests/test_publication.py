@@ -86,7 +86,7 @@ class PublicationTests(FolderFixture):
         def process(command, cwd, env, payload, **kwargs):
             supplied = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n')[1]
                                   .split('\n\n# Required final JSON Schema')[0])
-            return self.result(data | {'source_fingerprint': supplied['source_fingerprint']})
+            return self.result(response(supplied))
         def fail_report_json(path, content):
             if path.name == 'study.json':
                 raise OSError('fixture disk full')
@@ -99,7 +99,7 @@ class PublicationTests(FolderFixture):
         self.assertFalse(manifest['accepted'])
         self.assertFalse(manifest['publication_complete'])
         self.assertIsNone(manifest['study'])
-        summary = json.loads((runner.run_dir / 'study.logs/invocation.json').read_text())
+        summary = json.loads((runner.run_dir / 'revisions/001/study.logs/invocation.json').read_text())
         self.assertEqual(summary['status'], 'FAILED')
 
     def test_document_bytes_plan_and_wire_are_separate(self):
@@ -119,8 +119,8 @@ class PublicationTests(FolderFixture):
         self.assertNotIn('contract_version', saved)
         self.assertNotIn('artifact_version', saved)
         self.assertNotIn('contract_version', saved['review_plan'])
-        self.assertEqual(meta['contract_version'], 'evidence-ledger-v2')
-        self.assertEqual(meta['artifact_version'], 'evidence-ledger-artifacts-v2')
+        self.assertEqual(meta['contract_version'], 'evidence-ledger-v3')
+        self.assertEqual(meta['artifact_version'], 'evidence-ledger-artifacts-v3')
         self.assertTrue(meta['publication_complete'])
 
     def test_forged_review_target_is_not_recovered_even_with_schema_error(self):

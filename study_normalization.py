@@ -10,7 +10,7 @@ import re
 from contracts import contract_violation, validate_wire_identity
 from evidence import canonical, sha
 
-RULE = 'EVIDENCE_IDS_V2'
+RULE = 'EVIDENCE_IDS_V3'
 HASH_FORMAT = 'canonical-json-utf8-v1'
 
 
@@ -55,7 +55,7 @@ def normalize_evidence(stage, value, context, mode='git'):
             changes.append(dict(rule=RULE, path=path, before=before, after=after))
     for i, evidence in enumerate(candidate['evidence']):
         change(evidence, 'id', definitions[evidence['id']], f'$.evidence[{i}].id')
-    for field in ('claims', 'findings') if stage == 'review' else ('claims',):
+    for field in ('claims', 'findings') if stage == 'review' else ('claims', 'coverage'):
         for i, record in enumerate(candidate[field]):
             for j, ref in enumerate(record['evidence_ids']):
                 change(record['evidence_ids'], j, aliases.get(ref, ref), f'$.{field}[{i}].evidence_ids[{j}]')

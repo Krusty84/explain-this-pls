@@ -2,7 +2,7 @@
 
 Response schemas contain no version fields. The orchestrator
 selects the required schema for each stage and validates its structure locally.
-`schemas/{study,review,compare}.schema.json` and their `folder-` variants
+`schemas/{catalog,study,review,compare}.schema.json` and their `folder-` variants
 are **wire** schemas generated from `contracts.py`. Separate `saved-*.schema.json`
 files are generated from `saved_contracts.py` and locally validated before publication.
 Historical formats without the required ledger structure are legacy. Absence of a
@@ -15,10 +15,10 @@ new checks were not performed”. They cannot receive positive acceptance.
 
 | Data | Authority |
 | --- | --- |
-| `completion_status`, narrative, claims, evidence pointers, findings, assessments, omission-search activity | Agent; completion is a self-assessment |
+| `completion_status`, narrative, claims, evidence pointers, findings, assessments, study coverage, omission-search activity | Agent; completion is a self-assessment |
 | Transport completion/error/timeout/interruption and cleanup | Backend adapter and runner |
 | Expected source identities, review target, contract/artifact identifiers in invocation metadata and manifest | Orchestrator |
-| `program_checks`, `verdict`, frozen plan, hashes, coverage, reverse links, tables | Python, after local wire validation |
+| `program_checks` (including coverage checks), `verdict`, frozen plan, hashes, file distribution, reverse links, tables | Python, after local wire validation |
 | `model_requested` | Configuration |
 | `model_actual`, `model_actual_source` | Backend metadata, or null with a reason; never inferred from executable or model prose |
 | `review_quality` / `semantic_quality: NOT_MEASURED` | No substantive evaluation of this execution profile has been performed |
@@ -29,9 +29,10 @@ Transport/stdout and stderr remain private attempt artifacts. A saved `study.jso
 fields and `program_checks`. Study narrative is authored as sections/blocks;
 the program computes the Markdown, block map and every document locator.
 Contract/artifact identifiers (`contract_version:
-"evidence-ledger-v2"`, `artifact_version: "evidence-ledger-artifacts-v2"`) belong only
-to invocation metadata and the manifest, not agent responses, saved-result schemas,
-or the review plan. Study adds `review_plan` and `normalization_provenance` (including
+"evidence-ledger-v3"`, `artifact_version: "evidence-ledger-artifacts-v3"`) belong only
+to invocation metadata and the manifest, not agent responses or the root of saved
+results. The immutable coverage plan also records contract_version and is embedded
+in saved review plans. Study adds `review_plan` and `normalization_provenance` (including
 the normalization rule version). Review also adds `review_plan`, the
 unchanged `claim_registry`, and the Python-derived `verdict`. These extra fields
 are forbidden in wire output. The saved representation must not be re-submitted
@@ -63,7 +64,7 @@ review or publication. `study.annotated.md` contains generated checks and the re
 `review.original.md` and `compare.original.md` preserve original prose.
 The final report places limitations and assessments before narrative,
 and keeps contradictory assessments visible. It is a study and automated review
-summary, not an automatically corrected architecture.
+summary of the selected architecture revision and its corresponding review.
 
 Each file is replaced atomically with private permissions. Multiple files are
 **not** one atomic transaction. A stage is published only after all stage writes
@@ -100,7 +101,7 @@ so legitimate Git EOL transformations do not produce false blob mismatches.
 Inventories do not enter prompts and do not count as agent source inspection.
 
 Lines are positive integers (booleans are not integers), inclusive and ordered.
-UTF-8 decoding is strict; there is no replacement of invalid bytes. Lines split
+Source decoding is strict; there is no replacement of invalid bytes. Lines split
 on LF only; CRLF becomes LF; a lone CR stays data. A final nonterminated line
 counts, and an empty file has zero lines. Document locators use the same rules.
 File SHA-256 covers the original bytes. Fragment SHA-256 covers normalized UTF-8
@@ -109,19 +110,38 @@ may be `""`; otherwise it must equal that complete normalized range exactly.
 There is no fuzzy correction. Document quotes must be nonblank and exact.
 
 Limits per stage: 256 evidence records; 16 KiB canonical JSON per record; 8 MiB
-per file; 200 lines and 64 KiB per fragment; 32 MiB total file bytes read (repeated
-files count again). Reaching/exceeding a limit that prevents full resolution gives
+per file; 200 lines and 64 KiB per fragment; 32 MiB total unique file bytes read
+per resolver call (successful cache hits do not count again). Reaching/exceeding a limit that prevents full resolution gives
 `LIMIT_EXCEEDED`, never successful resolution of truncated data. No source fragment
 is copied into generated tables. Model-supplied quotes remain in private wire data.
 
 Each resolution stores namespaced ID, source identity, path, range, raw file hash,
-fragment hash and status. Hashes not obtained remain null. `RESOLVED` means only
+fragment hash, used encoding and status. Hashes not obtained remain null. `RESOLVED` means only
 that the locator resolved. Other statuses distinguish `INVALID_POINTER`,
 `UNKNOWN_SOURCE`, `SOURCE_SCOPE_MISMATCH`, `UNSAFE_PATH`, `NOT_FOUND`,
-`ACCESS_DENIED`, `READ_ERROR`, `OUT_OF_RANGE`, `DECODE_ERROR`, `QUOTE_MISMATCH`,
+`ACCESS_DENIED`, `READ_ERROR`, `OUT_OF_RANGE`, `DECODE_ERROR`, `ENCODING_MISMATCH`, `QUOTE_MISMATCH`,
 `LIMIT_EXCEEDED`. Bad/inaccessible pointers prevent positive policy acceptance
 without discarding an otherwise well-formed report. A real fragment may be
 irrelevant to its architecture claim; the resolver never assigns `SUPPORTED`.
+
+`source_decoding.rules` contains `{path, encoding}` rules relative to the common
+source root, including submodules. A path selects a file or directory subtree;
+`.` selects the whole tree. Matching respects component boundaries and the most
+specific path wins. Duplicate/unsafe paths and unknown encodings fail configuration
+before model calls. Rules support UTF-8, UTF-16/32 with BOM or explicit LE/BE,
+CP1251, CP1252, CP866 and Latin-1. Without a rule, a recognized Unicode BOM is used,
+otherwise strict UTF-8. A compatible BOM is removed before line splitting; a
+conflicting BOM is ENCODING_MISMATCH. Raw file hashes include BOM bytes; fragment
+hashes follow decoding and existing LF/CRLF normalization. Normalized rules enter
+the frozen review plan and change its identity. Agents receive them as context,
+but CLI reading capabilities are independent; no UTF-8 copies are generated.
+
+The resolver caches successful reads/decoding only within one call; its unique-byte
+budget also includes files read before a decoding failure. Every repeated
+reference still walks the path with O_NOFOLLOW and checks component identity and
+file state. Replacement, mutation or disappearance raises SourceChanged rather
+than silently reading a newer version. Cache data never crosses stages, attempts
+or branches. Pinned raw hashes and stage-boundary source guards remain mandatory.
 
 ## Evidence ID compatibility and diagnostics
 
@@ -131,7 +151,7 @@ when no changes are needed. It first requires the complete stage wire schema,
 task, matching pinned Git/folder identity and, for review, unchanged frozen
 context and exact target. The caller verifies transport before calling it.
 It never repairs the schema. `normalize_study` remains a convenience wrapper.
-The rule version is `EVIDENCE_IDS_V2` in both strict and compromise.
+The rule version is `EVIDENCE_IDS_V3` in both strict and compromise.
 
 Evidence definitions may pad one/two numeric digits (`E-1`, `E-01` -> `E-001`)
 and remove the stage's own namespace (`study:E-001` in study or `review:E-001`
@@ -179,7 +199,7 @@ The private journal is a provenance object plus `changes`, for example:
 
 ```json
 {
-  "rule": "EVIDENCE_IDS_V2",
+  "rule": "EVIDENCE_IDS_V3",
   "path": "$.claims[0].evidence_ids[0]",
   "before": "E-001",
   "after": "study:E-001"
@@ -196,7 +216,7 @@ array order are unchanged. With zero edits both hashes are identical.
 The same provenance summary is carried in invocation metadata and every new
 published study/review; direct library callers may omit that summary, but every
 new Runner publication requires the normalization artifacts. Older artifacts are
-viewed in their historical format, not validated against the v2 saved schema.
+viewed in their historical format, not validated against the v3 saved schema.
 It is never requested from the model or admitted by the wire schema. Successful
 normalization does not change `completion_status`, establish content accuracy,
 satisfy policy, or imply publication.
@@ -299,7 +319,7 @@ Saved schemas use MATERIALIZED_CLAIM, never the locator-free wire CLAIM.
 
 Before review, `claim.registry.json` and `review.plan.json` fix the source catalog,
 document SHA-256, registry SHA-256, required IDs, mandatory omission areas, and
-study eligibility. Every configured priority scenario becomes another mandatory
+study eligibility, normalized decoding rules and immutable coverage plan. Every configured priority scenario becomes another mandatory
 omission area. The response `target` must match all four hashes (source, document,
 registry, plan). Repeating a hash does not prove reading the document.
 
@@ -349,7 +369,7 @@ cannot pass. Neither policy nor these offline tests measure factual correctness.
 ## Comparison, compatibility and validation
 
 Comparison is reports-only. A structured reference identifies branch, artifact
-(`study`/`review`), claim ID, document hash and registry hash. Strong differences
+(`study`/`review`), selected revision ID, claim ID, document hash and registry hash. Strong differences
 need references resolving on **both distinct sides** and policy-accepted inputs
 on both sides. Each side needs a referenced FACT assessed as SUPPORTED; acceptance
 of a hypothesis's caveat is not factual support for a strong contrast.
@@ -372,10 +392,88 @@ blocks are labeled program assembly of authored blocks. No partial registry is
 presented as accepted, and empty-registry review is explicitly limited/ineligible.
 Historical v1 manifest, registry, target and acceptance records are read-only.
 Use a new run directory; no automatic reacceptance/import is implemented.
-Ordinary successful execution still uses study → review → compare
-(comparison only for multiple Git branches). Format repairs stay bounded and may
+Ordinary successful execution uses catalog → study → review, optionally one
+revised study → full review, then selection → compare (comparison only for
+multiple Git branches). Format repairs stay bounded and may
 not change already valid facts/evidence/assessments. Backend eligibility gates are
 unchanged, including the unavailable OpenCode native retry capability.
+
+## Compact model context
+
+A pure projection builds the model request without mutating internal context.
+Review receives the whole document Markdown once and claim_registry once. Claim
+coordinates retain start/end lines without duplicate quotes; block_map, duplicated
+registries and private provenance are omitted. Comparison, substantive revision
+and format-repair contexts use the same principle. Findings, evidence, limitations,
+identifiers and diagnostics remain available; narrative is neither truncated nor
+summarized. Full saved locators, registry hashes and document hashes remain intact.
+Invocation metadata records the compact-context format version, and input.prompt.txt
+contains the exact request actually sent.
+
+## Subsystem catalog and coverage
+
+The catalog stage uses the same read-only source scope and boundary guards as study.
+Its wire task is architecture_catalog, with source identity, completion_status,
+limitations, subsystems `{id,name,purpose,paths}` and exclusions `{path,reason}`.
+The agent receives source information and a compact directory summary; Python
+checks selectors against the full file inventory. Explicit exclusions and symlinks
+remain represented, and links are never followed. Unallocated entries become
+UNCLASSIFIED. The resulting coverage.plan.json is immutable for the snapshot and
+shared by all document revisions; there is still only one study per version.
+
+In compromise mode an invalid catalog produces DIRECTORY_FALLBACK areas from
+top-level directories and root files, retaining explicit limitations. In strict
+mode that failure stops the current source. continue_on_error controls continuation
+and false stops further calls in both policies. Integrity, cleanup and publication
+errors stop the run regardless of policy. An incomplete or fallback catalog and
+remaining UNCLASSIFIED prevent COMPLETE even if usable documentation is retained.
+
+Study adds coverage entries `{area_id,status,evidence_ids,limitation}` with status
+INSPECTED, PARTIALLY_INSPECTED or NOT_INSPECTED for every area. A missing response
+blocks acceptance; unfinished inspection blocks acceptance only for required areas.
+Empty or fully excluded areas may report NOT_INSPECTED with a limitation. INSPECTED
+needs a resolved source pointer inside that area. This is evidence of support, not
+proof of exhaustive reading. Review omission_search includes required catalog areas as well
+as thematic scopes and user scenarios; missing/unfinished mandatory responses block
+acceptance. Final output separately reports file allocation and agent assessments.
+Neither is called completeness of system understanding; semantic_quality stays
+NOT_MEASURED.
+
+## Bounded revision and selected artifacts
+
+execution.max_revision_rounds is 0 or 1, default 1. Revision starts only after a
+published, strictly valid study and review, when review completion_status is
+COMPLETE and there are HIGH/MEDIUM findings. LOW-only findings, incomplete review,
+transport failures and recovered contract-invalid material do not trigger it.
+prompts.revise supplies a separate prompt to the existing study agent; no revision
+backend profile is introduced. stage_agents.catalog inherits study settings.
+prompts.catalog controls catalog. Each substantive stage has its own budget,
+shared with its format-repair attempts, for at most five stages per snapshot.
+
+The program compares registries for added, removed and changed claims. Coordinate
+changes alone are not semantic edits; unchanged assertions retain their IDs.
+Previous claims/findings are addressed by revision plus local ID. Repeat review
+receives the old substantive obligations and returns prior_findings records
+`{revision_id,finding_id,status,explanation}` with RESOLVED, UNRESOLVED or NOT_CHECKED.
+Initial review returns an empty list. The entire new registry and all mandatory
+areas are reviewed again. Missing or unresolved obligations and new material
+findings block acceptance. Only reviewer assessment can close an issue by deleting
+an erroneous statement; deleting necessary explanation leaves an issue or omission.
+The loop ends after the second review regardless of its result.
+
+revisions/001 and revisions/002 hold separate immutable study/review states and
+artifacts. Selection prefers an accepted pair; otherwise it uses the latest
+published pair whose review has completion_status COMPLETE; PARTIAL does not count
+as completed. An incomplete new review keeps the previous
+completed pair selected and exposes the newer study separately as unverified.
+Without any completed review, the latest usable study is selected with a warning.
+The manifest records selected_revision and revision history. Comparison uses only
+selected pairs. Top-level ARCHITECTURE.md, study.json and companion files are exact
+copies of the selected artifacts, published after selection. Frozen-document checks
+run within each revision; a new study can never inherit an older review.
+Historical v1/v2 results remain readable without automatic hash migration or status
+promotion. Custom prompts must adopt the v3 wire schemas; old outputs stay legacy
+or explicitly unvalidated material under the existing policy.
 
 For run `20261002T091648Z-95474db027`, only the reported error codes/paths and
 generic unsupported-finish message are known. Actual bad ID spellings, Markdown /

@@ -1,0 +1,245 @@
+{
+  "type": "object",
+  "properties": {
+    "contract_version": {
+      "type": "string",
+      "enum": [
+        "evidence-ledger-v3"
+      ]
+    },
+    "origin": {
+      "type": "string",
+      "enum": [
+        "AGENT",
+        "DIRECTORY_FALLBACK"
+      ]
+    },
+    "catalog_status": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "PARTIAL",
+        "BLOCKED"
+      ]
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "identity": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "git",
+                  "folder"
+                ]
+              },
+              "branch": {
+                "type": "string"
+              },
+              "commit": {
+                "type": "string"
+              },
+              "directory": {
+                "type": "string"
+              },
+              "fingerprint": {
+                "type": "string"
+              },
+              "parent_commit": {
+                "type": "string"
+              },
+              "submodule_path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "root",
+          "identity"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "inventory_sha256": {
+      "type": "string"
+    },
+    "areas": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "entry_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "file_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "required": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "purpose",
+          "paths",
+          "entry_paths",
+          "file_paths",
+          "required"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "exclusions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "entry_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "file_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "path",
+          "reason",
+          "entry_paths",
+          "file_paths"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "unclassified_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "counts": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "symlinks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "directories": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "empty_directories": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "assigned_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "excluded_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unclassified_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "overlapping_files": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "files",
+        "symlinks",
+        "directories",
+        "empty_directories",
+        "assigned_files",
+        "excluded_files",
+        "unclassified_files",
+        "overlapping_files"
+      ],
+      "additionalProperties": false
+    },
+    "policy_satisfied": {
+      "type": "boolean"
+    },
+    "plan_sha256": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "contract_version",
+    "origin",
+    "catalog_status",
+    "limitations",
+    "sources",
+    "inventory_sha256",
+    "areas",
+    "exclusions",
+    "unclassified_paths",
+    "counts",
+    "policy_satisfied",
+    "plan_sha256"
+  ],
+  "additionalProperties": false
+}

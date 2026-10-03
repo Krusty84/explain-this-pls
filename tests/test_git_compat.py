@@ -290,7 +290,8 @@ class RecursiveCompatibilityCLI(recursive.RecursiveFixture, unittest.TestCase):
                     result, manifest = self.execute(check=check)
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertIn(recursive.LEAF, result.stderr)
-                    self.assertIn('Required commit:', result.stderr)
+                    self.assertNotIn('Required commit:', result.stderr)
+                    self.assertTrue(manifest['diagnostics'][0]['required_commit'])
                     if setting:
                         self.assertIn('Partial-clone/promisor', result.stderr)
                     self.assertFalse(sentinel.exists())

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Synthetic v2 fixtures. No historical responses or real model calls."""
+"""Synthetic v3 fixtures. No historical responses or real model calls."""
 import copy
 import json
 from pathlib import Path

@@ -43,13 +43,18 @@ from final_report import recoverable_material, stage_document, usable_study, rep
 from ledger import prepare_result, review_context
 from study_normalization import normalize_evidence, normalization_provenance
 from document_rendering import materialize_study, validate_materialized
-from evidence import source_catalog, SourceChanged, open_source_directory
+from evidence import source_catalog, SourceChanged, open_source_directory, read_confined
 from contracts import CONTRACT_VERSION, ARTIFACT_VERSION, has_ledger_structure, validate_schema
 from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
 from presentation import render_stage
+from model_context import CONTEXT_FORMAT_VERSION, project_model_context
+from source_decoding import normalize_source_decoding
+from coverage_plan import build_coverage_plan, inventory_summary, verify_coverage_plan
+from revisions import revision_inputs, choose_revision, completed_pair
 
 ROOT = Path(__file__).resolve().parent
-STAGES = ('study', 'review', 'compare')
+STAGES = ('catalog', 'study', 'review', 'compare')
+SOURCE_STAGES = ('catalog', 'study', 'review')
 ARTIFACTS = {'study': 'ARCHITECTURE.md', 'review': 'ARCHITECTURE_REVIEW.md',
              'compare': 'BRANCH_COMPARISON.md'}
 BACKENDS = {'codex': 'codex', 'claude-code': 'claude', 'opencode': 'opencode', 'xxx': 'xxx'}
@@ -903,7 +908,7 @@ def load_config(path: Path) -> dict:
         raise AuditError('Configuration must be a JSON object.')
     allowed = {'repository', 'reports_dir', 'branches', 'baseline_branch', 'agent', 'stage_agents',
         'output_language', 'priority_scenarios', 'continue_on_error', 'project_description', 'prompts',
-        'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy'}
+        'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy', 'source_decoding'}
     if 'additional_runtime_read_paths' in value:
         raise AuditError('Remove additional_runtime_read_paths from configuration: the runner now uses native CLI permissions.')
     if set(value) - allowed:
@@ -912,6 +917,7 @@ def load_config(path: Path) -> dict:
         if 'execution' in value and value['execution'] is None:
             raise ValueError('execution must be a JSON object.')
         value['execution'] = execution_settings(value.get('execution'))
+        value['source_decoding'] = normalize_source_decoding(value.get('source_decoding'))
     except ValueError as exc:
         raise AuditError(str(exc), code='INVALID_CONFIG') from exc
     for key in ('reports_dir', 'agent'):
@@ -970,15 +976,15 @@ def load_config(path: Path) -> dict:
         raise AuditError('result_policy must be compromise or strict.')
     if not isinstance(value['priority_scenarios'], list) or any(not isinstance(s, str) for s in value['priority_scenarios']):
         raise AuditError('priority_scenarios must be an array of strings.')
-    stages = STAGES if mode == 'git' and len(source['branches']) > 1 else STAGES[:2]
+    stages = STAGES if mode == 'git' and len(source['branches']) > 1 else SOURCE_STAGES
     for stage in value['stage_agents']:
         if stage not in STAGES:
             raise AuditError(f'Unknown stage override: {stage}')
         if stage in stages and type(value['stage_agents'][stage]) is not dict:
             raise AuditError(f'stage_agents.{stage} must be a JSON object.')
     value['_agents'] = {}
-    for stage in stages:
-        agent = dict(value['agent'])
+    for stage in ('study', *(s for s in stages if s != 'study')):
+        agent = dict(value['_agents']['study'] if stage == 'catalog' else value['agent'])
         agent.update(value['stage_agents'].get(stage, {}))
         obsolete = set(agent) & {'api_key_env', 'provider_key_env'}
         if obsolete:
@@ -1003,9 +1009,9 @@ def load_config(path: Path) -> dict:
                 raise AuditError(f'agent.{key} must be a string or null.')
         value['_agents'][stage] = agent
     value['_prompt_paths'] = {}
-    if set(value['prompts']) - set(STAGES):
+    if set(value['prompts']) - (set(STAGES) | {'revise'}):
         raise AuditError('Unknown prompt stage.')
-    for stage in stages:
+    for stage in (*stages, *(('revise',) if value['execution']['max_revision_rounds'] else ())):
         prompt_path = value['prompts'].get(stage, str(ROOT / 'prompts' / (stage + '.md')))
         if not isinstance(prompt_path, str) or not prompt_path.strip():
             raise AuditError(f'prompts.{stage} must be a nonempty path string.')
@@ -1067,7 +1073,9 @@ class Runner:
     def stage_context(self, stage, context):
         return {'branch': context.get('branch', 'all branches' if stage == 'compare' else 'folder'),
                 **({'source_name': self.source_path.name or str(self.source_path)} if self.mode == 'folder' else {}),
-                'commit': context.get('source_commit'), 'stage': stage,
+                'commit': context.get('source_commit'),
+                'stage': 'revise' if stage == 'study' and context.get('prompt_variant') == 'revise' else stage,
+                'revision_id': context.get('revision_id'),
                 'backend': self.cfg['_agents'][stage]['backend']}
 
     def stage_started(self, stage, context):
@@ -1182,6 +1190,8 @@ class Runner:
 
     def invoke(self, stage: str, context: dict, destination: Path) -> tuple[dict | None, dict]:
         context = dict(context)
+        context['stage'] = stage
+        self.assert_coverage_file(context)
         if stage != 'compare':
             context['sources'] = source_catalog(context)
         budget = Budget(self.execution['stage_timeout_seconds'], self.execution['idle_timeout_seconds'])
@@ -1192,6 +1202,11 @@ class Runner:
             if self.repo:
                 self.repo.assert_expected()
             inventory = (self.folder or Folder(self.source_path, canonical=True)).snapshot(exclude_git=self.repo is not None)
+            if context.get('_inventory') and inventory['source_fingerprint'] != context['_inventory']['source_fingerprint']:
+                raise UnsafeRepository('Source changed from the inventory used for the coverage plan.', failure_layer='integrity')
+            if stage == 'catalog':
+                context['_inventory'] = inventory
+                context['inventory_summary'] = inventory_summary(inventory)
             if self.folder and inventory['source_fingerprint'] != context['source_fingerprint']:
                 raise UnsafeRepository('Source folder changed from the pinned snapshot before invocation.')
             if self.repo:
@@ -1253,8 +1268,11 @@ class Runner:
                         self.repo.assert_expected()
                     candidate['artifact_directory'] = candidate_attempt
                     save_json(destination.parent / (stage + '.material.json'), candidate)
+                    material_bytes = (json.dumps(candidate, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
                     meta = meta | {'status': 'PARTIAL', 'usable_material': candidate,
-                                   'local_validation': False, 'recovery_source_attempt': candidate_attempt}
+                                   'local_validation': False, 'recovery_source_attempt': candidate_attempt,
+                                   'material_retained': True, 'material_hashes': {
+                                       stage + '.material.json': {'sha256': digest(material_bytes), 'bytes': len(material_bytes)}}}
                     # Per-attempt files remain the original failed validation record.
                     save_json(destination / 'invocation.json', meta)
                     return None, meta
@@ -1327,6 +1345,214 @@ class Runner:
         if material is not None and not self.cfg['continue_on_error']:
             raise ContractError('Stopped after retaining unvalidated material (continue_on_error=false).')
 
+    def publish_coverage_plan(self, plan, directory):
+        verify_coverage_plan(plan)
+        content = (json.dumps(plan, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        path = directory / 'coverage.plan.json'
+        if path.exists() or path.is_symlink():
+            self.assert_coverage_file({'coverage_plan': plan, '_coverage_plan_path': str(path)})
+            return
+        atomic(path, content)
+
+    def assert_coverage_file(self, context):
+        if not context.get('_coverage_plan_path'):
+            return
+        try:
+            verify_coverage_plan(context['coverage_plan'])
+            expected = (json.dumps(context['coverage_plan'], ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+            relative = str(Path(context['_coverage_plan_path']).relative_to(self.run_dir))
+            if read_confined(self.run_dir, relative, len(expected)) != expected:
+                raise ValueError('changed')
+        except (OSError, ValueError, SourceChanged) as exc:
+            raise AuditError('Frozen coverage plan changed.', code='COVERAGE_PLAN_CHANGED', failure_layer='integrity') from exc
+
+    def select_source_revision(self, item, directory, *, publish):
+        self.assert_revision_files(item)
+        selected = choose_revision(item.get('revisions', []))
+        item['selected_revision'] = selected['revision_id'] if selected else None
+        item['revision_history'] = [{
+            'revision_id': revision['revision_id'], 'directory': revision['directory'],
+            'study_status': (stage_document(revision, 'study') or {}).get('completion_status'),
+            'review_status': (revision.get('review') or {}).get('completion_status'),
+            'review_complete': completed_pair(revision), 'accepted': accepted(revision),
+            'errors': list(revision['errors'])} for revision in item.get('revisions', [])]
+        for stage in ('study', 'review'):
+            for suffix in ('', '_material', '_invocation', '_usable'):
+                item.pop(stage + suffix, None)
+            item[stage] = None
+        if selected:
+            for stage in ('study', 'review'):
+                if stage == 'review' and not completed_pair(selected):
+                    continue
+                for suffix in ('', '_material', '_invocation', '_usable'):
+                    if stage + suffix in selected:
+                        item[stage + suffix] = selected[stage + suffix]
+            if publish:
+                source = directory / 'revisions' / selected['revision_id']
+                names = ['study.json', 'study.material.json', 'study.original.md', 'study.annotated.md',
+                         'ARCHITECTURE.md', 'claim.registry.json', 'review.plan.json', 'registry.diff.json']
+                if completed_pair(selected):
+                    names += ['review.json', 'review.original.md', 'ARCHITECTURE_REVIEW.md']
+                expected_files = {}
+                for stage in ('study', 'review'):
+                    meta = selected.get(stage + '_invocation') or {}
+                    expected_files.update(meta.get('artifact_hashes', {}))
+                    expected_files.update(meta.get('material_hashes', {}))
+                for name in names:
+                    path = source / name
+                    if name in expected_files or path.exists():
+                        expected = expected_files.get(name)
+                        blob = read_confined(self.run_dir, str(path.relative_to(self.run_dir)),
+                                             expected['bytes'] if expected else path.stat().st_size)
+                        if expected and (len(blob) != expected['bytes'] or digest(blob) != expected['sha256']):
+                            raise AuditError('Selected revision artifact changed during publication.',
+                                             code='REVIEW_TARGET_CHANGED', failure_layer='integrity')
+                        atomic(directory / name, blob)
+                item['selection_publication_complete'] = True
+        item['accepted'] = accepted(item)
+
+    def assert_revision_files(self, item):
+        states = list(item.get('revisions', []))
+        directory = item.get('directory', '.')
+        if item.get('coverage_plan'):
+            self.assert_coverage_file({'coverage_plan': item['coverage_plan'],
+                                       '_coverage_plan_path': str(self.run_dir / directory / 'coverage.plan.json')})
+        states.append({'directory': directory, 'catalog_invocation': item.get('catalog_invocation')})
+        if item.get('selection_publication_complete'):
+            states.append(item | {'directory': directory})
+        for revision in states:
+            for stage in ('catalog', 'study', 'review'):
+                meta = revision.get(stage + '_invocation') or {}
+                hashes = dict(meta.get('artifact_hashes', {})) if meta.get('publication_complete') else {}
+                if meta.get('material_retained'):
+                    hashes.update(meta.get('material_hashes', {}))
+                for name, expected in hashes.items():
+                    relative = str(Path(revision['directory']) / name)
+                    try:
+                        blob = read_confined(self.run_dir, relative, expected['bytes'])
+                        if len(blob) != expected['bytes'] or digest(blob) != expected['sha256']:
+                            raise ValueError('changed')
+                    except (OSError, ValueError, SourceChanged) as exc:
+                        self.critical_failure = True
+                        raise AuditError('Published revision artifact changed.', code='REVIEW_TARGET_CHANGED',
+                                         failure_layer='integrity') from exc
+
+    def run_source(self, item, context, directory, persist):
+        """One pinned source, one catalog, and at most two independent document pairs."""
+        context = dict(context, source_decoding=self.cfg.get('source_decoding', {'rules': []}),
+                       source_decoding_access='Decoding rules apply to program evidence checks only; agent reading depends on its CLI.')
+        item['revisions'] = []
+
+        def guard(stage_context):
+            if self.folder:
+                self.folder.assert_snapshot(context['source_fingerprint'])
+            else:
+                self.repo.assert_snapshot(context['source_commit'])
+            self.assert_coverage_file(stage_context)
+            self.assert_revision_files(item)
+
+        def run_stage(stage, state, stage_context, stage_dir):
+            started = self.stage_started(stage, stage_context)
+            destination = stage_dir / (stage + '.logs')
+            try:
+                guard(stage_context)
+                data, meta = self.invoke(stage, stage_context, destination)
+                self.store_stage(state, stage, data, meta, stage_context)
+                if data is not None:
+                    self.stage_finished(stage, stage_context, data, started)
+                else:
+                    self.reporter.emit('stage_completed', **self.stage_context(stage, stage_context),
+                                       status='PARTIAL', elapsed_seconds=self.reporter.clock() - started)
+                    self.active_stage = {}
+                return data
+            except (AuditError, ContractError, OSError, UnicodeError) as exc:
+                message = f'{stage}: {exc}'
+                state.setdefault('errors', []).append(message)
+                if state is not item:
+                    item['errors'].append(message)
+                self.record_error(self.manifest, exc, phase='stage', **self.stage_context(stage, stage_context))
+                invocation = destination / 'invocation.json'
+                if invocation.is_file():
+                    with contextlib.suppress(OSError, ContractError):
+                        state[stage + '_invocation'] = strict_json(invocation.read_text())
+                if self.critical_failure or not self.cfg['continue_on_error']:
+                    raise
+                return None
+            finally:
+                try:
+                    guard(stage_context)
+                except BaseException:
+                    self.critical_failure = True
+                    state[stage] = None
+                    state.pop(stage + '_material', None)
+                    state[stage + '_usable'] = False
+                    raise
+                finally:
+                    persist()
+
+        try:
+            guard(context)
+            inventory = (self.folder or Folder(self.source_path, canonical=True)).snapshot(exclude_git=self.repo is not None)
+            guard(context)
+            save_json(directory / 'source.inventory.json', inventory)
+            context['_inventory'] = inventory
+            context['inventory_summary'] = inventory_summary(inventory)
+            catalog = run_stage('catalog', item, context, directory)
+            if catalog is None:
+                if not self.compromise:
+                    return
+                plan = build_coverage_plan(None, inventory, context, fallback=True)
+                self.publish_coverage_plan(plan, directory)
+            else:
+                plan = catalog['coverage_plan']
+            item['coverage_plan'] = plan
+            context.update(coverage_plan=plan, _coverage_plan_path=str(directory / 'coverage.plan.json'))
+            context.pop('inventory_summary', None)
+            previous = None
+            for number in range(1, self.execution['max_revision_rounds'] + 2):
+                revision_id = f'{number:03d}'
+                revision_dir = directory / 'revisions' / revision_id
+                revision = {key: item[key] for key in ('branch', 'source_commit', 'source_directory', 'source_fingerprint') if key in item}
+                revision.update(revision_id=revision_id, directory=str(revision_dir.relative_to(self.run_dir)),
+                                study=None, review=None, errors=[])
+                item['revisions'].append(revision)
+                current = context | {'revision_id': revision_id}
+                if previous:
+                    current.update(revision_inputs(previous))
+                    current['prompt_variant'] = 'revise'
+                run_stage('study', revision, current, revision_dir)
+                if usable_study(revision) and (previous is None or revision.get('study') is not None):
+                    current.pop('prompt_variant', None)
+                    if previous and revision.get('study'):
+                        current['registry_diff'] = revision['study']['registry_diff']
+                    review_input = self.freeze_review(stage_document(revision, 'study'), current, revision_dir)
+                    if revision.get('study_material') is not None:
+                        meta = revision['study_invocation']
+                        for name, value in (('claim.registry.json', review_input['claim_registry']),
+                                            ('review.plan.json', review_input['review_plan'])):
+                            content = (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+                            meta['material_hashes'][name] = {'sha256': digest(content), 'bytes': len(content)}
+                        save_json(revision_dir / 'study.logs' / 'invocation.json', meta)
+                    run_stage('review', revision, review_input, revision_dir)
+                else:
+                    revision['review_skipped'] = 'No usable strictly valid revised study.' if previous else 'No usable architecture document.'
+                    self.reporter.emit('stage_skipped', **self.stage_context('review', current))
+                    if self.repo and not usable_study(revision):
+                        item['errors'].append('Review skipped: no usable architecture document.')
+                revision['accepted'] = accepted(revision)
+                persist()
+                if not (completed_pair(revision) and revision.get('study') and
+                        any(f['severity'] in ('HIGH', 'MEDIUM') for f in revision['review']['findings'])):
+                    break
+                previous = revision
+        except BaseException as exc:
+            self.record_error(self.manifest, exc, phase='stage' if self.active_stage else 'run')
+            raise
+        finally:
+            # Even a failed second stage leaves the first published pair intact.
+            self.select_source_revision(item, directory, publish=not self.critical_failure)
+            persist()
+
     def publish_result(self, stage, data, destination):
         try:
             if stage == 'study':
@@ -1335,38 +1561,54 @@ class Runner:
         except ContractError as exc:
             raise AuditError('Computed artifact failed local validation.', code='ARTIFACT_CONTRACT_ERROR',
                              failure_layer='publication') from exc
-        # Study bytes are the reviewed document identity; never normalize them.
+        contents = self.artifact_contents(stage, data)
+        # Published revision files are immutable, including JSON and annotations.
+        for name, content in contents.items():
+            path = destination.parent / name
+            if path.exists() or path.is_symlink():
+                try:
+                    actual = read_confined(self.run_dir, str(path.relative_to(self.run_dir)), len(content))
+                    if actual != content:
+                        raise ValueError('changed')
+                except (OSError, ValueError, SourceChanged) as exc:
+                    raise AuditError('Frozen stage artifacts cannot be replaced; select a new run directory.',
+                                     code='REVIEW_TARGET_CHANGED', failure_layer='publication') from exc
+        for name, content in contents.items():
+            path = destination.parent / name
+            if not path.exists():
+                atomic(path, content)
+        return digest(contents['catalog.json' if stage == 'catalog' else ARTIFACTS[stage]])
+
+    def artifact_contents(self, stage, data):
+        def encoded(value):
+            return (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        if stage == 'catalog':
+            verify_coverage_plan(data['coverage_plan'])
+            return {'coverage.plan.json': encoded(data['coverage_plan']), 'catalog.json': encoded(data)}
         report = data['report_markdown'] if stage == 'study' else render_stage(stage, data, self.cfg.get('output_language'))
+        contents = {ARTIFACTS[stage]: report.encode('utf-8'),
+                    stage + '.original.md': data['report_markdown'].encode('utf-8'),
+                    stage + '.json': encoded(data)}
         if stage == 'study':
-            frozen = {'ARCHITECTURE.md': report.encode('utf-8'),
-                'claim.registry.json': (json.dumps(data['claims'], ensure_ascii=False, indent=2) + '\n').encode('utf-8'),
-                'review.plan.json': (json.dumps(data['review_plan'], ensure_ascii=False, indent=2) + '\n').encode('utf-8')}
-            for name, expected in frozen.items():
-                path = destination.parent / name
-                if path.exists() and path.read_bytes() != expected:
-                    raise AuditError('Frozen study artifacts cannot be replaced; select a new run directory.',
-                                     code='REVIEW_TARGET_CHANGED', failure_layer='publication')
-        atomic(destination.parent / ARTIFACTS[stage], report)
-        atomic(destination.parent / (stage + '.original.md'), data['report_markdown'])
-        if stage == 'study':
-            atomic(destination.parent / 'study.annotated.md', render_stage(stage, data, self.cfg.get('output_language')))
-            save_json(destination.parent / 'claim.registry.json', data['claims'])
-            save_json(destination.parent / 'review.plan.json', data['review_plan'])
-        save_json(destination.parent / (stage + '.json'), data)
-        return digest(report.encode())
+            contents.update({'study.annotated.md': render_stage(stage, data, self.cfg.get('output_language')).encode('utf-8'),
+                             'claim.registry.json': encoded(data['claims']), 'review.plan.json': encoded(data['review_plan'])})
+            if data.get('registry_diff') is not None:
+                contents['registry.diff.json'] = encoded(data['registry_diff'])
+        return contents
 
     def assert_review_files(self, context, directory):
-        if not context.get('document_strictly_valid'):
-            return
-        expected = {'ARCHITECTURE.md': context['architecture_document']['report_markdown'].encode('utf-8'),
-            'claim.registry.json': (json.dumps(context['claim_registry'], ensure_ascii=False, indent=2) + '\n').encode(),
+        expected = {'claim.registry.json': (json.dumps(context['claim_registry'], ensure_ascii=False, indent=2) + '\n').encode(),
             'review.plan.json': (json.dumps(context['review_plan'], ensure_ascii=False, indent=2) + '\n').encode()}
+        if context.get('document_strictly_valid'):
+            expected['ARCHITECTURE.md'] = context['architecture_document']['report_markdown'].encode('utf-8')
         for name, content in expected.items():
-            fd = os.open(directory / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(fd, 'rb') as stream:
-                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode) or stream.read(len(content) + 1) != content:
-                    raise AuditError('Published document, registry or review plan changed.',
-                                     code='REVIEW_TARGET_CHANGED', failure_layer='integrity')
+            try:
+                actual = read_confined(self.run_dir, str((directory / name).relative_to(self.run_dir)), len(content))
+                if actual != content:
+                    raise ValueError('changed')
+            except (OSError, ValueError, SourceChanged) as exc:
+                raise AuditError('Published document, registry or review plan changed.',
+                                 code='REVIEW_TARGET_CHANGED', failure_layer='integrity') from exc
 
     def freeze_review(self, doc, context, directory):
         result = review_context(doc, context)
@@ -1377,9 +1619,13 @@ class Runner:
             for name, value in pending.items():
                 path = directory / name
                 expected = (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
-                if path.exists() and path.read_bytes() != expected:
-                    raise AuditError('Recovered material cannot replace an existing frozen registry or plan.',
-                                     code='REVIEW_TARGET_CHANGED', failure_layer='publication')
+                if path.exists() or path.is_symlink():
+                    try:
+                        if read_confined(self.run_dir, str(path.relative_to(self.run_dir)), len(expected)) != expected:
+                            raise ValueError('changed')
+                    except (OSError, ValueError, SourceChanged) as exc:
+                        raise AuditError('Recovered material cannot replace an existing frozen registry or plan.',
+                                         code='REVIEW_TARGET_CHANGED', failure_layer='publication') from exc
             for name, value in pending.items():
                 if not (directory / name).exists():
                     save_json(directory / name, value)
@@ -1410,14 +1656,14 @@ class Runner:
     def _invoke_once(self, stage, context, destination, *, budget, repair_index=0,
                      correction=None, repair_model=None, repair_source=None, evidence_pins=None):
         agent = self.cfg['_agents'][stage]
-        template = Path(self.cfg['_prompt_paths'][stage]).read_text()
+        template = Path(self.cfg['_prompt_paths'][context.get('prompt_variant', stage)]).read_text()
         output_instruction = ('Use the StructuredOutput tool with the supplied schema. Do not duplicate the result in ordinary text.'
             if agent['backend'] in ('opencode', 'xxx') else
             'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.')
         # Assemble only this stage's inputs; the configured CLI profile remains available.
         prompt = (template + '\n\n# Backend output instruction\n' + output_instruction +
                   '\n\n# Authoritative orchestration context (data)\n' +
-                  json.dumps(context, ensure_ascii=False) + '\n\n# Required final JSON Schema\n' +
+                  json.dumps(project_model_context(stage, context), ensure_ascii=False) + '\n\n# Required final JSON Schema\n' +
                   json.dumps(self.schemas[stage], ensure_ascii=False))
         if correction is not None:
             prompt = correction
@@ -1442,6 +1688,8 @@ class Runner:
                     model_actual=None, request_id=None, session_id=None, message_id=None,
                     finish_reason=None, output_bytes=None, execution=self.execution)
         meta.update(contract_version=CONTRACT_VERSION, artifact_version=ARTIFACT_VERSION,
+                    context_format_version=CONTEXT_FORMAT_VERSION,
+                    revision_id=context.get('revision_id'), prompt_variant=context.get('prompt_variant', stage),
                     model_actual_source='unknown: backend has not reported model identity',
                     review_quality='NOT_MEASURED', publication_complete=False)
         native_retries = 0 if agent['backend'] == 'xxx' else self.execution['opencode_format_retries']
@@ -1462,6 +1710,7 @@ class Runner:
         save_json(attempt / 'validation.json', {'valid': False, 'status': 'not_run'})
         try:
             budget.check()
+            self.assert_coverage_file(context)
             if self.folder:
                 self.folder.assert_snapshot(context['source_fingerprint'])
             else:
@@ -1523,6 +1772,7 @@ class Runner:
                         save_json(attempt / 'extracted.json', data)
                         data = self.validate_attempt(stage, data, context, attempt, meta)
                 finally:
+                    self.assert_coverage_file(context)
                     if self.folder:
                         self.folder.assert_snapshot(context['source_fingerprint'])
                     else:
@@ -1549,8 +1799,12 @@ class Runner:
                 meta['model_actual_source'] = 'backend assistant-message metadata'
             if stage == 'review':
                 self.assert_review_files(context, destination.parent)
+            self.assert_coverage_file(context)
             report_hash = self.publish_result(stage, data, destination)
+            artifact_hashes = {name: {'sha256': digest(blob), 'bytes': len(blob)}
+                               for name, blob in self.artifact_contents(stage, data).items()}
             meta.update(status='SUCCEEDED', finished_at=now(), report_sha256=report_hash, publication_complete=True)
+            meta['artifact_hashes'] = artifact_hashes
             meta['duration_seconds'] = round(budget.clock() - budget.started, 3)
             save_json(attempt / 'invocation.json', meta)
             save_json(destination / 'invocation.json', meta)
@@ -1694,44 +1948,7 @@ class Runner:
                         'priority_scenarios': self.cfg['priority_scenarios'],
                         'execution_mode': 'static-only', 'initial_working_tree': 'clean',
                         'source_access': 'current checkout; native CLI permissions; other branch reports are outside task scope'}
-                    for stage in ('study', 'review'):
-                        if stage == 'review' and not usable_study(item):
-                            item['errors'].append('Review skipped: no usable architecture document.')
-                            self.reporter.emit('stage_skipped', **self.stage_context(stage, context))
-                            break
-                        stage_context = dict(context)
-                        if stage == 'review':
-                            doc = stage_document(item, 'study')
-                            stage_context = self.freeze_review(doc, context, branch_dir)
-                        try:
-                            started = self.stage_started(stage, context)
-                            self.repo.assert_snapshot(commit)
-                            data, meta = self.invoke(stage, stage_context, branch_dir / (stage + '.logs'))
-                            self.store_stage(item, stage, data, meta, stage_context)
-                        except (AuditError, ContractError, OSError, UnicodeError) as exc:
-                            item['errors'].append(f'{stage}: {exc}')
-                            self.record_error(manifest, exc, phase='stage', **self.stage_context(stage, context))
-                            if (isinstance(exc, UnsafeRepository) or (self.compromise and self.critical_failure)
-                                    or not self.cfg['continue_on_error']):
-                                raise
-                        finally:
-                            # Changed HEAD or working tree is always fatal, even with continue_on_error.
-                            try:
-                                self.repo.assert_snapshot(commit)
-                            except BaseException:
-                                # A result must not survive a failed stage-boundary source check.
-                                item[stage] = None
-                                item.pop(stage + '_material', None)
-                                item[stage + '_usable'] = False
-                                raise
-                            finally:
-                                persist()
-                        if item[stage] is not None:
-                            self.stage_finished(stage, context, item[stage], started)
-                        elif item.get(stage + '_material'):
-                            self.reporter.emit('stage_completed', **self.stage_context(stage, context),
-                                               status='PARTIAL', elapsed_seconds=self.reporter.clock() - started)
-                            self.active_stage = {}
+                    self.run_source(item, context, branch_dir, persist)
                     item['accepted'] = accepted(item)
                     persist()
             except BaseException as exc:
@@ -1758,7 +1975,7 @@ class Runner:
                     'project_description': self.cfg['project_description'],
                     'scope': 'reports-only comparison; source inspection is outside task scope',
                     'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'submodules', 'study', 'review',
-                                                       'study_material', 'review_material', 'errors')} |
+                                                       'study_material', 'review_material', 'errors', 'selected_revision', 'coverage_plan')} |
                                  {'accepted': accepted(b)} |
                                  {stage + '_invocation': {k: (b.get(stage + '_invocation') or {}).get(k) for k in
                                     ('publication_complete', 'contract_version', 'artifact_version', 'status', 'model_requested', 'model_actual',
@@ -1771,6 +1988,8 @@ class Runner:
                 started = self.stage_started('compare', bundle)
                 try:
                     self.repo.assert_expected()
+                    for entry in entries:
+                        self.assert_revision_files(entry)
                     can_compare = (comparison_possible(entries, baseline) if self.compromise
                                    else any(accepted(b) for b in entries))
                     if can_compare:
@@ -1782,6 +2001,8 @@ class Runner:
                     # checkout even though this stage runs outside the repository.
                     try:
                         self.repo.assert_expected()
+                        for entry in entries:
+                            self.assert_revision_files(entry)
                     except AuditError as exc:
                         manifest['restoration'] = {'restored': False, 'node': getattr(exc, 'node', None), 'error': str(exc)}
                         self.record_error(manifest, exc, phase='restoration')
@@ -1844,29 +2065,10 @@ class Runner:
                     'priority_scenarios': self.cfg['priority_scenarios'], 'execution_mode': 'static-only',
                     'source_access': 'Current directory tree, including hidden files; do not follow symlinks or use Git. '
                                      'Native CLI permissions; fingerprints verify stage boundaries only.'}
-                for stage in ('study', 'review'):
-                    stage_context = dict(context)
-                    if stage == 'review':
-                        doc = stage_document(manifest, 'study')
-                        if not usable_study(manifest):
-                            manifest['review_skipped'] = 'No usable architecture document.'
-                            self.reporter.emit('stage_skipped', **self.stage_context(stage, context))
-                            break
-                        stage_context = self.freeze_review(doc, context, self.run_dir)
-                    started = self.stage_started(stage, context)
-                    data, meta = self.invoke(stage, stage_context, self.run_dir / (stage + '.logs'))
-                    self.folder.assert_snapshot(fingerprint)
-                    self.store_stage(manifest, stage, data, meta, stage_context)
-                    persist()
-                    if data is not None:
-                        self.stage_finished(stage, context, data, started)
-                    else:
-                        self.reporter.emit('stage_completed', **self.stage_context(stage, context),
-                                           status='PARTIAL', elapsed_seconds=self.reporter.clock() - started)
-                        self.active_stage = {}
+                self.run_source(manifest, context, self.run_dir, persist)
                 manifest['accepted'] = accepted(manifest)
-                manifest['status'] = 'COMPLETE' if manifest['accepted'] else 'PARTIAL'
-                code = 0 if manifest['accepted'] else 2
+                manifest['status'] = 'FAILED' if manifest['errors'] else 'COMPLETE' if manifest['accepted'] else 'PARTIAL'
+                code = 1 if manifest['errors'] else 0 if manifest['accepted'] else 2
         except BaseException as exc:
             manifest['errors'].append(str(exc) or type(exc).__name__)
             manifest['status'] = 'FAILED'

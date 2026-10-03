@@ -23,7 +23,6 @@ from structured_output import blocked_comparison, required_unresolved
 import test_opencode_http as http_fixtures
 from test_explain import doc, review
 from fixtures.ledger_response import response
-from ledger import review_context
 import test_xxx as xxx_fixtures
 
 
@@ -43,7 +42,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
         context = {'source_mode': 'folder', 'source_directory': str(self.source),
                    'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
         if stage == 'review':
-            context = review_context(materialize_study(response(context)), context)
+            context = runner.freeze_review(materialize_study(response(context)), context, destination.parent)
         self.destination = destination
         self.last_runner = runner
         env = self.env | {'AUDIT_FAKE_BACKEND': backend, 'AUDIT_FAKE_CASE': scenario}
@@ -400,7 +399,7 @@ class NativeGitComparisonTests(unittest.TestCase):
                 with patch('opencode.verify_native_retries'):
                     manifest, code = self.run_case('unknown-compare-finish')
                 self.assertNotEqual(code, 0)
-                self.assertEqual(len(self.prompts()) - before, 5)
+                self.assertEqual(len(self.prompts()) - before, 7)
                 self.assertTrue(all(b['accepted'] for b in manifest['branches']))
                 self.assertNotIn('comparison', manifest)
                 final = Path(manifest['final_report']).read_text()
@@ -430,7 +429,7 @@ class NativeGitComparisonTests(unittest.TestCase):
                     manifest, code = self.run_case(scenario)
                 self.assertEqual(code, expected_code, manifest)
                 self.assertFalse(any(b['accepted'] for b in manifest['branches']))
-                self.assertEqual(len(self.prompts()) - start, 2 if scenario == 'schema-error' else 4)
+                self.assertEqual(len(self.prompts()) - start, 4 if scenario == 'schema-error' else 6)
                 result = manifest['comparison']
                 self.assertEqual(result['completion_status'], 'BLOCKED')
                 self.assertEqual(result['compared_branches'], ['other'])

@@ -99,56 +99,57 @@ class Handler(BaseHTTPRequestHandler):
             repair = prompt.startswith('Correct only the format')
             raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]
             context = json.loads(raw.split('\n\n# Required final JSON Schema\n')[0])
+            stage = context.get('stage') or ('compare' if 'baseline_branch' in context else
+                                            'review' if 'architecture_document' in context else 'study')
             if scenario == 'progress-barrier':
                 # No response/history activity until the parent test observes the UI.
                 gate = Path(os.environ['AUDIT_FAKE_PROGRESS_GATE'])
-                stage = 'review' if 'architecture_document' in context else 'study'
                 (gate / (stage + '.ready')).touch()
                 deadline = time.monotonic() + 10
                 while not (gate / (stage + '.release')).exists():
                     if time.monotonic() >= deadline:
                         raise RuntimeError('Progress test did not release the HTTP response')
                     time.sleep(.01)
-            if scenario == 'source-change':
+            if scenario == 'source-change' and stage != 'catalog':
                 (Path.cwd() / 'app.py').write_text('unexpected fixture mutation\n')
             data = result(context)
-            if scenario == 'legacy':
+            if scenario == 'legacy' and stage == 'study':
                 del data['claims']
-            if scenario in ('repair-ok', 'repair-invalid', 'repair-semantic', 'repair-timeout'):
+            if stage != 'catalog' and scenario in ('repair-ok', 'repair-invalid', 'repair-semantic', 'repair-timeout'):
                 if not repair or scenario == 'repair-invalid':
                     data['extra_private_key'] = ['private value']
                 elif scenario == 'repair-semantic':
                     data['source_fingerprint' if 'source_fingerprint' in data else 'source_commit'] = 'wrong'
                 elif scenario == 'repair-timeout':
                     time.sleep(2)
-            if scenario in ('repair-verdict', 'repair-evidence'):
+            if stage != 'catalog' and scenario in ('repair-verdict', 'repair-evidence'):
                 if not repair:
                     data['extra_private_key'] = []
                     if scenario == 'repair-verdict':
                         data['completion_status'] = 'PARTIAL'; data['limitations'] = ['Original partial self-assessment']
                 elif scenario == 'repair-evidence':
                     data['evidence'][0]['path'] = 'invented.py'
-            if scenario in ('claims-44', 'claims-40', 'claims-empty') and 'architecture_document' in context:
+            if scenario in ('claims-44', 'claims-40', 'claims-empty') and stage == 'review':
                 count = 40 if scenario == 'claims-40' else 44
                 data['claims'] = [dict(data['claims'][0], id=f'C-{i + 1:03d}',
                     claim_ids=[] if scenario == 'claims-empty' else ['C-PRIVATE']) for i in range(count)]
                 data['report_markdown'] = '\n'.join(c['id'] for c in data['claims'])
-            if scenario == 'partial-review' and 'architecture_document' in context:
+            if scenario == 'partial-review' and stage == 'review':
                 data.update(completion_status='PARTIAL', limitations=['Synthetic incomplete review'])
-            if scenario == 'material-review' and 'architecture_document' in context:
+            if scenario == 'material-review' and stage == 'review':
                 data['claims'][0].update(outcome='UNVERIFIABLE', limitation='Insufficient static evidence')
-            if scenario == 'wrong-identity':
+            if scenario == 'wrong-identity' and stage != 'catalog':
                 data['source_fingerprint' if 'source_fingerprint' in data else 'source_commit'] = 'wrong'
-            if scenario == 'schema-error' or (scenario == 'fail-main-study' and
-                    context.get('branch') == 'main' and 'architecture_document' not in context):
+            if (scenario == 'schema-error' and stage != 'catalog') or (scenario == 'fail-main-study' and
+                    context.get('branch') == 'main' and stage == 'study'):
                 data['completion_status'] = 'INVALID'
-            if os.environ.get('AUDIT_FAKE_LOCAL_REFS'):
+            if stage != 'catalog' and os.environ.get('AUDIT_FAKE_LOCAL_REFS'):
                 data['claims'][0]['evidence_ids'] = ['E-001']
-            if os.environ.get('AUDIT_FAKE_SHORT_IDS'):
-                namespace = 'review' if 'architecture_document' in context else 'study'
+            if stage != 'catalog' and os.environ.get('AUDIT_FAKE_SHORT_IDS'):
+                namespace = stage
                 data['evidence'][0]['id'] = namespace + ':E-1'
                 data['claims'][0]['evidence_ids'] = [namespace + ':E-1']
-            if scenario == 'claims-string':
+            if scenario == 'claims-string' and stage != 'catalog':
                 data['claims'] = '[{"private":"' + 'x' * 21295
             model = body.get('model', {'providerID': 'fixture', 'modelID': 'configured-model'})
             mid = 'msg_' + uuid.uuid4().hex
@@ -165,31 +166,31 @@ class Handler(BaseHTTPRequestHandler):
                  'tool': 'StructuredOutput', 'callID': 'call_fixture', 'state': {'status': 'completed',
                     'input': data, 'output': 'Structured output captured successfully.', 'title': 'Structured Output',
                     'metadata': {'valid': True}, 'time': {'start': 1, 'end': 2}}}]}
-            if scenario == 'backend-error':
+            if scenario == 'backend-error' and stage != 'catalog':
                 info['error'] = {'name': 'APIError', 'data': {'message': 'SECRET_RESPONSE', 'isRetryable': False}}
-            if scenario == 'exhausted':
+            if scenario == 'exhausted' and stage != 'catalog':
                 info['error'] = {'name': 'StructuredOutputError', 'data': {'message': 'No output', 'retries': 0}}
-            if scenario == 'prose-only':
+            if scenario == 'prose-only' and stage != 'catalog':
                 del info['structured']
-            if scenario == 'no-final':
+            if scenario == 'no-final' and stage != 'catalog':
                 del info['time']['completed']
             if scenario == 'unknown-compare-finish' and 'baseline_branch' in context:
                 info['finish'] = 'SYNTHETIC_PRIVATE_UNKNOWN_FINISH'
-            if scenario == 'tool-input-mismatch':
+            if scenario == 'tool-input-mismatch' and stage != 'catalog':
                 different = json.loads(json.dumps(data))
                 different['claims'][0]['evidence_ids'] = ['study:E-001']
                 response['parts'][1]['state']['input'] = different
-            if scenario == 'foreign-session':
+            if scenario == 'foreign-session' and stage != 'catalog':
                 info['sessionID'] = 'ses_foreign'
-            if scenario == 'foreign-request':
+            if scenario == 'foreign-request' and stage != 'catalog':
                 info['parentID'] = 'msg_old'
             messages[:] = [response]
-            if scenario in ('slow', 'active'):
+            if scenario in ('slow', 'active') and stage != 'catalog':
                 for tick in range(40):
                     if scenario == 'active':
                         response['parts'][0]['text'] += str(tick)
                     time.sleep(.05)
-            if scenario == 'malformed':
+            if scenario == 'malformed' and stage != 'catalog':
                 self.send_response(200); self.end_headers(); self.wfile.write(b'{broken'); return
         elif self.path.endswith('/message'):
             response = messages

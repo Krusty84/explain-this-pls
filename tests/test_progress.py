@@ -70,7 +70,7 @@ class ProgressTests(unittest.TestCase):
         r = self.reporter()
         state = self.start(r)
         initial = self.err.getvalue()
-        self.assertEqual(initial, '[RUN] master / study / xxx  ⠋ 00:00\x1b[K')
+        self.assertEqual(initial, '[RUN] master / Analyzing project…  ⠋ 00:00\x1b[K')
         for elapsed in (0.125, 0.25, 0.499):
             self.tick(r, elapsed)
         self.assertEqual(self.err.getvalue(), initial)
@@ -78,7 +78,7 @@ class ProgressTests(unittest.TestCase):
                                       (1, '⠴', '00:01'), (134, None, '02:14'), (3661, None, '01:01:01')):
             self.tick(r, elapsed)
             line = self.err.getvalue().split('\r')[-1]
-            self.assertTrue(line.startswith('[RUN] master / study / xxx  '))
+            self.assertTrue(line.startswith('[RUN] master / Analyzing project…  '))
             self.assertIn((frame + ' ' if frame else '') + timer, line)
         r.emit('stage_completed', **CONTEXT, status='COMPLETE', elapsed_seconds=3661)
         self.assertTrue(state.stop.is_set())
@@ -86,7 +86,7 @@ class ProgressTests(unittest.TestCase):
         before = self.err.getvalue()
         r._tick_progress(state)
         self.assertEqual(self.err.getvalue(), before)
-        self.assertTrue(before.endswith('[OK] master / study / xxx — COMPLETE: Description generated; agent reports investigation complete in its stated scope | Elapsed: 01:01:01\n'))
+        self.assertTrue(before.endswith('[OK] master / Architecture report created. | Elapsed: 01:01:01\n'))
 
     def test_short_stage_has_only_initial_frame(self):
         r = self.reporter()
@@ -94,7 +94,7 @@ class ProgressTests(unittest.TestCase):
         self.tick(r, .4)
         r.emit('stage_completed', **CONTEXT, status='PARTIAL', elapsed_seconds=.4)
         self.assertEqual(sum(self.err.getvalue().count(c) for c in SPINNER), 1)
-        self.assertIn('— PARTIAL: Policy checks not completed or not satisfied; see diagnostics | Elapsed: 00:00\n', self.err.getvalue())
+        self.assertIn('master / Project analysis incomplete. See details below. | Elapsed: 00:00\n', self.err.getvalue())
 
     def test_runner_context_retries_and_next_stage_reset(self):
         r = self.reporter()
@@ -116,12 +116,12 @@ class ProgressTests(unittest.TestCase):
         runner.stage_finished('study', {'branch': 'topic'}, {'completion_status': 'COMPLETE'}, started)
         runner.mode = 'folder'
         started = runner.stage_started('review', {})
-        self.assertIn('[RUN] name / review / codex  ⠋ 00:00', self.err.getvalue())
+        self.assertIn('[RUN] name / Reviewing report…  ⠋ 00:00', self.err.getvalue())
         runner.stage_finished('review', {}, {'completion_status': 'COMPLETE', 'verdict': 'INCONCLUSIVE'}, started)
-        self.assertIn('name / review / codex — PARTIAL', self.err.getvalue())
+        self.assertIn('name / Report review incomplete. See details below.', self.err.getvalue())
         runner.mode = 'git'
         started = runner.stage_started('compare', {})
-        self.assertIn('[RUN] all branches / compare / claude-code  ⠋ 00:00', self.err.getvalue())
+        self.assertIn('[RUN] Comparing branch reports…  ⠋ 00:00', self.err.getvalue())
         runner.stage_finished('compare', {}, {'completion_status': 'BLOCKED'}, started)
         self.assertIsNone(r._progress)
 
@@ -139,10 +139,13 @@ class ProgressTests(unittest.TestCase):
                 r.cli_output()
                 self.tick(r, 60)
                 self.tick(r, 60)
-                self.assertIn('Last CLI output: 00:10 ago', self.err.getvalue())
+                self.assertNotIn('CLI', self.err.getvalue())
                 r.cli_started()
                 self.tick(r, 90)
-                self.assertIn('No CLI output received yet', self.err.getvalue())
+                self.assertNotIn('CLI', self.err.getvalue())
+                for timer in ('00:30', '01:00', '01:30'):
+                    self.assertIn('[RUN] master / Analyzing project…\n      Elapsed: ' + timer,
+                                  self.err.getvalue())
                 self.assertEqual(self.err.getvalue().count('Elapsed:'), 3)
                 self.assertNotIn('\x1b', self.err.getvalue())
                 r.close()
@@ -157,8 +160,8 @@ class ProgressTests(unittest.TestCase):
             worker.assert_not_called()
         self.assertNotIn('\x1b', self.err.getvalue())
         self.assertEqual(self.err.getvalue().count('Elapsed:'), 1)
-        self.assertIn('[RUN] master / study / xxx\n', self.err.getvalue())
-        self.assertIn('[FAIL] master / study / xxx failed', self.err.getvalue())
+        self.assertIn('[RUN] master / Analyzing project…\n', self.err.getvalue())
+        self.assertIn('[FAIL] master / Project analysis failed.', self.err.getvalue())
         r = self.reporter()
         for event, context in (('preflight_started', {'check': 'configuration'}),
                                ('branch_started', {'branch': 'master', 'commit': 'a' * 40}),
@@ -174,10 +177,10 @@ class ProgressTests(unittest.TestCase):
         r.emit('stage_recovered', message='still running')
         r.disable_log()
         text = self.err.getvalue()
-        self.assertIn('\r\x1b[2K[WARN] retained material\nsecond line\n[RUN] master / study / xxx  ⠹', text)
+        self.assertIn('\r\x1b[2K[WARN] retained material\nsecond line\n[RUN] master / Analyzing project…  ⠹', text)
         self.assertIn('Detail: stage_recovered', text)
-        self.assertIn('Technical log is unavailable', text)
-        self.assertTrue(text.endswith('[RUN] master / study / xxx  ⠹ 00:00\x1b[K'))
+        self.assertIn('Error details could not be saved. Analysis will continue.', text)
+        self.assertTrue(text.endswith('[RUN] master / Analyzing project…  ⠹ 00:00\x1b[K'))
         self.assertIsNotNone(r._progress)
 
     def test_log_write_failure_inside_tick_warns_once_and_keeps_stage_active(self):
@@ -189,7 +192,7 @@ class ProgressTests(unittest.TestCase):
             with patch.object(handler, 'emit', side_effect=OSError('disk full')):
                 self.tick(r, 30)
                 self.tick(r, 60)
-            self.assertEqual(self.err.getvalue().count('Technical log is unavailable'), 1)
+            self.assertEqual(self.err.getvalue().count('Error details could not be saved. Analysis will continue.'), 1)
             self.assertTrue(handler.stream.closed)
             self.assertIs(r._progress, state)
             self.assertFalse(state.stop.is_set())
@@ -210,6 +213,16 @@ class ProgressTests(unittest.TestCase):
             self.assertNotIn('last_output_seconds', records[1])
             self.assertNotIn('\n', self.err.getvalue())
             self.assertNotIn('\x1b', (Path(raw) / 'run.log').read_text())
+            r.cli_started()
+            self.tick(r, 45)
+            r.cli_output()
+            self.tick(r, 60)
+            r.cli_started()
+            self.tick(r, 90)
+            records = [json.loads(line) for line in (Path(raw) / 'run.log').read_text().splitlines()]
+            self.assertEqual(records[-2]['last_output_seconds'], 15)
+            self.assertIsNone(records[-1]['last_output_seconds'])
+            self.assertNotIn('CLI', self.err.getvalue())
             with self.assertRaises(ContractError) as caught:
                 budget.check()
             self.assertEqual(caught.exception.failure_kind, 'IDLE_TIMEOUT')
@@ -241,7 +254,7 @@ class ProgressTests(unittest.TestCase):
             line = r._progress_line(r._progress)
             if line is not None:
                 self.assertLessEqual(cell_width(SGR.sub('', line)), columns - 1)
-                self.assertIn('study / xxx', line)
+                self.assertIn('Analyzing project…', line)
                 self.assertNotIn('private-token', line)
                 self.assertNotIn('\u202e', line)
                 self.assertNotIn('\x1b[31m', line)
@@ -264,7 +277,7 @@ class ProgressTests(unittest.TestCase):
         before = r._progress_line(r._progress)
         self.tick(r, 3600)
         after = r._progress_line(r._progress)
-        self.assertEqual(before.index('/ study /'), after.index('/ study /'))
+        self.assertEqual(before.index('/ Analyzing project…'), after.index('/ Analyzing project…'))
         self.assertIn('59:59', before)
         self.assertIn('01:00:00', after)
         self.assertLessEqual(cell_width(after), 44)
@@ -314,7 +327,7 @@ class ProgressTests(unittest.TestCase):
         self.tick(r, .75)
         r.emit('stage_completed', **CONTEXT, status='COMPLETE', elapsed_seconds=.75)
         self.assertIn(b'  \\ 00:00', buffer.getvalue())
-        self.assertIn(b'COMPLETE: Description generated; agent reports investigation complete in its stated scope | Elapsed: 00:00\n', buffer.getvalue())
+        self.assertIn(b'Architecture report created. | Elapsed: 00:00\n', buffer.getvalue())
         self.assertNotIn(id(stream), r.failed_streams)
         state = self.start(r)
         stream.close()
@@ -340,7 +353,7 @@ class ProgressTests(unittest.TestCase):
         self.start(r)
         r.error(OSError('failed'), phase='stage', **CONTEXT)
         self.start(r, branch='next')
-        self.assertIn('[RUN] next / study / xxx  ⠋ 00:00', self.err.getvalue())
+        self.assertIn('[RUN] next / Analyzing project…  ⠋ 00:00', self.err.getvalue())
 
     def test_real_worker_stops_during_tick_without_join_deadlock(self):
         r = self.reporter()
@@ -391,13 +404,16 @@ class XXXProgressIntegrationTests(unittest.TestCase):
             '--config', str(path), '--output', 'json'], env=env, stdout=subprocess.PIPE, stderr=slave)
         raw = bytearray()
         try:
-            for stage in ('study', 'review'):
+            for stage, label, completed in (
+                    ('catalog', 'Cataloging subsystems…', 'Subsystem catalog created.'),
+                    ('study', 'Analyzing project…', 'Architecture report created.'),
+                    ('review', 'Reviewing report…', 'Review complete.')):
                 deadline = time.monotonic() + 12
                 while time.monotonic() < deadline:
                     if select.select([master], [], [], .1)[0]:
                         raw.extend(os.read(master, 65536))
                     text = raw.decode('utf-8')
-                    frames = re.findall(r'\[RUN\] master / ' + stage + r' / xxx  (.) (\d\d:\d\d)', text)
+                    frames = re.findall(r'\[RUN\] master / ' + re.escape(label) + r'  (.) (\d\d:\d\d)', text)
                     if ((gate / (stage + '.ready')).exists() and
                             len({frame for frame, _ in frames}) >= 3 and
                             any(timer != '00:00' for _, timer in frames)):
@@ -405,10 +421,10 @@ class XXXProgressIntegrationTests(unittest.TestCase):
                     self.assertIsNone(child.poll(), text)
                 else:
                     self.fail('No moving spinner/timer during pending HTTP: ' + raw.decode())
-                self.assertNotIn('[OK] master / ' + stage, text)
+                self.assertNotIn('[OK] master / ' + completed, text)
                 self.assertFalse((gate / (stage + '.release')).exists())
                 # Frames never scroll; there is no newline between their writes.
-                span = text.split('[RUN] master / ' + stage, 1)[1]
+                span = text.split('[RUN] master / ' + label, 1)[1]
                 self.assertNotIn('\n', span)
                 (gate / (stage + '.release')).touch()
             stdout, _ = child.communicate(timeout=12)
@@ -426,12 +442,12 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         self.assertEqual(result['status'], 'COMPLETE')
         self.assertNotIn(b'\x1b', stdout)
         self.assertNotRegex(text, SGR)
-        self.assertIn('[OK] master / study / xxx — COMPLETE: Description generated; agent reports investigation complete in its stated scope | Elapsed:', text)
-        self.assertIn('[OK] master / review / xxx — COMPLETE: No material issues reported for required registry; policy checks satisfied | Elapsed:', text)
-        self.assertIn('[OK] Original checkout hierarchy restored.', text)
+        self.assertIn('[OK] master / Architecture report created. | Elapsed:', text)
+        self.assertIn('[OK] master / Review complete. No significant issues reported. | Elapsed:', text)
+        self.assertNotIn('checkout hierarchy', text)
         self.assertNotIn('      Elapsed:', text)
         self.assertNotIn('\x1b[?25', text)
-        tail = text.split('[OK] master / review', 1)[1]
+        tail = text.split('[OK] master / Review complete.', 1)[1]
         self.assertFalse(any(c in tail for c in SPINNER))
         self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'master')
         run = Path(result['manifest']).parent
@@ -440,7 +456,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
             content = artifact.read_text()
             self.assertNotIn('\x1b', content, str(artifact))
             self.assertFalse(any(c in content for c in SPINNER), str(artifact))
-        self.assertEqual(len(self.prompts()), 2)
+        self.assertEqual(len(self.prompts()), 3)
 
     def test_http_plain_fallback_is_live_without_duplicate_waits(self):
         for term, tty in (('xterm', False), ('dumb', True)):
@@ -467,7 +483,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
                 self.assertNotIn('\x1b', err.getvalue())
                 self.assertNotIn('CLI output', err.getvalue())
                 self.assertTrue(records)
-                for stage in ('study', 'review'):
+                for stage in ('catalog', 'study', 'review'):
                     times = [x['elapsed_seconds'] for x in records if x['stage'] == stage]
                     self.assertTrue(times)
                     self.assertTrue(all(b - a >= .049 for a, b in zip(times, times[1:])))
@@ -486,7 +502,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         self.assertEqual(manifest['diagnostics'][0]['failure_kind'], 'IDLE_TIMEOUT')
         self.assertIsNone(r._progress)
         self.assertFalse(any(t.name == 'audit-progress' for t in threading.enumerate()))
-        self.assertIn('[FAIL] source / study / xxx failed', r.stderr.getvalue())
+        self.assertIn('[FAIL] source / Project analysis failed.', r.stderr.getvalue())
         for pid in {c['server_pid'] for c in self.recorded()}:
             with self.assertRaises(ProcessLookupError):
                 os.kill(pid, 0)
@@ -506,12 +522,12 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         with patch.object(Runner, '_invoke_once', invoke):
             manifest, code = self.run_case('repair-ok', reporter=r)
         self.assertEqual(code, 0, manifest)
-        self.assertEqual(attempts, [('study', 100, 0), ('study', 100, 1),
-                                    ('review', 102.5, 0), ('review', 102.5, 1)])
-        for stage in ('study', 'review'):
-            frames = re.findall(r'/ ' + stage + r' / xxx  . (\d\d:\d\d)', r.stderr.getvalue())
+        self.assertEqual(attempts, [('catalog', 100, 0), ('study', 101.25, 0), ('study', 101.25, 1),
+                                    ('review', 103.75, 0), ('review', 103.75, 1)])
+        for label in ('Analyzing project…', 'Reviewing report…'):
+            frames = re.findall(r'/ ' + re.escape(label) + r'  . (\d\d:\d\d)', r.stderr.getvalue())
             self.assertEqual(frames, ['00:00', '00:01', '00:02'])
-        self.assertEqual(len(self.prompts()), 4)
+        self.assertEqual(len(self.prompts()), 5)
         self.assertIsNone(r._progress)
 
     def test_real_stage_error_then_next_branch_and_comparison_stop_cleanly(self):
@@ -522,9 +538,9 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         manifest, code = self.run_case('fail-main-study', reporter=r)
         self.assertEqual(code, 1, manifest)
         self.assertIsNone(r._progress)
-        self.assertIn('[FAIL] main / study / xxx failed', r.stderr.getvalue())
-        self.assertIn('[RUN] other / study / xxx', r.stderr.getvalue())
-        self.assertIn('[RUN] all branches / compare / xxx', r.stderr.getvalue())
+        self.assertIn('[FAIL] main / Project analysis failed.', r.stderr.getvalue())
+        self.assertIn('[RUN] other / Analyzing project…', r.stderr.getvalue())
+        self.assertIn('[RUN] Comparing branch reports…', r.stderr.getvalue())
         self.assertTrue(manifest['restoration']['restored'])
         self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
 
@@ -544,11 +560,11 @@ class XXXProgressIntegrationTests(unittest.TestCase):
             raw = bytearray()
             try:
                 deadline = time.monotonic() + 10
-                while not (gate / 'study.ready').exists() and time.monotonic() < deadline:
+                while not (gate / 'catalog.ready').exists() and time.monotonic() < deadline:
                     if select.select([master], [], [], .05)[0]:
                         raw.extend(os.read(master, 65536))
                     self.assertIsNone(child.poll(), raw.decode())
-                self.assertTrue((gate / 'study.ready').exists())
+                self.assertTrue((gate / 'catalog.ready').exists())
                 child.send_signal(signal.SIGINT)
                 stdout, _ = child.communicate(timeout=10)
                 while select.select([master], [], [], .1)[0]:
@@ -562,15 +578,16 @@ class XXXProgressIntegrationTests(unittest.TestCase):
             text = raw.decode()
             self.assertEqual(child.returncode, 130, text)
             self.assertEqual(json.loads(stdout)['exit_code'], 130)
-            self.assertIn('Stop requested.', text)
-            self.assertIn('INTERRUPTED', text)
+            self.assertIn('Stopping analysis…', text)
+            self.assertIn('Analysis interrupted.', text)
+            self.assertNotIn('INTERRUPTED', text)
             if quiet:
                 self.assertNotIn('\x1b', text)
                 self.assertFalse(any(c in text for c in SPINNER))
             else:
                 self.assertIn('⠋', text)
-                self.assertIn('\r\x1b[2K[WARN] Stop requested.', text)
-            self.assertFalse(any(c in text.split('Stop requested.', 1)[1] for c in SPINNER))
+                self.assertIn('\r\x1b[2K[WARN] Stopping analysis…', text)
+            self.assertFalse(any(c in text.split('Stopping analysis…', 1)[1] for c in SPINNER))
             for pid in {c['server_pid'] for c in self.recorded()}:
                 with self.assertRaises(ProcessLookupError):
                     os.kill(pid, 0)
@@ -601,11 +618,11 @@ class CLIProgressIntegrationTests(unittest.TestCase):
             os.close(slave)
         self.assertEqual(result.returncode, 0, console)
         run = Path(json.loads(result.stdout)['manifest']).parent
-        self.assertIn('[RUN] source folder / study / codex  ⠋ 00:00', console)
+        self.assertIn('[RUN] source folder / Analyzing project…  ⠋ 00:00', console)
         self.assertIn('⠙', console)
         self.assertNotIn('      Elapsed:', console)
         self.assertNotIn('private CLI activity', console)
-        self.assertEqual((run / 'study.logs/attempt-001/stderr.log').read_bytes(), b'private CLI activity\n')
+        self.assertEqual((run / 'revisions/001/study.logs/attempt-001/stderr.log').read_bytes(), b'private CLI activity\n')
         records = [json.loads(line) for line in (run / 'run.log').read_text().splitlines()]
         times = [x['elapsed_seconds'] for x in records if x['event'] == 'process_waiting' and x['stage'] == 'study']
         self.assertGreater(len(times), 1)

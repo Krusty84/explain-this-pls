@@ -11,6 +11,14 @@
   },
   "reports_dir": "../architecture-reports/legacy-app",
   "output_language": "English",
+
+  // Evidence verification only; paths are relative to the common source root.
+  // Most specific path wins; "." selects the whole tree. No agent UTF-8 copies.
+  "source_decoding": {
+    "rules": [
+      // {"path": "src/legacy", "encoding": "cp1251"}
+    ]
+  },
   "agent": {
     // XXX is the explicit fork profile; it does not enable the opencode backend.
     "backend": "xxx",
@@ -22,6 +30,8 @@
     "expected_version": null
   },
   "execution": {
+    // One substantive revision and full review after material findings; use 0 to disable.
+    "max_revision_rounds": 1,
     "stage_timeout_seconds": 3600,
     "idle_timeout_seconds": null,
     "http_timeout_seconds": 5,

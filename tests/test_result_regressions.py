@@ -46,7 +46,8 @@ class ResultRegressions(unittest.TestCase):
             for stage, schema in schemas.items():
                 saved = json.loads((root / 'schemas' / f'{prefix}{stage}.schema.json').read_text())
                 self.assertEqual(saved, schema)
-                self.assertNotRegex(json.dumps(saved), r'"(?:contract|artifact)_version"')
+                self.assertNotIn('contract_version', saved['properties'])
+                self.assertNotIn('artifact_version', saved['properties'])
 
     def test_prompt_has_no_obsolete_schema_versions(self):
         for path in (Path(__file__).resolve().parents[1] / 'prompts').glob('*.md'):

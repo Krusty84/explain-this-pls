@@ -113,7 +113,7 @@ and review. Review PASS is necessary but not sufficient to confirm an individual
 contrast. Include concrete limitations for PARTIAL/BLOCKED.
 
 Structured evidence_refs must resolve on both sides: branch, artifact ("study"
-or "review"), claim_id, document_sha256 and registry_sha256 from that branch's
+or "review"), revision_id, claim_id, document_sha256 and registry_sha256 from that branch's
 frozen plan. Two references to one side do not justify a strong contrast.
 Each side needs a referenced FACT assessed as SUPPORTED in its review. An accepted
 hypothesis/unknown caveat is not factual support for a strong implementation contrast.
@@ -123,3 +123,9 @@ Do not return computed fields. Python renders the difference table from JSON;
 do not duplicate it in Markdown. All support is according to the comparing agent,
 using supplied reports only; no source inspection occurs here. Policy satisfaction
 does not establish factual correctness. Missing comparison is not "no differences".
+
+Each branch supplies only its selected study/review revision. Keep selected_revision
+and supplied revision identities with references; never pair a new study with an
+older review or use an unselected draft as support. Catalog file distribution and
+agent-reported coverage are separate from semantic correctness. Incomplete catalogs,
+UNCLASSIFIED and DIRECTORY_FALLBACK remain comparison limitations.

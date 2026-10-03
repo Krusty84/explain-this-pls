@@ -23,7 +23,7 @@ import test_explain as fixtures
 class ExecutionTests(unittest.TestCase):
     def test_defaults_and_invalid_values(self):
         self.assertEqual(execution_settings(), {'stage_timeout_seconds': 3600,
-            'idle_timeout_seconds': None, 'opencode_format_retries': 2,
+            'idle_timeout_seconds': None, 'max_revision_rounds': 1, 'opencode_format_retries': 2,
             'structured_output_repair_attempts': 0, 'http_timeout_seconds': 5, 'api_doc_timeout_seconds': 30})
         for key in ('stage_timeout_seconds', 'idle_timeout_seconds', 'http_timeout_seconds', 'api_doc_timeout_seconds'):
             for value in (True, False, 0, -1, float('nan'), float('inf'), 10 ** 1000, '3', [], {}):
@@ -35,6 +35,11 @@ class ExecutionTests(unittest.TestCase):
                     execution_settings({key: value})
             for value in (0, 1, 2):
                 self.assertEqual(execution_settings({key: value})[key], value)
+        for value in (True, False, -1, 2, 1.0, None):
+            with self.subTest(max_revision_rounds=value), self.assertRaises(ValueError):
+                execution_settings({'max_revision_rounds': value})
+        for value in (0, 1):
+            self.assertEqual(execution_settings({'max_revision_rounds': value})['max_revision_rounds'], value)
 
     def test_total_deadline_survives_activity(self):
         current = [0.0]

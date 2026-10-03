@@ -62,8 +62,8 @@ def obj(**properties: dict) -> dict:
 # Wire schemas deliberately use only type/enum/properties/required/items and
 # additionalProperties. Local semantic checks enforce nonblank strings, bounds
 # and graph constraints regardless of a backend's JSON Schema dialect.
-CONTRACT_VERSION = 'evidence-ledger-v2'
-ARTIFACT_VERSION = 'evidence-ledger-artifacts-v2'
+CONTRACT_VERSION = 'evidence-ledger-v3'
+ARTIFACT_VERSION = 'evidence-ledger-artifacts-v3'
 STRINGS = array(string())
 STATUS = string('COMPLETE', 'PARTIAL', 'BLOCKED')
 BASE = dict(completion_status=STATUS, report_markdown=string(), limitations=STRINGS)
@@ -79,10 +79,17 @@ SECTION_KEYS = ('scope', 'context', 'components', 'startup_and_flows', 'data_and
 SECTIONS = array(obj(key=string(*SECTION_KEYS), title=string(),
                      blocks=array(obj(markdown=string(), claim_ids=STRINGS))))
 STUDY_BASE = dict(completion_status=STATUS, report_sections=SECTIONS, limitations=STRINGS)
+INSPECTION_STATUS = string('INSPECTED', 'PARTIALLY_INSPECTED', 'NOT_INSPECTED')
+COVERAGE = array(obj(area_id=string(), status=INSPECTION_STATUS, evidence_ids=STRINGS, limitation=string()))
+PRIOR_FINDING = obj(revision_id=string(), finding_id=string())
 TARGET = obj(source_sha256=string(), document_sha256=string(), registry_sha256=string(), plan_sha256=string())
 SCHEMAS = {
+    'catalog': obj(task=string('architecture_catalog'), branch=string(), source_commit=string(),
+        completion_status=STATUS, limitations=STRINGS,
+        subsystems=array(obj(id=string(), name=string(), purpose=string(), paths=STRINGS)),
+        exclusions=array(obj(path=string(), reason=string()))),
     'study': obj(**STUDY_BASE, task=string('architecture_documentation'), branch=string(), source_commit=string(),
-                 evidence=EVIDENCE, claims=array(CLAIM)),
+                 evidence=EVIDENCE, claims=array(CLAIM), coverage=COVERAGE),
     'review': obj(**BASE, task=string('architecture_review'), branch=string(), source_commit=string(),
         target=TARGET, evidence=EVIDENCE,
         claims=array(obj(id=string(), outcome=string('SUPPORTED', 'CONTRADICTED', 'UNVERIFIABLE',
@@ -92,20 +99,22 @@ SCHEMAS = {
                         'SCOPE_MISMATCH', 'CONTRACT_VIOLATION'),
             claim_ids=STRINGS, location=string(), evidence_ids=STRINGS, impact=string(), proposed_correction=string())),
         omission_search=array(obj(area_id=string(), status=string('INSPECTED', 'PARTIALLY_INSPECTED', 'NOT_INSPECTED'),
-                                  limitation=string(), finding_ids=STRINGS))),
+                                  limitation=string(), finding_ids=STRINGS)),
+        prior_findings=array(obj(**PRIOR_FINDING['properties'],
+            status=string('RESOLVED', 'UNRESOLVED', 'NOT_CHECKED'), explanation=string()))),
     'compare': obj(**BASE, task=string('architecture_comparison'), baseline_branch=string(), baseline_commit=string(),
         compared_branches=STRINGS, unresolved_branches=STRINGS,
         differences=array(obj(id=string(), branch=string(), category=string(),
             classification=string('CONFIRMED_DIFFERENCE', 'REPORTED_UNVERIFIED', 'INSUFFICIENT_EVIDENCE'),
             baseline_statement=string(), branch_statement=string(),
             evidence_refs=array(obj(branch=string(), artifact=string('study', 'review'), claim_id=string(),
-                                    document_sha256=string(), registry_sha256=string())), explanation=string())))
+                                    revision_id=string(), document_sha256=string(), registry_sha256=string())), explanation=string())))
 }
 FOLDER_SCHEMAS = {
     stage: obj(**({key: spec for key, spec in SCHEMAS[stage]['properties'].items()
                   if key not in ('branch', 'source_commit')} |
                  {'source_directory': string(), 'source_fingerprint': string()}))
-    for stage in ('study', 'review')
+    for stage in ('catalog', 'study', 'review')
 }
 
 def strict_json(text: str) -> Any:
@@ -250,8 +259,8 @@ def validate_schema(value: Any, schema: dict, where: str = '$') -> None:
 
 def has_ledger_structure(stage, value, *, representation='materialized'):
     """Recognize substantive ledger fields without a model-supplied version tag."""
-    fields = {'study': ('claims', 'evidence'),
-              'review': ('claims', 'evidence', 'target', 'omission_search'),
+    fields = {'catalog': ('subsystems', 'exclusions'), 'study': ('claims', 'evidence', 'coverage'),
+              'review': ('claims', 'evidence', 'target', 'omission_search', 'prior_findings'),
               'compare': ('differences', 'unresolved_branches')}
     specs = dict(SCHEMAS[stage]['properties'])
     if stage == 'study' and representation != 'wire':
@@ -328,12 +337,12 @@ def validate_wire_identity(stage, value, context, mode='git'):
                 or (stage == 'study' and 'report_markdown' in value))
                 and not exc.details.get('code')):
             exc.safe_message = ('Expected the current evidence ledger structure. Legacy output/custom prompts '
-                                + ('must be updated to v2 report_sections with blocks[].claim_ids and no '
+                                + ('must be updated to v3 report_sections, coverage and blocks[].claim_ids with no '
                                    'report_markdown/document_locator; ' if stage == 'study' else
                                    'must be updated to the current ' + stage + ' wire schema; ')
                                 + 'new checks cannot be inferred from old fields.')
         raise
-    if stage in ('study', 'review'):
+    if stage in ('catalog', 'study', 'review'):
         identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
         for key in identity:
             if value[key] != context.get(key):
@@ -353,6 +362,19 @@ def validate_result(stage, value, context, mode='git'):
     nonblank(value)
     if value['completion_status'] != 'COMPLETE' and not value['limitations']:
         raise ContractError('PARTIAL/BLOCKED requires explicit limitations')
+    if stage == 'catalog':
+        from coverage_plan import checked_path, build_coverage_plan
+        unique_ids(value['subsystems'], r'S-[0-9]{3,}', '$.subsystems')
+        for subsystem in value['subsystems']:
+            if not subsystem['paths'] or len(subsystem['paths']) != len(set(subsystem['paths'])):
+                raise contract_violation('INVALID_CATALOG_PATHS', '$.subsystems')
+            for path in subsystem['paths']:
+                checked_path(path)
+        for exclusion in value['exclusions']:
+            checked_path(exclusion['path'])
+        if '_inventory' in context:
+            build_coverage_plan(value, context['_inventory'], context)
+        return
     if stage in ('study', 'review'):
         unique_ids(value['evidence'], r'E-[0-9]{3,}', '$.evidence')
         for i, e in enumerate(value['evidence']):
@@ -369,6 +391,18 @@ def validate_result(stage, value, context, mode='git'):
             references(claim['evidence_ids'], evidence_ids, f'$.claims[{i}].evidence_ids', namespaces={'study'})
             if claim['epistemic_kind'] != 'FACT' and not claim['uncertainty'].strip():
                 raise ContractError('Hypothesis/unknown requires a concrete missing check or limitation')
+        areas = {a['id'] for a in (context.get('coverage_plan') or {}).get('areas', [])}
+        seen = set()
+        for i, area in enumerate(value['coverage']):
+            if area['area_id'] in seen or area['area_id'] not in areas:
+                raise contract_violation('INVALID_COVERAGE_AREA_ID', f'$.coverage[{i}].area_id')
+            seen.add(area['area_id'])
+            references(area['evidence_ids'], evidence_ids, f'$.coverage[{i}].evidence_ids', namespaces={'study'})
+            if area['status'] != 'INSPECTED' and not area['limitation'].strip():
+                raise ContractError('Unfinished coverage requires a limitation')
+        if context.get('previous_revision'):
+            from revisions import registry_diff
+            registry_diff(context['previous_revision']['study'], value)
     elif stage == 'review':
         registry = {c['id']: c for c in context['claim_registry']}
         for i, c in enumerate(value['claims']):
@@ -407,6 +441,13 @@ def validate_result(stage, value, context, mode='git'):
             references(area['finding_ids'], fids, f'$.omission_search[{i}].finding_ids')
             if area['status'] != 'INSPECTED' and not area['limitation'].strip():
                 raise ContractError('Unfinished omission search requires a limitation')
+        obligations = {(f['revision_id'], f['finding_id']) for f in context.get('prior_findings', [])}
+        replied = set()
+        for i, finding in enumerate(value['prior_findings']):
+            key = (finding['revision_id'], finding['finding_id'])
+            if key not in obligations or key in replied:
+                raise contract_violation('INVALID_PRIOR_FINDING_REFERENCE', f'$.prior_findings[{i}]')
+            replied.add(key)
     else:
         expected = [b for b in context['requested_branches'] if b != context['baseline_branch']]
         if value['baseline_branch'] != context['baseline_branch'] or value['baseline_commit'] != context['baseline_commit']:
@@ -433,7 +474,9 @@ def validate_result(stage, value, context, mode='git'):
                 doc = entry.get('study') or {}
                 plan = doc.get('review_plan', {})
                 material = entry.get(ref['artifact']) or {}
-                if (ref['document_sha256'] != plan.get('document_sha256') or
+                if (ref['revision_id'] != doc.get('revision_id')
+                        or ('selected_revision' in entry and ref['revision_id'] != entry['selected_revision'])
+                        or ref['document_sha256'] != plan.get('document_sha256') or
                         ref['registry_sha256'] != plan.get('registry_sha256') or
                         ref['claim_id'] not in {c['id'] for c in material.get('claims', [])}):
                     raise ContractError('Comparison reference does not resolve in the supplied report')

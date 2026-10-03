@@ -106,7 +106,7 @@ def validate_materialized(value):
     schema = MATERIALIZED_SCHEMAS[mode]
     # Saved-only fields are checked by saved_contracts at publication.
     validate_schema({k: v for k, v in value.items()
-                     if k not in ('program_checks', 'review_plan', 'normalization_provenance')}, schema)
+                     if k not in ('program_checks', 'review_plan', 'normalization_provenance', 'revision_id', 'registry_diff')}, schema)
     document = lines(value['report_markdown'])
     ids = unique_ids(value['claims'], r'C-[0-9]{3,}', '$.claims')
     for i, block in enumerate(value['block_map']):

@@ -217,6 +217,38 @@
         "additionalProperties": false
       }
     },
+    "prior_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "revision_id": {
+            "type": "string"
+          },
+          "finding_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "RESOLVED",
+              "UNRESOLVED",
+              "NOT_CHECKED"
+            ]
+          },
+          "explanation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision_id",
+          "finding_id",
+          "status",
+          "explanation"
+        ],
+        "additionalProperties": false
+      }
+    },
     "source_directory": {
       "type": "string"
     },
@@ -234,6 +266,7 @@
     "claims",
     "findings",
     "omission_search",
+    "prior_findings",
     "source_directory",
     "source_fingerprint"
   ],

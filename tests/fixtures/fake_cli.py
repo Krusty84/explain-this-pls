@@ -99,7 +99,8 @@ else:
         assert json.loads(Path(args[args.index('--output-schema') + 1]).read_text()) == call['schema']
     elif '--json-schema' in args:
         assert json.loads(args[args.index('--json-schema') + 1]) == call['schema']
-    stage = 'compare' if 'baseline_branch' in context else 'review' if 'architecture_document' in context else 'study'
+    stage = context.get('stage') or ('compare' if 'baseline_branch' in context else
+                                    'review' if 'architecture_document' in context else 'study')
     if stage != 'compare' and context.get('source_mode') == 'git':
         inspect_sources(context)
     action(stage)

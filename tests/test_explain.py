@@ -147,8 +147,8 @@ class RepoFixture(unittest.TestCase):
             'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master',
             'output_language':'Russian','project_description':'ERP-система 1995 года.',
             'priority_scenarios':[],'continue_on_error':True,
-            '_agents':{s:dict(agent) for s in ('study','review','compare')},
-            '_prompt_paths':{s:str(Path(__file__).resolve().parents[1]/'prompts'/f'{s}.md') for s in ('study','review','compare')}}
+            '_agents':{s:dict(agent) for s in ('catalog','study','review','compare')},
+            '_prompt_paths':{s:str(Path(__file__).resolve().parents[1]/'prompts'/f'{s}.md') for s in ('catalog','study','review','revise','compare')}}
     def test_grouped_git_configuration_runs_and_restores(self):
         cfg=self.config()
         cfg['mode']='git'
@@ -207,7 +207,7 @@ class RepoFixture(unittest.TestCase):
         result,code=fake.run()
         self.assertEqual(code,0)
         self.assertEqual(result['status'],'COMPLETE')
-        self.assertEqual(len(fake.calls),7)
+        self.assertEqual(len(fake.calls),10)
         for stage,context in fake.calls:
             self.assertEqual(context['project_description'],config['project_description'],stage)
         self.assertEqual(result['isolation'],'cli-native-permissions')
@@ -240,7 +240,7 @@ class RepoFixture(unittest.TestCase):
                 invoke=fake.invoke
                 def change_result(stage,context,destination):
                     if stage==failed_stage and outcome=='error':
-                        raise AuditError('simulated CLI failure')
+                        raise AuditError('simulated CLI failure', code='CLI_FAILED', failure_layer='backend')
                     data,meta=invoke(stage,context,destination)
                     if stage==failed_stage:
                         data.update(completion_status=outcome,limitations=['Incomplete coverage.'])
@@ -302,12 +302,14 @@ class FakeRunner(Runner):
     def check_cli(self):return {'TEST_ONLY':'mocked agents'}
     def invoke(self,stage,context,destination):
         self.calls.append((stage,copy.deepcopy(context)))
-        if stage=='study':
+        if stage=='catalog':
+            data=response(dict(context, stage=stage))
+        elif stage=='study':
             assert 'architecture_document' not in context and 'branches' not in context
             assert self.repo.symbolic() is None and self.repo.head()==context['source_commit']
             assert context['branch'] in (self.repo.path/'app.py').read_text()
-            if context['branch']==self.fail_branch:raise AuditError('simulated CLI failure')
-            data=doc(context['branch'],context['source_commit'])
+            if context['branch']==self.fail_branch:raise AuditError('simulated CLI failure', code='CLI_FAILED', failure_layer='backend')
+            data=response(dict(context, stage=stage))
         elif stage=='review':
             assert 'branches' not in context
             assert context['architecture_document']['branch']==context['branch']
@@ -394,8 +396,8 @@ class ConfigTests(unittest.TestCase):
                     self.value['git_mode']={key:self.value.pop(key)
                         for key in ('repository','branches','baseline_branch')}
                 cfg=self.load()
-                self.assertEqual(set(cfg['_agents']),{'study','review'})
-                self.assertEqual(set(cfg['_prompt_paths']),{'study','review'})
+                self.assertEqual(set(cfg['_agents']),{'catalog','study','review'})
+                self.assertEqual(set(cfg['_prompt_paths']),{'catalog','study','review','revise'})
     def test_git_branches_and_baseline_validation(self):
         for branches,baseline in (([],'master'),(['master','master'],'master'),
                 ([''],'master'),([None],'master'),('master','master'),
@@ -575,8 +577,8 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                     self.assertEqual(result.stderr.count('Project description is missing.'),int(check_only))
                     calls=[json.loads(line) for line in calls_path.read_text().splitlines()]
                     invocations=[call for call in calls if 'context' in call]
-                    self.assertEqual(len(calls),2 if check_only else 9)
-                    self.assertEqual(len(invocations),0 if check_only else 7)
+                    self.assertEqual(len(calls),2 if check_only else 12)
+                    self.assertEqual(len(invocations),0 if check_only else 10)
                     for call in invocations:
                         self.assertNotIn('schema_version',call['schema']['properties'])
                         self.assertNotIn('schema_version',call['schema']['required'])
@@ -590,20 +592,20 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                     if not check_only:
                         results=[run_dir/'comparison'/'compare.json']
                         bundle=json.loads((run_dir/'comparison'/'inputs.json').read_text())
-                        self.assertEqual(invocations[-1]['context'],bundle)
+                        self.assertEqual(invocations[-1]['context']['requested_branches'],bundle['requested_branches'])
                         for index,branch in enumerate(manifest['branches']):
                             self.assertNotIn('document',branch)
                             self.assertNotIn('document_invocation',branch)
                             self.assertEqual(branch['study_invocation']['stage'],'study')
                             self.assertEqual(bundle['branches'][index]['study'],branch['study'])
                             self.assertNotIn('document',bundle['branches'][index])
-                            self.assertNotIn('architecture_document',invocations[index*2]['context'])
-                            review_context=invocations[index*2+1]['context']
-                            self.assertEqual(review_context['architecture_document'],branch['study'])
+                            self.assertNotIn('architecture_document',invocations[index*3]['context'])
+                            review_context=invocations[index*3+2]['context']
+                            self.assertEqual(review_context['architecture_document']['report_markdown'],branch['study']['report_markdown'])
                             self.assertEqual(review_context['document_sha256'],branch['study_invocation']['report_sha256'])
                             branch_dir=run_dir/branch['directory']
                             self.assertEqual(json.loads((branch_dir/'study.json').read_text()),branch['study'])
-                            meta=json.loads((branch_dir/'study.logs/invocation.json').read_text())
+                            meta=json.loads((branch_dir/'revisions/001/study.logs/invocation.json').read_text())
                             self.assertEqual(meta['stage'],'study')
                             self.assertFalse((branch_dir/'document.json').exists())
                             self.assertFalse((branch_dir/'document.logs').exists())

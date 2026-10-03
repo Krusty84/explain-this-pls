@@ -24,10 +24,15 @@ from contracts import ContractError, json_error_details
 
 LABEL_COLORS = {'[WARN]': '\x1b[33m', '[RUN]': '\x1b[36m', '[OK]': '\x1b[32m',
                 '[FAIL]': '\x1b[31m', '[SKIP]': '\x1b[90m'}
-STATUS_COLORS = {'COMPLETE': '\x1b[32m', 'PREFLIGHT PASSED': '\x1b[32m', 'verified': '\x1b[32m',
-                 'FAILED': '\x1b[31m', 'PARTIAL': '\x1b[33m', 'BLOCKED': '\x1b[33m',
-                 'not started': '\x1b[90m', 'not completed': '\x1b[90m', 'not performed': '\x1b[90m',
-                 'not applicable': '\x1b[90m'}
+STATUS_COLORS = {'Complete': '\x1b[32m', 'Failed': '\x1b[31m',
+                 'Incomplete': '\x1b[33m', 'Not started': '\x1b[90m'}
+STAGE_MESSAGES = {
+    'catalog': ('Cataloging subsystems…', 'Subsystem catalog', 'Subsystem catalog created.'),
+    'study': ('Analyzing project…', 'Project analysis', 'Architecture report created.'),
+    'revise': ('Revising architecture report…', 'Architecture revision', 'Revised architecture report created.'),
+    'review': ('Reviewing report…', 'Report review', 'Review complete. No significant issues reported.'),
+    'compare': ('Comparing branch reports…', 'Branch report comparison', 'Branch report comparison ready.'),
+}
 
 SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 FRAME_INTERVAL = 0.125
@@ -254,6 +259,13 @@ class Reporter(NullReporter):
             return STATUS_COLORS[value] + text + '\x1b[0m'
         return text
 
+    def stage_source(self, context):
+        return '' if context.get('stage') == 'compare' else context.get('source_name') or context.get('branch') or ''
+
+    def stage_message(self, context, message):
+        source = self.stage_source(context)
+        return (self.display(source) + ' / ' if source else '') + self.display(message)
+
     def _write(self, stream, text):
         """All console writes, including frames, hold _lock and flush explicitly."""
         if id(stream) in self.failed_streams:
@@ -270,8 +282,8 @@ class Reporter(NullReporter):
             if stream is self.stderr and self._progress:
                 self._progress.stop.set()
 
-    def _labels(self, text):
-        if self.colors.get(id(self.stderr)):
+    def _labels(self, text, stream=None):
+        if self.colors.get(id(self.stderr if stream is None else stream)):
             return re.sub(r'^\[(?:WARN|RUN|OK|FAIL|SKIP)\](?= |$)',
                           lambda m: LABEL_COLORS[m[0]] + m[0] + '\x1b[0m', text, flags=re.MULTILINE)
         return text
@@ -280,7 +292,7 @@ class Reporter(NullReporter):
         with self._lock:
             state = self._progress
             self._clear_progress(state)
-            self._write(stream, (self._labels(text) if stream is self.stderr else text) + '\n')
+            self._write(stream, self._labels(text, stream) + '\n')
             if state and not state.stop.is_set():
                 self._draw_progress(state)
 
@@ -304,13 +316,13 @@ class Reporter(NullReporter):
         def display(value):
             text = self.display(value)
             return text.encode(self._encoding, errors='backslashreplace').decode(self._encoding)
-        source = display(c.get('source_name') or c.get('branch') or '')
-        stage = display(c['stage']) + ' / ' + display(c['backend'])
+        source = display(self.stage_source(c))
+        stage = display(STAGE_MESSAGES[c['stage']][0])
         fixed = '[RUN]  / ' + stage + tail
         # Reserve the hours field so a truncated source does not move the stage
         # label when MM:SS becomes HH:MM:SS.
         source_columns = columns - cell_width(fixed) - max(0, 8 - len(timer))
-        if source_columns >= 1:
+        if source and source_columns >= 1:
             line = '[RUN] ' + clip_cells(source, source_columns) + ' / ' + stage + tail
         else:
             # Keep stage and time when the source cannot fit; tiny/unknown terminals
@@ -414,7 +426,7 @@ class Reporter(NullReporter):
             self.handler = None
         if not self.log_failed:
             self.log_failed = True
-            self.write(self.stderr, '[WARN] Technical log is unavailable or incomplete; execution and cleanup continue.')
+            self.write(self.stderr, '[WARN] Error details could not be saved. Analysis will continue.')
 
     def log(self, event):
         with self._lock:
@@ -439,7 +451,7 @@ class Reporter(NullReporter):
         item = Event(event, level, dt.datetime.now(dt.timezone.utc).isoformat(), self.run_id,
                      self.clean(context), exception)
         self.log(item)
-        if (event == 'stage_started' and context.get('stage') in ('study', 'review', 'compare')
+        if (event == 'stage_started' and context.get('stage') in STAGE_MESSAGES
                 and self.progress and not self._closed and not self.finished and not self.stopping
                 and id(self.stderr) not in self.failed_streams):
             started = self.clock() if _started is None else _started
@@ -448,8 +460,9 @@ class Reporter(NullReporter):
         if lines:
             self.write(self.stderr, '\n'.join(lines))
         if self.verbose and event not in ('process_waiting', 'error'):
+            details = item.context | {'run_id': item.run_id} if event == 'run_started' else item.context
             self.write(self.stderr, '[RUN] Detail: ' + self.display(event) + ' ' +
-                       self.display(json.dumps(item.context, ensure_ascii=False)))
+                       self.display(json.dumps(details, ensure_ascii=False)))
         if event == 'stage_started' and self._progress:
             self._draw_progress(self._progress)
             if not self._progress.stop.is_set():
@@ -481,89 +494,85 @@ class Reporter(NullReporter):
     def render(self, item):
         c, name = item.context, item.event
         s = self.display
-        if name in ('study_normalized', 'review_normalized'):
-            stage_label = 'Study' if name == 'study_normalized' else 'Review'
-            return [f"[RUN] {stage_label} evidence IDs/references normalized: {s(c['replacement_count'])} replacement(s); "
-                    'contract, source and policy checks remain required.']
         if name == 'stage_recovered':
-            return ['[WARN] ' + s(c['message'])]
-        stage = ' / '.join(s(value) for value in (c.get('source_name') or c.get('branch'),
-                                                c.get('stage'), c.get('backend')) if value)
-        checks = {'configuration': 'Configuration', 'git': 'Git version and selected branches',
-                  'submodules': 'Submodules and required local objects', 'integrity': 'Source integrity',
-                  'inventory': 'Source inventory and fingerprint'}
+            return ['[WARN] ' + self.stage_message(c, 'Report text saved, but it did not pass all checks.')]
+        active, title, complete = STAGE_MESSAGES.get(c.get('stage'), ('Analyzing project…', 'Analysis', 'Analysis complete.'))
         if name == 'run_started':
-            return ['explain-this-pls — ' + ('preflight check' if c['check_only'] else 'source analysis'),
-                    'Source: ' + s(c.get('source') or '(not loaded)'), 'Run:    ' + s(item.run_id or '(not assigned)'),
-                    'Mode:   ' + ('human-readable' if c['output'] == 'text' else s(c['output'])) +
-                    ' / ' + s(c.get('mode') or 'not loaded'), '']
-        if name == 'configuration_loaded':
-            return ['Repository: ' + s(c['repository_name']),
-                    'Branches: ' + (', '.join(map(s, c['branches'])) or '(folder mode)'),
-                    'Agents: ' + ', '.join(s(k) + '=' + s(v) for k, v in c['agents'].items())]
+            return ['[RUN] ' + ('Checking local setup.' if c['check_only'] else 'Preparing analysis.'),
+                    *(['Source: ' + s(c['source'])] if c.get('source') else [])]
         if name == 'root_warning':
-            return ['[WARN] Running as root; child CLIs inherit root privileges.']
+            return ['[WARN] Running with administrator privileges.']
         if name == 'description_missing':
             return ['[WARN] Project description is missing. Set project_description to describe the system purpose and history.']
-        if name == 'preflight_started':
-            label = s(c['backend']) + ' executable and required CLI options' if c['check'] == 'cli' else checks.get(c['check'], s(c['check'])).lower()
-            return ['[RUN] Checking ' + label + '.']
-        if name == 'preflight_completed':
-            label = (s(c['backend']) + ' executable and required CLI options' if c['check'] == 'cli'
-                     else checks.get(c['check'], s(c['check'])))
-            return ['[OK] ' + label]
-        if name in ('snapshot_started', 'snapshot_completed'):
-            return [('[RUN] Checking local objects for snapshot: ' if name == 'snapshot_started' else
-                     '[OK] Local objects for snapshot: ') + s(c['snapshot'])]
-        if name == 'branch_started':
-            return ['[RUN] Preparing ' + s(c['branch']) + ' at ' + s(c['commit'][:12])]
         if name == 'stage_started':
             if self._progress and self._progress_line(self._progress) is not None:
                 return []
-            return ['[RUN] ' + stage]
+            return ['[RUN] ' + self.stage_message(c, active)]
         if name == 'process_waiting':
             if not self.progress or (self._progress and self._progress_line(self._progress) is not None):
                 return []
             last = ''
-            if 'last_output_seconds' in c:
+            if self.verbose and 'last_output_seconds' in c:
                 last = ' | ' + ('No CLI output received yet' if c['last_output_seconds'] is None else
                                 'Last CLI output: ' + duration(c['last_output_seconds']) + ' ago')
-            return ['[RUN] ' + stage, '      Elapsed: ' + duration(c['elapsed_seconds']) +
+            return ['[RUN] ' + self.stage_message(c, active), '      Elapsed: ' + duration(c['elapsed_seconds']) +
                     last]
         if name == 'stage_completed':
             status = c['status']
             label = '[OK] ' if status == 'COMPLETE' else '[FAIL] ' if status == 'FAILED' else '[WARN] '
-            meaning = ('Description generated; agent reports investigation complete in its stated scope'
-                       if c.get('stage') == 'study' and status == 'COMPLETE' else
-                       'No material issues reported for required registry; policy checks satisfied'
-                       if c.get('stage') == 'review' and status == 'COMPLETE' else
-                       'Reports-only comparison generated; agent reports completion'
-                       if status == 'COMPLETE' else 'Policy checks not completed or not satisfied; see diagnostics')
-            return [label + stage + ' — ' + self.status(status, self.stderr) + ': ' + meaning +
+            meaning = complete if status == 'COMPLETE' else title + (
+                ' failed. See details below.' if status == 'FAILED' else ' incomplete. See details below.')
+            return [label + self.stage_message(c, meaning) +
                     ' | Elapsed: ' + duration(c['elapsed_seconds'])]
         if name == 'stage_skipped':
-            return ['[SKIP] ' + stage + ': No usable architecture document.']
+            title = 'Review' if c.get('stage') == 'review' else title
+            return ['[SKIP] ' + self.stage_message(c, title + ' skipped: no architecture report available.')]
         if name == 'stop_requested':
-            return ['[WARN] Stop requested.']
-        if name == 'process_stopping':
-            return ['[RUN] Stopping the active CLI process.']
-        if name == 'restoration_started':
-            return ['[RUN] Restoring the original checkout hierarchy.']
-        if name == 'restoration_completed':
-            return ['[OK] Original checkout hierarchy restored.']
+            return ['[WARN] Stopping analysis…']
         if name == 'error':
-            label = {'preflight': 'Preflight stopped', 'restoration': 'Restoration failed',
-                     'stage': stage + ' failed', 'run': 'Run stopped'}[c['phase']]
-            lines = ['[FAIL] ' + label, 'Code: ' + s(c['code']), '', 'Reason:', '  ' + s(c['message'])]
-            for key, title in (('snapshot', 'Snapshot'), ('node_path', 'Node' if c.get('node_path') == '.' else 'Submodule'),
-                               ('required_commit', 'Required commit'), ('hint', 'Next step')):
+            label = {'preflight': 'Could not prepare analysis.',
+                     'restoration': 'Could not return the repository to its original state.',
+                     'stage': self.stage_message(c, title + ' failed.')}.get(c['phase'], 'Analysis failed.')
+            interrupted = c['code'] == 'INTERRUPTED'
+            messages = {
+                'INVALID_RESPONSE': 'The response could not be used.',
+                'MATERIALIZATION_ERROR': 'The architecture report could not be created.',
+                'ARTIFACT_CONTRACT_ERROR': 'The report could not be saved because it failed validation.',
+            }
+            message = c['message'] if self.verbose else messages.get(c['code'], c['message'])
+            if not self.verbose:
+                if c.get('failure_layer') == 'cleanup':
+                    message = 'The agent could not be stopped or cleaned up completely.'
+                elif c.get('failure_kind') == 'STAGE_TIMEOUT':
+                    message = 'The operation exceeded its time limit.'
+                elif c.get('failure_kind') == 'IDLE_TIMEOUT':
+                    message = 'No activity was detected within the time limit.'
+            lines = ['[WARN] Analysis interrupted.' if interrupted else '[FAIL] ' + label]
+            if self.verbose:
+                lines += ['Code: ' + s(c['code'])]
+            if not interrupted or self.verbose:
+                lines += ['', 'Reason:', '  ' + s(message)]
+            fields = [('node_path', 'Path' if c.get('node_path') == '.' else 'Submodule')]
+            if self.verbose:
+                fields = [('snapshot', 'Snapshot'), *fields, ('required_commit', 'Required commit')]
+            for key, title in fields:
                 if c.get(key):
                     lines += ['', title + ':', *('  ' + s(line) for line in c[key].split('\n'))]
+            hint = c.get('hint')
+            if not self.verbose and c['code'] in messages:
+                hint = 'Use --verbose for details.'
+            elif not self.verbose and c['code'] == 'INTERNAL_ERROR':
+                hint = 'Use --verbose for details and report this error.'
+            if hint:
+                lines += ['', 'Next step:', *('  ' + s(line) for line in hint.split('\n'))]
             if c.get('analysis_started') is False:
-                lines += ['', 'Analysis has not started.' + (' No checkout switches were performed.'
-                          if c.get('switches_performed') is False else '')]
+                lines += ['', 'Analysis has not started.']
+                if self.verbose and c.get('switches_performed') is False:
+                    lines[-1] += ' No checkout switches were performed.'
+            if self.verbose and c.get('details'):
+                lines += ['', 'Diagnostic details:', '  ' + s(json.dumps(c['details'], ensure_ascii=False))]
             if existing_file(self.log_path):
-                lines += ['', 'Details:', '  ' + s(self.log_path)]
+                lines += ['', 'Error details:', '  ' + s(self.log_path)]
             return lines
         return []
 
@@ -579,52 +588,34 @@ class Reporter(NullReporter):
             return
         s = self.display
         status = lambda value: self.status(value, self.stdout)
-        meaning = ('Local launch prerequisites checked. Source analysis was not performed.' if result['status'] == 'PREFLIGHT_OK' else
-                   'Policy checks satisfied; factual correctness is not established.' if result['status'] == 'COMPLETE' else
-                   'Policy checks not completed or not satisfied; see limitations and diagnostics.')
-        lines = [status('PREFLIGHT PASSED' if result['status'] == 'PREFLIGHT_OK' else result['status']) + ': ' + meaning,
-                 'Elapsed: ' + duration(elapsed)]
+        meaning = ('[WARN] Analysis interrupted.' if result['exit_code'] == 130 else
+                   '[OK] Local setup checked. Analysis has not started.' if result['status'] == 'PREFLIGHT_OK' else
+                   '[OK] Analysis complete. Reports may still contain errors.' if result['status'] == 'COMPLETE' else
+                   '[WARN] Analysis incomplete. See available results and limitations below.' if result['status'] == 'PARTIAL' else
+                   '[FAIL] Analysis failed.')
+        lines = [meaning, 'Elapsed: ' + duration(elapsed)]
         if result['status'] == 'PREFLIGHT_OK':
             command = ['python3', 'explain.py', '--config', str(config_path)]
             if trust:
                 command.append('--trust-repository')
-            lines += ['', 'No model calls were made. Source analysis has not started.', '',
-                      'Checked: configuration, local source prerequisites, executable version and required CLI options.',
-                      'Model availability and provider authorization were not tested.', '',
+            lines += ['', 'AI service access and model availability were not checked.', '',
                       'Start analysis:', '  ' + s(shlex.join(command))]
         elif not check_only:
             for branch in manifest.get('branches', []):
                 partial_material = manifest.get('result_policy') == 'compromise' and branch.get('study_usable')
                 lines += ['Branch ' + s(branch['branch']) + ': ' +
-                          status('COMPLETE' if branch.get('accepted') else 'PARTIAL' if partial_material
-                                 else 'FAILED' if branch['errors'] else 'PARTIAL') +
-                          (' — processing/review policy satisfied' if branch.get('accepted') else
-                           ' — processing incomplete or evidence insufficient')]
+                          status('Complete' if branch.get('accepted') else 'Incomplete' if partial_material
+                                 else 'Failed' if branch['errors'] else 'Incomplete')]
             analyzed = {branch['branch'] for branch in manifest.get('branches', [])}
             for branch in manifest.get('pins', {}):
                 if branch not in analyzed:
-                    lines += ['Branch ' + s(branch) + ': ' + status('not started')]
-            if manifest.get('mode') == 'folder':
-                lines += ['Source result: ' + status('COMPLETE' if manifest.get('accepted') else result['status']) +
-                          (' — processing/review policy satisfied' if manifest.get('accepted') else
-                           ' — processing incomplete or evidence insufficient'),
-                          'Comparison: ' + status('not applicable') + ' (folder mode)',
-                          'Restoration: ' + status('not applicable') + ' (folder mode)']
-            else:
-                if 'comparison' not in manifest and len(manifest.get('pins', {})) == 1:
-                    lines += ['Comparison: ' + status('not applicable') + ' (single branch)']
-                else:
-                    lines += ['Comparison: ' + status(manifest.get('comparison', {}).get('completion_status', 'not completed')) +
-                              ' — supplied reports only; no source inspection in this stage']
-                restoration = manifest.get('restoration')
-                lines += ['Restoration: ' + status('verified' if restoration and restoration['restored'] else
-                          'FAILED' if restoration else 'not performed')]
-        paths = [('Manifest', Path(result['manifest']))] if result['manifest'] else []
-        if self.log_path:
+                    lines += ['Branch ' + s(branch) + ': ' + status('Not started')]
+        paths = [('Manifest', Path(result['manifest']))] if self.verbose and result['manifest'] else []
+        if self.verbose and self.log_path:
             paths.append(('Technical log', self.log_path))
         if run_dir and not check_only:
             if manifest.get('final_report'):
-                paths.append(('Final report' if manifest.get('has_usable_material') else 'Final report (diagnostic only)',
+                paths.append(('Final report' if manifest.get('has_usable_material') else 'Error summary',
                               Path(manifest['final_report'])))
             for branch in manifest.get('branches', []):
                 for name in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md'):

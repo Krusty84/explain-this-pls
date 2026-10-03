@@ -90,7 +90,7 @@ The study-only compatibility rule for unprefixed local IDs does not apply here.
 Source resolution is a separate program check, not support for your conclusion.
 Never compute hashes, follow symlinks, expose source secrets or cite an unlisted
 source. Limits: 256 pointers, 16 KiB/record, 200 lines and 64 KiB/fragment,
-8 MiB/file, 32 MiB total file bytes read per stage. Lines split on LF with CRLF
+8 MiB/file, 32 MiB unique file bytes read per resolver call. Lines split on LF with CRLF
 normalized; quote must equal the complete selected range.
 
 ## Report and completion
@@ -117,3 +117,27 @@ Use output_language and precise attribution in all prose. Support is according
 to the agent; contradictions are reported by the agent. Policy satisfaction
 does not establish factual correctness, session separation does not establish
 independent errors, and semantic review quality has not been measured.
+
+The prompt carries report Markdown once and claim_registry once. Locator coordinates
+refer to that Markdown; repeated locator quote text and private provenance are
+omitted from this model view. The orchestrator preserves and verifies full locators
+and hashes separately. Do not interpret compact context as missing document text.
+
+The frozen internal plan binds coverage_plan and source_decoding; the compact model
+context supplies one copy of each at the top level. Include catalog
+areas in omission_search alongside thematic areas and priority scenarios. Check
+the study's per-area coverage claims and cited sources; INSPECTED is an agent
+assessment, not exhaustive understanding. Incomplete required areas, UNCLASSIFIED
+and DIRECTORY_FALLBACK cannot be hidden by a positive narrative. Encoding rules
+affect program evidence resolution only; actual reading support depends on the CLI.
+
+Return prior_findings: [] for an initial review. For a revised study, assess every
+supplied previous HIGH/MEDIUM finding exactly once using revision_id, finding_id,
+status RESOLVED | UNRESOLVED | NOT_CHECKED and explanation. Use the supplied old
+revision and IDs, including findings attached to claims absent from the new registry.
+The registry diff distinguishes added, removed and changed claims; coordinate moves
+alone do not change meaning. Removing an erroneous statement may resolve a finding
+only after your assessment; removing necessary description leaves an unresolved
+finding or creates an omission finding. Never silently drop a prior obligation.
+Unresolved, unchecked or missing prior findings and new HIGH/MEDIUM findings prevent
+acceptance. Perform the complete registry and omission review again, not only a diff.

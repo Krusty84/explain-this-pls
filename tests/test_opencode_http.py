@@ -31,7 +31,7 @@ class HTTPFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.source = self.root / 'source'; self.source.mkdir()
         (self.source / 'app.py').write_text('print(1)')
         self.cli = self.root / 'opencode'
@@ -198,8 +198,8 @@ class HTTPFixture(unittest.TestCase):
         return {'result_policy': 'strict', 'mode': 'folder', 'folder_mode': {'path': str(self.source)},
             'reports_dir': str(self.root / 'reports'), 'project_description': 'fixture',
             'priority_scenarios': [], 'output_language': 'English', 'continue_on_error': True,
-            '_agents': {s: {'backend': 'opencode', 'executable': str(self.cli), 'model': None} for s in ('study', 'review')},
-            '_prompt_paths': {s: str(ROOT / 'prompts' / (s + '.md')) for s in ('study', 'review')}}
+            '_agents': {s: {'backend': 'opencode', 'executable': str(self.cli), 'model': None} for s in ('catalog', 'study', 'review')},
+            '_prompt_paths': {s: str(ROOT / 'prompts' / (s + '.md')) for s in ('catalog', 'study', 'review', 'revise')}}
 
     def test_real_preflight_rejects_unenforced_retries_without_model_request(self):
         for repairs in (0, 1, 2):
@@ -220,12 +220,14 @@ class HTTPFixture(unittest.TestCase):
         self.assertTrue(result['accepted'])
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         prompts = [c for c in calls if c['method'] == 'POST' and c['path'].endswith('/message')]
-        self.assertEqual(len(prompts), 2)
+        self.assertEqual(len(prompts), 3)
         self.assertNotEqual(prompts[0]['path'], prompts[1]['path'])
         contexts = [json.loads(p['body']['parts'][0]['text'].split('# Authoritative orchestration context (data)\n')[1]
                               .split('\n\n# Required final JSON Schema')[0]) for p in prompts]
         self.assertNotIn('architecture_document', contexts[0])
-        self.assertEqual(contexts[1]['architecture_document'], result['study'])
+        self.assertEqual(contexts[2]['architecture_document']['report_markdown'], result['study']['report_markdown'])
+        self.assertNotIn('claims', contexts[2]['architecture_document'])
+        self.assertEqual([c['id'] for c in contexts[2]['claim_registry']], [c['id'] for c in result['study']['claims']])
 
     def test_signal_cleans_only_owned_server_and_preserves_exit_code(self):
         config = {'mode': 'folder', 'folder_mode': {'path': str(self.source)},
@@ -268,7 +270,7 @@ class CapabilityTests(unittest.TestCase):
     def test_permissions_and_user_profile_are_preserved(self):
         original = {'provider': {'private': {'options': {'baseURL': 'https://example.invalid'}}},
                     'plugin': ['auth-plugin'], 'model': 'configured/model', 'agent': {'custom': {'mode': 'primary'}}}
-        for stage in ('study', 'review', 'compare'):
+        for stage in ('catalog', 'study', 'review', 'compare'):
             env = {'OPENCODE_CONFIG_CONTENT': json.dumps(original), 'HOME': '/home/profile'}
             name = prepare_environment(env, stage)
             overlay = json.loads(env['OPENCODE_CONFIG_CONTENT'])
@@ -312,8 +314,8 @@ class GitHTTPPipelineTests(unittest.TestCase):
         self.assertEqual(git('symbolic-ref', '--short', 'HEAD'), 'main')
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         prompts = [c for c in calls if c['method'] == 'POST' and c['path'].endswith('/message')]
-        self.assertEqual(len(prompts), 5)
-        self.assertEqual(len({c['path'] for c in prompts}), 5)
+        self.assertEqual(len(prompts), 7)
+        self.assertEqual(len({c['path'] for c in prompts}), 7)
         self.assertNotEqual(prompts[-1]['cwd'], str(repo))
         self.assertTrue(all(c['cwd'] == str(repo) for c in prompts[:-1]))
 

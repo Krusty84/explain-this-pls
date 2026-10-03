@@ -111,8 +111,8 @@ unknowns, evidence_basis. Return unnumbered titles; Python adds heading numbers.
    DOCUMENTED_RULE, or OBSERVED_PATTERN; include scope, evidence, and exceptions.
 8. Change navigation: change type, starting locations, related constraints/components,
    and relevant test locations where found. Do not imply tests were run.
-9. Unknowns and coverage: per-area INSPECTED, PARTIALLY_INSPECTED, NOT_INSPECTED,
-   OUT_OF_SCOPE; reasons, missing evidence, and concrete next verification steps.
+9. Unknowns and coverage: per-area INSPECTED, PARTIALLY_INSPECTED, NOT_INSPECTED;
+   reasons, missing evidence, and concrete next verification steps.
 10. Evidence basis and limitations: explain why cited sources are relevant. The orchestrator renders the evidence index from structured locators.
 
 Each material relationship in prose, tables, and scenarios needs supporting evidence
@@ -161,7 +161,7 @@ A nested submodule uses its own source_id
 and paths relative to that submodule; do not cite it through the main source ID.
 Use positive integer lines, no absolute paths or links. Limits: 256 pointers,
 16 KiB per record, 200 lines and 64 KiB per fragment, 8 MiB per file and 32 MiB
-total file bytes read per stage (repeated files count). Disclose inaccessible,
+total unique file bytes read per resolver call (cache hits do not count again). Disclose inaccessible,
 undecodable or oversized evidence; never invent a smaller supporting range.
 
 completion_status is your self-assessment: COMPLETE means you report completing
@@ -172,3 +172,17 @@ Use "supported according to the agent" for semantic conclusions, not "proved".
 Respond in output_language with equivalent meaning. A resolved locator does not
 establish semantic support. Do not repeat mandatory ledger/evidence tables or
 counts in Markdown; Python renders them from the single structured record.
+
+The supplied immutable coverage_plan identifies required source areas and explicit
+exclusions. Preserve it; this remains one shared study, not separate subsystem
+studies. Return one structured coverage entry per area: area_id, status INSPECTED,
+PARTIALLY_INSPECTED or NOT_INSPECTED, evidence_ids, limitation. INSPECTED requires
+source evidence within the area; an actual citation is support, not proof that all
+its code was examined. Partial/uninspected areas need concrete limitations.
+UNCLASSIFIED, incomplete catalogs and DIRECTORY_FALLBACK stay visible and prevent
+an overall COMPLETE policy result. Do not silently recategorize them.
+
+source_decoding rules select explicit encodings by common-root-relative path,
+including submodules. They apply only to program evidence verification. Whether
+you can read such files depends on this CLI; no UTF-8 copies are created. Disclose
+decoding gaps and never assume replacement characters are original source text.

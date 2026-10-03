@@ -72,7 +72,7 @@ class XXXTests(unittest.TestCase):
         self.assertEqual(code, 0, manifest)
         self.assertTrue(manifest['accepted'])
         prompts = self.prompts()
-        self.assertEqual(len(prompts), 2)
+        self.assertEqual(len(prompts), 3)
         self.assertNotEqual(prompts[0]['path'], prompts[1]['path'])
         self.assertNotEqual(prompts[0]['body']['agent'], prompts[1]['body']['agent'])
         for call in prompts:
@@ -84,7 +84,7 @@ class XXXTests(unittest.TestCase):
         context = lambda p: json.loads(p['body']['parts'][0]['text'].split(
             '# Authoritative orchestration context (data)\n')[1].split('\n\n# Required final JSON Schema')[0])
         self.assertNotIn('architecture_document', context(prompts[0]))
-        self.assertEqual(context(prompts[1])['architecture_document'], manifest['study'])
+        self.assertEqual(context(prompts[2])['architecture_document']['report_markdown'], manifest['study']['report_markdown'])
         self.assertEqual(manifest['study_invocation']['retry_policy']['orchestrator_retries'], 0)
         self.assertFalse(manifest['study_invocation']['retry_policy']['native_enforcement_verified'])
 
@@ -116,9 +116,9 @@ class XXXTests(unittest.TestCase):
                 self.assertEqual(code, 1, manifest)
                 self.assertFalse(manifest['accepted'])
                 self.assertEqual(manifest['diagnostics'][0]['failure_kind'], kind)
-                self.assertEqual(len(self.prompts()) - previous, 1)
+                self.assertEqual(len(self.prompts()) - previous, 2)
                 self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
-                self.assertTrue((self.run_dir / 'study.logs/attempt-001/response.json').exists())
+                self.assertTrue((self.run_dir / 'revisions/001/study.logs/attempt-001/response.json').exists())
 
     def git(self, *args):
         return subprocess.check_output(['git', '-C', str(self.source), *args], stderr=subprocess.STDOUT).decode().strip()
@@ -143,7 +143,7 @@ class XXXTests(unittest.TestCase):
             self.assertEqual(code, 0, manifest)
             self.assertEqual(manifest['status'], 'COMPLETE')
             self.assertTrue(all(branch['accepted'] for branch in manifest['branches']))
-            self.assertEqual(len(self.prompts()) - previous, 2 if len(branches) == 1 else 5)
+            self.assertEqual(len(self.prompts()) - previous, 3 if len(branches) == 1 else 7)
             self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
         compare = self.prompts()[-1]
         self.assertNotEqual(compare['cwd'], str(self.source))
@@ -158,13 +158,13 @@ class XXXTests(unittest.TestCase):
         self.assertEqual(manifest['status'], 'FAILED')
         self.assertFalse(manifest['branches'][0]['accepted'])
         self.assertEqual(manifest['comparison']['unresolved_branches'], ['main'])
-        self.assertEqual(len(self.prompts()), 4)
+        self.assertEqual(len(self.prompts()), 6)
         self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
         self.value['continue_on_error'] = False
         previous = len(self.prompts())
         manifest, code = self.run_case('fail-main-study')
         self.assertEqual(code, 1, manifest)
-        self.assertEqual(len(self.prompts()) - previous, 1)
+        self.assertEqual(len(self.prompts()) - previous, 2)
         self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
 
     def test_stage_timeout_and_cleanup_do_not_touch_other_process(self):
@@ -225,7 +225,7 @@ class XXXTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse(manifest['accepted'])
         self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
-        invocation = json.loads((self.run_dir / 'study.logs/invocation.json').read_text())
+        invocation = json.loads((self.run_dir / 'revisions/001/study.logs/invocation.json').read_text())
         self.assertEqual(invocation['status'], 'FAILED')
 
     def test_source_changes_are_preserved_and_prevent_acceptance(self):
@@ -234,7 +234,7 @@ class XXXTests(unittest.TestCase):
         self.assertFalse(manifest['accepted'])
         self.assertEqual((self.source / 'app.py').read_text(), 'unexpected fixture mutation\n')
         self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
-        self.assertEqual(len(self.prompts()), 1)
+        self.assertEqual(len(self.prompts()), 2)
 
     def test_signals_cleanup_real_xxx_pipeline(self):
         path = self.root / 'config.json'

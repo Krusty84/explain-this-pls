@@ -8,6 +8,7 @@ import time
 from contracts import response_error
 
 DEFAULT_EXECUTION = {'stage_timeout_seconds': 3600, 'idle_timeout_seconds': None,
+                     'max_revision_rounds': 1,
                      'opencode_format_retries': 2, 'structured_output_repair_attempts': 0,
                      'http_timeout_seconds': 5, 'api_doc_timeout_seconds': 30}
 
@@ -18,6 +19,8 @@ def execution_settings(value=None):
     if type(value) is not dict or set(value) - set(DEFAULT_EXECUTION):
         raise ValueError('execution must be an object containing only documented settings.')
     result = DEFAULT_EXECUTION | value
+    if type(result['max_revision_rounds']) is not int or result['max_revision_rounds'] not in (0, 1):
+        raise ValueError('execution.max_revision_rounds must be 0 or 1.')
     for key in ('stage_timeout_seconds', 'idle_timeout_seconds',
                 'http_timeout_seconds', 'api_doc_timeout_seconds'):
         number = result[key]

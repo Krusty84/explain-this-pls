@@ -22,7 +22,7 @@ from fixtures.ledger_response import sections
 def study(context):
     return dict(task='architecture_documentation',
         branch=context['branch'], source_commit=context['source_commit'],
-        completion_status='COMPLETE', limitations=[], report_sections=sections('A claim.\n'),
+        completion_status='COMPLETE', limitations=[], report_sections=sections('A claim.\n'), coverage=[],
         evidence=[dict(id='E-001', source_id='source-001', path='app.py', start_line=1, end_line=1, quote='')],
         claims=[dict(id='C-001', statement='A claim.', scope='Static fixture.', epistemic_kind='FACT',
             evidence_ids=['study:E-001'], uncertainty='')])
@@ -34,7 +34,7 @@ def review(context):
         completion_status='COMPLETE', limitations=[], report_markdown='Agent assessment.',
         evidence=[dict(id='E-001', source_id='source-001', path='app.py', start_line=1, end_line=1, quote='')],
         claims=[dict(id=c['id'], outcome='SUPPORTED', evidence_ids=['review:E-001'], limitation='')
-                for c in context['claim_registry']], findings=[],
+                for c in context['claim_registry']], findings=[], prior_findings=[],
         omission_search=[dict(area_id=a['id'], status='INSPECTED', limitation='', finding_ids=[])
                          for a in context['review_plan']['omission_areas']])
 
@@ -213,7 +213,7 @@ class LedgerTests(unittest.TestCase):
         (self.root / 'app.py').write_bytes(b'1234\n')
         with patch('evidence.MAX_TOTAL_BYTES', 5):
             result = resolve_evidence('study', [pointer, pointer | {'id': 'E-002'}], self.context)
-        self.assertEqual([e['status'] for e in result], ['RESOLVED', 'LIMIT_EXCEEDED'])
+        self.assertEqual([e['status'] for e in result], ['RESOLVED', 'RESOLVED'])
         with patch('evidence.MAX_EVIDENCE', 1):
             result = resolve_evidence('study', [pointer, pointer | {'id': 'E-002'}], self.context)
         self.assertEqual(result[-1]['status'], 'LIMIT_EXCEEDED')
@@ -277,7 +277,7 @@ class LedgerTests(unittest.TestCase):
         data = response(ctx)
         def ref(item):
             plan = item['study']['review_plan']
-            return dict(branch=item['branch'], artifact='study', claim_id='C-001',
+            return dict(branch=item['branch'], revision_id='001', artifact='study', claim_id='C-001',
                         document_sha256=plan['document_sha256'], registry_sha256=plan['registry_sha256'])
         data['differences'] = [dict(id='D-001', branch='other', category='state', classification='CONFIRMED_DIFFERENCE',
             baseline_statement='A', branch_statement='B', evidence_refs=[ref(baseline), ref(other)], explanation='Agent contrast.')]
@@ -285,6 +285,9 @@ class LedgerTests(unittest.TestCase):
             validate_result('compare', data, ctx)
             self.assertTrue(prepare_result('compare', data, ctx)['program_checks']['policy_satisfied'])
         data['differences'][0]['evidence_refs'] = [ref(baseline), ref(baseline)]
+        with self.assertRaises(ContractError): validate_result('compare', data, ctx)
+        data['differences'][0]['evidence_refs'] = [ref(baseline), ref(other)]
+        data['differences'][0]['evidence_refs'][1]['revision_id'] = '002'
         with self.assertRaises(ContractError): validate_result('compare', data, ctx)
         data['differences'][0]['evidence_refs'] = [ref(baseline), ref(other)]
         other['study_invocation']['publication_complete'] = False
@@ -327,7 +330,7 @@ class LedgerTests(unittest.TestCase):
                 claim['document_locator'] = claim.pop('document_locators')[0]
         original = copy.deepcopy(old)
         for stage in ('study', 'review'):
-            self.assertIn('Historical v1 checks', render_stage(stage, old[stage], 'English'))
+            self.assertIn('Historical checks; no reacceptance under v3', render_stage(stage, old[stage], 'English'))
         self.assertFalse(accepted(old))
         self.assertEqual(old, original)
         pair['study']['claims'][0]['scope'] += ' modified'

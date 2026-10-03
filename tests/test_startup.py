@@ -24,7 +24,7 @@ import test_explain as fixtures
 from explain import AuditError, Repository, main
 
 ROOT = Path(__file__).resolve().parents[1]
-ROOT_WARNING = '[WARN] Running as root; child CLIs inherit root privileges.'
+ROOT_WARNING = '[WARN] Running with administrator privileges.'
 OWNERSHIP_HINT = ('Git rejected the repository because of an ownership mismatch.\n'
                   'Run with the checkout owner\'s UID, or use --trust-repository\n'
                   'only if you trust this specific checkout.')
@@ -172,11 +172,11 @@ class StartupCLIIntegrationTests(unittest.TestCase):
         snapshot = json.loads((manifest_path.parent / 'config.snapshot.json').read_text())
         self.assertEqual(snapshot['mode'], mode)
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        self.assertEqual(len(calls), 2 if check else 7 if mode == 'git' else 4)
+        self.assertEqual(len(calls), 2 if check else 9 if mode == 'git' else 5)
         self.assertIn('--version', calls[0]['args'])
         self.assertIn('--help', calls[1]['args'])
         stages = [call for call in calls if 'context' in call]
-        self.assertEqual(len(stages), 0 if check else 5 if mode == 'git' else 2)
+        self.assertEqual(len(stages), 0 if check else 7 if mode == 'git' else 3)
         for call in calls:
             self.assertEqual(call['euid'], os.geteuid())
             self.assertEqual(call['git_config_env'], {})
@@ -251,7 +251,7 @@ class StartupCLIIntegrationTests(unittest.TestCase):
                 self.repo.clean()
                 self.assertEqual({path: path.read_bytes() for path in paths}, before)
                 calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-                self.assertEqual(len(calls), 2 if check else 7)
+                self.assertEqual(len(calls), 2 if check else 9)
                 for call in calls:
                     self.assertEqual(call['git_config_env'], {'GIT_CONFIG_SYSTEM': str(system_config)})
                     self.assertFalse(any('safe.directory' in arg for arg in call['args']))

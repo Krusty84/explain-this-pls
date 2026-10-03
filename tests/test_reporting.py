@@ -106,18 +106,22 @@ class ReporterTests(unittest.TestCase):
             reporter = Reporter(stdout=self.out, stderr=self.err)
         self.addCleanup(reporter.close)
         reporter.attach_log(self.base)
-        for status, color, label in (('COMPLETE', 32, 'OK'), ('PARTIAL', 33, 'WARN'),
-                                     ('BLOCKED', 33, 'WARN'), ('FAILED', 31, 'FAIL')):
+        for status, color, label, message in (
+                ('COMPLETE', 32, 'OK', 'Architecture report created.'),
+                ('PARTIAL', 33, 'WARN', 'Project analysis incomplete. See details below.'),
+                ('BLOCKED', 33, 'WARN', 'Project analysis incomplete. See details below.'),
+                ('FAILED', 31, 'FAIL', 'Project analysis failed. See details below.')):
             reporter.emit('stage_completed', branch='folder', source_name='COMPLETE 深い [FAIL]',
                           stage='study', backend='codex', status=status, elapsed_seconds=1)
-            self.assertIn(f'[{label}]\x1b[0m COMPLETE 深い [FAIL] / study / codex — '
-                          f'\x1b[{color}m{status}\x1b[0m:', self.err.getvalue())
+            self.assertIn(f'\x1b[{color}m[{label}]\x1b[0m COMPLETE 深い [FAIL] / {message}'
+                          ' | Elapsed: 00:01', self.err.getvalue())
+        self.assertNotIn(' / study / codex', self.err.getvalue())
         records = [json.loads(line) for line in (self.base / 'run.log').read_text().splitlines()]
         self.assertEqual([r['status'] for r in records], ['COMPLETE', 'PARTIAL', 'BLOCKED', 'FAILED'])
         self.assertTrue(all(r['branch'] == 'folder' for r in records))
         self.assertNotIn('\x1b', (self.base / 'run.log').read_text())
 
-    def test_folder_name_in_all_stage_messages_and_git_labels_unchanged(self):
+    def test_folder_name_in_all_stage_messages_and_comparison_without_synthetic_branch(self):
         r = self.reporter
         context = {'branch': 'folder', 'source_name': 'source 深い\n\x1b[31m',
                    'stage': 'study', 'backend': 'codex'}
@@ -127,40 +131,46 @@ class ReporterTests(unittest.TestCase):
         r.emit('stage_skipped', **context)
         r.error(AuditError('test failure'), phase='stage', **context)
         text = self.err.getvalue()
-        self.assertEqual(text.count('source 深い\\n\\x1b[31m / study / codex'), 5)
+        self.assertEqual(text.count('source 深い\\n\\x1b[31m / '), 5)
         self.assertNotIn('\x1b', text)
-        for branch, stage in (('folder', 'study'), ('all branches', 'compare')):
-            r.emit('stage_started', branch=branch, stage=stage, backend='codex')
-            self.assertIn(f'[RUN] {branch} / {stage} / codex', self.err.getvalue())
+        self.assertNotIn(' / study / codex', text)
+        r.emit('stage_started', branch='master', stage='study', backend='codex')
+        self.assertIn('[RUN] master / Analyzing project…', self.err.getvalue())
+        r.emit('stage_started', branch='all branches', stage='compare', backend='codex')
+        self.assertIn('[RUN] Comparing branch reports…', self.err.getvalue())
+        self.assertNotIn('all branches', self.err.getvalue())
 
-    def test_final_summary_colors_only_status_values(self):
+    def test_final_summary_colors_labels_and_human_branch_statuses(self):
         manifests = [
-            ({'status': 'PREFLIGHT_OK'}, {}, ['\x1b[32mPREFLIGHT PASSED\x1b[0m']),
+            ({'status': 'PREFLIGHT_OK'}, {}, ['\x1b[32m[OK]\x1b[0m Local setup checked. Analysis has not started.']),
             ({'status': 'COMPLETE'}, {'mode': 'folder', 'accepted': True},
-             ['Source result: \x1b[32mCOMPLETE\x1b[0m', 'Comparison: \x1b[90mnot applicable\x1b[0m (folder mode)',
-              'Restoration: \x1b[90mnot applicable\x1b[0m (folder mode)']),
+             ['\x1b[32m[OK]\x1b[0m Analysis complete. Reports may still contain errors.']),
             ({'status': 'PARTIAL'}, {'branches': [
                 {'branch': 'COMPLETE', 'accepted': True, 'errors': []},
                 {'branch': 'FAILED', 'accepted': False, 'errors': ['error']},
                 {'branch': 'PARTIAL', 'accepted': False, 'errors': []}], 'pins': {'BLOCKED': 'sha'},
                 'comparison': {'completion_status': 'BLOCKED'}, 'restoration': {'restored': True}},
-             ['\x1b[33mPARTIAL\x1b[0m', 'Branch COMPLETE: \x1b[32mCOMPLETE\x1b[0m',
-              'Branch FAILED: \x1b[31mFAILED\x1b[0m', 'Branch PARTIAL: \x1b[33mPARTIAL\x1b[0m',
-              'Branch BLOCKED: \x1b[90mnot started\x1b[0m', 'Comparison: \x1b[33mBLOCKED\x1b[0m',
-              'Restoration: \x1b[32mverified\x1b[0m']),
-            ({'status': 'FAILED'}, {}, ['\x1b[31mFAILED\x1b[0m', 'Comparison: \x1b[90mnot completed\x1b[0m',
-                                       'Restoration: \x1b[90mnot performed\x1b[0m']),
-            ({'status': 'FAILED'}, {'restoration': {'restored': False}}, ['Restoration: \x1b[31mFAILED\x1b[0m'])]
+             ['\x1b[33m[WARN]\x1b[0m Analysis incomplete. See available results and limitations below.',
+              'Branch COMPLETE: \x1b[32mComplete\x1b[0m', 'Branch FAILED: \x1b[31mFailed\x1b[0m',
+              'Branch PARTIAL: \x1b[33mIncomplete\x1b[0m', 'Branch BLOCKED: \x1b[90mNot started\x1b[0m']),
+            ({'status': 'FAILED'}, {}, ['\x1b[31m[FAIL]\x1b[0m Analysis failed.']),
+            ({'status': 'FAILED', 'exit_code': 130}, {}, ['\x1b[33m[WARN]\x1b[0m Analysis interrupted.']),
+            ({'status': 'FAILED'}, {'restoration': {'restored': False}}, ['\x1b[31m[FAIL]\x1b[0m Analysis failed.'])]
         for result, manifest, expected in manifests:
             with self.subTest(result=result, manifest=manifest):
                 out = io.StringIO()
                 with patch.dict(os.environ, {'TERM': 'xterm'}, clear=True), patch.object(out, 'isatty', return_value=True):
                     r = Reporter(stdout=out, stderr=self.err)
                 self.addCleanup(r.close)
-                r.finish(result | {'manifest': None, 'exit_code': 0}, manifest,
+                r.finish({'manifest': None, 'exit_code': 0} | result, manifest,
                          check_only=False, config_path=Path('config.jsonc'))
                 for line in expected:
                     self.assertIn(line, out.getvalue())
+                self.assertNotIn('not applicable', out.getvalue())
+                self.assertNotIn('Source result:', out.getvalue())
+                self.assertNotIn('Restoration: \x1b[32m', out.getvalue())
+                if 'comparison' not in manifest:
+                    self.assertNotIn('Comparison:', out.getvalue())
 
     def test_colored_verbose_and_log_warning_preserve_escaping_and_file_data(self):
         with patch.dict(os.environ, {'TERM': 'xterm'}, clear=True), \
@@ -176,11 +186,147 @@ class ReporterTests(unittest.TestCase):
         self.assertEqual(self.err.getvalue().count('\x1b'), 4)
         self.assertNotIn('\x1b', (self.base / 'run.log').read_text())
         reporter.disable_log()
-        self.assertIn('\x1b[33m[WARN]\x1b[0m Technical log', self.err.getvalue())
+        self.assertIn('\x1b[33m[WARN]\x1b[0m Error details could not be saved.', self.err.getvalue())
         result = {'run_id': None, 'status': 'FAILED', 'manifest': None, 'exit_code': 1}
         reporter.finish(result, {}, check_only=True, config_path=Path('config.jsonc'))
         self.assertEqual(json.loads(self.out.getvalue()), result)
         self.assertNotIn('\x1b', self.out.getvalue())
+
+    def test_internal_events_are_hidden_but_preserved_in_verbose_output_and_log(self):
+        events = [
+            ('study_normalized', {'replacement_count': 142}),
+            ('review_normalized', {'replacement_count': 5}),
+            ('configuration_loaded', {'repository_name': 'example', 'branches': ['main'], 'agents': {'study': 'codex'}}),
+            ('preflight_started', {'check': 'configuration'}),
+            ('preflight_completed', {'check': 'inventory'}),
+            ('snapshot_started', {'snapshot': 'original'}),
+            ('snapshot_completed', {'snapshot': 'original'}),
+            ('branch_started', {'branch': 'main', 'commit': 'a' * 40}),
+            ('process_stopping', {}), ('restoration_started', {}), ('restoration_completed', {}),
+        ]
+        for verbose in (False, True):
+            with self.subTest(verbose=verbose):
+                err = io.StringIO()
+                reporter = Reporter(stdout=self.out, stderr=err, verbose=verbose)
+                self.addCleanup(reporter.close)
+                directory = self.base / str(verbose)
+                directory.mkdir()
+                reporter.attach_log(directory)
+                for event, context in events:
+                    reporter.emit(event, **context)
+                if verbose:
+                    for event, context in events:
+                        self.assertIn('[RUN] Detail: ' + event, err.getvalue())
+                    self.assertIn('142', err.getvalue())
+                else:
+                    self.assertEqual(err.getvalue(), '')
+                records = [json.loads(line) for line in (directory / 'run.log').read_text().splitlines()]
+                self.assertEqual([record['event'] for record in records], [event for event, _ in events])
+                self.assertEqual(records[0]['replacement_count'], 142)
+                self.assertEqual(records[7]['commit'], 'a' * 40)
+
+    def test_stage_outcomes_are_specific_and_recovered_text_is_not_success(self):
+        r = self.reporter
+        for stage, noun, completed in (
+                ('study', 'Project analysis', 'Architecture report created.'),
+                ('review', 'Report review', 'Review complete. No significant issues reported.'),
+                ('compare', 'Branch report comparison', 'Branch report comparison ready.')):
+            for status, label, meaning in (
+                    ('COMPLETE', 'OK', completed),
+                    ('PARTIAL', 'WARN', noun + ' incomplete. See details below.'),
+                    ('BLOCKED', 'WARN', noun + ' incomplete. See details below.'),
+                    ('FAILED', 'FAIL', noun + ' failed. See details below.')):
+                with self.subTest(stage=stage, status=status):
+                    self.err.seek(0)
+                    self.err.truncate()
+                    r.emit('stage_completed', branch='all branches' if stage == 'compare' else 'main',
+                           stage=stage, backend='codex', status=status, elapsed_seconds=62)
+                    prefix = '' if stage == 'compare' else 'main / '
+                    self.assertEqual(self.err.getvalue(), f'[{label}] {prefix}{meaning} | Elapsed: 01:02\n')
+        self.err.seek(0)
+        self.err.truncate()
+        r.emit('stage_recovered', branch='main', stage='study', backend='codex',
+               message='Text retained; policy checks not completed')
+        r.emit('stage_skipped', branch='main', stage='review', backend='codex')
+        self.assertIn('[WARN] main / Report text saved, but it did not pass all checks.', self.err.getvalue())
+        self.assertIn('[SKIP] main / Review skipped: no architecture report available.', self.err.getvalue())
+        self.assertNotIn('[OK]', self.err.getvalue())
+        self.assertNotIn('policy', self.err.getvalue())
+
+    def test_normal_errors_use_clear_reasons_and_keep_useful_paths_and_next_steps(self):
+        self.reporter.attach_log(self.base)
+        errors = [
+            (ContractError('unexpected enum value PRIVATE_MODEL_VALUE'), 'The response could not be used.'),
+            (AuditError('ArchitectureDocument renderer failed at $.document', code='MATERIALIZATION_ERROR'),
+             'The architecture report could not be created.'),
+            (AuditError('Computed artifact failed local validation.', code='ARTIFACT_CONTRACT_ERROR'),
+             'The report could not be saved because it failed validation.'),
+            (FileNotFoundError(2, 'No such file or directory', '/missing/report.md'), '/missing/report.md'),
+            (PermissionError(13, 'Permission denied', '/reports'), 'Permission denied'),
+        ]
+        for error, expected in errors:
+            with self.subTest(error=type(error).__name__, expected=expected):
+                self.err.seek(0)
+                self.err.truncate()
+                self.reporter.error(error, phase='stage', branch='main', stage='study', backend='codex')
+                text = self.err.getvalue()
+                self.assertIn(expected, text)
+                self.assertIn(str(self.base / 'run.log'), text)
+                self.assertNotIn('Code:', text)
+                self.assertNotIn('$.document', text)
+                self.assertNotIn('PRIVATE_MODEL_VALUE', text)
+                if isinstance(error, OSError):
+                    self.assertIn('Next step:', text)
+                    self.assertIn('access permissions', text)
+
+    def test_timeout_and_cleanup_errors_keep_distinct_reasons_and_verbose_diagnostics(self):
+        for kind, layer, expected in (
+                ('BACKEND_ERROR', 'cleanup', 'The agent could not be stopped or cleaned up completely.'),
+                ('STAGE_TIMEOUT', 'execution', 'The operation exceeded its time limit.'),
+                ('IDLE_TIMEOUT', 'execution', 'No activity was detected within the time limit.')):
+            for verbose in (False, True):
+                with self.subTest(kind=kind, layer=layer, verbose=verbose):
+                    err = io.StringIO()
+                    reporter = Reporter(stdout=self.out, stderr=err, verbose=verbose)
+                    self.addCleanup(reporter.close)
+                    message = f'Detailed failure: {kind} / {layer}'
+                    error = ContractError(message, failure_kind=kind, failure_layer=layer, safe=True)
+                    reporter.error(error, phase='stage', branch='main', stage='study')
+                    self.assertIn(message if verbose else expected, err.getvalue())
+                    self.assertEqual('Code: INVALID_RESPONSE' in err.getvalue(), verbose)
+                    self.assertNotIn('The response could not be used.', err.getvalue())
+
+    def test_summary_shows_existing_reports_and_diagnostic_paths_only_when_verbose(self):
+        final_report = self.base / 'FINAL_REPORT.md'
+        report = self.base / 'ARCHITECTURE.md'
+        manifest_path = self.base / 'manifest.json'
+        for path in (final_report, report, manifest_path):
+            path.write_text('fixture')
+        manifest = {'mode': 'folder', 'accepted': True, 'has_usable_material': True,
+                    'final_report': str(final_report),
+                    'study_invocation': {'publication_complete': True},
+                    'review_invocation': {'publication_complete': True}}
+        result = {'run_id': 'test-run', 'status': 'COMPLETE', 'manifest': str(manifest_path), 'exit_code': 0}
+        for verbose in (False, True):
+            with self.subTest(verbose=verbose):
+                out = io.StringIO()
+                reporter = Reporter(stdout=out, stderr=self.err, verbose=verbose)
+                self.addCleanup(reporter.close)
+                logs = self.base / str(verbose)
+                logs.mkdir()
+                reporter.attach_log(logs)
+                reporter.finish(result, manifest, check_only=False,
+                                config_path=Path('config.jsonc'), run_dir=self.base)
+                text = out.getvalue()
+                self.assertIn(str(final_report), text)
+                self.assertIn(str(report), text)
+                self.assertNotIn('ARCHITECTURE_REVIEW.md', text)
+                self.assertEqual('Manifest:' in text, verbose)
+                self.assertEqual(str(manifest_path) in text, verbose)
+                self.assertEqual('Technical log:' in text, verbose)
+                self.assertEqual(str(logs / 'run.log') in text, verbose)
+                for redundant in ('Source result:', 'Comparison:', 'Restoration:', 'test-run'):
+                    self.assertNotIn(redundant, text)
 
     def test_early_buffer_private_log_full_context_and_close(self):
         root_handlers = list(logging.getLogger().handlers)
@@ -222,10 +368,14 @@ class ReporterTests(unittest.TestCase):
             self.assertEqual(exc.node_path, 'lib/deep child')
             r.error(exc, phase='preflight', analysis_started=False, switches_performed=False)
         console = self.err.getvalue()
-        self.assertEqual(console.count('Snapshot:'), 1)
+        self.assertNotIn('Snapshot:', console)
+        self.assertNotIn('Required commit:', console)
+        self.assertNotIn('Code:', console)
+        self.assertIn('lib/deep child', console)
         self.assertEqual(console.count('The submodule is not initialized locally.'), 1)
         self.assertNotIn('Traceback', console)
-        self.assertIn('No checkout switches were performed.', console)
+        self.assertIn('Analysis has not started.', console)
+        self.assertNotIn('No checkout switches were performed.', console)
         self.assertIn('Traceback', (self.base / 'run.log').read_text())
         self.assertIn('direct cause', (self.base / 'run.log').read_text())
         unsafe = UnsafeRepository('dirty').with_context(node_path='child').with_context(node_path='.')
@@ -272,7 +422,7 @@ class ReporterTests(unittest.TestCase):
             if mode == 'json':
                 self.assertEqual(json.loads(out.getvalue()), result)
             else:
-                self.assertEqual(out.getvalue().count('FAILED'), 1)
+                self.assertEqual(out.getvalue().count('[FAIL] Analysis failed.'), 1)
                 self.assertNotIn('Manifest:', out.getvalue())
                 self.assertNotIn('Technical log:', out.getvalue())
             r.close()
@@ -323,7 +473,8 @@ class ProcessReportingTests(unittest.TestCase):
             self.assertEqual(text.count('Elapsed:'), 3)
             for elapsed in ('00:30', '01:00', '01:30'):
                 self.assertIn('Elapsed: ' + elapsed, text)
-            self.assertIn('Last CLI output: 00:10 ago' if active else 'No CLI output received yet', text)
+            self.assertEqual(text.count('[RUN] master / Analyzing project…'), 3)
+            self.assertNotIn('CLI output', text)
             self.assertNotIn('private bytes', text)
             self.assertNotIn('Timeout:', text)
             _, quiet = self.simulate(active=active, progress=False)
@@ -337,7 +488,7 @@ class ProcessReportingTests(unittest.TestCase):
                 self.assertEqual(result['duration_seconds'], 1900)
                 self.assertIn('Elapsed: 31:30', text)
                 self.assertNotIn('Timeout:', text)
-                self.assertNotIn('Stopping the active CLI process', text)
+                self.assertNotIn('Stopping analysis', text)
 
     def test_streams_are_written_before_exit_without_changing_parser_bytes(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -455,12 +606,13 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                         self.assertEqual(self.repo.symbolic(), 'master')
                         continue
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertTrue(result.stdout.startswith('PREFLIGHT PASSED' if check else 'COMPLETE'))
+                    self.assertTrue(result.stdout.startswith('[OK] Local setup checked.' if check else '[OK] Analysis complete.'))
                     calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
                     invocations = [call for call in calls if 'context' in call]
-                    self.assertEqual(len(calls), 2 if check else 4)
-                    self.assertEqual(len(invocations), 0 if check else 2)
-                    self.assertNotIn(' / compare / ', result.stderr)
+                    self.assertEqual(len(calls), 2 if check else 5)
+                    self.assertEqual(len(invocations), 0 if check else 3)
+                    self.assertNotIn('Comparing branch reports', result.stderr)
+                    self.assertNotIn('Branch report comparison ready', result.stderr)
                     manifests = list(self.reports.glob('*/manifest.json'))
                     path = max(manifests, key=lambda p: p.stat().st_mtime_ns)
                     manifest = json.loads(path.read_text())
@@ -471,8 +623,8 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     if check:
                         self.assertEqual(manifest['switch_journal'], [])
                     else:
-                        self.assertIn('Comparison: not applicable (single branch)', result.stdout)
-                        self.assertIn('Restoration: verified', result.stdout)
+                        self.assertNotIn('Comparison:', result.stdout)
+                        self.assertNotIn('Restoration:', result.stdout)
                         self.assertTrue(manifest['branches'][0]['accepted'])
                         branch_dir = path.parent / manifest['branches'][0]['directory']
                         for stage, report in (('study', 'ARCHITECTURE.md'),
@@ -511,29 +663,31 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                 with self.subTest(mode=mode, check=check):
                     result = self.run_cli(self.prepare(mode, check=check) + ['--output', 'text'])
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertIn(f'Mode:   human-readable / {mode}\n', result.stderr)
-                    repository = self.folder.name if mode == 'folder' else 'remote-name'
-                    branches = '(folder mode)' if mode == 'folder' else 'master, test01'
-                    self.assertIn(f'Repository: {repository}\nBranches: {branches}\nAgents:', result.stderr)
+                    self.assertTrue(result.stderr.startswith('[RUN] Checking local setup.' if check else '[RUN] Preparing analysis.'))
+                    self.assertNotIn('Mode:', result.stderr)
+                    self.assertIn(f'Source: {self.folder if mode == "folder" else self.repo_path}', result.stderr)
+                    self.assertNotIn('Agents:', result.stderr)
                     self.assertNotIn('private-password', result.stdout + result.stderr)
                     if not check:
                         if mode == 'folder':
-                            for stage in ('study', 'review'):
-                                self.assertIn(f'[RUN] {self.folder.name} / {stage} / codex', result.stderr)
-                                self.assertIn(f'[OK] {self.folder.name} / {stage} / codex — COMPLETE', result.stderr)
+                            for activity, complete in (('Analyzing project…', 'Architecture report created.'),
+                                                       ('Reviewing report…', 'Review complete. No significant issues reported.')):
+                                self.assertIn(f'[RUN] {self.folder.name} / {activity}', result.stderr)
+                                self.assertIn(f'[OK] {self.folder.name} / {complete}', result.stderr)
                         else:
-                            self.assertIn('[RUN] master / study / codex', result.stderr)
-                            self.assertIn('[RUN] all branches / compare / codex', result.stderr)
+                            self.assertIn('[RUN] master / Analyzing project…', result.stderr)
+                            self.assertIn('[RUN] Comparing branch reports…', result.stderr)
+                            self.assertNotIn('all branches /', result.stderr)
 
     def test_missing_origin_falls_back_without_masking_preflight_errors(self):
         args = self.prepare('git', check=True)
         result = self.run_cli(args)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f'Repository: {self.repo_path.name}\nBranches:', result.stderr)
+        self.assertIn(f'Source: {self.repo_path}', result.stderr)
         (self.repo_path / '.git' / 'HEAD').write_text('invalid HEAD\n')
         result = self.run_cli(args)
         self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn(f'Repository: {self.repo_path.name}\nBranches:', result.stderr)
+        self.assertIn(f'Source: {self.repo_path}', result.stderr)
         self.assertIn('Invalid detached HEAD', result.stderr)
         self.assertIsNotNone(json.loads(result.stdout)['manifest'])
 
@@ -558,12 +712,13 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     if mode == 'json' or mode == 'auto' and not tty:
                         self.assertEqual(json.loads(output)['status'], 'PREFLIGHT_OK')
-                        self.assertIn('Mode:   json / folder', result.stderr)
+                        self.assertNotIn('Mode:', result.stderr)
                     else:
-                        self.assertIn('PREFLIGHT PASSED', output)
-                        self.assertIn('No model calls were made.', output)
-                        self.assertIn('Mode:   human-readable / folder', result.stderr)
-                    self.assertIn('Source inventory and fingerprint', result.stderr)
+                        self.assertIn('Local setup checked. Analysis has not started.', output)
+                        self.assertIn('AI service access and model availability were not checked.', output)
+                        self.assertIn('Start analysis:', output)
+                    self.assertNotIn('Source inventory and fingerprint', result.stderr)
+                    self.assertNotIn('Checking source inventory', result.stderr)
                     self.assertNotIn('authentication', result.stderr)
                     self.assertNotIn('\x1b', result.stderr)
 
@@ -584,12 +739,12 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         summary = json.loads(result.stdout)
         self.assertEqual(summary['status'], 'COMPLETE')
         self.assertNotIn('\x1b', result.stdout)
-        self.assertIn('\x1b[36m[RUN]\x1b[0m source folder / study / codex', console)
-        self.assertIn('— \x1b[32mCOMPLETE\x1b[0m: Description generated; agent reports investigation complete in its stated scope | Elapsed:', console)
-        self.assertIn('\x1b[32m[OK]\x1b[0m Configuration', console)
+        self.assertIn('\x1b[36m[RUN]\x1b[0m source folder / Analyzing project…', console)
+        self.assertIn('\x1b[32m[OK]\x1b[0m source folder / Architecture report created. | Elapsed:', console)
+        self.assertNotIn('Configuration', console)
         run_dir = Path(summary['manifest']).parent
-        logs = [run_dir / 'run.log', *run_dir.glob('*.logs/attempt-001/stdout.log'), *run_dir.glob('*.logs/attempt-001/stderr.log')]
-        self.assertEqual(len(logs), 5)
+        logs = [run_dir / 'run.log', *run_dir.glob('**/*.logs/attempt-001/stdout.log'), *run_dir.glob('**/*.logs/attempt-001/stderr.log')]
+        self.assertEqual(len(logs), 7)
         for path in logs:
             self.assertNotIn(b'\x1b', path.read_bytes(), str(path))
 
@@ -610,7 +765,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn('\x1b', result.stderr)
                 if mode == 'text':
-                    self.assertIn('\x1b[32mPREFLIGHT PASSED\x1b[0m', output)
+                    self.assertIn('\x1b[32m[OK]\x1b[0m Local setup checked.', output)
                 else:
                     self.assertEqual(json.loads(output)['status'], 'PREFLIGHT_OK')
                     self.assertNotIn('\x1b', output)
@@ -624,9 +779,9 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         result = self.run_cli(args)
         self.assertEqual(result.returncode, 1)
         self.assertIn('git was not found', result.stderr)
-        self.assertIn(f'Repository: {self.repo_path.name}\nBranches:', result.stderr)
+        self.assertIn(f'Source: {self.repo_path}', result.stderr)
         self.assertIsNone(json.loads(result.stdout)['manifest'])
-        self.assertNotIn('Details:', result.stderr)
+        self.assertNotIn('Error details:', result.stderr)
         args = self.prepare('folder', check=True)
         self.reports.write_text('a file instead of a directory')
         cases.append((args, 'assigned'))
@@ -636,10 +791,10 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
             self.assertEqual(data['exit_code'], 1)
             self.assertIsNone(data['manifest'])
             self.assertEqual(data['run_id'] is None, assigned is None)
-            self.assertNotIn('Details:', result.stderr)
+            self.assertNotIn('Error details:', result.stderr)
             self.assertNotIn('Traceback', result.stderr)
         text = self.run_cli(['--config', str(missing), '--output', 'text'])
-        self.assertIn('FAILED', text.stdout)
+        self.assertIn('[FAIL] Analysis failed.', text.stdout)
         self.assertNotIn('Manifest:', text.stdout)
 
     def test_argparse_exceptions_create_no_run(self):
@@ -657,7 +812,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         result = self.run_cli(args + ['--output', 'text', '--verbose'])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(safe_text(target), result.stderr)
-        self.assertIn('Repository: ' + safe_text(target.name) + '\nBranches:', result.stderr)
+        self.assertIn('Source: ' + safe_text(target), result.stderr)
         self.assertNotIn('\x1b', result.stdout + result.stderr)
         result = self.run_cli(args)
         data = json.loads(result.stdout)
@@ -708,7 +863,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.assertEqual(data['exit_code'], 1)
         self.assertIsNone(data['manifest'])
         self.assertNotIn('Traceback', result.stderr)
-        self.assertNotIn('Details:', result.stderr)
+        self.assertNotIn('Error details:', result.stderr)
 
     def test_internal_error_is_distinct_from_configuration_error(self):
         args = self.prepare('folder', check=True)
@@ -719,7 +874,8 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
             self.assertEqual(main(), 1)
         data = json.loads(out.getvalue())
         log = (Path(data['manifest']).parent / 'run.log').read_text()
-        self.assertIn('INTERNAL_ERROR', err.getvalue())
+        self.assertNotIn('INTERNAL_ERROR', err.getvalue())
+        self.assertIn('INTERNAL_ERROR', log)
         self.assertIn('Traceback', log)
         self.assertNotIn('Traceback', err.getvalue())
         self.assertNotIn('private internal value', err.getvalue() + log)
@@ -736,7 +892,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     self.assertEqual('      Elapsed:' in result.stderr, not quiet)
                     if not quiet:
                         self.assertIn('Last CLI output:' if kind == 'active' else 'No CLI output received yet', result.stderr)
-                        self.assertIn('[RUN] source folder / study / codex\n      Elapsed:', result.stderr)
+                        self.assertIn('[RUN] source folder / Analyzing project…\n      Elapsed:', result.stderr)
                     self.assertNotIn('private CLI activity', result.stderr)
                     self.assertNotIn('Timeout:', result.stderr)
                     log = Path(output['manifest']).parent / 'run.log'
@@ -745,8 +901,8 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     self.assertNotIn('timeout_seconds', log.read_text())
                     if kind == 'closed-pipes':
                         self.assertIn('CLI_FAILED', result.stderr)
-                        self.assertNotIn('[OK] source folder / study', result.stderr)
-                        self.assertIn('[FAIL] source folder / study / codex failed', result.stderr)
+                        self.assertNotIn('[OK] source folder / Architecture report created.', result.stderr)
+                        self.assertIn('[FAIL] source folder / Project analysis failed', result.stderr)
 
     def test_large_stage_input_reaches_cli_without_truncation(self):
         args = self.prepare('folder')
@@ -760,10 +916,10 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         run = Path(output['manifest']).parent
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         model_calls = [call for call in calls if 'context' in call]
-        self.assertEqual(len(model_calls), 2)
-        for call, stage in zip(model_calls, ('study', 'review')):
+        self.assertEqual(len(model_calls), 3)
+        for call, stage in zip(model_calls, ('catalog', 'study', 'review')):
             self.assertEqual(call['context']['project_description'], description.strip())
-            logs = run / (stage + '.logs')
+            logs = (run if stage == 'catalog' else run / 'revisions/001') / (stage + '.logs')
             meta = json.loads((logs / 'invocation.json').read_text())
             payload = (logs / meta['attempt'] / 'input.prompt.txt').read_bytes()
             self.assertEqual(meta['status'], 'SUCCEEDED')
@@ -775,8 +931,8 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.env['AUDIT_TEST_PARTIAL'] = '1'
         result = self.run_cli(args + ['--output', 'text'])
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertTrue(result.stdout.startswith('PARTIAL: Policy checks not completed or not satisfied;'))
-        self.assertIn('[WARN] source folder / study / codex — PARTIAL', result.stderr)
+        self.assertTrue(result.stdout.startswith('[WARN] Analysis incomplete. See available results and limitations below.'))
+        self.assertIn('[WARN] source folder / Project analysis incomplete. See details below.', result.stderr)
         del self.env['AUDIT_TEST_PARTIAL']
         self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': 'invalid', 'value': 'PRIVATE_MODEL_VALUE'})
         result = self.run_cli(args + ['--verbose'])
@@ -784,9 +940,9 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         data = json.loads(result.stdout)
         run = Path(data['manifest']).parent
         self.assertNotIn('PRIVATE_MODEL_VALUE', result.stderr + (run / 'run.log').read_text())
-        self.assertIn('PRIVATE_MODEL_VALUE', (run / 'study.logs/attempt-001/stdout.log').read_text())
+        self.assertIn('PRIVATE_MODEL_VALUE', (run / 'revisions/001/study.logs/attempt-001/stdout.log').read_text())
         self.assertIn('INVALID_RESPONSE', result.stderr)
-        self.assertNotIn('[OK] source folder / study', result.stderr)
+        self.assertNotIn('[OK] source folder / Architecture report created.', result.stderr)
         errors = [json.loads(line) for line in (run / 'run.log').read_text().splitlines()
                   if json.loads(line)['event'] == 'error']
         self.assertEqual((errors[0]['branch'], errors[0]['stage'], errors[0]['backend']),
@@ -801,11 +957,15 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 130, result.stderr)
         manifest = json.loads(Path(data['manifest']).read_text())
         self.assertTrue(manifest['restoration']['restored'])
-        expected = ['[WARN] Stop requested.', '[RUN] Stopping the active CLI process.',
-                    '[RUN] Restoring the original checkout hierarchy.', '[OK] Original checkout hierarchy restored.']
-        positions = [result.stderr.index(line) for line in expected]
+        self.assertEqual(result.stderr.count('[WARN] Stopping analysis…'), 1)
+        for message in ('Stopping the active CLI process', 'Restoring the original checkout hierarchy',
+                        'Original checkout hierarchy restored'):
+            self.assertNotIn(message, result.stderr)
+        records = [json.loads(line) for line in (Path(data['manifest']).parent / 'run.log').read_text().splitlines()]
+        events = [record['event'] for record in records]
+        expected = ['stop_requested', 'process_stopping', 'restoration_started', 'restoration_completed']
+        positions = [events.index(event) for event in expected]
         self.assertEqual(positions, sorted(positions))
-        self.assertEqual(result.stderr.count('Stop requested.'), 1)
         self.assertEqual(self.repo.symbolic(), 'master')
 
     def test_broken_console_log_failure_and_repeated_main_cleanup(self):
@@ -845,14 +1005,16 @@ class RecursiveDiagnosticTests(recursive.RecursiveFixture, unittest.TestCase):
         (self.paths[recursive.LEAF] / '.git').unlink()
         result, manifest = self.execute(check=True)
         self.assertEqual(result.returncode, 1)
-        self.assertEqual(result.stderr.count('Snapshot:'), 1)
+        self.assertNotIn('Snapshot:', result.stderr)
+        self.assertIn(recursive.LEAF, result.stderr)
         self.assertEqual(result.stderr.count('The submodule is not initialized locally.'), 1)
         detail = manifest['diagnostics'][0]
         self.assertEqual(detail['code'], 'SUBMODULE_NOT_INITIALIZED')
         self.assertEqual(detail['node_path'], recursive.LEAF)
         self.assertEqual(detail['required_commit'], self.expected['master'][recursive.LEAF]['commit'])
         self.assertEqual(manifest['switch_journal'], [])
-        self.assertIn('No checkout switches were performed.', result.stderr)
+        self.assertIn('Analysis has not started.', result.stderr)
+        self.assertNotIn('No checkout switches were performed.', result.stderr)
 
     def test_primary_and_restoration_failures_are_both_visible(self):
         self.write_config()
@@ -867,8 +1029,7 @@ class RecursiveDiagnosticTests(recursive.RecursiveFixture, unittest.TestCase):
             manifest, code = runner.run()
         self.assertEqual(code, 1)
         self.assertIn('PRIMARY agent failure', err.getvalue())
-        self.assertIn('[FAIL] Restoration failed', err.getvalue())
-        self.assertNotIn('[OK] Original checkout hierarchy restored', err.getvalue())
+        self.assertIn('[FAIL] Could not return the repository to its original state.', err.getvalue())
         self.assertEqual(manifest['restoration']['node'], recursive.LEAF)
         self.assertFalse(manifest['restoration']['restored'])
         self.assertGreaterEqual(len(manifest['diagnostics']), 2)
