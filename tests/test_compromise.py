@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Offline regressions for partial documents, strict compatibility and final assembly."""
+"""Offline regressions for partial documents, strict validation and final assembly."""
 import copy
 import io
 import json
@@ -257,20 +257,38 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         with self.assertRaisesRegex(AuditError, 'result_policy'):
             load_config(self.config_path)
 
-    def test_legacy_cli_text_has_no_new_registry_or_positive_acceptance(self):
-        def legacy(stage, data):
+    def test_missing_claims_has_no_registry_or_positive_acceptance(self):
+        def missing_claims(stage, data):
             data.pop('claims')
             return data
         for backend in ('codex', 'claude-code'):
             for policy in ('strict', 'compromise'):
                 with self.subTest(backend=backend, policy=policy):
-                    manifest, code = self.run_case(legacy, backend=backend, policy=policy)
+                    manifest, code = self.run_case(missing_claims, backend=backend, policy=policy)
                     self.assertEqual(code, 2 if policy == 'compromise' else 1)
                     self.assertFalse(manifest['accepted'])
                     if policy == 'compromise':
                         self.assertNotIn('claims', manifest['study_material'])
                         self.assertEqual(self.calls[2][1]['claim_registry'], [])
-                        self.assertIn('Старый формат', Path(manifest['final_report']).read_text())
+                        self.assertIn('Восстановленный текст', Path(manifest['final_report']).read_text())
+
+    def test_markdown_study_never_reaches_review_or_final_narrative(self):
+        def markdown_study(stage, data):
+            if stage == 'study':
+                data.pop('report_sections')
+                data['report_markdown'] = '# Unsupported study'
+            return data
+        for backend in ('codex', 'claude-code'):
+            for policy in ('strict', 'compromise'):
+                with self.subTest(backend=backend, policy=policy):
+                    manifest, code = self.run_case(markdown_study, backend=backend, policy=policy)
+                    self.assertEqual((code, manifest['status'], manifest['accepted']), (1, 'FAILED', False))
+                    self.assertEqual([stage for stage, _ in self.calls], ['catalog', 'study'])
+                    self.assertNotIn('study_material', manifest)
+                    self.assertNotIn('# Unsupported study', Path(manifest['final_report']).read_text())
+                    directory = Path(manifest['final_report']).parent
+                    for name in ('study.json', 'study.material.json', 'ARCHITECTURE.md', 'review.plan.json'):
+                        self.assertFalse(list(directory.rglob(name)))
 
 
 class CompromiseGit(unittest.TestCase):
@@ -284,7 +302,7 @@ class CompromiseGit(unittest.TestCase):
         config.pop('result_policy')
         config['continue_on_error'] = cont
         if single:
-            config['branches'] = ['master']
+            config['git_mode']['branches'] = ['master']
         runner = Runner(config, self.base / 'run')
         original_restore = runner.repo.restore
         def restore(*args):
@@ -317,9 +335,9 @@ class CompromiseGit(unittest.TestCase):
         self.assertFalse(any(b['accepted'] for b in manifest['branches']))
         self.assertEqual(len(calls), 9)
         self.assertEqual(calls[-1][0], 'compare')
-        self.assertEqual(set(manifest['comparison']['unresolved_branches']), set(self.config()['branches']))
+        self.assertEqual(set(manifest['comparison']['unresolved_branches']), set(self.config()['git_mode']['branches']))
         text = Path(manifest['final_report']).read_text()
-        for branch in self.config()['branches']:
+        for branch in self.config()['git_mode']['branches']:
             self.assertIn(branch, text)
         self.assertEqual(sum(b.get('study_usable', False) for b in manifest['branches']), 2)
 

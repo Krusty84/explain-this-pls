@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Pure evidence-ID compatibility. No source reads, model calls or acceptance."""
+"""Pure evidence-ID normalization. No source reads, model calls or acceptance."""
 from __future__ import annotations
 
 import copy
@@ -12,16 +12,6 @@ from evidence import canonical, sha
 
 RULE = 'EVIDENCE_IDS_V4'
 HASH_FORMAT = 'canonical-json-utf8-v1'
-
-
-def normalize_study(value, context, mode='git'):
-    """Return an independent candidate and exact edits after strict prerequisites.
-
-    This function accepts study wire objects only. Transport completion and
-    consistency must already have been checked by a live caller. Offline callers
-    get no assertion about transport, sources, policy or publication.
-    """
-    return normalize_evidence('study', value, context, mode)
 
 
 def normalize_evidence(stage, value, context, mode='git'):

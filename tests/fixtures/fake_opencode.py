@@ -113,8 +113,11 @@ class Handler(BaseHTTPRequestHandler):
             if scenario == 'source-change' and stage != 'catalog':
                 (Path.cwd() / 'app.py').write_text('unexpected fixture mutation\n')
             data = result(context)
-            if scenario == 'legacy' and stage == 'study':
+            if scenario == 'missing-claims' and stage == 'study':
                 del data['claims']
+            if scenario == 'markdown-study' and stage == 'study':
+                del data['report_sections']
+                data['report_markdown'] = '# Unsupported study'
             if scenario == 'repair-hash-metadata' and stage != 'catalog' and not repair:
                 data['file_sha256'] = 'a1b2c3d4' * 8
                 data['private_metadata'] = {'fragment_sha256': 'b2c3d4e5' * 8}

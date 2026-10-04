@@ -18,7 +18,7 @@ from fixtures.ledger_response import response, model_wire, prompt_context
 
 
 class PublicationTests(FolderFixture):
-    def test_v1_manifest_registry_and_acceptance_are_read_only(self):
+    def test_unsupported_manifest_is_rejected_without_changing_artifacts(self):
         directory = self.base / 'historical'
         directory.mkdir()
         historical = {'contract_version': 'evidence-ledger-v1',
@@ -28,7 +28,7 @@ class PublicationTests(FolderFixture):
             (directory / name).write_bytes(b'historical bytes')
         before = {p.name: p.read_bytes() for p in directory.iterdir()}
         with self.assertRaises(AuditError) as caught: Runner(self.config(), directory)
-        self.assertEqual(caught.exception.code, 'LEGACY_ARTIFACT_READ_ONLY')
+        self.assertEqual(caught.exception.code, 'UNSUPPORTED_ARTIFACT_VERSION')
         self.assertEqual(before, {p.name: p.read_bytes() for p in directory.iterdir()})
 
     def prepare(self):

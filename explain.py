@@ -31,7 +31,7 @@ import time
 import uuid
 from typing import Any
 from urllib.parse import urlsplit
-from contracts import MODEL_FOLDER_SCHEMAS, MODEL_SCHEMAS, ContractError, accepted, jsonc, parse_backend, strict_json, validate_result, schema_diagnostics, result_diagnostics
+from contracts import MODEL_FOLDER_SCHEMAS, MODEL_SCHEMAS, ContractError, accepted, jsonc, strict_json, validate_result, schema_diagnostics, result_diagnostics
 from reporting import Diagnostic, NullReporter, Reporter, diagnostic, existing_file, output_mode
 from execution import Budget, execution_settings
 import codex
@@ -176,9 +176,9 @@ def _process(command, cwd, env, input_data, reporter, context,
     start = clock()
     last_output = None
     next_progress = start + progress_interval
-    # A stage-owned Reporter also covers silent HTTP waits and retries. Legacy
-    # reporters / standalone process callers retain the original waiting events.
-    managed_progress = getattr(reporter, 'cli_started', lambda: False)()
+    # A stage-owned Reporter also covers silent HTTP waits and retries.
+    # Standalone process callers retain their own waiting events.
+    managed_progress = reporter.cli_started()
     out, err = bytearray(), bytearray()
     p = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -752,13 +752,8 @@ class Repository:
         self.assert_expected()
 
     def checkout(self, commit: str) -> None:
-        if not hasattr(self, 'plans'):
-            self.preflight([])
-            # Compatibility for callers that previously checked out directly.
-            if commit not in self.plans:
-                if self.tree(commit):
-                    raise AuditError('Submodule checkout requires a prepared preflight plan.')
-                self.plans[commit] = {'.': commit}
+        if commit not in getattr(self, 'plans', {}):
+            raise AuditError('Checkout requires a prepared preflight plan.')
         for path, sha in self.plans[commit].items():
             self.switch_node(path, sha)
         self.assert_snapshot(commit)
@@ -907,11 +902,9 @@ def load_config(path: Path) -> dict:
     value = (jsonc if path.suffix.lower() == '.jsonc' else strict_json)(path.read_text())
     if type(value) is not dict:
         raise AuditError('Configuration must be a JSON object.')
-    allowed = {'repository', 'reports_dir', 'branches', 'baseline_branch', 'agent', 'stage_agents',
+    allowed = {'reports_dir', 'agent', 'stage_agents',
         'output_language', 'priority_scenarios', 'continue_on_error', 'project_description', 'prompts',
         'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy', 'source_decoding'}
-    if 'additional_runtime_read_paths' in value:
-        raise AuditError('Remove additional_runtime_read_paths from configuration: the runner now uses native CLI permissions.')
     if set(value) - allowed:
         raise AuditError(f'Unknown configuration keys: {set(value) - allowed}')
     try:
@@ -921,27 +914,21 @@ def load_config(path: Path) -> dict:
         value['source_decoding'] = normalize_source_decoding(value.get('source_decoding'))
     except ValueError as exc:
         raise AuditError(str(exc), code='INVALID_CONFIG') from exc
-    for key in ('reports_dir', 'agent'):
+    for key in ('mode', 'reports_dir', 'agent'):
         if key not in value:
             raise AuditError(f'Missing configuration key: {key}')
-    grouped = bool(set(value) & {'mode', 'git_mode', 'folder_mode'})
-    if grouped:
-        if set(value) & {'repository', 'branches', 'baseline_branch'}:
-            raise AuditError('Do not mix legacy repository/branches/baseline_branch with mode sections.')
-        if value.get('mode') not in ('git', 'folder'):
-            raise AuditError('Grouped configuration requires mode: "git" or "folder".')
-        for section in ('git_mode', 'folder_mode'):
-            if section in value and type(value[section]) is not dict:
-                raise AuditError(f'{section} must be a JSON object, even when inactive.')
-        section = value['mode'] + '_mode'
-        if section not in value:
-            raise AuditError(f'Missing configuration section: {section}')
-        source = value[section]
-    else:
-        source = value
-    mode = value.get('mode', 'git')
+    mode = value['mode']
+    if mode not in ('git', 'folder'):
+        raise AuditError('Configuration requires mode: "git" or "folder".')
+    for section in ('git_mode', 'folder_mode'):
+        if section in value and type(value[section]) is not dict:
+            raise AuditError(f'{section} must be a JSON object, even when inactive.')
+    section = mode + '_mode'
+    if section not in value:
+        raise AuditError(f'Missing configuration section: {section}')
+    source = value[section]
     required = ('repository', 'branches', 'baseline_branch') if mode == 'git' else ('path',)
-    if grouped and set(source) - set(required):
+    if set(source) - set(required):
         raise AuditError(f'Unknown {mode}_mode keys: {set(source) - set(required)}')
     for key in required:
         if key not in source:
@@ -987,9 +974,6 @@ def load_config(path: Path) -> dict:
     for stage in ('study', *(s for s in stages if s != 'study')):
         agent = dict(value['_agents']['study'] if stage == 'catalog' else value['agent'])
         agent.update(value['stage_agents'].get(stage, {}))
-        obsolete = set(agent) & {'api_key_env', 'provider_key_env'}
-        if obsolete:
-            raise AuditError(f'Remove {", ".join(sorted(obsolete))} from {stage} agent configuration: authenticate using the CLI itself.')
         if set(agent) - {'backend', 'executable', 'model', 'expected_version'}:
             raise AuditError('Unknown agent configuration field.')
         backend = agent.get('backend')
@@ -1037,15 +1021,15 @@ class Runner:
             previous = strict_json(existing_manifest.read_text(encoding='utf-8'))
             if (previous.get('contract_version') != CONTRACT_VERSION or
                     previous.get('artifact_version') != ARTIFACT_VERSION):
-                raise AuditError('Historical run artifacts are read-only; select a new run directory.',
-                                 code='LEGACY_ARTIFACT_READ_ONLY', failure_layer='publication')
+                raise AuditError('Unsupported artifact version; select a new run directory.',
+                                 code='UNSUPPORTED_ARTIFACT_VERSION', failure_layer='publication')
         self.compromise = config.get('result_policy', 'compromise') == 'compromise'
         self.critical_failure = False
         self.execution = execution_settings(config.get('execution'))
-        self.mode = config.get('mode', 'git')
+        self.mode = config['mode']
         if trust_repository and self.mode != 'git':
             raise AuditError('--trust-repository requires git mode; it cannot be used in folder mode.')
-        self.source = config.get(self.mode + '_mode', config)
+        self.source = config[self.mode + '_mode']
         self.source_path = Path(self.source['path' if self.mode == 'folder' else 'repository'])
         self.folder = Folder(self.source_path) if self.mode == 'folder' else None
         self.repo = Repository(self.source_path, trust_repository=trust_repository,
@@ -1055,7 +1039,7 @@ class Runner:
         self.versions: dict[str, str] = {}
 
     def record_error(self, manifest, exc, *, phase='run', **context):
-        getattr(self.reporter, 'stop_progress', lambda: None)()
+        self.reporter.stop_progress()
         recoverable = isinstance(exc, ContractError) or (isinstance(exc, AuditError)
             and exc.code == 'CLI_FAILED' and exc.failure_layer == 'backend')
         if (not recoverable or phase in ('preflight', 'restoration')
@@ -1302,13 +1286,7 @@ class Runner:
             self.save_attempt_value(attempt, 'expanded.json', candidate, meta)
             self.save_binding(binding, data, candidate, attempt, meta)
             validation['validated_object'] = 'expanded.json'
-            try:
-                validate_schema(data, self.schemas[stage])
-            except ContractError as exc:
-                if not has_ledger_structure(stage, candidate, representation='wire') and not exc.details.get('code'):
-                    exc.safe_message = ('Expected the current evidence ledger structure. Legacy output/custom prompts '
-                                        'must use the v4 model schema; missing facts cannot be inferred from old fields.')
-                raise
+            validate_schema(data, self.schemas[stage])
             expanded = candidate
             if stage in ('study', 'review'):
                 candidate, changes = normalize_evidence(stage, expanded, context, self.mode)
@@ -1835,7 +1813,7 @@ class Runner:
                         if r['returncode']:
                             raise AuditError(f'{agent["backend"]} exited with {r["returncode"]}; inspect private attempt logs.',
                                 code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='backend')
-                        data, provider_meta = parse_backend(agent['backend'], r['stdout'].decode('utf-8'))
+                        data, provider_meta = CLI_ADAPTERS[agent['backend']].parse_output(r['stdout'].decode('utf-8'))
                         meta['backend_result_valid'] = True
                         meta['provider_metadata'] = provider_meta
                         model_usage = provider_meta.get('modelUsage')
@@ -1906,7 +1884,7 @@ class Runner:
         try:
             manifest, code = self.run_folder(check_only) if self.folder else self.run_git(check_only)
         finally:
-            getattr(self.reporter, 'stop_progress', lambda: None)()
+            self.reporter.stop_progress()
             if self.repo:
                 try:
                     self.repo.close()
@@ -2189,8 +2167,8 @@ def main() -> int:
         if header_shown:
             return
         header_shown = True
-        mode = config.get('mode', 'git') if config else None
-        source = config.get(mode + '_mode', config) if config else {}
+        mode = config['mode'] if config else None
+        source = config[mode + '_mode'] if config else {}
         reporter.emit('run_started', check_only=args.check, output=reporter.mode, mode=mode,
                       source=source.get('path' if mode == 'folder' else 'repository'))
         if os.geteuid() == 0:
@@ -2210,8 +2188,8 @@ def main() -> int:
         run_dir = reports / run_id
         reporter.run_id = run_id
         header()
-        mode = config.get('mode', 'git')
-        source = config.get(mode + '_mode', config)
+        mode = config['mode']
+        source = config[mode + '_mode']
         source_path = Path(source['path' if mode == 'folder' else 'repository'])
         repository_name = source_path.name or str(source_path)
         phase = 'preflight'

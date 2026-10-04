@@ -241,7 +241,7 @@ Custom prompts must follow the v4 model schemas, including study coverage and re
 closure assessments for previous material findings. Folder responses echo
 `source_snapshot_id`; review responses and comparison references use
 `review_target_id`. These opaque IDs bind responses to the expected snapshot and
-selected revision. Old wire responses are not automatically converted.
+selected revision.
 
 The `compact-context-v2` model view contains the full report text once and one
 claim registry. Duplicate locator quotes, service hashes and private provenance
@@ -300,7 +300,7 @@ and review are directly in the run folder.
 Each snapshot has an immutable `coverage.plan.json`. Versions are stored separately
 under `revisions/001` and, when created, `revisions/002`, each with its own study,
 review and invocation artifacts. The manifest records `selected_revision` and a
-short history. Compatibility report files are exact copies of the selected version.
+short history. Top-level report files are exact copies of the selected version.
 Comparison receives only the selected pair. A failed revision/review retains the
 previous completed pair; a newer unreviewed study is shown separately. With no
 completed review, the latest usable study is explicitly unverified.
@@ -344,6 +344,6 @@ mode. Catalog failure in strict mode stops that source; continuation to other
 branches follows the same setting. Source integrity, cleanup and publication
 failures stop both policies. Configured format repairs remain bounded. Substantive
 revision is a separate, explicitly bounded cycle, and every old HIGH/MEDIUM finding
-must be assessed again before acceptance. Historical v1–v3 artifacts stay readable
-without migrating their hashes or granting new acceptance. Semantic quality remains
-`NOT_MEASURED`.
+must be assessed again before acceptance. Only the `evidence-ledger-v4` contract is
+supported. Unsupported manifest versions are rejected before any artifact writes.
+Semantic quality remains `NOT_MEASURED`.

@@ -17,7 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from explain import AuditError, Repository, Runner, UnsafeRepository, cli_env, load_config, process, repository_lock, slug
 from reporting import Reporter
 from opencode import prepare_environment
-from contracts import ContractError, parse_backend, review_verdict, strict_json, validate_result
+import claude_code
+import codex
+from contracts import ContractError, review_verdict, strict_json, validate_result
 from fixtures.ledger_response import response
 from ledger import review_context, prepare_result
 
@@ -72,30 +74,18 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             strict_json('{"x":NaN}')
     def test_codex_native_json(self):
-        self.assertEqual(parse_backend('codex', json.dumps(doc('master', 'abc')))[0]['branch'], 'master')
+        self.assertEqual(codex.parse_output(json.dumps(doc('master', 'abc')))[0]['branch'], 'master')
     def test_fenced_output_rejected(self):
         with self.assertRaises(ContractError):
-            parse_backend('codex', '```json\n{}\n```')
+            codex.parse_output('```json\n{}\n```')
     def test_claude_structured_output(self):
         transport = {'is_error': False, 'structured_output': doc('master', 'abc'), 'session_id': 's'}
-        data, meta = parse_backend('claude-code', json.dumps(transport))
+        data, meta = claude_code.parse_output(json.dumps(transport))
         self.assertEqual(data['branch'], 'master')
         self.assertEqual(meta['session_id'], 's')
     def test_claude_error_is_not_success(self):
         with self.assertRaises(ContractError):
-            parse_backend('claude-code', '{"is_error":true,"result":"error"}')
-    def test_opencode_old_text_transport_is_explicitly_rejected(self):
-        events = [
-            {'type':'text','sessionID':'s','part':{'id':'p1','messageID':'m1','text':'Planning prose'}},
-            {'type':'step_finish','part':{'messageID':'m1','reason':'tool-calls'}},
-            {'type':'text','sessionID':'s','part':{'id':'p2','messageID':'m2','text':json.dumps(doc('test01','abc'))}},
-            {'type':'step_finish','part':{'messageID':'m2','reason':'stop'}}]
-        with self.assertRaises(ContractError) as caught:
-            parse_backend('opencode', '\n'.join(map(json.dumps,events)))
-        self.assertEqual(caught.exception.failure_kind, 'BACKEND_INCOMPATIBLE')
-    def test_opencode_truncation_rejected(self):
-        with self.assertRaises(ContractError):
-            parse_backend('opencode', json.dumps({'type':'text','part':{'id':'p','messageID':'m','text':'{}'}}))
+            claude_code.parse_output('{"is_error":true,"result":"error"}')
     def test_wrong_commit_rejected(self):
         with self.assertRaises(ContractError):
             validate_result('study',doc('master','wrong'),{'branch':'master','source_commit':'abc'})
@@ -143,16 +133,15 @@ class RepoFixture(unittest.TestCase):
         reports=self.base/'reports'; reports.mkdir(exist_ok=True)
         agent={'backend':'codex','executable':str(Path(sys.executable).resolve()),
                'model':None}
-        return {'result_policy':'strict', 'repository':str(self.repo_path),'reports_dir':str(reports),
-            'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master',
+        return {'result_policy':'strict', 'mode':'git', 'reports_dir':str(reports),
+            'git_mode':{'repository':str(self.repo_path),
+                'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master'},
             'output_language':'Russian','project_description':'ERP-система 1995 года.',
             'priority_scenarios':[],'continue_on_error':True,
             '_agents':{s:dict(agent) for s in ('catalog','study','review','compare')},
             '_prompt_paths':{s:str(Path(__file__).resolve().parents[1]/'prompts'/f'{s}.md') for s in ('catalog','study','review','revise','compare')}}
     def test_grouped_git_configuration_runs_and_restores(self):
         cfg=self.config()
-        cfg['mode']='git'
-        cfg['git_mode']={key:cfg.pop(key) for key in ('repository','branches','baseline_branch')}
         cfg['folder_mode']={'path':'/missing/inactive/folder'}
         result,code=FakeRunner(cfg,self.base/'grouped-run').run()
         self.assertEqual(code,0)
@@ -168,6 +157,20 @@ class RepoFixture(unittest.TestCase):
         self.assertIsNone(self.repo.symbolic())
         self.repo.restore('master',self.master)
         self.assertEqual(self.repo.symbolic(),'master')
+    def test_checkout_requires_a_plan_before_any_git_changes(self):
+        for prepared in (False, True):
+            with self.subTest(prepared=prepared):
+                if prepared:
+                    self.repo.preflight(['master'])
+                target=self.repo.text('rev-parse','test01')
+                before={str(p.relative_to(self.repo_path)):p.read_bytes()
+                    for p in self.repo_path.rglob('*') if p.is_file()}
+                with patch.object(self.repo,'preflight',side_effect=AssertionError('Unexpected preflight')), \
+                        patch.object(self.repo,'switch_node',side_effect=AssertionError('Unexpected checkout')), \
+                        self.assertRaisesRegex(AuditError,'prepared preflight plan'):
+                    self.repo.checkout(target)
+                self.assertEqual(before,{str(p.relative_to(self.repo_path)):p.read_bytes()
+                    for p in self.repo_path.rglob('*') if p.is_file()})
     def test_dirty_worktree_rejected(self):
         (self.repo_path/'app.py').write_text('changed')
         with self.assertRaises(UnsafeRepository):self.repo.clean()
@@ -189,6 +192,7 @@ class RepoFixture(unittest.TestCase):
         self.assertEqual(delta['changes'][0]['status'],'M')
         self.assertFalse(delta['identical_trees'])
     def test_changed_original_branch_is_not_reset(self):
+        self.repo.preflight(['master'])
         self.repo.checkout(self.master)
         pin=self.repo.text('rev-parse','test01')
         self.git('update-ref','refs/heads/master',pin)
@@ -233,7 +237,7 @@ class RepoFixture(unittest.TestCase):
                ('review','error',False,'FAILED',1)]
         for index,(failed_stage,outcome,continue_on_error,status,expected_code) in enumerate(cases):
             with self.subTest(stage=failed_stage,outcome=outcome,continue_on_error=continue_on_error):
-                config=self.config();config['branches']=['master']
+                config=self.config();config['git_mode']['branches']=['master']
                 config['continue_on_error']=continue_on_error
                 dest=self.base/'reports'/str(index)
                 fake=FakeRunner(config,dest)
@@ -361,8 +365,8 @@ class ConfigTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.base=Path(self.tmp.name).resolve()
         self.path=self.base/'config.json'
-        self.value={'repository':'repo','reports_dir':'reports',
-            'branches':['master','test01'],'baseline_branch':'master',
+        self.value={'mode':'git','reports_dir':'reports',
+            'git_mode':{'repository':'repo','branches':['master','test01'],'baseline_branch':'master'},
             'agent':{'backend':'codex','executable':sys.executable}}
     def load(self):
         self.path.write_text(json.dumps(self.value))
@@ -375,7 +379,7 @@ class ConfigTests(unittest.TestCase):
                 self.value['project_description']=raw
                 cfg=self.load()
                 self.assertEqual(cfg['project_description'],expected)
-                self.assertEqual(cfg['repository'],str(self.base/'repo'))
+                self.assertEqual(cfg['git_mode']['repository'],str(self.base/'repo'))
                 self.assertEqual(cfg['reports_dir'],str(self.base/'reports'))
         del self.value['project_description']
         self.assertEqual(self.load()['project_description'],'')
@@ -385,25 +389,20 @@ class ConfigTests(unittest.TestCase):
                 self.value['project_description']=raw
                 with self.assertRaisesRegex(AuditError,'project_description must be a string'):
                     self.load()
-    def test_single_branch_ignores_compare_settings_in_both_config_formats(self):
-        self.value.update(branches=['master'],
+    def test_single_branch_ignores_compare_settings(self):
+        self.value['git_mode']['branches']=['master']
+        self.value.update(
             stage_agents={'compare':{'backend':'unavailable','executable':'/missing/cli'}},
             prompts={'compare':'/missing/prompt'})
-        for grouped in (False,True):
-            with self.subTest(grouped=grouped):
-                if grouped:
-                    self.value['mode']='git'
-                    self.value['git_mode']={key:self.value.pop(key)
-                        for key in ('repository','branches','baseline_branch')}
-                cfg=self.load()
-                self.assertEqual(set(cfg['_agents']),{'catalog','study','review'})
-                self.assertEqual(set(cfg['_prompt_paths']),{'catalog','study','review','revise'})
+        cfg=self.load()
+        self.assertEqual(set(cfg['_agents']),{'catalog','study','review'})
+        self.assertEqual(set(cfg['_prompt_paths']),{'catalog','study','review','revise'})
     def test_git_branches_and_baseline_validation(self):
         for branches,baseline in (([],'master'),(['master','master'],'master'),
                 ([''],'master'),([None],'master'),('master','master'),
                 (['master'],'other'),(['master','test01'],'other')):
             with self.subTest(branches=branches,baseline=baseline):
-                self.value.update(branches=branches,baseline_branch=baseline)
+                self.value['git_mode'].update(branches=branches,baseline_branch=baseline)
                 with self.assertRaises(AuditError):self.load()
     def test_removed_limits_are_not_defaulted_and_are_rejected(self):
         cfg=self.load()
@@ -414,17 +413,17 @@ class ConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(AuditError,'Unknown configuration keys:.*'+key):
                     self.load()
                 del self.value[key]
-    def test_removed_fields_have_migration_errors(self):
+    def test_removed_fields_are_unknown_keys(self):
         for name in ('api_key_env','provider_key_env'):
             for location in ('agent','stage_agents'):
                 with self.subTest(name=name,location=location):
                     original=copy.deepcopy(self.value)
                     if location=='agent':self.value['agent'][name]='OLD_KEY'
                     else:self.value['stage_agents']={'review':{name:'OLD_KEY'}}
-                    with self.assertRaisesRegex(AuditError,'Remove '+name):self.load()
+                    with self.assertRaisesRegex(AuditError,'Unknown agent configuration field'):self.load()
                     self.value=original
         self.value['additional_runtime_read_paths']=[]
-        with self.assertRaisesRegex(AuditError,'Remove additional_runtime_read_paths'):self.load()
+        with self.assertRaisesRegex(AuditError,'Unknown configuration keys:.*additional_runtime_read_paths'):self.load()
     def test_stage_overrides_preserve_explicit_model_and_version(self):
         self.value['agent'].update(model='base-model',expected_version='test-version')
         self.value['stage_agents']={'review':{'backend':'opencode','model':None}}
@@ -548,8 +547,9 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
             for check_only in (True,False):
                 with self.subTest(backend=backend,check_only=check_only):
                     calls_path.write_text('')
-                    cfg={'repository':str(self.repo_path),'reports_dir':str(self.base/'reports'),
-                         'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master',
+                    cfg={'mode':'git','reports_dir':str(self.base/'reports'),
+                         'git_mode':{'repository':str(self.repo_path),
+                             'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master'},
                          'agent':{'backend':backend,'executable':str(cli),'expected_version':'fixture-cli 1.0'}}
                     # Cover both startup warning and non-ASCII description propagation.
                     if not check_only:cfg['project_description']='ERP-система 1995 года.'
@@ -558,8 +558,8 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                     if check_only:cmd.append('--check')
                     result=subprocess.run(cmd,cwd=self.base,env=env,capture_output=True,text=True,timeout=30)
                     if backend == 'opencode':
-                        # The former fake CLI emits prompt-only JSON. It is no
-                        # longer a supported interface; native HTTP has its own fixtures.
+                        # This fixture lacks the required HTTP interface;
+                        # native HTTP has its own fixtures.
                         self.assertEqual(result.returncode,1,result.stderr)
                         calls=[json.loads(line) for line in calls_path.read_text().splitlines()]
                         self.assertFalse(any('context' in call for call in calls))

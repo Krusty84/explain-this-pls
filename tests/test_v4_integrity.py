@@ -161,7 +161,8 @@ class PrivateChainCompareTests(unittest.TestCase):
         for filename in ('extracted.json', 'expanded.json', 'binding.json'):
             with self.subTest(filename=filename):
                 config = git_fixtures.RepoFixture.config(self)
-                config.update(branches=['master', 'test01'], output_language='English')
+                config['git_mode']['branches'] = ['master', 'test01']
+                config.update(output_language='English')
                 runner = Runner(config, self.base / ('compare-chain-' + filename))
                 calls = []
                 def process(command, cwd, env, payload, **kwargs):

@@ -149,7 +149,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
                              json.loads((attempt / 'expanded.json').read_text()))
             self.assertEqual(json.loads((attempt / 'normalization.json').read_text())['replacement_count'], 0)
 
-    def test_legacy_contract_never_triggers_invented_registry_repair(self):
+    def test_missing_claims_never_triggers_invented_registry_repair(self):
         for backend in ('xxx', 'opencode'):
             for policy in ('strict', 'compromise'):
                 config = self.config() | {'result_policy': policy}
@@ -157,14 +157,32 @@ class NativeStructuredOutputTests(unittest.TestCase):
                 with self.subTest(backend=backend, policy=policy), patch.object(self, 'config', return_value=config):
                     if policy == 'strict':
                         with self.assertRaises(ContractError) as caught:
-                            self.stage(backend, 'legacy', repairs=2)
-                        self.assertIn('Expected the current evidence ledger structure', caught.exception.safe_message)
+                            self.stage(backend, 'missing-claims', repairs=2)
+                        self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')
+                        self.assertIn('claims', caught.exception.details['missing_keys'])
                     else:
-                        data, meta = self.stage(backend, 'legacy', repairs=2)
+                        data, meta = self.stage(backend, 'missing-claims', repairs=2)
                         self.assertIsNone(data)
                         self.assertNotIn('claims', meta['usable_material'])
                         self.assertFalse(meta['local_validation'])
                 self.assertEqual(len(self.prompts()) - before, 1)
+
+    def test_markdown_study_is_not_recovered_repaired_or_published(self):
+        for backend in ('xxx', 'opencode'):
+            for policy in ('strict', 'compromise'):
+                config = self.config() | {'result_policy': policy}
+                before = len(self.prompts())
+                with self.subTest(backend=backend, policy=policy), patch.object(self, 'config', return_value=config):
+                    with self.assertRaises(ContractError) as caught:
+                        self.stage(backend, 'markdown-study', repairs=2)
+                    self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')
+                    self.assertIn('report_sections', caught.exception.details['missing_keys'])
+                self.assertEqual(len(self.prompts()) - before, 1)
+                for name in ('study.json', 'study.material.json', 'ARCHITECTURE.md', 'review.plan.json'):
+                    self.assertFalse((self.destination.parent / name).exists())
+                metadata = json.loads((self.destination / 'invocation.json').read_text())
+                self.assertFalse(metadata['publication_complete'])
+                self.assertNotIn('usable_material', metadata)
 
     def test_claim_counts_and_no_normalization_even_empty(self):
         for backend in ('xxx', 'opencode'):

@@ -14,7 +14,7 @@ def registry_diff(previous, current):
     old = {c['id']: c for c in (previous['claims'] if isinstance(previous, dict) else previous)}
     new = {c['id']: c for c in (current['claims'] if isinstance(current, dict) else current)}
     def payload(claim):
-        return canonical({k: v for k, v in claim.items() if k not in ('id', 'document_locators', 'document_locator')})
+        return canonical({k: v for k, v in claim.items() if k not in ('id', 'document_locators')})
     old_values = {identifier: payload(c) for identifier, c in old.items()}
     new_values = {identifier: payload(c) for identifier, c in new.items()}
     for identifier in new.keys() - old.keys():

@@ -4,7 +4,9 @@
 """Deterministic English tables, separate from canonical narrative bytes."""
 import html
 import unicodedata
-from contracts import CONTRACT_VERSION, has_program_checks
+from contracts import is_recovered_material, validate_schema
+from document_rendering import validate_materialized
+from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
 
 LABELS = {
     'SUPPORTED': 'Supported according to the reviewing agent',
@@ -75,11 +77,19 @@ def render_coverage(plan, reports=(), checks=None):
     return '\n'.join(out) + '\n'
 
 
+def validate_report(stage, data):
+    if is_recovered_material(stage, data):
+        return
+    schemas = SAVED_FOLDER_SCHEMAS if type(data) is dict and 'source_directory' in data else SAVED_SCHEMAS
+    validate_schema(data, schemas[stage])
+    if stage == 'study':
+        validate_materialized(data)
+
+
 def render_stage(stage, data, language='English'):
-    if not has_program_checks(data):
-        if (data.get('contract_failure') or {}).get('details', {}).get('code'):
-            return '> Text retained after contract rejection; full policy checks are not complete.\n\n'
-        return '> Legacy or recovered format; new checks were not performed.\n\n'
+    validate_report(stage, data)
+    if is_recovered_material(stage, data):
+        return '> Text retained after contract rejection; full policy checks are not complete.\n\n'
     checks = data['program_checks']
     out = ['# Program checks and agent assessments', '',
         ('Study processing conditions satisfied; final acceptance depends on review.' if stage == 'study' else
@@ -87,13 +97,6 @@ def render_stage(stage, data, language='English'):
         'Policy checks not satisfied. Review is incomplete or has limitations/issues.', '',
         'Semantic review quality is not measured. Resolving a locator does not validate the conclusion.', '']
     out += ['- ' + cell(x) for x in data.get('limitations', [])]
-    historical = ((stage in ('study', 'review') and 'revision_id' not in data) or
-                  ((data.get('review_plan', {}).get('coverage_plan') or {}).get('contract_version', CONTRACT_VERSION) != CONTRACT_VERSION) or
-                  (data.get('normalization_provenance', {}).get('rule') == 'EVIDENCE_IDS_V3') or
-                  (stage == 'study' and 'materialization_provenance' not in data) or
-                  (stage == 'review' and any('document_locator' in c for c in data.get('claim_registry', []))))
-    if historical:
-        out += ['> Historical checks; no reacceptance under v4 was performed.', '']
     if stage == 'study':
         out += ['Study completion reported by the agent: ' + data['completion_status'], '']
         out += [render_coverage(data.get('review_plan', {}).get('coverage_plan'), data.get('coverage', []),
@@ -126,7 +129,7 @@ def render_stage(stage, data, language='English'):
             reply = replies.get(claim['id'], {})
             linked = checks.get('finding_ids_by_claim', {}).get(claim['id'], [])
             issues = '; '.join(fid + ': ' + findings[fid]['impact'] for fid in linked)
-            locations = claim.get('document_locators', [claim['document_locator']] if 'document_locator' in claim else [])
+            locations = claim['document_locators']
             evidence_refs = claim['evidence_ids'] + reply.get('evidence_ids', [])
             out.append('| ' + ' | '.join(cell(v) for v in (claim['id'],
                 ', '.join(f"L{location['start_line']}-L{location['end_line']}" for location in locations),

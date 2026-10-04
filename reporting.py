@@ -191,6 +191,9 @@ class NullReporter:
     def stop_progress(self):
         pass
 
+    def cli_started(self):
+        return False
+
 
 class Reporter(NullReporter):
     def __init__(self, *, mode='text', verbose=False, progress=True, stdout=None, stderr=None,

@@ -86,7 +86,7 @@ Evidence is structured exactly as in study: id E-001, source_id from sources,
 source-root-relative path, positive start_line/end_line, quote ("" unless exact).
 Reference review:E-001 for your pointers and study:E-001 for supplied pointers.
 These explicit namespaces are required in review, where both sets are available.
-The study-only compatibility rule for unprefixed local IDs does not apply here.
+The study-only normalization rule for unprefixed local IDs does not apply here.
 Source resolution is a separate program check, not support for your conclusion.
 Never compute hashes, follow symlinks, expose source secrets or cite an unlisted
 source. Limits: 256 pointers, 16 KiB/record, 200 lines and 64 KiB/fragment,

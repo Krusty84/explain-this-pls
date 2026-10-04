@@ -125,9 +125,11 @@ def validate_materialized(value):
             raise contract_violation('DOCUMENT_LOCATOR_MISMATCH', path)
     provenance = value['materialization_provenance']
     normalization = value.get('normalization_provenance')
-    if normalization is not None and (type(normalization) is not dict or
-            normalization.get('normalized_sha256') != provenance['normalized_sha256']):
-        raise contract_violation('MATERIALIZATION_HASH_MISMATCH', '$.materialization_provenance.normalized_sha256')
+    if normalization is not None:
+        from saved_contracts import NORMALIZATION_PROVENANCE
+        validate_schema(normalization, NORMALIZATION_PROVENANCE, '$.normalization_provenance')
+        if normalization['normalized_sha256'] != provenance['normalized_sha256']:
+            raise contract_violation('MATERIALIZATION_HASH_MISMATCH', '$.materialization_provenance.normalized_sha256')
     for key, actual in (('document_sha256', sha(value['report_markdown'].encode('utf-8'))),
                         ('registry_sha256', sha(canonical(value['claims']))),
                         ('block_map_sha256', sha(canonical(value['block_map'])))):

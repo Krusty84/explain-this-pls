@@ -1,4 +1,7 @@
-"""Public v3 settings fail before invoking a backend and inherit deliberately."""
+# SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
+# SPDX-License-Identifier: MIT
+
+"""Public settings fail before invoking a backend and inherit deliberately."""
 import copy
 from unittest.mock import patch
 
@@ -6,7 +9,27 @@ from explain import AuditError
 from test_folder import FolderFixture
 
 
-class V3ConfigTests(FolderFixture):
+class ConfigTests(FolderFixture):
+    def test_explicit_mode_and_active_section_required_before_backend(self):
+        original = copy.deepcopy(self.value)
+        for key in ('mode', 'folder_mode'):
+            self.value = {k: v for k, v in original.items() if k != key}
+            with self.subTest(key=key), patch('explain.process') as process:
+                with self.assertRaisesRegex(AuditError, 'Missing configuration'):
+                    self.config()
+                process.assert_not_called()
+
+    def test_top_level_source_keys_rejected_before_backend(self):
+        original = copy.deepcopy(self.value)
+        source = {'repository': './source', 'branches': ['main'], 'baseline_branch': 'main'}
+        for mode in ('git', 'folder'):
+            for key, value in source.items():
+                self.value = original | {'mode': mode, 'git_mode': source, key: value}
+                with self.subTest(mode=mode, key=key), patch('explain.process') as process:
+                    with self.assertRaisesRegex(AuditError, 'Unknown configuration keys:.*' + key):
+                        self.config()
+                    process.assert_not_called()
+
     def test_catalog_inherits_effective_study_then_its_own_overrides(self):
         self.value['agent']['model'] = 'shared'
         self.value['stage_agents'] = {'study': {'model': 'study-model', 'expected_version': 'pinned'},

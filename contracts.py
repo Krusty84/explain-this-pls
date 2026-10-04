@@ -288,6 +288,8 @@ def has_ledger_structure(stage, value, *, representation='materialized'):
               'review': ('claims', 'evidence', 'target', 'omission_search', 'prior_findings'),
               'compare': ('differences', 'unresolved_branches')}
     specs = dict(SCHEMAS[stage]['properties'])
+    if stage == 'study' and representation == 'wire' and (type(value) is not dict or 'report_sections' not in value):
+        return False
     if stage == 'study' and representation != 'wire':
         specs['claims'] = array(MATERIALIZED_CLAIM)
         if type(value) is not dict or type(value.get('report_markdown')) is not str:
@@ -301,6 +303,22 @@ def has_program_checks(value):
     """Saved processing marker, forbidden in wire responses; not a signature."""
     return (type(value) is dict and type(value.get('program_checks')) is dict
             and value['program_checks'].get('contract') == 'VALID')
+
+def is_recovered_material(stage, value):
+    """Recognize explicitly retained current-format text without a claim registry."""
+    origins = {'study': 'PROGRAM_ASSEMBLED_AUTHOR_BLOCKS', 'review': 'MODEL_MARKDOWN'}
+    if (stage not in origins or type(value) is not dict or value.get('strict_valid') is not False
+            or value.get('narrative_origin') != origins[stage]
+            or value.get('task') != SCHEMAS[stage]['properties']['task']['enum'][0]
+            or type(value.get('report_markdown')) is not str or not value['report_markdown'].strip()
+            or type(value.get('validation_issues')) is not dict
+            or any(key in value for key in ('claims', 'program_checks', 'materialization_provenance'))):
+        return False
+    if 'normalization_provenance' in value:
+        from saved_contracts import NORMALIZATION_PROVENANCE
+        if schema_diagnostics(value['normalization_provenance'], NORMALIZATION_PROVENANCE, limit=0)['total_violations']:
+            return False
+    return True
 
 def unique_ids(records, pattern, path):
     seen = set()
@@ -355,18 +373,7 @@ def references(refs, allowed, path, *, namespaces=None):
 
 def validate_wire_identity(stage, value, context, mode='git'):
     """Structural and pinned-identity prerequisites; performs no repair."""
-    try:
-        validate_schema(value, (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage])
-    except ContractError as exc:
-        if (type(value) is dict and (not has_ledger_structure(stage, value, representation='wire')
-                or (stage == 'study' and 'report_markdown' in value))
-                and not exc.details.get('code')):
-            exc.safe_message = ('Expected the current evidence ledger structure. Legacy output/custom prompts '
-                                + ('must be updated to v4 report_sections, coverage and blocks[].claim_ids with no '
-                                   'report_markdown/document_locator; ' if stage == 'study' else
-                                   'must be updated to the current ' + stage + ' wire schema; ')
-                                + 'new checks cannot be inferred from old fields.')
-        raise
+    validate_schema(value, (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage])
     if stage in ('catalog', 'study', 'review'):
         identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
         for key in identity:
@@ -562,17 +569,3 @@ def transport_json(text):
         return strict_json(text)
     except ContractError as exc:
         raise response_error('TRANSPORT_ERROR', 'transport', 'Invalid transport JSON.', **exc.details) from exc
-
-
-def parse_backend(backend: str, output: str) -> tuple[dict, dict]:
-    """Normalize only documented transports. Never extract JSON with a greedy regex."""
-    if backend == 'codex':
-        from codex import parse_output
-        return parse_output(output)
-    if backend == 'claude-code':
-        from claude_code import parse_output
-        return parse_output(output)
-    if backend == 'opencode':
-        raise response_error('BACKEND_INCOMPATIBLE', 'compatibility',
-                             'OpenCode text event parsing was removed; native HTTP structured output is required.')
-    raise ContractError(f'Unknown backend: {backend}')

@@ -310,7 +310,7 @@ class LedgerTests(unittest.TestCase):
         data['differences'][0].update(classification='CONFIRMED_DIFFERENCE', evidence_refs=[ref(baseline), ref(other)])
         with self.assertRaises(ContractError): validate_result('compare', data, ctx)
 
-    def test_replay_render_labels_and_legacy_do_not_upgrade(self):
+    def test_replay_render_labels_and_reject_unsupported_formats(self):
         pair = self.pair('main')
         for language in ('Russian', 'English'):
             a = render_stage('review', pair['review'], language)
@@ -320,8 +320,8 @@ class LedgerTests(unittest.TestCase):
             self.assertNotIn('print(1)', a)
         legacy = {'completion_status': 'COMPLETE', 'report_markdown': '# Historical PASS', 'verdict': 'PASS'}
         self.assertFalse(accepted({'study': legacy, 'review': legacy}))
-        report, _ = render_final_report({'status': 'COMPLETE', 'study': legacy, 'review': legacy}, {'path': '/old'}, 'folder', 'English')
-        self.assertIn('Legacy', report); self.assertIn('# Historical PASS', report)
+        with self.assertRaises(ContractError):
+            render_final_report({'status': 'COMPLETE', 'study': legacy, 'review': legacy}, {'path': '/old'}, 'folder', 'English')
         old = copy.deepcopy(pair)
         old['study'].pop('materialization_provenance')
         old['study'].pop('block_map')
@@ -330,7 +330,8 @@ class LedgerTests(unittest.TestCase):
                 claim['document_locator'] = claim.pop('document_locators')[0]
         original = copy.deepcopy(old)
         for stage in ('study', 'review'):
-            self.assertIn('Historical checks; no reacceptance under v4', render_stage(stage, old[stage], 'English'))
+            with self.assertRaises(ContractError): render_stage(stage, old[stage], 'English')
+        with self.assertRaises(ContractError): review_context(old['study'], self.context)
         self.assertFalse(accepted(old))
         self.assertEqual(old, original)
         pair['study']['claims'][0]['scope'] += ' modified'

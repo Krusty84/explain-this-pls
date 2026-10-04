@@ -117,7 +117,7 @@ or "review"), revision_id, claim_id and review_target_id supplied for that branc
 selected revision. Two references to one side do not justify a strong contrast.
 Each side needs a referenced FACT assessed as SUPPORTED in its review. An accepted
 hypothesis/unknown caveat is not factual support for a strong implementation contrast.
-Legacy, recovered and incomplete inputs cannot support CONFIRMED_DIFFERENCE.
+Recovered and incomplete inputs cannot support CONFIRMED_DIFFERENCE.
 Empty evidence_refs are allowed for explicitly insufficient/unverified material.
 Do not return computed fields. Python renders the difference table from JSON;
 do not duplicate it in Markdown. All support is according to the comparing agent,

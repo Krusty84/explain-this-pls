@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Offline compatibility, diagnostics and provenance; no provider calls."""
+"""Offline normalization, diagnostics and provenance; no provider calls."""
 import copy
 import io
 import json
@@ -14,7 +14,7 @@ from evidence import canonical, sha, SourceChanged
 from explain import AuditError, Folder, Runner, atomic
 from ledger import prepare_result, review_context
 from reporting import Reporter, diagnostic
-from study_normalization import normalize_study, normalization_provenance, RULE
+from study_normalization import normalize_evidence, normalization_provenance, RULE
 from test_evidence_ledger import study, review
 from test_folder import FolderFixture
 from fixtures.ledger_response import response, model_wire, prompt_context
@@ -41,7 +41,7 @@ class PureNormalizationTests(unittest.TestCase):
         self.data['claims'][0]['evidence_ids'] += ['study:E-0001']
         self.data['claims'][1]['evidence_ids'] = ['E-0001', 'study:E-001']
         original = copy.deepcopy(self.data)
-        candidate, changes = normalize_study(self.data, self.context)
+        candidate, changes = normalize_evidence('study', self.data, self.context)
         self.assertEqual(self.data, original)
         self.assertEqual(changes, [
             dict(rule=RULE, path='$.claims[0].evidence_ids[0]', before='E-001', after='study:E-001'),
@@ -51,7 +51,7 @@ class PureNormalizationTests(unittest.TestCase):
         expected['claims'][1]['evidence_ids'][0] = 'study:E-0001'
         self.assertEqual(candidate, expected)  # Every other field and array order is identical.
         validate_result('study', candidate, self.context)
-        again, changes = normalize_study(candidate, self.context)
+        again, changes = normalize_evidence('study', candidate, self.context)
         self.assertEqual((again, changes), (candidate, []))
         self.assertIsNot(again, candidate)
         again['evidence'][0]['path'] = 'different'
@@ -63,7 +63,7 @@ class PureNormalizationTests(unittest.TestCase):
                     'SECRET\n\x1b[31m<script>'):
             with self.subTest(ref=ref):
                 self.data['claims'][0]['evidence_ids'] = [ref]
-                candidate, changes = normalize_study(self.data, self.context)
+                candidate, changes = normalize_evidence('study', self.data, self.context)
                 self.assertEqual((candidate, changes), (self.data, []))
                 code = 'INVALID_EVIDENCE_NAMESPACE' if ref in ('review:E-001', 'Study:E-001') else 'UNKNOWN_EVIDENCE_REFERENCE'
                 exc = self.error(candidate, code, '$.claims[0].evidence_ids[0]')
@@ -75,13 +75,13 @@ class PureNormalizationTests(unittest.TestCase):
             data = copy.deepcopy(self.data)
             data['evidence'].append(dict(data['evidence'][0], id=identifier))
             with self.subTest(identifier=identifier), self.assertRaises(ContractError) as caught:
-                normalize_study(data, self.context)
+                normalize_evidence('study', data, self.context)
             self.assertEqual(caught.exception.details, {'code': code, 'path': '$.evidence[1].id'})
             self.assertEqual(data['claims'][0]['evidence_ids'], ['E-001'])
 
     def test_converging_references_remain_duplicate(self):
         self.data['claims'][0]['evidence_ids'] = ['E-001', 'study:E-001']
-        candidate, changes = normalize_study(self.data, self.context)
+        candidate, changes = normalize_evidence('study', self.data, self.context)
         self.assertEqual(len(changes), 1)
         self.assertEqual(candidate['claims'][0]['evidence_ids'], ['study:E-001'] * 2)
         self.error(candidate, 'DUPLICATE_EVIDENCE_REFERENCE', '$.claims[0].evidence_ids[1]')
@@ -90,7 +90,7 @@ class PureNormalizationTests(unittest.TestCase):
         for claims in ('[{"private":"' + 's' * 21295, '[]', None, {}, [None]):
             data = self.data | {'claims': claims}
             with self.subTest(typ=type(claims)), self.assertRaises(ContractError) as caught:
-                normalize_study(data, self.context)
+                normalize_evidence('study', data, self.context)
             self.assertEqual(data['claims'], claims)
             if type(claims) is not list:
                 self.assertEqual(caught.exception.details['code'], 'CLAIMS_TYPE_MISMATCH')
@@ -98,25 +98,25 @@ class PureNormalizationTests(unittest.TestCase):
                 self.assertEqual(caught.exception.details['expected_type'], 'array')
                 self.assertNotIn('s' * 100, str(diagnostic(caught.exception)))
         for field, value in (('evidence', '[]'), ('accepted', True), ('normalization_provenance', {})):
-            with self.assertRaises(ContractError): normalize_study(self.data | {field: value}, self.context)
+            with self.assertRaises(ContractError): normalize_evidence('study', self.data | {field: value}, self.context)
         self.data['claims'][0]['evidence_ids'] = [1]
-        with self.assertRaises(ContractError): normalize_study(self.data, self.context)
+        with self.assertRaises(ContractError): normalize_evidence('study', self.data, self.context)
 
     def test_study_only_identity_and_folder_prerequisites(self):
-        with self.assertRaises(ContractError): normalize_study(self.data, {})
+        with self.assertRaises(ContractError): normalize_evidence('study', self.data, {})
         for key, value in (('task', 'architecture_review'), ('branch', 'other'), ('source_commit', 'wrong')):
             with self.subTest(key=key), self.assertRaises(ContractError):
-                normalize_study(self.data | {key: value}, self.context)
+                normalize_evidence('study', self.data | {key: value}, self.context)
         context = {'source_directory': '/source', 'source_fingerprint': 'abc'}
         data = {k: v for k, v in self.data.items() if k not in ('branch', 'source_commit')} | context
-        candidate, changes = normalize_study(data, context, 'folder')
+        candidate, changes = normalize_evidence('study', data, context, 'folder')
         self.assertEqual(len(changes), 1)
         validate_result('study', candidate, context, 'folder')
-        with self.assertRaises(ContractError): normalize_study(data | {'source_fingerprint': 'bad'}, context, 'folder')
+        with self.assertRaises(ContractError): normalize_evidence('study', data | {'source_fingerprint': 'bad'}, context, 'folder')
 
     def test_claims_type_diagnostic_survives_bounded_schema_detail_list(self):
         data = self.data | {'evidence': [None] * 110, 'claims': 'SECRET_INVALID_REGISTRY'}
-        with self.assertRaises(ContractError) as caught: normalize_study(data, self.context)
+        with self.assertRaises(ContractError) as caught: normalize_evidence('study', data, self.context)
         self.assertEqual(caught.exception.details['code'], 'CLAIMS_TYPE_MISMATCH')
         self.assertEqual(caught.exception.details['actual_type'], 'string')
         self.assertTrue(caught.exception.details['truncated'])
@@ -124,20 +124,20 @@ class PureNormalizationTests(unittest.TestCase):
 
     def test_full_validation_still_checks_block_links_ids_and_completion(self):
         self.data['report_sections'][0]['blocks'][0]['claim_ids'] = ['C-999']
-        candidate, changes = normalize_study(self.data, self.context)
+        candidate, changes = normalize_evidence('study', self.data, self.context)
         self.assertEqual(len(changes), 1)
         self.error(candidate, 'UNKNOWN_REFERENCE', '$.report_sections[0].blocks[0].claim_ids[0]')
         self.data['claims'][0]['id'] = 'bad'
-        candidate, _ = normalize_study(self.data, self.context)
+        candidate, _ = normalize_evidence('study', self.data, self.context)
         self.error(candidate, 'INVALID_RECORD_ID', '$.claims[0].id')
         self.data['claims'][0]['id'] = 'C-001'
         self.data['report_sections'][0]['blocks'][0]['claim_ids'] = ['C-001']
         self.data.update(completion_status='PARTIAL', limitations=['Incomplete.'])
-        candidate, _ = normalize_study(self.data, self.context)
+        candidate, _ = normalize_evidence('study', self.data, self.context)
         self.assertEqual(candidate['completion_status'], 'PARTIAL')
 
     def test_review_keeps_explicit_namespaces_and_target_diagnostics(self):
-        candidate, _ = normalize_study(self.data, self.context)
+        candidate, _ = normalize_evidence('study', self.data, self.context)
         context = review_context(prepare_result('study', candidate, self.context), self.context)
         data = review(context)
         for ref in ('E-001', 'review:E-001', 'study:E-001'):
@@ -147,7 +147,7 @@ class PureNormalizationTests(unittest.TestCase):
                 self.assertEqual(caught.exception.details['code'], 'UNKNOWN_EVIDENCE_REFERENCE')
             else:
                 validate_result('review', data, context)
-            with self.assertRaises(ContractError): normalize_study(data, context)
+            with self.assertRaises(ContractError): normalize_evidence('study', data, context)
         data['target'] = data['target'] | {'document_sha256': 'wrong'}
         with self.assertRaises(ContractError) as caught: validate_result('review', data, context)
         self.assertEqual(caught.exception.details['code'], 'TARGET_IDENTITY_MISMATCH')
@@ -216,7 +216,7 @@ class NormalizationPipelineTests(FolderFixture):
                 self.assertEqual(extracted, model_wire(original, prompt_context((attempt / 'input.prompt.txt').read_bytes()), context))
                 self.assertEqual(expanded, original)
                 self.assertEqual(raw, original)
-                candidate, changes = normalize_study(expanded, context, 'folder')
+                candidate, changes = normalize_evidence('study', expanded, context, 'folder')
                 self.assertEqual(normalized, candidate)
                 self.assertEqual((attempt / 'extracted.json').read_bytes(), extracted_bytes)
                 provenance = normalization_provenance(expanded, candidate, changes)

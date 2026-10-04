@@ -11,7 +11,7 @@ from evidence import canonical, sha
 from explain import Runner
 from fixtures.ledger_response import response, prompt_context
 from test_folder import FolderFixture
-from test_v3_pipeline import initial_finding
+from test_revision_pipeline import initial_finding
 import test_structured_output as native_fixtures
 
 

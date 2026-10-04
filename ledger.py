@@ -5,7 +5,7 @@
 from __future__ import annotations
 import copy
 from collections import Counter
-from contracts import CONTRACT_VERSION, ARTIFACT_VERSION, ContractError, contract_violation, has_ledger_structure, has_program_checks, review_verdict
+from contracts import CONTRACT_VERSION, ARTIFACT_VERSION, ContractError, contract_violation, has_ledger_structure, has_program_checks, is_recovered_material, review_verdict
 from evidence import canonical, sha, source_catalog, resolve_evidence
 from coverage_plan import build_coverage_plan, verify_coverage_plan, coverage_checks
 from source_decoding import normalize_source_decoding
@@ -17,7 +17,7 @@ OMISSION_AREAS = ('context', 'components', 'startup_and_flows', 'data_and_state'
 def freeze_plan(document, context):
     if 'report_sections' in document:
         raise contract_violation('UNMATERIALIZED_STUDY', '$.report_sections')
-    if has_ledger_structure('study', document) or 'materialization_provenance' in document or has_program_checks(document):
+    if not is_recovered_material('study', document):
         from document_rendering import validate_materialized
         validate_materialized(document)
     registry = copy.deepcopy(document.get('claims', [])) if has_ledger_structure('study', document) else []

@@ -28,12 +28,12 @@ def initial_finding(stage, context, data, severity='HIGH'):
     return data
 
 
-class V3PipelineTests(FolderFixture):
+class RevisionPipelineTests(FolderFixture):
     def run_case(self, change=None, *, rounds=1, policy='strict', continue_on_error=True, verify_immutable=True):
         self.value.update(result_policy=policy, continue_on_error=continue_on_error,
                           execution={'max_revision_rounds': rounds}, output_language='English')
         config = self.config()
-        run_dir = self.base / ('v3-run-' + str(len(list(self.base.glob('v3-run-*')))))
+        run_dir = self.base / ('revision-run-' + str(len(list(self.base.glob('revision-run-*')))))
         runner = Runner(config, run_dir)
         calls, originals, frozen_first = [], {}, {}
 
@@ -281,7 +281,7 @@ class V3PipelineTests(FolderFixture):
             def change(stage, context, data):
                 initial_finding(stage, context, data)
                 if stage == 'study' and context['revision_id'] == '002':
-                    active = max(self.base.glob('v3-run-*'), key=lambda path: path.stat().st_mtime_ns)
+                    active = max(self.base.glob('revision-run-*'), key=lambda path: path.stat().st_mtime_ns)
                     with (active / 'revisions' / '001' / name).open('ab') as stream:
                         stream.write(b'\nTAMPERED\n')
                     return 'transport_failure'
@@ -298,7 +298,7 @@ class V3PipelineTests(FolderFixture):
             if stage == 'study':
                 data['unexpected'] = True
             elif stage == 'review':
-                active = max(self.base.glob('v3-run-*'), key=lambda path: path.stat().st_mtime_ns)
+                active = max(self.base.glob('revision-run-*'), key=lambda path: path.stat().st_mtime_ns)
                 with (active / 'revisions' / '001' / 'study.material.json').open('ab') as stream:
                     stream.write(b'\nTAMPERED\n')
             return data
@@ -327,7 +327,7 @@ class V3PipelineTests(FolderFixture):
                     self.assertEqual(manifest['revisions'], [])
 
 
-class V3GitPipelineTests(unittest.TestCase):
+class RevisionGitPipelineTests(unittest.TestCase):
     setUp = git_fixtures.RepoFixture.setUp
     tearDown = git_fixtures.RepoFixture.tearDown
     git = git_fixtures.RepoFixture.git
@@ -337,8 +337,9 @@ class V3GitPipelineTests(unittest.TestCase):
             for location in ('revision', 'alias'):
                 with self.subTest(name=name, location=location):
                     config = git_fixtures.RepoFixture.config(self)
-                    config.update(branches=['master', 'test01'], output_language='English', result_policy='compromise')
-                    runner = Runner(config, self.base / ('v3-recovered-sidecars-' + name + '-' + location))
+                    config['git_mode']['branches'] = ['master', 'test01']
+                    config.update(output_language='English', result_policy='compromise')
+                    runner = Runner(config, self.base / ('revision-recovered-sidecars-' + name + '-' + location))
                     calls = []
                     def process(command, cwd, env, payload, **kwargs):
                         context = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n', 1)[1]
@@ -369,8 +370,9 @@ class V3GitPipelineTests(unittest.TestCase):
 
     def test_comparison_cannot_change_the_frozen_coverage_plan(self):
         config = git_fixtures.RepoFixture.config(self)
-        config.update(branches=['master', 'test01'], output_language='English')
-        runner = Runner(config, self.base / 'v3-coverage-guard')
+        config['git_mode']['branches'] = ['master', 'test01']
+        config.update(output_language='English')
+        runner = Runner(config, self.base / 'revision-coverage-guard')
         def process(command, cwd, env, payload, **kwargs):
             context = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n', 1)[1]
                                  .split('\n\n# Required final JSON Schema', 1)[0])
@@ -387,8 +389,9 @@ class V3GitPipelineTests(unittest.TestCase):
 
     def test_comparison_receives_only_selected_revision_and_resolves_its_claims(self):
         config = git_fixtures.RepoFixture.config(self)
-        config.update(branches=['master', 'test01'], output_language='English')
-        runner = Runner(config, self.base / 'v3-git')
+        config['git_mode']['branches'] = ['master', 'test01']
+        config.update(output_language='English')
+        runner = Runner(config, self.base / 'revision-git')
         calls = []
         def process(command, cwd, env, payload, **kwargs):
             context = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n', 1)[1]

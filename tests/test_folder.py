@@ -114,16 +114,16 @@ class ModeConfigTests(FolderFixture):
         self.assertEqual(set(cfg['_agents']), {'catalog', 'study', 'review'})
         self.assertEqual(set(cfg['_prompt_paths']), {'catalog', 'study', 'review', 'revise'})
 
-    def test_git_grouped_and_legacy_formats(self):
+    def test_git_sections_are_required(self):
         git = {'repository': './source', 'branches': ['master', 'customer'], 'baseline_branch': 'master'}
         self.value.update(mode='git', git_mode=git, folder_mode={'path': None})
         grouped = self.config()
         self.assertEqual(Runner(grouped, self.base / 'run').source_path, self.source)
         self.value.pop('mode'); self.value.pop('git_mode'); self.value.pop('folder_mode')
         self.value.update(git)
-        legacy = self.config()
-        self.assertEqual(legacy['repository'], str(self.source))
-        self.assertEqual(set(legacy['_agents']), {'catalog', 'study', 'review', 'compare'})
+        with patch('explain.process') as process, self.assertRaisesRegex(AuditError, 'Unknown configuration keys'):
+            self.config()
+        process.assert_not_called()
 
     def test_invalid_modes_sections_and_mixed_formats(self):
         original = copy.deepcopy(self.value)
@@ -138,7 +138,7 @@ class ModeConfigTests(FolderFixture):
                 self.config()
         self.value = copy.deepcopy(original)
         del self.value['mode']
-        with self.assertRaisesRegex(AuditError, 'requires mode'):
+        with self.assertRaisesRegex(AuditError, 'Missing configuration key: mode'):
             self.config()
         self.value = copy.deepcopy(original)
         del self.value['folder_mode']
@@ -375,7 +375,7 @@ class FolderCLIIntegrationTests(FolderFixture):
                     self.value['project_description'] = '' if check else 'ERP-система 1995 года.'
                     result = self.execute(check)
                     if backend == 'opencode':
-                        # Legacy text fixture is unsupported; HTTP pipeline is
+                        # This fixture lacks the required HTTP interface; the pipeline is
                         # covered separately, with its upstream capability limit explicit.
                         self.assertEqual(result.returncode, 1, result.stderr)
                         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]

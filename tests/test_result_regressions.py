@@ -7,7 +7,8 @@ import io
 from pathlib import Path
 import unittest
 
-from contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS, parse_backend, strict_json, validate_result
+import claude_code
+from contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS, strict_json, validate_result
 from reporting import Reporter, diagnostic
 
 
@@ -35,7 +36,7 @@ class ResultRegressions(unittest.TestCase):
     def test_claude_untrusted_transport_types(self):
         for value in (None, [], 'secret', {'is_error': []}, {'structured_output': {}}):
             with self.subTest(value=value), self.assertRaises(ContractError) as caught:
-                parse_backend('claude-code', json.dumps(value))
+                claude_code.parse_output(json.dumps(value))
             self.assertEqual(diagnostic(caught.exception).failure_kind, 'TRANSPORT_ERROR')
 
     def test_public_schemas_equal_python_source(self):

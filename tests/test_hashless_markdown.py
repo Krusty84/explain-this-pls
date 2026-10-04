@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from contracts import SECTION_KEYS
+from contracts import ContractError, SECTION_KEYS
 from final_report import render_final_report
 from ledger import prepare_result, review_context
 from presentation import render_stage
@@ -72,13 +72,18 @@ class HashlessMarkdownTests(unittest.TestCase):
         self.assertIn(self.narrative, markdown)
         self.assertEqual((self.study, self.review), original)
 
-    def test_historical_v3_is_labelled_without_migration(self):
+    def test_unsupported_normalization_provenance_is_rejected(self):
         for stage, current in (('study', self.study), ('review', self.review)):
             with self.subTest(stage=stage):
                 historical = copy.deepcopy(current)
-                historical['normalization_provenance'] = {'rule': 'EVIDENCE_IDS_V3'}
+                historical['normalization_provenance'] = {'rule': 'EVIDENCE_IDS_V3',
+                    'hash_format': 'canonical-json-utf8-v1', 'input_sha256': 'a' * 64,
+                    'normalized_sha256': self.study['materialization_provenance']['normalized_sha256'],
+                    'replacement_count': 0}
                 before = copy.deepcopy(historical)
-                self.assertIn('Historical checks; no reacceptance under v4', render_stage(stage, historical))
+                with self.assertRaises(ContractError): render_stage(stage, historical)
+                if stage == 'study':
+                    with self.assertRaises(ContractError): review_context(historical, self.context)
                 self.assertEqual(historical, before)
 
 

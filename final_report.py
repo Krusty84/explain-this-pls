@@ -13,12 +13,13 @@ def recoverable_material(stage, data, context, mode, diagnostics):
     if stage not in ('study', 'review') or type(data) is not dict:
         return None
     identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
-    narrative = data.get('report_markdown')
-    narrative_origin = 'LEGACY_MODEL_MARKDOWN' if stage == 'study' else 'MODEL_MARKDOWN'
-    if stage == 'study' and 'report_sections' in data:
+    if stage == 'study':
         from document_rendering import recover_sections
-        narrative = recover_sections(data['report_sections'])
+        narrative = recover_sections(data.get('report_sections'))
         narrative_origin = 'PROGRAM_ASSEMBLED_AUTHOR_BLOCKS'
+    else:
+        narrative = data.get('report_markdown')
+        narrative_origin = 'MODEL_MARKDOWN'
     if (data.get('task') != SCHEMAS[stage]['properties']['task']['enum'][0]
             or any(type(data.get(k)) is not str or data[k] != context.get(k) for k in identity)
             or type(narrative) is not str or not narrative.strip()):
@@ -47,7 +48,11 @@ def recoverable_material(stage, data, context, mode, diagnostics):
 
 
 def stage_document(item, stage):
-    return item.get(stage) or item.get(stage + '_material')
+    from presentation import validate_report
+    document = item.get(stage) or item.get(stage + '_material')
+    if document is not None:
+        validate_report(stage, document)
+    return document
 
 
 def usable_study(item):
@@ -141,9 +146,9 @@ def render_final_report(manifest, source, mode, language='Russian'):
                               'Text retained; policy checks not completed. Agent self-assessment: ') +
                             (doc.get('completion_status') or 'UNAVAILABLE') + '.', '']
                 if not failure or not failure.get('details', {}).get('code'):
-                    out += ['> ' + t('Старый формат или текст с нарушениями контракта; новые проверки не выполнялись. '
+                    out += ['> ' + t('Восстановленный текст с нарушениями контракта; проверки политики не завершены. '
                                       'Исходный текст не получает положительную приёмку.',
-                                      'Legacy format or text with contract violations; new checks were not performed. '
+                                      'Recovered text with contract violations; policy checks are not complete. '
                                       'Original text has no positive acceptance.'), '']
             if stage == 'study':
                 out += [render_stage(stage, doc, language), '']

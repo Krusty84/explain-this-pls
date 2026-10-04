@@ -82,7 +82,8 @@ class TimeoutRestorationTests(unittest.TestCase):
 
     def test_git_restoration_runs_after_agent_deadline_expires(self):
         config = self.config()
-        config.update(branches=['master'], continue_on_error=False)
+        config['git_mode']['branches'] = ['master']
+        config.update(continue_on_error=False)
         runner = Runner(config, self.base / 'timeout-run')
         self.addCleanup(runner.repo.close)
         with patch.object(runner, 'check_cli', return_value={}), \

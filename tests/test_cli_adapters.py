@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 import claude_code
 import codex
-from contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS, parse_backend
+from contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS
 from explain import AuditError, Runner
 
 
@@ -80,7 +80,7 @@ class CLIAdapterTests(unittest.TestCase):
                     flags.clear()
                     self.assertEqual(adapter.required_flags(mode), expected)
 
-    def test_parsers_and_legacy_entry_point_preserve_results_and_metadata(self):
+    def test_parsers_preserve_results_and_metadata(self):
         data = {'report_markdown': '# Report', 'completion_status': 'COMPLETE'}
         metadata = {'session_id': 'session', 'total_cost_usd': 0.25,
                     'usage': {'input_tokens': 10}, 'modelUsage': {'chosen-model': {}}}
@@ -93,7 +93,6 @@ class CLIAdapterTests(unittest.TestCase):
             with self.subTest(backend=backend):
                 output = '\n ' + json.dumps(envelope) + ' \n'
                 self.assertEqual(ADAPTERS[backend].parse_output(output), (data, expected_metadata))
-                self.assertEqual(parse_backend(backend, output), (data, expected_metadata))
 
     def test_parsers_preserve_failure_classification(self):
         cases = [
@@ -107,12 +106,10 @@ class CLIAdapterTests(unittest.TestCase):
             ('claude-code', '{"is_error": false, "structured_output": []}', 'INCOMPLETE_OUTPUT', 'result'),
         ]
         for backend, output, kind, layer in cases:
-            for parse in (ADAPTERS[backend].parse_output, lambda text: parse_backend(backend, text)):
-                with self.subTest(backend=backend, output=output, parse=parse), \
-                        self.assertRaises(ContractError) as caught:
-                    parse(output)
-                self.assertEqual(caught.exception.failure_kind, kind)
-                self.assertEqual(caught.exception.failure_layer, layer)
+            with self.subTest(backend=backend, output=output), self.assertRaises(ContractError) as caught:
+                ADAPTERS[backend].parse_output(output)
+            self.assertEqual(caught.exception.failure_kind, kind)
+            self.assertEqual(caught.exception.failure_layer, layer)
 
     def test_adapters_import_without_orchestrator_in_any_order(self):
         script = '''
@@ -120,9 +117,10 @@ import importlib
 import sys
 for name in sys.argv[1:]:
     importlib.import_module(name)
-from contracts import parse_backend
-assert parse_backend('codex', '{}') == ({}, {})
-assert parse_backend('claude-code', '{"is_error": false, "structured_output": {}}') == ({}, {})
+import codex
+import claude_code
+assert codex.parse_output('{}') == ({}, {})
+assert claude_code.parse_output('{"is_error": false, "structured_output": {}}') == ({}, {})
 assert 'explain' not in sys.modules
 '''
         for order in itertools.permutations(('codex', 'claude_code', 'contracts')):

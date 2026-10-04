@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Synthetic v3 fixtures. No historical responses or real model calls."""
+"""Synthetic current-format fixtures. No historical responses or real model calls."""
 import copy
 import json
 from pathlib import Path
@@ -125,11 +125,32 @@ class RenderingTests(unittest.TestCase):
         ctx = review_context(recovered, self.context)
         self.assertEqual(ctx['claim_registry'], [])
         self.assertFalse(ctx['review_plan']['eligible_study'])
-        legacy = {k: v for k, v in self.wire.items() if k != 'report_sections'} | {'report_markdown': '# Legacy'}
-        with self.assertRaises(ContractError) as caught: validate_result('study', legacy, self.context)
-        self.assertIn('report_sections', caught.exception.safe_message)
-        material = recoverable_material('study', legacy, self.context, 'git', {})
-        self.assertEqual(material['narrative_origin'], 'LEGACY_MODEL_MARKDOWN')
+        from presentation import render_stage
+        self.assertIn('Text retained after contract rejection', render_stage('study', recovered))
+        for key in ('strict_valid', 'narrative_origin'):
+            unmarked = {k: v for k, v in recovered.items() if k != key}
+            with self.assertRaises(ContractError): review_context(unmarked, self.context)
+            with self.assertRaises(ContractError): render_stage('study', unmarked)
+
+    def test_markdown_study_is_rejected_without_recovery_or_review(self):
+        from presentation import render_stage
+        for mode, context in (('git', self.context),
+                ('folder', dict(source_directory='/source', source_fingerprint='abc'))):
+            data = response(context)
+            data.pop('report_sections')
+            data['report_markdown'] = '# Legacy'
+            original = copy.deepcopy(data)
+            with self.subTest(mode=mode):
+                with self.assertRaises(ContractError) as caught: validate_result('study', data, context, mode)
+                self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')
+                self.assertEqual(caught.exception.failure_layer, 'schema')
+                self.assertEqual(caught.exception.details['path'], '$')
+                self.assertIn('report_sections', caught.exception.details['missing_keys'])
+                self.assertIsNone(recoverable_material('study', data, context, mode, {}))
+                self.assertFalse(has_ledger_structure('study', data, representation='wire'))
+                with self.assertRaises(ContractError): review_context(data, context)
+                with self.assertRaises(ContractError): render_stage('study', data)
+                self.assertEqual(data, original)
 
     def test_link_counts_are_claims_not_occurrences(self):
         self.wire['report_sections'][0]['blocks'] *= 3

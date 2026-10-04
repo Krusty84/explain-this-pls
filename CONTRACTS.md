@@ -7,11 +7,9 @@ are **model wire** schemas generated from `MODEL_SCHEMAS` / `MODEL_FOLDER_SCHEMA
 in `contracts.py`. Internal `SCHEMAS` / `FOLDER_SCHEMAS` validate the expanded
 representation, which retains full integrity identities. Separate `saved-*.schema.json`
 files are generated from `saved_contracts.py` and locally validated before publication.
-Historical formats without the required ledger structure are legacy. Absence of a
-version field is normal and does not identify a legacy response. There is no
-automatic upgrade or import system.
-Old reports remain readable as original agent text, with the label “Legacy format;
-new checks were not performed”. They cannot receive positive acceptance.
+The only supported contract is `evidence-ledger-v4`. Rendering requires the current
+saved schema or explicitly marked recovery material from the current format.
+Unsupported results are rejected without modifying their artifacts.
 
 ## Data provenance and storage
 
@@ -69,8 +67,7 @@ the edge case where an authored trailing bare CR touches a program-added LF.
 After materialization no whitespace or newline changes are allowed before hashing,
 review or publication. `study.annotated.md` contains generated checks and the registry.
 `ARCHITECTURE_REVIEW.md` and `BRANCH_COMPARISON.md` contain generated tables;
-`study.original.md` retains the canonical program assembly of authored blocks
-(the historical filename does not mean model-authored Markdown).
+`study.original.md` retains the canonical program assembly of authored blocks.
 `review.original.md` and `compare.original.md` preserve original prose.
 The final report places limitations and assessments before narrative,
 and keeps contradictory assessments visible. It is a study and automated review
@@ -93,7 +90,7 @@ still retain successfully published earlier stages and a diagnostic final report
 
 An evidence record has `id`, `source_id`, `path`, `start_line`, `end_line`, `quote`.
 IDs are local `E-001` etc.; references use `study:E-001` or `review:E-001`.
-Prefixed references are canonical. Study has the narrowly scoped compatibility
+Prefixed references are canonical. Study has the narrowly scoped normalization
 rule below; review always requires explicit namespaces because both its own
 evidence and study evidence are available.
 The orchestrator assigns `source-001` to the main source and subsequent IDs to
@@ -159,14 +156,14 @@ file state. Replacement, mutation or disappearance raises SourceChanged rather
 than silently reading a newer version. Cache data never crosses stages, attempts
 or branches. Pinned raw hashes and stage-boundary source guards remain mandatory.
 
-## Evidence ID compatibility and diagnostics
+## Evidence ID normalization and diagnostics
 
 `study_normalization.normalize_evidence(stage, value, context, mode='git')` is a pure
 function returning `(candidate, changes)`. The candidate is a deep copy, including
 when no changes are needed. It first requires the complete internal stage schema,
 task, matching pinned Git/folder identity and, for review, unchanged frozen
 context and exact target. The caller verifies transport before calling it.
-It never repairs the schema. `normalize_study` remains a convenience wrapper.
+It never repairs the schema.
 The rule version is `EVIDENCE_IDS_V4` in both strict and compromise.
 
 Evidence definitions may pad one/two numeric digits (`E-1`, `E-01` -> `E-001`)
@@ -235,8 +232,7 @@ newline. They do not hash the pretty-printed artifact file bytes. Unicode and
 array order are unchanged. With zero edits both hashes are identical.
 The same provenance summary is carried in invocation metadata and every new
 published study/review; direct library callers may omit that summary, but every
-new Runner publication requires the normalization artifacts. Older artifacts are
-viewed in their historical format, not validated against the v4 saved schema.
+new Runner publication requires the normalization artifacts.
 It is never requested from the model or admitted by the wire schema. Successful
 normalization does not change `completion_status`, establish content accuracy,
 satisfy policy, or imply publication.
@@ -266,8 +262,7 @@ self-assessment; they do not infer insufficient architectural evidence from a
 structure error.
 
 A string-valued `claims`, including large strings that strict JSON parsing cannot
-decode, stays a string in private `extracted.json` alongside original authored blocks
-(or legacy Markdown).
+decode, stays a string in private `extracted.json` alongside original authored blocks.
 It is rejected with `CLAIMS_TYPE_MISMATCH at $.claims; expected array, got string`.
 No nested decoding, partial extraction, empty-array substitution or model registry
 reconstruction is performed. In compromise mode only the existing unvalidated
@@ -279,26 +274,10 @@ separate result revision with full review.
 ### Offline candidate checking versus a new acceptance pass
 
 An offline caller may load an **expanded internal** study using `strict_json`, supply its
-expected identity, call `normalize_study`, and run `validate_result('study',
+expected identity, call `normalize_evidence('study', value, context, mode)`, and run `validate_result('study',
 candidate, context, mode)`. This reads no sources, calls no model, publishes
 nothing and grants no new COMPLETE. Keep any outputs in a separate location;
-never overwrite the historical `extracted.json`, manifest, material or review.
-
-Full reuse additionally requires the corresponding source snapshot, submodule
-state and evidence checks, all cleanup/publication guards, and a newly frozen
-review plan. Changing registry references changes its hash and requires a new
-review; an old review of an empty/different registry cannot be made applicable by
-replacing target hashes. No resume/import subsystem is implemented here.
-
-For the investigated run `20261001T120459Z-bdbe271e91`, the reported master
-`claims` was a 21,295-character string whose nested strict JSON decoding failed;
-its actual contents were not supplied and are not classified as truncated JSON,
-Markdown or an array. The 29 shown GLM violations were existing local IDs without
-prefixes. Of DeepSeek's 48 reported violations, only 30 were shown with that
-pattern; the remaining 18 are not assumed identical. Fixing that representation
-may expose further contract, source or policy failures. No historical artifacts
-or acceptance records are changed, and these observations do not establish
-whether the architecture conclusions are correct.
+never overwrite the original `extracted.json`, manifest, material or review.
 
 ## Frozen registry and review plan
 
@@ -356,7 +335,7 @@ plan requires a new review identity; old acceptance does not transfer.
 Review `claims` contain only `id`, `outcome`, `evidence_ids`, `limitation`.
 The renderer takes original statements/scope from the frozen registry. Findings
 have the only canonical claim relation: `findings[].claim_ids`. Reverse links
-are generated. Old two-direction wire relations are rejected, not reconciled.
+are generated.
 Omissions reference findings without replacing required claim responses.
 
 | Frozen kind | Allowed outcomes | Rule |
@@ -388,7 +367,7 @@ CAVEAT_ACCEPTABLE uncertainties. Python computes PASS, CHANGES_REQUIRED (materia
 agent findings), or INCONCLUSIVE. An empty registry or unsupported material fact
 cannot pass. Neither policy nor these offline tests measure factual correctness.
 
-## Comparison, compatibility and validation
+## Comparison and validation
 
 Comparison is reports-only. A structured reference identifies branch, artifact
 (`study`/`review`), selected revision ID, claim ID and `review_target_id`. The
@@ -397,7 +376,7 @@ the binding to the internal document and registry hashes. Strong differences
 need references resolving on **both distinct sides** and policy-accepted inputs
 on both sides. Each side needs a referenced FACT assessed as SUPPORTED; acceptance
 of a hypothesis's caveat is not factual support for a strong contrast.
-Legacy/recovered/incomplete inputs stay unverified. Missing reports
+Recovered/incomplete inputs stay unverified. Missing reports
 do not prove absent components, and missing comparison does not mean no differences.
 An unresolved or unverified difference prevents positive comparison policy even
 when the agent reports COMPLETE. A response with no listed differences is still
@@ -407,15 +386,14 @@ an agent assessment of the supplied reports, not proof of identical behavior.
 with matching task/source identity as unvalidated material, but never invents
 claims/evidence/positive assessments. A wrong review target, incomplete transport,
 source mutation or cleanup failure cannot be repaired into usable acceptance.
-Custom prompts that still emit legacy objects receive an explicit expected-contract
-diagnostic. Migrate study prompts to ten structured sections and blocks[].claim_ids;
-remove report_markdown and claims[].document_locator, keep source evidence ranges
-and quotation rules. Review/compare keep their own Markdown. In compromise a legacy
-Markdown or usable new blocks may be retained only as unvalidated narrative; new
-blocks are labeled program assembly of authored blocks. No partial registry is
-presented as accepted, and empty-registry review is explicitly limited/ineligible.
-Historical v1–v3 manifest, registry, target and acceptance records are read-only.
-Use a new run directory; no automatic reacceptance/import is implemented.
+Custom prompts must emit the current model wire schema. Contract diagnostics retain
+the failure kind and schema-owned violation paths. In compromise, usable study
+`report_sections` blocks may be retained as unvalidated narrative, labeled program
+assembly of authored blocks. A study wire response without `report_sections` is rejected and
+cannot enter recovery, review or format repair. No partial registry is presented
+as accepted, and empty-registry review is explicitly limited/ineligible.
+An existing manifest with unsupported contract/artifact versions causes
+`UNSUPPORTED_ARTIFACT_VERSION` before any artifact writes. Use a new run directory.
 Ordinary successful execution uses catalog → study → review, optionally one
 revised study → full review, then selection → compare (comparison only for
 multiple Git branches). Format repairs stay bounded and may
@@ -517,15 +495,6 @@ The manifest records selected_revision and revision history. Comparison uses onl
 selected pairs. Top-level ARCHITECTURE.md, study.json and companion files are exact
 copies of the selected artifacts, published after selection. Frozen-document checks
 run within each revision; a new study can never inherit an older review.
-Historical v1–v3 results remain readable without automatic hash migration or status
-promotion. Custom prompts must adopt the v4 model wire schemas; old outputs stay legacy
-or explicitly unvalidated material under the existing policy.
-
-For run `20261002T091648Z-95474db027`, only the reported error codes/paths and
-generic unsupported-finish message are known. Actual bad ID spellings, Markdown /
-locator pairs and `info.finish` were not supplied. `E-1`, `E-01` and prefixed
-definitions in regression tests are synthetic, not observations from that run.
-Its specific finish incompatibility remains unverified.
 
 XXX uses the shared inspected OpenCode envelope checks: successful `stop` and
 `tool-calls` were already supported. Closed diagnostics distinguish FINISH_MISSING,

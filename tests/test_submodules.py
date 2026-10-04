@@ -85,8 +85,8 @@ class RecursiveFixture:
         self.expected_file = self.base / 'expected.json'
         self.expected_file.write_text(json.dumps(self.expected))
         self.config_path = self.base / 'config.jsonc'
-        self.config = {'repository': str(self.path), 'branches': ['master', 'topic'],
-            'baseline_branch': 'master', 'reports_dir': str(self.base / 'reports'),
+        self.config = {'mode': 'git', 'git_mode': {'repository': str(self.path), 'branches': ['master', 'topic'],
+            'baseline_branch': 'master'}, 'reports_dir': str(self.base / 'reports'),
             'project_description': 'Recursive fixture',
             'agent': {'backend': 'codex', 'executable': str(self.cli)}, 'continue_on_error': False}
         self.env = {'PATH': os.environ.get('PATH', os.defpath), 'HOME': str(self.home),
@@ -142,8 +142,8 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
                 self.env['OPENCODE_CONFIG_CONTENT'] = '{"provider":{"custom":{"options":{"baseURL":"https://example.invalid"}}}}'
                 result, manifest = self.execute()
                 if backend == 'opencode':
-                    # Prompt-only transport was retired, so this legacy CLI
-                    # fixture must stop before reading any source snapshot.
+                    # This fixture lacks the required HTTP interface and must
+                    # stop before reading any source snapshot.
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertEqual(manifest['status'], 'FAILED')
                     self.assert_original(before)
@@ -563,7 +563,7 @@ print(json.dumps({'base': str(fixture.base), 'path': str(fixture.path), 'expecte
         fixture = json.loads(child.stdout)
         self.addCleanup(shutil.rmtree, fixture['base'])
         self.path = Path(fixture['path'])
-        self.config['repository'] = str(self.path)
+        self.config['git_mode']['repository'] = str(self.path)
         self.expected_file.write_text(json.dumps(fixture['expected']))
         self.assertEqual(self.path.stat().st_uid, owner.pw_uid)
         for check in (True, False):
