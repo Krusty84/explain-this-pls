@@ -315,7 +315,7 @@ def is_recovered_material(stage, value):
             or any(key in value for key in ('claims', 'program_checks', 'materialization_provenance'))):
         return False
     if 'normalization_provenance' in value:
-        from saved_contracts import NORMALIZATION_PROVENANCE
+        from src.contracts.saved_contracts import NORMALIZATION_PROVENANCE
         if schema_diagnostics(value['normalization_provenance'], NORMALIZATION_PROVENANCE, limit=0)['total_violations']:
             return False
     return True
@@ -339,7 +339,7 @@ def review_verdict(value):
 
 
 def accepted(item):
-    from ledger import accepted_pair
+    from src.analysis.ledger import accepted_pair
     return accepted_pair(item)
 
 
@@ -381,7 +381,7 @@ def validate_wire_identity(stage, value, context, mode='git'):
                 raise contract_violation('SOURCE_IDENTITY_MISMATCH', '$.' + key,
                                          kind='IDENTITY_MISMATCH', layer='identity')
     if stage == 'review':
-        from ledger import verify_review_context
+        from src.analysis.ledger import verify_review_context
         verify_review_context(context)
         if value['target'] != context['review_target']:
             key = next(k for k in TARGET['properties'] if value['target'][k] != context['review_target'][k])
@@ -395,7 +395,7 @@ def validate_result(stage, value, context, mode='git'):
     if value['completion_status'] != 'COMPLETE' and not value['limitations']:
         raise ContractError('PARTIAL/BLOCKED requires explicit limitations')
     if stage == 'catalog':
-        from coverage_plan import checked_path, build_coverage_plan
+        from src.analysis.coverage_plan import checked_path, build_coverage_plan
         unique_ids(value['subsystems'], r'S-[0-9]{3,}', '$.subsystems')
         for subsystem in value['subsystems']:
             if not subsystem['paths'] or len(subsystem['paths']) != len(set(subsystem['paths'])):
@@ -417,7 +417,7 @@ def validate_result(stage, value, context, mode='git'):
         evidence_ids = {stage + ':' + e['id'] for e in value['evidence']}
         unique_ids(value['claims'], r'C-[0-9]{3,}', '$.claims')
     if stage == 'study':
-        from document_rendering import validate_sections
+        from src.reports.document_rendering import validate_sections
         validate_sections(value['report_sections'], value['claims'])
         for i, claim in enumerate(value['claims']):
             references(claim['evidence_ids'], evidence_ids, f'$.claims[{i}].evidence_ids', namespaces={'study'})
@@ -433,7 +433,7 @@ def validate_result(stage, value, context, mode='git'):
             if area['status'] != 'INSPECTED' and not area['limitation'].strip():
                 raise ContractError('Unfinished coverage requires a limitation')
         if context.get('previous_revision'):
-            from revisions import registry_diff
+            from src.analysis.revisions import registry_diff
             registry_diff(context['previous_revision']['study'], value)
     elif stage == 'review':
         registry = {c['id']: c for c in context['claim_registry']}

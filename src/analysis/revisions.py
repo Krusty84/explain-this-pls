@@ -5,8 +5,8 @@
 from __future__ import annotations
 import copy
 
-from contracts import accepted, contract_violation, has_program_checks, CONTRACT_ID, ARTIFACT_FORMAT, ContractError
-from evidence import canonical, sha
+from src.contracts.contracts import accepted, contract_violation, has_program_checks, CONTRACT_ID, ARTIFACT_FORMAT, ContractError
+from src.analysis.evidence import canonical, sha
 
 
 def registry_diff(previous, current):
@@ -44,10 +44,10 @@ def completed_pair(revision):
         metadata = revision.get(stage + '_invocation') or {}
         if metadata.get('contract_id') != CONTRACT_ID or metadata.get('artifact_format') != ARTIFACT_FORMAT:
             return False
-    from ledger import target
-    from document_rendering import validate_materialized
-    from contracts import validate_schema
-    from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
+    from src.analysis.ledger import target
+    from src.reports.document_rendering import validate_materialized
+    from src.contracts.contracts import validate_schema
+    from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
     try:
         validate_materialized(study)
         schemas = SAVED_FOLDER_SCHEMAS if 'source_directory' in study else SAVED_SCHEMAS
@@ -78,5 +78,5 @@ def choose_revision(revisions):
     for revision in ordered:
         if completed_pair(revision):
             return revision
-    from final_report import usable_study
+    from src.reports.final_report import usable_study
     return next((revision for revision in ordered if usable_study(revision)), None)

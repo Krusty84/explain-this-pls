@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from explain import Runner
-from reporting import Reporter
+from src.runtime.reporting import Reporter
 from fixtures.ledger_response import response
 from test_folder import FolderFixture
 import test_explain as git_fixtures

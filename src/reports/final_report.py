@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import html
-from contracts import SCHEMAS, accepted, has_program_checks, schema_diagnostics
+from src.contracts.contracts import SCHEMAS, accepted, has_program_checks, schema_diagnostics
 
 
 def recoverable_material(stage, data, context, mode, diagnostics):
@@ -14,7 +14,7 @@ def recoverable_material(stage, data, context, mode, diagnostics):
         return None
     identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
     if stage == 'study':
-        from document_rendering import recover_sections
+        from src.reports.document_rendering import recover_sections
         narrative = recover_sections(data.get('report_sections'))
         narrative_origin = 'PROGRAM_ASSEMBLED_AUTHOR_BLOCKS'
     else:
@@ -48,7 +48,7 @@ def recoverable_material(stage, data, context, mode, diagnostics):
 
 
 def stage_document(item, stage):
-    from presentation import validate_report
+    from src.reports.presentation import validate_report
     document = item.get(stage) or item.get(stage + '_material')
     if document is not None:
         validate_report(stage, document)
@@ -74,7 +74,7 @@ def comparison_possible(entries, baseline):
 
 
 def retained_review_observations(document, study, language):
-    from presentation import cell, label, russian
+    from src.reports.presentation import cell, label, russian
     observations = document.get('review_observations')
     if not observations:
         return []
@@ -93,7 +93,7 @@ def retained_review_observations(document, study, language):
 
 
 def render_final_report(manifest, source, mode, language='Russian'):
-    from presentation import cell, label, render_stage, render_coverage, russian
+    from src.reports.presentation import cell, label, render_stage, render_coverage, russian
     ru = russian(language)
     def t(r, e): return r if ru else e
     entries = report_entries(manifest, source, mode)

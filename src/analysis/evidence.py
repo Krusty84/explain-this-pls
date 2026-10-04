@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import re
 import stat
-from source_decoding import normalize_source_decoding, decode_source, SourceDecodeError
+from src.analysis.source_decoding import normalize_source_decoding, decode_source, SourceDecodeError
 
 MAX_RECORD_BYTES = 16 * 1024
 MAX_FILE_BYTES = 8 * 1024 * 1024

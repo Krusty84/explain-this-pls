@@ -4,8 +4,8 @@
 """Shared orchestrator policy. Native runtime retries are a separate capability."""
 import json
 
-from contracts import accepted, response_error, schema_diagnostics
-from model_context import project_model_context, project_model_response
+from src.contracts.contracts import accepted, response_error, schema_diagnostics
+from src.model.model_context import project_model_context, project_model_response
 
 
 def retry_policy(configured=0, performed=0, native=0):
@@ -78,7 +78,7 @@ def required_unresolved(context):
 
 def blocked_comparison(context):
     """No accepted input: there are no model-derived comparisons to synthesize."""
-    from presentation import russian, label
+    from src.reports.presentation import russian, label
     language = context.get('output_language', 'English')
     def t(r, e): return r if russian(language) else e
     entries = {item['branch']: item for item in context['branches']}

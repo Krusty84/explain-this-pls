@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: MIT
 
 """Artifact-only schemas. These are never sent to a backend as wire schemas."""
-from contracts import (SCHEMAS, FOLDER_SCHEMAS, MATERIALIZED_CLAIM, STRINGS, PRIOR_FINDING,
+from src.contracts.contracts import (SCHEMAS, FOLDER_SCHEMAS, MATERIALIZED_CLAIM, STRINGS, PRIOR_FINDING,
                        CONTRACT_ID, obj, array, string)
-from document_rendering import materialized_schema
+from src.reports.document_rendering import materialized_schema
 
 INTEGER = {'type': 'integer', 'minimum': 0}
 NULL_STRING = {'type': ['string', 'null']}

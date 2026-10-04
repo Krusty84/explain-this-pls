@@ -18,16 +18,16 @@ from pathlib import Path
 import secrets
 import sys
 
-from contracts import ContractError, strict_json
-from openapi_contract import DiffError, compare
-from opencode import Server as OpenCodeServer, incompatible, object_value
+from src.contracts.contracts import ContractError, strict_json
+from src.backends.openapi_contract import DiffError, compare
+from src.backends.opencode import Server as OpenCodeServer, incompatible, object_value
 
 PROFILE = 'xxx-http'
-PROFILE_PATH = Path(__file__).resolve().parent / 'schemas/xxx-declarations.json'
+PROFILE_PATH = Path(__file__).resolve().parents[2] / 'schemas/xxx-declarations.json'
 
 
 def retry_policy(configured=0, performed=0):
-    from structured_output import retry_policy as shared_policy
+    from src.model.structured_output import retry_policy as shared_policy
     return shared_policy(configured, performed, 0)
 
 

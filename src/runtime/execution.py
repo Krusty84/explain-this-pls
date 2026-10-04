@@ -5,7 +5,7 @@
 import math
 import time
 
-from contracts import response_error
+from src.contracts.contracts import response_error
 
 DEFAULT_EXECUTION = {'stage_timeout_seconds': 3600, 'idle_timeout_seconds': None,
                      'max_revision_rounds': 1,

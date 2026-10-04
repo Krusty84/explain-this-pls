@@ -4,9 +4,9 @@ The orchestrator selects the required response schema for each stage and validat
 its structure locally.
 `schemas/{catalog,study,review,compare}.schema.json` and their `folder-` variants
 are **model wire** schemas generated from `MODEL_SCHEMAS` / `MODEL_FOLDER_SCHEMAS`
-in `contracts.py`. Internal `SCHEMAS` / `FOLDER_SCHEMAS` validate the expanded
+in `src/contracts/contracts.py`. Internal `SCHEMAS` / `FOLDER_SCHEMAS` validate the expanded
 representation, which retains full integrity identities. Separate `saved-*.schema.json`
-files are generated from `saved_contracts.py` and locally validated before publication.
+files are generated from `src/contracts/saved_contracts.py` and locally validated before publication.
 The `evidence-ledger` contract requires the saved schema or explicitly marked
 recovery material for rendering.
 Unsupported results are rejected without modifying their artifacts.
@@ -307,7 +307,7 @@ exist and be unique within each block, and every claim must be linked. Multiple
 claims per block and multiple occurrences per claim are supported. Empty claim_ids
 are allowed for nonmaterial prose; they do not waive the registration requirement.
 
-`document_rendering.py` purely produces materialized `report_markdown`, `block_map`
+`src/reports/document_rendering.py` purely produces materialized `report_markdown`, `block_map`
 and claims with `document_locators: [...]`, one exact line range/quote per linked
 block. No Markdown AST, quote search or fuzzy match is used. `report_sections` is
 not retained as a second narrative in the materialized/saved result. Its original

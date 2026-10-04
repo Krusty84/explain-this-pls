@@ -7,10 +7,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from contracts import ContractError, SECTION_KEYS
-from final_report import render_final_report
-from ledger import prepare_result, review_context
-from presentation import render_stage
+from src.contracts.contracts import ContractError, SECTION_KEYS
+from src.reports.final_report import render_final_report
+from src.analysis.ledger import prepare_result, review_context
+from src.reports.presentation import render_stage
 
 
 class HashlessMarkdownTests(unittest.TestCase):

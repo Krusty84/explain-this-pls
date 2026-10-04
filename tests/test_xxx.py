@@ -192,7 +192,7 @@ class XXXTests(unittest.TestCase):
             self.assertEqual(manifest['diagnostics'][0]['failure_kind'], expected)
 
     def test_unready_server_fails_check_without_model_request(self):
-        with patch('opencode.STARTUP_SECONDS', .2):
+        with patch('src.backends.opencode.STARTUP_SECONDS', .2):
             manifest, code = self.run_case('not-ready', check=True)
         self.assertEqual(code, 1)
         self.assertEqual(manifest['diagnostics'][0]['failure_kind'], 'STAGE_TIMEOUT')

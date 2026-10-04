@@ -8,9 +8,9 @@ import copy
 import json
 import secrets
 
-from contracts import contract_violation, validate_schema, MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS
-from evidence import canonical, sha
-from model_context import project_model_context
+from src.contracts.contracts import contract_violation, validate_schema, MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS
+from src.analysis.evidence import canonical, sha
+from src.model.model_context import project_model_context
 
 RULE = 'MODEL_BINDING'
 HASH_FORMAT = 'canonical-json-utf8'

@@ -7,9 +7,9 @@ import io
 from pathlib import Path
 import unittest
 
-import claude_code
-from contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS, strict_json, validate_result
-from reporting import Reporter, diagnostic
+from src.backends import claude_code
+from src.contracts.contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS, strict_json, validate_result
+from src.runtime.reporting import Reporter, diagnostic
 
 
 class ResultRegressions(unittest.TestCase):
@@ -40,8 +40,8 @@ class ResultRegressions(unittest.TestCase):
             self.assertEqual(diagnostic(caught.exception).failure_kind, 'TRANSPORT_ERROR')
 
     def test_public_schemas_equal_python_source(self):
-        from contracts import MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS
-        from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS, COVERAGE_PLAN
+        from src.contracts.contracts import MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS
+        from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS, COVERAGE_PLAN
         root = Path(__file__).resolve().parents[1]
         for prefix, schemas in (('', MODEL_SCHEMAS), ('folder-', MODEL_FOLDER_SCHEMAS),
                                 ('saved-', SAVED_SCHEMAS), ('saved-folder-', SAVED_FOLDER_SCHEMAS)):

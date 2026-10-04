@@ -7,8 +7,8 @@ from __future__ import annotations
 import copy
 import re
 
-from contracts import contract_violation, validate_wire_identity
-from evidence import canonical, sha
+from src.contracts.contracts import contract_violation, validate_wire_identity
+from src.analysis.evidence import canonical, sha
 
 RULE = 'EVIDENCE_IDS'
 HASH_FORMAT = 'canonical-json-utf8'

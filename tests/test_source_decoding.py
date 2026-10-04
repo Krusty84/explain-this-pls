@@ -11,9 +11,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import evidence
-from evidence import SourceChanged, resolve_evidence, read_confined
-from source_decoding import normalize_source_decoding, decode_source
+from src.analysis import evidence
+from src.analysis.evidence import SourceChanged, resolve_evidence, read_confined
+from src.analysis.source_decoding import normalize_source_decoding, decode_source
 
 
 class SourceDecodingTests(unittest.TestCase):
@@ -55,7 +55,7 @@ class SourceDecodingTests(unittest.TestCase):
         for value in invalid:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 normalize_source_decoding(value)
-        with patch('evidence._read_confined', side_effect=AssertionError('must not read source')):
+        with patch('src.analysis.evidence._read_confined', side_effect=AssertionError('must not read source')):
             with self.assertRaises(ValueError):
                 resolve_evidence('study', [self.pointer], self.context | {'source_decoding': invalid[5]})
 
@@ -127,15 +127,15 @@ class SourceDecodingTests(unittest.TestCase):
         blob = b'x\n' * (512 * 1024)
         (self.root / 'app.py').write_bytes(blob)
         pointers = [self.pointer | {'id': f'E-{i:03d}'} for i in range(1, 34)]
-        with patch('evidence._read_confined', wraps=evidence._read_confined) as reads, \
-                patch('evidence.decode_source', wraps=decode_source) as decodes:
+        with patch('src.analysis.evidence._read_confined', wraps=evidence._read_confined) as reads, \
+                patch('src.analysis.evidence.decode_source', wraps=decode_source) as decodes:
             results = resolve_evidence('study', pointers, self.context,
                 {'app.py': hashlib.sha256(blob).hexdigest()})
         self.assertTrue(all(result['status'] == 'RESOLVED' for result in results))
         self.assertEqual(sum(call.kwargs.get('read', True) for call in reads.call_args_list), 1)
         self.assertEqual(reads.call_count, 33)  # Every hit still safely walks and verifies the path.
         self.assertEqual(decodes.call_count, 1)
-        with patch('evidence.decode_source', wraps=decode_source) as decodes:
+        with patch('src.analysis.evidence.decode_source', wraps=decode_source) as decodes:
             resolve_evidence('review', pointers[:1], self.context)
             resolve_evidence('study', pointers[:1], self.context)
         self.assertEqual(decodes.call_count, 2)
@@ -152,7 +152,7 @@ class SourceDecodingTests(unittest.TestCase):
 
     def test_failed_decode_is_not_cached_and_unique_read_budget_is_not_recharged(self):
         (self.root / 'app.py').write_bytes(b'\xff')
-        with patch('evidence.MAX_TOTAL_BYTES', 1), patch('evidence.decode_source', wraps=decode_source) as decodes:
+        with patch('src.analysis.evidence.MAX_TOTAL_BYTES', 1), patch('src.analysis.evidence.decode_source', wraps=decode_source) as decodes:
             results = resolve_evidence('study', [self.pointer, self.pointer | {'id': 'E-002'}], self.context)
         self.assertEqual([result['status'] for result in results], ['DECODE_ERROR', 'DECODE_ERROR'])
         self.assertEqual(decodes.call_count, 2)
@@ -161,7 +161,7 @@ class SourceDecodingTests(unittest.TestCase):
         (self.root / 'app.py').write_bytes(b'A\n')
         pointers = [self.pointer | {'quote': 'wrong'}, self.pointer | {'id': 'E-002', 'end_line': 2},
                     self.pointer | {'id': 'E-003'}]
-        with patch('evidence.decode_source', wraps=decode_source) as decodes:
+        with patch('src.analysis.evidence.decode_source', wraps=decode_source) as decodes:
             results = resolve_evidence('study', pointers, self.context)
         self.assertEqual([result['status'] for result in results], ['QUOTE_MISMATCH', 'OUT_OF_RANGE', 'RESOLVED'])
         self.assertEqual(decodes.call_count, 1)
@@ -187,7 +187,7 @@ class SourceDecodingTests(unittest.TestCase):
                     else:
                         path.chmod(0o400)
                     yield pointer | {'id': 'E-002'}
-                with patch('evidence.decode_source', wraps=decode_source) as decodes, self.assertRaises(SourceChanged):
+                with patch('src.analysis.evidence.decode_source', wraps=decode_source) as decodes, self.assertRaises(SourceChanged):
                     resolve_evidence('study', pointers(), self.context)
                 self.assertEqual(decodes.call_count, 1)
 
@@ -219,7 +219,7 @@ class SourceDecodingTests(unittest.TestCase):
                     path.rename(self.root / 'old-app.py')
                     path.write_bytes(b'A\n')
             return original(name, flags, *args, **kwargs)
-        with patch('evidence.os.open', side_effect=replace_on_second_open), self.assertRaises(SourceChanged):
+        with patch('src.analysis.evidence.os.open', side_effect=replace_on_second_open), self.assertRaises(SourceChanged):
             resolve_evidence('study', [self.pointer, self.pointer | {'id': 'E-002'}], self.context)
 
 

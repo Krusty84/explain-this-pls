@@ -2,11 +2,11 @@ import copy
 import json
 import unittest
 
-from document_rendering import materialize_study
+from src.reports.document_rendering import materialize_study
 from fixtures.ledger_response import response
-from ledger import review_context, verify_review_context
-from model_context import project_model_context
-from structured_output import repair_prompt
+from src.analysis.ledger import review_context, verify_review_context
+from src.model.model_context import project_model_context
+from src.model.structured_output import repair_prompt
 
 
 class ModelContextTests(unittest.TestCase):

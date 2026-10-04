@@ -6,8 +6,8 @@ from __future__ import annotations
 import copy
 import re
 
-from contracts import CONTRACT_ID, ContractError, contract_violation
-from evidence import canonical, sha, source_catalog, valid_path
+from src.contracts.contracts import CONTRACT_ID, ContractError, contract_violation
+from src.analysis.evidence import canonical, sha, source_catalog, valid_path
 
 
 def checked_path(path):
@@ -56,7 +56,7 @@ def build_coverage_plan(catalog, inventory, context, fallback=False):
     if type(catalog) is not dict:
         raise ContractError('Catalog is unavailable.')
     if not fallback:
-        from contracts import validate_wire_identity, nonblank, unique_ids
+        from src.contracts.contracts import validate_wire_identity, nonblank, unique_ids
         mode = 'folder' if context.get('source_mode') == 'folder' or 'source_directory' in context else 'git'
         validate_wire_identity('catalog', catalog, context, mode)
         nonblank(catalog)
@@ -113,8 +113,8 @@ def build_coverage_plan(catalog, inventory, context, fallback=False):
 
 
 def verify_coverage_plan(plan):
-    from saved_contracts import COVERAGE_PLAN
-    from contracts import validate_schema
+    from src.contracts.saved_contracts import COVERAGE_PLAN
+    from src.contracts.contracts import validate_schema
     validate_schema(plan, COVERAGE_PLAN)
     if (type(plan) is not dict or plan.get('contract_id') != CONTRACT_ID
             or plan.get('plan_sha256') != sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))):

@@ -6,7 +6,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from contracts import ContractError
+from src.contracts.contracts import ContractError
 from explain import AuditError, Folder, Runner, save_json
 from fixtures.ledger_response import response, prompt_context
 from test_folder import FolderFixture
@@ -83,7 +83,7 @@ class PrivateChainRecoveryTests(FolderFixture):
                         return wire
                     def close(self):
                         corrupt_json(self.artifacts / filename)
-                with patch('opencode.Server', SyntheticServer), patch('opencode.verify_native_retries'), \
+                with patch('src.backends.opencode.Server', SyntheticServer), patch('src.backends.opencode.verify_native_retries'), \
                         self.assertRaises(AuditError) as caught:
                     runner.invoke('study', context, runner.run_dir / 'study.logs')
                 self.assertEqual(caught.exception.failure_layer, 'integrity')
@@ -120,7 +120,7 @@ class PrivateChainRecoveryTests(FolderFixture):
                         self.meta.update(model_actual='synthetic/model', prompt_sent=True)
                         (self.artifacts / 'extracted.json').write_text(json.dumps(wire))
                         return wire
-                with patch('opencode.Server', SyntheticServer), patch('opencode.verify_native_retries'), \
+                with patch('src.backends.opencode.Server', SyntheticServer), patch('src.backends.opencode.verify_native_retries'), \
                         self.assertRaises(ContractError) as caught:
                     runner.invoke('study', context, runner.run_dir / 'study.logs')
                 self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')

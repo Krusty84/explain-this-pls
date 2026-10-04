@@ -20,7 +20,7 @@ import time
 import traceback
 import unicodedata
 from typing import Any
-from contracts import ContractError, json_error_details
+from src.contracts.contracts import ContractError, json_error_details
 
 LABEL_COLORS = {'[WARN]': '\x1b[33m', '[RUN]': '\x1b[36m', '[OK]': '\x1b[32m',
                 '[FAIL]': '\x1b[31m', '[SKIP]': '\x1b[90m'}

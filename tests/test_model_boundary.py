@@ -2,14 +2,14 @@ import copy
 import json
 import unittest
 
-from contracts import (ContractError, MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS, SCHEMAS,
+from src.contracts.contracts import (ContractError, MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS, SCHEMAS,
                        FOLDER_SCHEMAS, validate_schema)
-from document_rendering import materialize_study
-from evidence import canonical, sha, source_catalog
+from src.reports.document_rendering import materialize_study
+from src.analysis.evidence import canonical, sha, source_catalog
 from fixtures.ledger_response import response
-from ledger import review_context
-from model_boundary import BindingRegistry
-from model_context import project_model_context, project_model_response
+from src.analysis.ledger import review_context
+from src.model.model_boundary import BindingRegistry
+from src.model.model_context import project_model_context, project_model_response
 
 
 class ModelBoundaryTests(unittest.TestCase):

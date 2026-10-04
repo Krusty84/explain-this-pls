@@ -14,9 +14,9 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import claude_code
-import codex
-from contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS
+from src.backends import claude_code
+from src.backends import codex
+from src.contracts.contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS
 from explain import AuditError, Runner
 
 
@@ -117,13 +117,14 @@ import importlib
 import sys
 for name in sys.argv[1:]:
     importlib.import_module(name)
-import codex
-import claude_code
+from src.backends import codex
+from src.backends import claude_code
 assert codex.parse_output('{}') == ({}, {})
 assert claude_code.parse_output('{"is_error": false, "structured_output": {}}') == ({}, {})
 assert 'explain' not in sys.modules
 '''
-        for order in itertools.permutations(('codex', 'claude_code', 'contracts')):
+        for order in itertools.permutations(('src.backends.codex', 'src.backends.claude_code',
+                                             'src.contracts.contracts')):
             with self.subTest(order=order):
                 result = subprocess.run([sys.executable, '-B', '-c', script, *order],
                                         cwd=ROOT, capture_output=True, text=True, timeout=10)

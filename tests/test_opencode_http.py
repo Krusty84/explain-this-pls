@@ -18,11 +18,11 @@ import time
 import unittest
 from unittest.mock import patch
 
-from contracts import ContractError, SCHEMAS, validate_result
-from execution import Budget
+from src.contracts.contracts import ContractError, SCHEMAS, validate_result
+from src.runtime.execution import Budget
 from explain import Runner, atomic, cli_env
-from opencode import Server, extract_result, prepare_environment, validate_history, verify_native_retries, verify_version
-from reporting import Reporter
+from src.backends.opencode import Server, extract_result, prepare_environment, validate_history, verify_native_retries, verify_version
+from src.runtime.reporting import Reporter
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -213,7 +213,7 @@ class HTTPFixture(unittest.TestCase):
 
     def test_wire_pipeline_only_with_explicit_test_gate_bypass(self):
         # This bypass is confined to this test. It proves no upstream retry behavior.
-        with patch('opencode.verify_native_retries'), patch.dict(os.environ, self.env):
+        with patch('src.backends.opencode.verify_native_retries'), patch.dict(os.environ, self.env):
             runner = Runner(self.config(), self.root / 'pipeline')
             result, code = runner.run()
         self.assertEqual(code, 0, result)
@@ -236,7 +236,7 @@ class HTTPFixture(unittest.TestCase):
         path = self.root / 'config.json'; path.write_text(json.dumps(config))
         # The subprocess is test-owned. No installed OpenCode or user profile is used.
         bootstrap = ('import sys; sys.path.insert(0,sys.argv.pop(1)); '
-                     'import opencode; opencode.verify_native_retries=lambda:None; '
+                     'from src.backends import opencode; opencode.verify_native_retries=lambda:None; '
                      'import explain; sys.exit(explain.main())')
         bystander = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
         try:
@@ -304,7 +304,7 @@ class GitHTTPPipelineTests(unittest.TestCase):
         # The orchestrator's comparison cwd must not follow an inherited TMPDIR
         # back into the inspected tree. Child profile variables remain preserved.
         self.env['TMPDIR'] = str(repo)
-        with patch('opencode.verify_native_retries'), patch.dict(os.environ, self.env):
+        with patch('src.backends.opencode.verify_native_retries'), patch.dict(os.environ, self.env):
             runner = Runner(config, self.root / 'git-pipeline')
             self.addCleanup(runner.repo.close)
             manifest, code = runner.run()

@@ -23,8 +23,8 @@ import subprocess
 import threading
 import time
 
-from contracts import ContractError, response_error, strict_json, transport_json
-from execution import Budget, execution_settings
+from src.contracts.contracts import ContractError, response_error, strict_json, transport_json
+from src.runtime.execution import Budget, execution_settings
 
 WIRE_VERSION = '1.2.27'
 STARTUP_SECONDS = 20

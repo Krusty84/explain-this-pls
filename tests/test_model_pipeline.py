@@ -7,7 +7,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from evidence import canonical, sha
+from src.analysis.evidence import canonical, sha
 from explain import Runner
 from fixtures.ledger_response import response, prompt_context
 from test_folder import FolderFixture

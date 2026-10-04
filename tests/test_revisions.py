@@ -6,10 +6,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from contracts import CONTRACT_ID, ARTIFACT_FORMAT, ContractError, validate_result, accepted, validate_schema
-from ledger import prepare_result, review_context
-from revisions import registry_diff, revision_inputs, choose_revision, completed_pair
-from saved_contracts import SAVED_SCHEMAS
+from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, ContractError, validate_result, accepted, validate_schema
+from src.analysis.ledger import prepare_result, review_context
+from src.analysis.revisions import registry_diff, revision_inputs, choose_revision, completed_pair
+from src.contracts.saved_contracts import SAVED_SCHEMAS
 from fixtures.ledger_response import response
 
 

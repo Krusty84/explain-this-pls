@@ -11,15 +11,15 @@ import os
 from pathlib import Path
 import time
 import unittest
-from document_rendering import materialize_study, recover_sections
+from src.reports.document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 
-from contracts import ContractError, SCHEMAS, schema_diagnostics, validate_result
-from execution import Budget, execution_settings
+from src.contracts.contracts import ContractError, SCHEMAS, schema_diagnostics, validate_result
+from src.runtime.execution import Budget, execution_settings
 from explain import AuditError, Folder, Runner, atomic
-import opencode
-import xxx
-from structured_output import blocked_comparison, required_unresolved
+from src.backends import opencode
+from src.backends import xxx
+from src.model.structured_output import blocked_comparison, required_unresolved
 import test_opencode_http as http_fixtures
 from test_explain import doc, review
 from fixtures.ledger_response import response
@@ -47,7 +47,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
         self.last_runner = runner
         env = self.env | {'AUDIT_FAKE_BACKEND': backend, 'AUDIT_FAKE_CASE': scenario}
         # A real fixture subprocess, not an installed binary or paid provider.
-        with patch('opencode.verify_native_retries'), patch.dict(os.environ, env):
+        with patch('src.backends.opencode.verify_native_retries'), patch.dict(os.environ, env):
             return runner.invoke(stage, context, destination)
 
     def prompts(self):
@@ -55,7 +55,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
         return [c for c in calls if c['method'] == 'POST' and c['path'].endswith('/message')]
 
     def test_native_study_normalization_after_transport_before_frozen_plan(self):
-        from evidence import canonical, sha
+        from src.analysis.evidence import canonical, sha
         for backend in ('xxx', 'opencode'):
             start = len(self.prompts())
             with patch.dict(os.environ, {'AUDIT_FAKE_LOCAL_REFS': '1'}):
@@ -417,7 +417,7 @@ class NativeGitComparisonTests(unittest.TestCase):
                 self.value['agent']['backend'] = backend
                 self.env['AUDIT_FAKE_BACKEND'] = backend
                 before = len(self.prompts())
-                with patch('opencode.verify_native_retries'):
+                with patch('src.backends.opencode.verify_native_retries'):
                     manifest, code = self.run_case('unknown-compare-finish')
                 self.assertNotEqual(code, 0)
                 self.assertEqual(len(self.prompts()) - before, 7)
@@ -445,7 +445,7 @@ class NativeGitComparisonTests(unittest.TestCase):
             self.value['agent']['backend'] = backend
             self.env['AUDIT_FAKE_BACKEND'] = backend
             for scenario, expected_code in (('claims-44', 1), ('schema-error', 1), ('partial-review', 2)):
-                with self.subTest(backend=backend, scenario=scenario), patch('opencode.verify_native_retries'):
+                with self.subTest(backend=backend, scenario=scenario), patch('src.backends.opencode.verify_native_retries'):
                     start = len(self.prompts())
                     manifest, code = self.run_case(scenario)
                 self.assertEqual(code, expected_code, manifest)
@@ -465,7 +465,7 @@ class NativeGitComparisonTests(unittest.TestCase):
                 self.assertTrue(all(not b['accepted'] for b in inputs['branches']))
                 wire = {k: result[k] for k in SCHEMAS['compare']['properties']}
                 validate_result('compare', wire, inputs)
-                from presentation import render_stage
+                from src.reports.presentation import render_stage
                 self.assertEqual((self.run_dir / 'comparison/BRANCH_COMPARISON.md').read_text(), render_stage('compare', result, 'Russian'))
                 self.assertEqual((self.run_dir / 'comparison/compare.original.md').read_text(), result['report_markdown'])
                 self.assertEqual(self.git('rev-parse', 'HEAD'), original)
@@ -477,7 +477,7 @@ class NativeGitComparisonTests(unittest.TestCase):
         for backend in ('xxx', 'opencode'):
             self.value['agent']['backend'] = backend
             self.env['AUDIT_FAKE_BACKEND'] = backend
-            with patch('opencode.verify_native_retries'):
+            with patch('src.backends.opencode.verify_native_retries'):
                 manifest, code = self.run_case('fail-main-study')
             self.assertEqual(code, 1, manifest)
             inputs = json.loads((self.run_dir / 'comparison/inputs.json').read_text())

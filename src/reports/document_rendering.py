@@ -10,10 +10,10 @@ LF. A locator includes the block's final LF, never the separator or heading.
 from __future__ import annotations
 import copy
 
-from contracts import (SECTION_KEYS, SECTIONS, CLAIM, MATERIALIZED_CLAIM, SCHEMAS,
+from src.contracts.contracts import (SECTION_KEYS, SECTIONS, CLAIM, MATERIALIZED_CLAIM, SCHEMAS,
     FOLDER_SCHEMAS, LOCATOR, STRINGS, array, obj, string, validate_schema,
     unique_ids, references, contract_violation)
-from evidence import canonical, sha, lines
+from src.analysis.evidence import canonical, sha, lines
 
 RENDERING_RULE = 'study-blocks-lf'
 BLOCK = obj(id=string(), section_key=string(), section_index={'type': 'integer'},
@@ -126,7 +126,7 @@ def validate_materialized(value):
     provenance = value['materialization_provenance']
     normalization = value.get('normalization_provenance')
     if normalization is not None:
-        from saved_contracts import NORMALIZATION_PROVENANCE
+        from src.contracts.saved_contracts import NORMALIZATION_PROVENANCE
         validate_schema(normalization, NORMALIZATION_PROVENANCE, '$.normalization_provenance')
         if normalization['normalized_sha256'] != provenance['normalized_sha256']:
             raise contract_violation('MATERIALIZATION_HASH_MISMATCH', '$.materialization_provenance.normalized_sha256')

@@ -6,12 +6,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from contracts import ContractError, validate_result, validate_schema
-from coverage_plan import build_coverage_plan, coverage_checks, inventory_summary, verify_coverage_plan
-from ledger import prepare_result, review_context
-from presentation import render_stage
-from saved_contracts import SAVED_SCHEMAS
-from evidence import canonical, sha
+from src.contracts.contracts import ContractError, validate_result, validate_schema
+from src.analysis.coverage_plan import build_coverage_plan, coverage_checks, inventory_summary, verify_coverage_plan
+from src.analysis.ledger import prepare_result, review_context
+from src.reports.presentation import render_stage
+from src.contracts.saved_contracts import SAVED_SCHEMAS
+from src.analysis.evidence import canonical, sha
 from fixtures.ledger_response import response
 
 
@@ -184,7 +184,7 @@ class CoveragePlanTests(unittest.TestCase):
             self.assertTrue(study['program_checks']['policy_satisfied'])
             review = review_context(study, context)
             self.assertIn('S-001', [a['id'] for a in review['review_plan']['omission_areas']])
-            from ledger import freeze_plan
+            from src.analysis.ledger import freeze_plan
             changed = freeze_plan(study, context | {'source_decoding': {'rules': [{'path': '.', 'encoding': 'cp1251'}]}})
             self.assertNotEqual(changed['plan_sha256'], study['review_plan']['plan_sha256'])
             self.assertEqual(changed['document_sha256'], study['review_plan']['document_sha256'])

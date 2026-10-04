@@ -7,13 +7,13 @@ import io
 import json
 from pathlib import Path
 import unittest
-from document_rendering import materialize_study, recover_sections
+from src.reports.document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 
-from contracts import ContractError, validate_result
+from src.contracts.contracts import ContractError, validate_result
 from explain import AuditError, Runner, atomic, load_config
-from reporting import Reporter
-from structured_output import blocked_comparison
+from src.runtime.reporting import Reporter
+from src.model.structured_output import blocked_comparison
 from test_explain import doc, review
 from fixtures.ledger_response import response
 import test_explain as git_fixtures
@@ -417,7 +417,7 @@ class CompromiseNative(unittest.TestCase):
                 self.assertEqual(meta['recovery_source_attempt'], str(self.destination / 'attempt-001'))
 
     def test_foreign_session_and_cleanup_failure_cannot_be_recovered(self):
-        import opencode
+        from src.backends import opencode
         original_close = opencode.Server.close
         def fail(server):
             original_close(server)
@@ -457,7 +457,7 @@ class NativeFinalPipeline(unittest.TestCase):
             self.env['AUDIT_FAKE_BACKEND'] = backend
             for scenario in ('partial-review', 'material-review'):
                 before = len(self.prompts())
-                with patch('opencode.verify_native_retries'):
+                with patch('src.backends.opencode.verify_native_retries'):
                     manifest, code = self.run_case(scenario)
                 self.assertEqual(code, 2)
                 self.assertEqual(len(self.prompts()) - before, 3)
@@ -467,7 +467,7 @@ class NativeFinalPipeline(unittest.TestCase):
                     self.assertIn('review_material', manifest['revisions'][0])
 
     def test_cleanup_failure_remains_fatal_even_with_a_study(self):
-        import opencode
+        from src.backends import opencode
         original_close = opencode.Server.close
         def close(server):
             original_close(server)

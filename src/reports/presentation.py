@@ -4,9 +4,9 @@
 """Deterministic English tables, separate from canonical narrative bytes."""
 import html
 import unicodedata
-from contracts import is_recovered_material, validate_schema
-from document_rendering import validate_materialized
-from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
+from src.contracts.contracts import is_recovered_material, validate_schema
+from src.reports.document_rendering import validate_materialized
+from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
 
 LABELS = {
     'SUPPORTED': 'Supported according to the reviewing agent',

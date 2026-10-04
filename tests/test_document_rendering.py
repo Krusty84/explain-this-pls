@@ -8,14 +8,14 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from contracts import (ContractError, SCHEMAS, FOLDER_SCHEMAS, has_ledger_structure,
+from src.contracts.contracts import (ContractError, SCHEMAS, FOLDER_SCHEMAS, has_ledger_structure,
                        validate_result, validate_schema)
-from document_rendering import materialize_study, validate_materialized, recover_sections
-from evidence import canonical, lines, sha
-from ledger import review_context, verify_review_context, prepare_result
-from study_normalization import normalize_evidence
+from src.reports.document_rendering import materialize_study, validate_materialized, recover_sections
+from src.analysis.evidence import canonical, lines, sha
+from src.analysis.ledger import review_context, verify_review_context, prepare_result
+from src.analysis.study_normalization import normalize_evidence
 from fixtures.ledger_response import response
-from final_report import recoverable_material
+from src.reports.final_report import recoverable_material
 
 
 class RenderingTests(unittest.TestCase):
@@ -32,7 +32,7 @@ class RenderingTests(unittest.TestCase):
         self.wire['report_sections'][0]['blocks'] = [dict(markdown=f, claim_ids=['C-001', 'C-002']) for f in fragments]
         original = copy.deepcopy(self.wire)
         validate_result('study', self.wire, self.context)
-        with patch('evidence.read_confined', side_effect=AssertionError('pure renderer')):
+        with patch('src.analysis.evidence.read_confined', side_effect=AssertionError('pure renderer')):
             saved = materialize_study(self.wire)
         self.assertEqual(self.wire, original)
         self.assertEqual(saved, materialize_study(copy.deepcopy(self.wire)))
@@ -125,7 +125,7 @@ class RenderingTests(unittest.TestCase):
         ctx = review_context(recovered, self.context)
         self.assertEqual(ctx['claim_registry'], [])
         self.assertFalse(ctx['review_plan']['eligible_study'])
-        from presentation import render_stage
+        from src.reports.presentation import render_stage
         self.assertIn('Text retained after contract rejection', render_stage('study', recovered))
         for key in ('strict_valid', 'narrative_origin'):
             unmarked = {k: v for k, v in recovered.items() if k != key}
@@ -133,7 +133,7 @@ class RenderingTests(unittest.TestCase):
             with self.assertRaises(ContractError): render_stage('study', unmarked)
 
     def test_markdown_study_is_rejected_without_recovery_or_review(self):
-        from presentation import render_stage
+        from src.reports.presentation import render_stage
         for mode, context in (('git', self.context),
                 ('folder', dict(source_directory='/source', source_fingerprint='abc'))):
             data = response(context)
@@ -154,7 +154,7 @@ class RenderingTests(unittest.TestCase):
 
     def test_link_counts_are_claims_not_occurrences(self):
         self.wire['report_sections'][0]['blocks'] *= 3
-        with patch('ledger.resolve_evidence', return_value=[{'status': 'RESOLVED'}]):
+        with patch('src.analysis.ledger.resolve_evidence', return_value=[{'status': 'RESOLVED'}]):
             saved = prepare_result('study', self.wire, self.context)
         self.assertEqual(len(saved['claims'][0]['document_locators']), 3)
         self.assertEqual(saved['program_checks']['document_links']['matched'], 1)
@@ -229,7 +229,7 @@ class EvidenceIDTests(unittest.TestCase):
                 with self.assertRaises(ContractError): normalize_evidence(stage, wire, ctx)
 
     def test_repair_compares_only_original_wire_content(self):
-        from structured_output import validate_repair
+        from src.model.structured_output import validate_repair
         original = response(self.context) | {'extra': True}
         corrected = {k: v for k, v in original.items() if k != 'extra'}
         validate_repair(original, corrected, SCHEMAS['study'])

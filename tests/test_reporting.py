@@ -19,9 +19,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from contracts import ContractError, jsonc
+from src.contracts.contracts import ContractError, jsonc
 from explain import AuditError, Runner, UnsafeRepository, cli_env, load_config, main, process
-from reporting import NullReporter, Reporter, duration, output_mode, safe_text
+from src.runtime.reporting import NullReporter, Reporter, duration, output_mode, safe_text
 import test_startup as startup
 import test_submodules as recursive
 
@@ -575,7 +575,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         if accelerated:
             # Real entry point + real child CLI; shorten only presentation's interval.
             command = [sys.executable, '-B', '-c',
-                'import runpy,sys; sys.path.insert(0,sys.argv[1]); import reporting; '
+                'import runpy,sys; sys.path.insert(0,sys.argv[1]); from src.runtime import reporting; '
                 'original=reporting.Reporter; reporting.Reporter=lambda **kw: original(progress_interval=0.05,**kw); '
                 'sys.argv=sys.argv[2:]; runpy.run_path(sys.argv[0],run_name="__main__")',
                 str(ROOT), str(ROOT / 'explain.py')]
@@ -1025,7 +1025,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         out = io.StringIO()
         with patch('sys.argv', ['explain.py', *args]), patch.dict(os.environ, self.env, clear=True), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(broken), \
-                patch('reporting.RunLogHandler.emit', side_effect=OSError('disk full')):
+                patch('src.runtime.reporting.RunLogHandler.emit', side_effect=OSError('disk full')):
             self.assertEqual(main(), 0)
         manifest = json.loads(Path(json.loads(out.getvalue())['manifest']).read_text())
         self.assertTrue(manifest['restoration']['restored'])

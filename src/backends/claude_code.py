@@ -5,7 +5,7 @@
 import json
 from pathlib import Path
 
-from contracts import response_error, transport_json
+from src.contracts.contracts import response_error, transport_json
 
 
 def help_command(executable: str) -> list[str]:

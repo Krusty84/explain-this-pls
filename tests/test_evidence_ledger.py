@@ -10,12 +10,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from contracts import ContractError, validate_result, SCHEMAS, validate_schema, accepted
-from evidence import resolve_evidence, SourceChanged, MAX_FILE_BYTES
-from ledger import freeze_plan, prepare_result, review_context, CONTRACT_ID, ARTIFACT_FORMAT
-from presentation import render_stage, label
-from final_report import render_final_report, recoverable_material
-from document_rendering import materialize_study, validate_materialized
+from src.contracts.contracts import ContractError, validate_result, SCHEMAS, validate_schema, accepted
+from src.analysis.evidence import resolve_evidence, SourceChanged, MAX_FILE_BYTES
+from src.analysis.ledger import freeze_plan, prepare_result, review_context, CONTRACT_ID, ARTIFACT_FORMAT
+from src.reports.presentation import render_stage, label
+from src.reports.final_report import render_final_report, recoverable_material
+from src.reports.document_rendering import materialize_study, validate_materialized
 from fixtures.ledger_response import sections
 
 
@@ -89,7 +89,7 @@ class LedgerTests(unittest.TestCase):
                 directory.rename(self.root / 'old')
                 directory.symlink_to('/etc', target_is_directory=True)
             return original(path, flags, *args, **kwargs)
-        with patch('evidence.os.open', side_effect=replace_component):
+        with patch('src.analysis.evidence.os.open', side_effect=replace_component):
             self.assertNotEqual(self.resolved(study(self.context)['evidence'][0] | {'path': 'dir/passwd'})['status'], 'RESOLVED')
         from explain import Folder, AuditError
         # Inventory must also retain canonical authorization when a root ancestor
@@ -211,10 +211,10 @@ class LedgerTests(unittest.TestCase):
         (self.root / 'app.py').write_bytes(b'x' * 65537)
         self.assertEqual(self.resolved()['status'], 'LIMIT_EXCEEDED')
         (self.root / 'app.py').write_bytes(b'1234\n')
-        with patch('evidence.MAX_TOTAL_BYTES', 5):
+        with patch('src.analysis.evidence.MAX_TOTAL_BYTES', 5):
             result = resolve_evidence('study', [pointer, pointer | {'id': 'E-002'}], self.context)
         self.assertEqual([e['status'] for e in result], ['RESOLVED', 'RESOLVED'])
-        with patch('evidence.MAX_EVIDENCE', 1):
+        with patch('src.analysis.evidence.MAX_EVIDENCE', 1):
             result = resolve_evidence('study', [pointer, pointer | {'id': 'E-002'}], self.context)
         self.assertEqual(result[-1]['status'], 'LIMIT_EXCEEDED')
 
@@ -231,7 +231,7 @@ class LedgerTests(unittest.TestCase):
             self.assertFalse(prepare_result('review', response, ctx)['program_checks']['policy_satisfied'])
 
     def test_access_error_and_mutation_are_distinct(self):
-        with patch('evidence.os.open', side_effect=PermissionError(13, 'secret-path')):
+        with patch('src.analysis.evidence.os.open', side_effect=PermissionError(13, 'secret-path')):
             result = self.resolved()
         self.assertEqual(result['status'], 'ACCESS_DENIED')
         self.assertNotIn('secret-path', str(result))
@@ -240,7 +240,7 @@ class LedgerTests(unittest.TestCase):
             data = original(fd, size)
             if data: (self.root / 'app.py').write_text('changed')
             return data
-        with patch('evidence.os.read', side_effect=mutate), self.assertRaises(SourceChanged):
+        with patch('src.analysis.evidence.os.read', side_effect=mutate), self.assertRaises(SourceChanged):
             self.resolved()
         with self.assertRaises(SourceChanged):
             resolve_evidence('study', study(self.context)['evidence'], self.context, {'app.py': 'wrong-snapshot-hash'})
@@ -281,7 +281,7 @@ class LedgerTests(unittest.TestCase):
                         document_sha256=plan['document_sha256'], registry_sha256=plan['registry_sha256'])
         data['differences'] = [dict(id='D-001', branch='other', category='state', classification='CONFIRMED_DIFFERENCE',
             baseline_statement='A', branch_statement='B', evidence_refs=[ref(baseline), ref(other)], explanation='Agent contrast.')]
-        with patch('evidence.read_confined', side_effect=AssertionError('Compare must not read source')):
+        with patch('src.analysis.evidence.read_confined', side_effect=AssertionError('Compare must not read source')):
             validate_result('compare', data, ctx)
             self.assertTrue(prepare_result('compare', data, ctx)['program_checks']['policy_satisfied'])
         data['differences'][0]['evidence_refs'] = [ref(baseline), ref(baseline)]
@@ -347,7 +347,7 @@ class LedgerTests(unittest.TestCase):
             with self.assertRaises(ContractError): validate_result('study', data, self.context)
 
     def test_format_repair_cannot_invent_registry_or_locators(self):
-        from structured_output import validate_repair
+        from src.model.structured_output import validate_repair
         original = study(self.context)
         corrected = copy.deepcopy(original)
         del original['claims']

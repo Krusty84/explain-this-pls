@@ -9,12 +9,12 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
-from document_rendering import materialize_study, recover_sections
+from src.reports.document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 
-from contracts import ContractError
+from src.contracts.contracts import ContractError
 from explain import AuditError, Folder, Runner, atomic
-from reporting import Reporter
+from src.runtime.reporting import Reporter
 from test_folder import FolderFixture
 from fixtures.ledger_response import response, model_wire, prompt_context
 
@@ -89,7 +89,7 @@ class PublicationTests(FolderFixture):
         self.assertFalse((runner.run_dir / 'study.json').exists())
 
     def test_recovered_material_cannot_replace_a_previously_frozen_registry(self):
-        from final_report import recoverable_material
+        from src.reports.final_report import recoverable_material
         runner, context, data = self.prepare()
         with patch('explain.process', side_effect=self.process_for(data, context)):
             runner.invoke('study', context, runner.run_dir / 'study.logs')
@@ -195,9 +195,9 @@ class PublicationTests(FolderFixture):
         self.assertTrue(meta['publication_complete'])
 
     def test_forged_review_target_is_not_recovered_even_with_schema_error(self):
-        from final_report import recoverable_material
-        from ledger import review_context, prepare_result
-        from contracts import result_diagnostics
+        from src.reports.final_report import recoverable_material
+        from src.analysis.ledger import review_context, prepare_result
+        from src.contracts.contracts import result_diagnostics
         runner, context, data = self.prepare()
         doc = prepare_result('study', data, context)
         ctx = review_context(doc, context)

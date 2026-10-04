@@ -17,7 +17,7 @@ class OpenAPIContractTests(unittest.TestCase):
         self.base = json.loads(BASELINE.read_text())
 
     def compare(self, candidate, baseline=None, **kwargs):
-        from openapi_contract import compare
+        from src.backends.openapi_contract import compare
         return compare(baseline or self.base, candidate, **kwargs)
 
     def test_identical_subset_and_extra_unused_endpoints_match(self):

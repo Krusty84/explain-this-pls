@@ -11,11 +11,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from document_rendering import materialize_study, recover_sections
+from src.reports.document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS, MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS, jsonc, validate_result
+from src.contracts.contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS, MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS, jsonc, validate_result
 from explain import AuditError, Folder, Runner, load_config, repository_lock
 from test_explain import review
 from fixtures.ledger_response import response as ledger_response
@@ -256,7 +256,7 @@ class FolderInventoryTests(FolderFixture):
 
 class FolderContractTests(unittest.TestCase):
     def test_identity_is_checked(self):
-        from ledger import review_context
+        from src.analysis.ledger import review_context
         context = {'source_directory': '/source', 'source_fingerprint': 'abc'}
         context = review_context(materialize_study(ledger_response(context)), context)
         data = ledger_response(context)

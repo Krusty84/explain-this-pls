@@ -19,10 +19,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-from contracts import ContractError
-from execution import Budget
+from src.contracts.contracts import ContractError
+from src.runtime.execution import Budget
 from explain import Runner
-from reporting import Reporter, SPINNER, cell_width
+from src.runtime.reporting import Reporter, SPINNER, cell_width
 import test_xxx as xxx_fixtures
 import test_reporting as cli_fixtures
 
@@ -630,7 +630,7 @@ class CLIProgressIntegrationTests(unittest.TestCase):
         master, slave = pty.openpty()
         termios.tcsetwinsize(slave, (24, 100))
         command = [sys.executable, '-B', '-c',
-            'import runpy,sys; sys.path.insert(0,sys.argv[1]); import reporting; '
+            'import runpy,sys; sys.path.insert(0,sys.argv[1]); from src.runtime import reporting; '
             'original=reporting.Reporter; reporting.Reporter=lambda **kw: original(progress_interval=0.1,**kw); '
             'sys.argv=sys.argv[2:]; runpy.run_path(sys.argv[0],run_name="__main__")',
             str(ROOT), str(ROOT / 'explain.py'), *args, '--output', 'json']

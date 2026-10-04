@@ -4,7 +4,7 @@
 """Codex CLI commands and structured-output parsing (stdlib only)."""
 from pathlib import Path
 
-from contracts import strict_json
+from src.contracts.contracts import strict_json
 
 
 def help_command(executable: str) -> list[str]:

@@ -5,10 +5,10 @@
 from __future__ import annotations
 import copy
 from collections import Counter
-from contracts import CONTRACT_ID, ARTIFACT_FORMAT, ContractError, contract_violation, has_ledger_structure, has_program_checks, is_recovered_material, review_verdict
-from evidence import canonical, sha, source_catalog, resolve_evidence
-from coverage_plan import build_coverage_plan, verify_coverage_plan, coverage_checks
-from source_decoding import normalize_source_decoding
+from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, ContractError, contract_violation, has_ledger_structure, has_program_checks, is_recovered_material, review_verdict
+from src.analysis.evidence import canonical, sha, source_catalog, resolve_evidence
+from src.analysis.coverage_plan import build_coverage_plan, verify_coverage_plan, coverage_checks
+from src.analysis.source_decoding import normalize_source_decoding
 
 OMISSION_AREAS = ('context', 'components', 'startup_and_flows', 'data_and_state',
                   'cross_cutting', 'constraints', 'change_navigation', 'unknowns', 'evidence_basis')
@@ -18,7 +18,7 @@ def freeze_plan(document, context):
     if 'report_sections' in document:
         raise contract_violation('UNMATERIALIZED_STUDY', '$.report_sections')
     if not is_recovered_material('study', document):
-        from document_rendering import validate_materialized
+        from src.reports.document_rendering import validate_materialized
         validate_materialized(document)
     registry = copy.deepcopy(document.get('claims', [])) if has_ledger_structure('study', document) else []
     areas = [{'id': 'A-' + str(i + 1).zfill(3), 'scope': name} for i, name in enumerate(OMISSION_AREAS)]
@@ -39,7 +39,7 @@ def freeze_plan(document, context):
                  for f in previous['review']['findings'] if f['severity'] in ('HIGH', 'MEDIUM')]
         prior_review_hash = sha(canonical(previous['review']))
         previous_registry_hash = sha(canonical(previous['study']['claims']))
-        from revisions import registry_diff
+        from src.analysis.revisions import registry_diff
         diff = registry_diff(previous['study'], document)
         diff.update(previous_revision_id=previous['revision_id'], revision_id=context.get('revision_id', '001'))
     if context.get('prior_findings', []) != prior:
@@ -94,9 +94,9 @@ def prepare_result(stage, data, context, expected_files=None):
     Resolver reads are performed by the orchestrator, not credited to an agent.
     """
     if stage == 'study':
-        from document_rendering import materialize_study, validate_materialized
+        from src.reports.document_rendering import materialize_study, validate_materialized
         if 'report_sections' in data:
-            from contracts import validate_result
+            from src.contracts.contracts import validate_result
             validate_result(stage, data, context, 'folder' if 'source_directory' in context else 'git')
             data = materialize_study(data)
         validate_materialized(data)
@@ -125,7 +125,7 @@ def prepare_result(stage, data, context, expected_files=None):
         result['revision_id'] = context.get('revision_id', '001')
         result['registry_diff'] = None
         if context.get('previous_revision'):
-            from revisions import registry_diff
+            from src.analysis.revisions import registry_diff
             result['registry_diff'] = registry_diff(context['previous_revision']['study'], result)
             result['registry_diff'].update(previous_revision_id=context['previous_revision']['revision_id'],
                                            revision_id=result['revision_id'])
@@ -186,9 +186,9 @@ def accepted_pair(item):
     if not doc or not rev:
         return False
     try:
-        from document_rendering import validate_materialized
-        from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
-        from contracts import validate_schema
+        from src.reports.document_rendering import validate_materialized
+        from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
+        from src.contracts.contracts import validate_schema
         validate_materialized(doc)
         schemas = SAVED_FOLDER_SCHEMAS if 'source_directory' in doc else SAVED_SCHEMAS
         validate_schema(doc, schemas['study'])

@@ -6,15 +6,15 @@ import copy
 import io
 import json
 import unittest
-from document_rendering import materialize_study, recover_sections
+from src.reports.document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 
-from contracts import ContractError, result_diagnostics, validate_result, strict_json
-from evidence import canonical, sha, SourceChanged
+from src.contracts.contracts import ContractError, result_diagnostics, validate_result, strict_json
+from src.analysis.evidence import canonical, sha, SourceChanged
 from explain import AuditError, Folder, Runner, atomic
-from ledger import prepare_result, review_context
-from reporting import Reporter, diagnostic
-from study_normalization import normalize_evidence, normalization_provenance, RULE
+from src.analysis.ledger import prepare_result, review_context
+from src.runtime.reporting import Reporter, diagnostic
+from src.analysis.study_normalization import normalize_evidence, normalization_provenance, RULE
 from test_evidence_ledger import study, review
 from test_folder import FolderFixture
 from fixtures.ledger_response import response, model_wire, prompt_context
@@ -293,7 +293,7 @@ class NormalizationPipelineTests(FolderFixture):
                 self.assertFalse(meta['publication_complete'])
                 self.assertEqual(meta['status'], 'FAILED')
             runner, context, data = self.prepare(policy=policy)
-            with patch('ledger.resolve_evidence', side_effect=SourceChanged), self.assertRaises(AuditError):
+            with patch('src.analysis.ledger.resolve_evidence', side_effect=SourceChanged), self.assertRaises(AuditError):
                 self.invoke(runner, context, data)
             self.assertFalse((runner.run_dir / 'study.json').exists())
 

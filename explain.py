@@ -31,27 +31,27 @@ import time
 import uuid
 from typing import Any
 from urllib.parse import urlsplit
-from contracts import MODEL_FOLDER_SCHEMAS, MODEL_SCHEMAS, ContractError, accepted, jsonc, strict_json, validate_result, schema_diagnostics, result_diagnostics
-from reporting import Diagnostic, NullReporter, Reporter, diagnostic, existing_file, output_mode
-from execution import Budget, execution_settings
-import codex
-import claude_code
-import opencode
-import xxx
-from structured_output import blocked_comparison, repair_prompt, required_unresolved, retry_policy, validate_repair
-from final_report import recoverable_material, stage_document, usable_study, report_entries, comparison_possible, render_final_report
-from ledger import prepare_result, review_context
-from study_normalization import normalize_evidence, normalization_provenance
-from document_rendering import materialize_study, validate_materialized
-from evidence import source_catalog, SourceChanged, open_source_directory, read_confined
-from contracts import CONTRACT_ID, ARTIFACT_FORMAT, has_ledger_structure, validate_schema
-from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
-from presentation import render_stage
-from model_context import CONTEXT_FORMAT
-from model_boundary import BindingRegistry
-from source_decoding import normalize_source_decoding
-from coverage_plan import build_coverage_plan, inventory_summary, verify_coverage_plan
-from revisions import revision_inputs, choose_revision, completed_pair
+from src.contracts.contracts import MODEL_FOLDER_SCHEMAS, MODEL_SCHEMAS, ContractError, accepted, jsonc, strict_json, validate_result, schema_diagnostics, result_diagnostics
+from src.runtime.reporting import Diagnostic, NullReporter, Reporter, diagnostic, existing_file, output_mode
+from src.runtime.execution import Budget, execution_settings
+from src.backends import codex
+from src.backends import claude_code
+from src.backends import opencode
+from src.backends import xxx
+from src.model.structured_output import blocked_comparison, repair_prompt, required_unresolved, retry_policy, validate_repair
+from src.reports.final_report import recoverable_material, stage_document, usable_study, report_entries, comparison_possible, render_final_report
+from src.analysis.ledger import prepare_result, review_context
+from src.analysis.study_normalization import normalize_evidence, normalization_provenance
+from src.reports.document_rendering import materialize_study, validate_materialized
+from src.analysis.evidence import source_catalog, SourceChanged, open_source_directory, read_confined
+from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, has_ledger_structure, validate_schema
+from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
+from src.reports.presentation import render_stage
+from src.model.model_context import CONTEXT_FORMAT
+from src.model.model_boundary import BindingRegistry
+from src.analysis.source_decoding import normalize_source_decoding
+from src.analysis.coverage_plan import build_coverage_plan, inventory_summary, verify_coverage_plan
+from src.analysis.revisions import revision_inputs, choose_revision, completed_pair
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ('catalog', 'study', 'review', 'compare')

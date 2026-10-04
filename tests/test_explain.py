@@ -11,17 +11,17 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from document_rendering import materialize_study, recover_sections
+from src.reports.document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from explain import AuditError, Repository, Runner, UnsafeRepository, cli_env, load_config, process, repository_lock, slug
-from reporting import Reporter
-from opencode import prepare_environment
-import claude_code
-import codex
-from contracts import ContractError, review_verdict, strict_json, validate_result
+from src.runtime.reporting import Reporter
+from src.backends.opencode import prepare_environment
+from src.backends import claude_code
+from src.backends import codex
+from src.contracts.contracts import ContractError, review_verdict, strict_json, validate_result
 from fixtures.ledger_response import response
-from ledger import review_context, prepare_result
+from src.analysis.ledger import review_context, prepare_result
 
 BASE = {'completion_status': 'COMPLETE',
         'report_markdown': '# Report\nC-001\n', 'limitations': []}
@@ -329,7 +329,7 @@ class FakeRunner(Runner):
         validate_result(stage,data,context)
         data = prepare_result(stage, data, context)
         self.publish_result(stage, data, destination)
-        from contracts import CONTRACT_ID, ARTIFACT_FORMAT
+        from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT
         return data,{'TEST_ONLY':'mock invocation', 'publication_complete': True,
                      'contract_id': CONTRACT_ID, 'artifact_format': ARTIFACT_FORMAT}
 

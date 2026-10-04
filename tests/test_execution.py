@@ -11,11 +11,11 @@ import tempfile
 import time
 import unittest
 
-from contracts import ContractError
-from execution import Budget, execution_settings
+from src.contracts.contracts import ContractError
+from src.runtime.execution import Budget, execution_settings
 from explain import cli_env, process
 from unittest.mock import patch
-from contracts import response_error
+from src.contracts.contracts import response_error
 from explain import Runner
 import test_explain as fixtures
 
