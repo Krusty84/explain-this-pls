@@ -63,8 +63,8 @@ def obj(**properties: dict) -> dict:
 # Wire schemas deliberately use only type/enum/properties/required/items and
 # additionalProperties. Local semantic checks enforce nonblank strings, bounds
 # and graph constraints regardless of a backend's JSON Schema dialect.
-CONTRACT_VERSION = 'evidence-ledger-v4'
-ARTIFACT_VERSION = 'evidence-ledger-artifacts-v4'
+CONTRACT_ID = 'evidence-ledger'
+ARTIFACT_FORMAT = 'evidence-ledger-artifacts'
 STRINGS = array(string())
 STATUS = string('COMPLETE', 'PARTIAL', 'BLOCKED')
 BASE = dict(completion_status=STATUS, report_markdown=string(), limitations=STRINGS)
@@ -283,7 +283,7 @@ def validate_schema(value: Any, schema: dict, where: str = '$') -> None:
 
 
 def has_ledger_structure(stage, value, *, representation='materialized'):
-    """Recognize substantive ledger fields without a model-supplied version tag."""
+    """Recognize substantive ledger fields for the requested representation."""
     fields = {'catalog': ('subsystems', 'exclusions'), 'study': ('claims', 'evidence', 'coverage'),
               'review': ('claims', 'evidence', 'target', 'omission_search', 'prior_findings'),
               'compare': ('differences', 'unresolved_branches')}
@@ -305,7 +305,7 @@ def has_program_checks(value):
             and value['program_checks'].get('contract') == 'VALID')
 
 def is_recovered_material(stage, value):
-    """Recognize explicitly retained current-format text without a claim registry."""
+    """Recognize explicitly retained narrative without a claim registry."""
     origins = {'study': 'PROGRAM_ASSEMBLED_AUTHOR_BLOCKS', 'review': 'MODEL_MARKDOWN'}
     if (stage not in origins or type(value) is not dict or value.get('strict_valid') is not False
             or value.get('narrative_origin') != origins[stage]

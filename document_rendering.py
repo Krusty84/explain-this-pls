@@ -15,10 +15,10 @@ from contracts import (SECTION_KEYS, SECTIONS, CLAIM, MATERIALIZED_CLAIM, SCHEMA
     unique_ids, references, contract_violation)
 from evidence import canonical, sha, lines
 
-RENDERING_VERSION = 'study-blocks-lf-v1'
+RENDERING_RULE = 'study-blocks-lf'
 BLOCK = obj(id=string(), section_key=string(), section_index={'type': 'integer'},
             block_index={'type': 'integer'}, claim_ids=STRINGS, locator=LOCATOR)
-PROVENANCE = obj(rule=string(RENDERING_VERSION), normalized_sha256=string(),
+PROVENANCE = obj(rule=string(RENDERING_RULE), normalized_sha256=string(),
                  document_sha256=string(), registry_sha256=string(), block_map_sha256=string())
 
 
@@ -92,7 +92,7 @@ def materialize_study(wire):
     markdown, blocks, registry = render_document(wire['report_sections'], wire['claims'])
     result = copy.deepcopy({k: v for k, v in wire.items() if k not in ('report_sections', 'claims')})
     result.update(report_markdown=markdown, claims=registry, block_map=blocks,
-        materialization_provenance=dict(rule=RENDERING_VERSION, normalized_sha256=sha(canonical(wire)),
+        materialization_provenance=dict(rule=RENDERING_RULE, normalized_sha256=sha(canonical(wire)),
             document_sha256=sha(markdown.encode('utf-8')), registry_sha256=sha(canonical(registry)),
             block_map_sha256=sha(canonical(blocks))))
     validate_materialized(result)

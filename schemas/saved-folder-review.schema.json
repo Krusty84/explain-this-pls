@@ -773,10 +773,10 @@
             "null"
           ],
           "properties": {
-            "contract_version": {
+            "contract_id": {
               "type": "string",
               "enum": [
-                "evidence-ledger-v4"
+                "evidence-ledger"
               ]
             },
             "origin": {
@@ -1000,7 +1000,7 @@
             }
           },
           "required": [
-            "contract_version",
+            "contract_id",
             "origin",
             "catalog_status",
             "limitations",
@@ -1223,13 +1223,13 @@
         "rule": {
           "type": "string",
           "enum": [
-            "EVIDENCE_IDS_V4"
+            "EVIDENCE_IDS"
           ]
         },
         "hash_format": {
           "type": "string",
           "enum": [
-            "canonical-json-utf8-v1"
+            "canonical-json-utf8"
           ]
         },
         "input_sha256": {

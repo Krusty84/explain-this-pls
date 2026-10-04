@@ -12,8 +12,8 @@ from contracts import contract_violation, validate_schema, MODEL_SCHEMAS, MODEL_
 from evidence import canonical, sha
 from model_context import project_model_context
 
-RULE = 'MODEL_BINDING_V1'
-HASH_FORMAT = 'canonical-json-utf8-v1'
+RULE = 'MODEL_BINDING'
+HASH_FORMAT = 'canonical-json-utf8'
 TARGET_KEYS = ('source_sha256', 'document_sha256', 'registry_sha256', 'plan_sha256')
 
 

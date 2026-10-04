@@ -74,17 +74,19 @@ class HashlessMarkdownTests(unittest.TestCase):
 
     def test_unsupported_normalization_provenance_is_rejected(self):
         for stage, current in (('study', self.study), ('review', self.review)):
-            with self.subTest(stage=stage):
-                historical = copy.deepcopy(current)
-                historical['normalization_provenance'] = {'rule': 'EVIDENCE_IDS_V3',
-                    'hash_format': 'canonical-json-utf8-v1', 'input_sha256': 'a' * 64,
-                    'normalized_sha256': self.study['materialization_provenance']['normalized_sha256'],
-                    'replacement_count': 0}
-                before = copy.deepcopy(historical)
-                with self.assertRaises(ContractError): render_stage(stage, historical)
-                if stage == 'study':
-                    with self.assertRaises(ContractError): review_context(historical, self.context)
-                self.assertEqual(historical, before)
+            for field in ('rule', 'hash_format'):
+                with self.subTest(stage=stage, field=field):
+                    unsupported = copy.deepcopy(current)
+                    unsupported['normalization_provenance'] = {'rule': 'EVIDENCE_IDS',
+                        'hash_format': 'canonical-json-utf8', 'input_sha256': 'a' * 64,
+                        'normalized_sha256': self.study['materialization_provenance']['normalized_sha256'],
+                        'replacement_count': 0}
+                    unsupported['normalization_provenance'][field] = 'unsupported-format'
+                    before = copy.deepcopy(unsupported)
+                    with self.assertRaises(ContractError): render_stage(stage, unsupported)
+                    if stage == 'study':
+                        with self.assertRaises(ContractError): review_context(unsupported, self.context)
+                    self.assertEqual(unsupported, before)
 
 
 if __name__ == '__main__':

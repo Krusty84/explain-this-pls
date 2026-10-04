@@ -6,7 +6,7 @@ from __future__ import annotations
 import copy
 import re
 
-from contracts import CONTRACT_VERSION, ContractError, contract_violation
+from contracts import CONTRACT_ID, ContractError, contract_violation
 from evidence import canonical, sha, source_catalog, valid_path
 
 
@@ -99,7 +99,7 @@ def build_coverage_plan(catalog, inventory, context, fallback=False):
                       'paths': sorted(unclassified), 'entry_paths': sorted(unclassified),
                       'file_paths': sorted(unclassified & files), 'required': True})
     summary = inventory_summary(inventory)
-    plan = {'contract_version': CONTRACT_VERSION, 'origin': 'DIRECTORY_FALLBACK' if fallback else 'AGENT',
+    plan = {'contract_id': CONTRACT_ID, 'origin': 'DIRECTORY_FALLBACK' if fallback else 'AGENT',
             'catalog_status': catalog['completion_status'], 'limitations': copy.deepcopy(catalog['limitations']),
             'sources': source_catalog(context), 'inventory_sha256': sha(canonical(entries)),
             'areas': areas, 'exclusions': exclusions, 'unclassified_paths': sorted(unclassified),
@@ -116,7 +116,7 @@ def verify_coverage_plan(plan):
     from saved_contracts import COVERAGE_PLAN
     from contracts import validate_schema
     validate_schema(plan, COVERAGE_PLAN)
-    if (type(plan) is not dict or plan.get('contract_version') != CONTRACT_VERSION
+    if (type(plan) is not dict or plan.get('contract_id') != CONTRACT_ID
             or plan.get('plan_sha256') != sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))):
         raise ContractError('Frozen coverage plan changed.')
     identifiers = [a['id'] for a in plan['areas']]

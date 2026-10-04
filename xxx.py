@@ -22,7 +22,7 @@ from contracts import ContractError, strict_json
 from openapi_contract import DiffError, compare
 from opencode import Server as OpenCodeServer, incompatible, object_value
 
-PROFILE = 'xxx-http-v1'
+PROFILE = 'xxx-http'
 PROFILE_PATH = Path(__file__).resolve().parent / 'schemas/xxx-declarations.json'
 
 
@@ -100,7 +100,7 @@ class Server(OpenCodeServer):
         self.save(self.artifacts / 'api-delta.json', json.dumps(delta))
         self.meta.update(compatibility_profile=PROFILE, api_changes=delta['total_changes'])
         if delta['status'] != 'MATCH':
-            raise incompatible('XXX OpenAPI differs from profile xxx-http-v1; inspect private api-delta.json. '
+            raise incompatible('XXX OpenAPI differs from profile xxx-http; inspect private api-delta.json. '
                                'No model request was sent.')
 
     def invoke(self, prompt, schema, agent_name, model, retries=0):

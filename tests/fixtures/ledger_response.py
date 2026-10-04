@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Synthetic model wire fixture, not a response from the user's historical run."""
+"""Synthetic model wire fixture."""
 import copy
 # Keep the child-process fixture self-contained; production checks enforce keys.
 SECTION_KEYS = ('scope', 'context', 'components', 'startup_and_flows', 'data_and_state',

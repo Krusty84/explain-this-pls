@@ -60,7 +60,7 @@ class XXXTests(unittest.TestCase):
         check = next(iter(manifest['cli_checks'].values()))
         self.assertEqual(check['version'], 'XXX fixture-unknown')
         self.assertEqual(check['http']['api_version'], 'XXX fixture-unknown')
-        self.assertEqual(check['http']['compatibility_profile'], 'xxx-http-v1')
+        self.assertEqual(check['http']['compatibility_profile'], 'xxx-http')
         for pid in {c['server_pid'] for c in self.recorded()}:
             with self.assertRaises(ProcessLookupError):
                 os.kill(pid, 0)

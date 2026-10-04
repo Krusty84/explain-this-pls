@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from contracts import CONTRACT_VERSION, ARTIFACT_VERSION, ContractError, validate_result, accepted, validate_schema
+from contracts import CONTRACT_ID, ARTIFACT_FORMAT, ContractError, validate_result, accepted, validate_schema
 from ledger import prepare_result, review_context
 from revisions import registry_diff, revision_inputs, choose_revision, completed_pair
 from saved_contracts import SAVED_SCHEMAS
@@ -20,7 +20,7 @@ class RevisionTests(unittest.TestCase):
         (self.root / 'app.py').write_text('print(1)\n')
         self.context = {'branch': 'main', 'source_commit': 'abc', 'source_mode': 'git',
                         'repository': str(self.root), 'revision_id': '001'}
-        self.meta = {'publication_complete': True, 'contract_version': CONTRACT_VERSION, 'artifact_version': ARTIFACT_VERSION}
+        self.meta = {'publication_complete': True, 'contract_id': CONTRACT_ID, 'artifact_format': ARTIFACT_FORMAT}
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -62,6 +62,23 @@ class RevisionTests(unittest.TestCase):
         after['claims'][0]['statement'] = before['claims'][0]['statement']
         with self.assertRaises(ContractError):
             registry_diff(before, after)
+
+    def test_pair_requires_supported_invocation_formats(self):
+        pair = self.pair()
+        self.assertTrue(accepted(pair))
+        self.assertTrue(completed_pair(pair))
+        for stage in ('study', 'review'):
+            for field in ('contract_id', 'artifact_format'):
+                for missing in (False, True):
+                    with self.subTest(stage=stage, field=field, missing=missing):
+                        unsupported = copy.deepcopy(pair)
+                        metadata = unsupported[stage + '_invocation']
+                        if missing:
+                            metadata.pop(field)
+                        else:
+                            metadata[field] = 'unsupported-format'
+                        self.assertFalse(accepted(unsupported))
+                        self.assertFalse(completed_pair(unsupported))
 
     def test_prior_findings_missing_unresolved_and_resolved(self):
         previous = self.pair(change_review=self.issue)

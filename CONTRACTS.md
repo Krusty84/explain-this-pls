@@ -1,14 +1,14 @@
 # Evidence ledger contract
 
-Response schemas contain no version fields. The orchestrator
-selects the required schema for each stage and validates its structure locally.
+The orchestrator selects the required response schema for each stage and validates
+its structure locally.
 `schemas/{catalog,study,review,compare}.schema.json` and their `folder-` variants
 are **model wire** schemas generated from `MODEL_SCHEMAS` / `MODEL_FOLDER_SCHEMAS`
 in `contracts.py`. Internal `SCHEMAS` / `FOLDER_SCHEMAS` validate the expanded
 representation, which retains full integrity identities. Separate `saved-*.schema.json`
 files are generated from `saved_contracts.py` and locally validated before publication.
-The only supported contract is `evidence-ledger-v4`. Rendering requires the current
-saved schema or explicitly marked recovery material from the current format.
+The `evidence-ledger` contract requires the saved schema or explicitly marked
+recovery material for rendering.
 Unsupported results are rejected without modifying their artifacts.
 
 ## Data provenance and storage
@@ -26,7 +26,7 @@ Unsupported results are rejected without modifying their artifacts.
 An attempt's private `extracted.json` preserves the original model wire object.
 The orchestrator verifies opaque identity bindings and writes `expanded.json`
 with full internal identities before evidence normalization. `binding.json`
-records `rule: "MODEL_BINDING_V1"`, `hash_format: "canonical-json-utf8-v1"`,
+records `rule: "MODEL_BINDING"`, `hash_format: "canonical-json-utf8"`,
 `stage`, `mode`, ID `mappings` with role/ID/identity, permitted `reference_scope`,
 `wire_sha256` and `expanded_sha256`. Both digests are null before the model call;
 after verified expansion they cover the whole original wire and expanded canonical
@@ -36,12 +36,12 @@ Transport/stdout and stderr remain private attempt artifacts. A saved `study.jso
 `review.json` or `compare.json` is a separate representation with processed wire
 fields and `program_checks`. Study narrative is authored as sections/blocks;
 the program computes the Markdown, block map and every document locator.
-Contract/artifact identifiers (`contract_version:
-"evidence-ledger-v4"`, `artifact_version: "evidence-ledger-artifacts-v4"`) belong only
+Contract/artifact identifiers (`contract_id:
+"evidence-ledger"`, `artifact_format: "evidence-ledger-artifacts"`) belong only
 to invocation metadata and the manifest, not agent responses or the root of saved
-results. The immutable coverage plan also records contract_version and is embedded
+results. The immutable coverage plan also records `contract_id` and is embedded
 in saved review plans. Study adds `review_plan` and `normalization_provenance` (including
-the normalization rule version). Review also adds `review_plan`, the
+the normalization rule). Review also adds `review_plan`, the
 unchanged `claim_registry`, and the Python-derived `verdict`. These extra fields
 are forbidden in wire output. The saved representation must not be re-submitted
 as an agent response. Stored `program_checks` are execution records, not signatures
@@ -164,7 +164,7 @@ when no changes are needed. It first requires the complete internal stage schema
 task, matching pinned Git/folder identity and, for review, unchanged frozen
 context and exact target. The caller verifies transport before calling it.
 It never repairs the schema.
-The rule version is `EVIDENCE_IDS_V4` in both strict and compromise.
+The rule is `EVIDENCE_IDS` in both strict and compromise.
 
 Evidence definitions may pad one/two numeric digits (`E-1`, `E-01` -> `E-001`)
 and remove the stage's own namespace (`study:E-001` in study or `review:E-001`
@@ -215,7 +215,7 @@ The private journal is a provenance object plus `changes`, for example:
 
 ```json
 {
-  "rule": "EVIDENCE_IDS_V4",
+  "rule": "EVIDENCE_IDS",
   "path": "$.claims[0].evidence_ids[0]",
   "before": "E-001",
   "after": "study:E-001"
@@ -223,7 +223,7 @@ The private journal is a provenance object plus `changes`, for example:
 ```
 
 Each change has the above shape. The provenance object contains `rule`,
-`hash_format: "canonical-json-utf8-v1"`, `replacement_count`, `input_sha256`
+`hash_format: "canonical-json-utf8"`, `replacement_count`, `input_sha256`
 and `normalized_sha256`. The input is `expanded.json`, after verified identity
 expansion. Both SHA-256 hashes cover the respective **entire internal objects**,
 serialized with Python `json.dumps(ensure_ascii=False, sort_keys=True,
@@ -311,7 +311,7 @@ For example, the first section `{key: "scope", title: "Область", blocks:
 Further occurrences receive separate locators, never a spanning range.
 Always `quote == "".join(lines(report_markdown)[start_line-1:end_line])`.
 
-Materialization provenance uses `study-blocks-lf-v1` and records distinct hashes
+Materialization provenance uses `study-blocks-lf` and records distinct hashes
 of normalized wire, exact UTF-8 document, final registry and block map. Combined
 private provenance also records expanded/normalized object hashes and the ID edit
 journal separately. Identical canonical input yields identical text/locators/hashes.
@@ -392,8 +392,8 @@ the failure kind and schema-owned violation paths. In compromise, usable study
 assembly of authored blocks. A study wire response without `report_sections` is rejected and
 cannot enter recovery, review or format repair. No partial registry is presented
 as accepted, and empty-registry review is explicitly limited/ineligible.
-An existing manifest with unsupported contract/artifact versions causes
-`UNSUPPORTED_ARTIFACT_VERSION` before any artifact writes. Use a new run directory.
+An existing manifest with missing or unsupported `contract_id` / `artifact_format`
+causes `UNSUPPORTED_ARTIFACT_FORMAT` before any artifact writes. Use a new run directory.
 Ordinary successful execution uses catalog → study → review, optionally one
 revised study → full review, then selection → compare (comparison only for
 multiple Git branches). Format repairs stay bounded and may
@@ -429,7 +429,7 @@ prose, quotes and diagnostics. Equal original/invalid objects are sent once with
 both roles identified. Recovery uses only the first original response after its
 identity has been verified; it never promotes contract-invalid text to acceptance.
 
-Invocation metadata records `context_format_version: "compact-context-v2"`.
+Invocation metadata records `context_format: "compact-context"`.
 `input.prompt.txt` contains the exact request actually sent, with its hash recorded
 in invocation metadata. The backend receives the model schema, while local
 validation and publication use expanded internal and saved schemas.

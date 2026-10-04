@@ -5,7 +5,7 @@
 from __future__ import annotations
 import copy
 from collections import Counter
-from contracts import CONTRACT_VERSION, ARTIFACT_VERSION, ContractError, contract_violation, has_ledger_structure, has_program_checks, is_recovered_material, review_verdict
+from contracts import CONTRACT_ID, ARTIFACT_FORMAT, ContractError, contract_violation, has_ledger_structure, has_program_checks, is_recovered_material, review_verdict
 from evidence import canonical, sha, source_catalog, resolve_evidence
 from coverage_plan import build_coverage_plan, verify_coverage_plan, coverage_checks
 from source_decoding import normalize_source_decoding
@@ -199,7 +199,7 @@ def accepted_pair(item):
         return False
     for stage, data in (('study', doc), ('review', rev)):
         meta = item.get(stage + '_invocation') or {}
-        if (meta.get('contract_version') != CONTRACT_VERSION or meta.get('artifact_version') != ARTIFACT_VERSION or
+        if (meta.get('contract_id') != CONTRACT_ID or meta.get('artifact_format') != ARTIFACT_FORMAT or
                 not has_program_checks(data) or
                 not data.get('program_checks', {}).get('policy_satisfied') or data.get('completion_status') != 'COMPLETE' or
                 not meta.get('publication_complete')):

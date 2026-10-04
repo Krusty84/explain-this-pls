@@ -18,17 +18,29 @@ from fixtures.ledger_response import response, model_wire, prompt_context
 
 
 class PublicationTests(FolderFixture):
-    def test_unsupported_manifest_is_rejected_without_changing_artifacts(self):
-        directory = self.base / 'historical'
+    def test_manifest_identifiers_checked_without_changing_artifacts(self):
+        directory = self.base / 'existing-run'
         directory.mkdir()
-        historical = {'contract_version': 'evidence-ledger-v1',
-                      'artifact_version': 'evidence-ledger-artifacts-v1', 'accepted': True}
-        (directory / 'manifest.json').write_text(json.dumps(historical))
+        supported = {'contract_id': 'evidence-ledger',
+                     'artifact_format': 'evidence-ledger-artifacts', 'accepted': True}
         for name in ('claim.registry.json', 'review.plan.json', 'study.json', 'ARCHITECTURE.md'):
-            (directory / name).write_bytes(b'historical bytes')
+            (directory / name).write_bytes(b'existing artifact bytes')
+        for field in ('contract_id', 'artifact_format'):
+            for missing in (False, True):
+                with self.subTest(field=field, missing=missing):
+                    unsupported = dict(supported)
+                    if missing:
+                        unsupported.pop(field)
+                    else:
+                        unsupported[field] = 'unsupported-format'
+                    (directory / 'manifest.json').write_text(json.dumps(unsupported))
+                    before = {p.name: p.read_bytes() for p in directory.iterdir()}
+                    with self.assertRaises(AuditError) as caught: Runner(self.config(), directory)
+                    self.assertEqual(caught.exception.code, 'UNSUPPORTED_ARTIFACT_FORMAT')
+                    self.assertEqual(before, {p.name: p.read_bytes() for p in directory.iterdir()})
+        (directory / 'manifest.json').write_text(json.dumps(supported))
         before = {p.name: p.read_bytes() for p in directory.iterdir()}
-        with self.assertRaises(AuditError) as caught: Runner(self.config(), directory)
-        self.assertEqual(caught.exception.code, 'UNSUPPORTED_ARTIFACT_VERSION')
+        Runner(self.config(), directory)
         self.assertEqual(before, {p.name: p.read_bytes() for p in directory.iterdir()})
 
     def prepare(self):
@@ -53,7 +65,7 @@ class PublicationTests(FolderFixture):
         with patch('explain.process', side_effect=self.process_for(data, context)):
             runner.invoke('study', context, destination)
         first = {p.name: p.read_bytes() for p in (destination / 'attempt-001').iterdir()}
-        with patch('explain.process', side_effect=self.process_for(data | {'schema_version': 'legacy'}, context)):
+        with patch('explain.process', side_effect=self.process_for(data | {'unexpected_field': True}, context)):
             with self.assertRaises(ContractError):
                 runner.invoke('study', context, destination)
         self.assertEqual(first, {p.name: p.read_bytes() for p in (destination / 'attempt-001').iterdir()})
@@ -61,8 +73,8 @@ class PublicationTests(FolderFixture):
         self.assertEqual(summary['attempt'], 'attempt-002')
         self.assertEqual(summary['status'], 'FAILED')
         self.assertEqual(summary['error']['failure_kind'], 'SCHEMA_ERROR')
-        self.assertIn('schema_version', (destination / 'attempt-002/extracted.json').read_text())
-        self.assertNotIn('schema_version', (runner.run_dir / 'study.json').read_text())
+        self.assertIn('unexpected_field', (destination / 'attempt-002/extracted.json').read_text())
+        self.assertNotIn('unexpected_field', (runner.run_dir / 'study.json').read_text())
         for path in runner.run_dir.rglob('*'):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700 if path.is_dir() else 0o600)
 
@@ -122,12 +134,13 @@ class PublicationTests(FolderFixture):
         self.assertEqual(wire, model_wire(data, model_context, context))
         self.assertEqual(json.loads((runner.run_dir / 'study.logs/attempt-001/expanded.json').read_text()), data)
         self.assertNotIn('program_checks', wire)
-        self.assertNotIn('contract_version', wire)
-        self.assertNotIn('contract_version', saved)
-        self.assertNotIn('artifact_version', saved)
-        self.assertNotIn('contract_version', saved['review_plan'])
-        self.assertEqual(meta['contract_version'], 'evidence-ledger-v4')
-        self.assertEqual(meta['artifact_version'], 'evidence-ledger-artifacts-v4')
+        for field in ('contract_id', 'artifact_format', 'context_format'):
+            self.assertNotIn(field, wire)
+            self.assertNotIn(field, saved)
+            self.assertNotIn(field, saved['review_plan'])
+        self.assertEqual(meta['contract_id'], 'evidence-ledger')
+        self.assertEqual(meta['artifact_format'], 'evidence-ledger-artifacts')
+        self.assertEqual(meta['context_format'], 'compact-context')
         self.assertTrue(meta['publication_complete'])
 
     def test_forged_review_target_is_not_recovered_even_with_schema_error(self):

@@ -388,7 +388,8 @@ class FolderCLIIntegrationTests(FolderFixture):
                     self.assertEqual(result.stderr.count('Project description is missing.'), int(check))
                     run = Path(output['manifest']).parent
                     manifest = json.loads((run / 'manifest.json').read_text())
-                    self.assertNotIn('schema_version', manifest)
+                    self.assertEqual(manifest['contract_id'], 'evidence-ledger')
+                    self.assertEqual(manifest['artifact_format'], 'evidence-ledger-artifacts')
                     self.assertEqual(manifest['source_fingerprint'], before['source_fingerprint'])
                     self.assertEqual(json.loads((run / 'source.inventory.json').read_text()), before)
                     snapshot = json.loads((run / 'config.snapshot.json').read_text())
@@ -401,8 +402,9 @@ class FolderCLIIntegrationTests(FolderFixture):
                     self.assertFalse((self.source / '.git').exists())
                     for call in invocations:
                         context, args = call['context'], call['args']
-                        self.assertNotIn('schema_version', call['schema']['properties'])
-                        self.assertNotIn('schema_version', call['schema']['required'])
+                        for field in ('contract_id', 'artifact_format', 'context_format'):
+                            self.assertNotIn(field, call['schema']['properties'])
+                            self.assertNotIn(field, call['schema']['required'])
                         self.assertEqual(call['cwd'], str(self.source))
                         self.assertEqual(context['project_description'], self.value['project_description'])
                         self.assertNotIn('entries', context)
@@ -438,7 +440,8 @@ class FolderCLIIntegrationTests(FolderFixture):
                             self.assertEqual(data, manifest[stage])
                             meta = json.loads((run / 'revisions/001' / f'{stage}.logs/invocation.json').read_text())
                             self.assertEqual(meta['stage'], stage)
-                            self.assertNotIn('schema_version', data)
+                            for field in ('contract_id', 'artifact_format', 'context_format'):
+                                self.assertNotIn(field, data)
                             self.assertEqual(data['source_fingerprint'], before['source_fingerprint'])
                     self.assertEqual(Folder(self.source).snapshot(), before)
 

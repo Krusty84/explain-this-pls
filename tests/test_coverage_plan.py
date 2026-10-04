@@ -65,6 +65,18 @@ class CoveragePlanTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             verify_coverage_plan(plan)
 
+    def test_unsupported_contract_is_rejected_even_with_matching_hash(self):
+        for missing in (False, True):
+            with self.subTest(missing=missing):
+                plan = build_coverage_plan(self.catalog, self.inventory, self.context)
+                if missing:
+                    plan.pop('contract_id')
+                else:
+                    plan['contract_id'] = 'unsupported-format'
+                plan['plan_sha256'] = sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))
+                with self.assertRaises(ContractError):
+                    verify_coverage_plan(plan)
+
     def test_catalog_identity_reserved_ids_and_plan_policy_cannot_be_forged(self):
         for catalog in (self.catalog | {'source_commit': 'another'}, self.catalog | {
                 'subsystems': [self.catalog['subsystems'][0] | {'id': 'A-001'}]}):

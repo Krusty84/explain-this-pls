@@ -34,7 +34,7 @@ def review(branch, commit, context=None):
     return response(context)
 
 class ContractTests(unittest.TestCase):
-    def test_wire_contract_without_versions_and_rejection_of_unexpected_fields(self):
+    def test_wire_contract_rejects_unexpected_fields(self):
         git_context = {'branch': 'master', 'source_commit': 'abc'}
         folder_context = {'source_directory': '/source', 'source_fingerprint': 'abc'}
         comparison = dict(BASE, task='architecture_comparison', baseline_branch='master',
@@ -59,10 +59,10 @@ class ContractTests(unittest.TestCase):
         for stage, data, context, mode in cases:
             with self.subTest(stage=stage, mode=mode):
                 validate_result(stage, data, context, mode)
-                for key in ('schema_version', 'contract_version', 'artifact_version'):
+                for key in ('unexpected_field', 'contract_id', 'artifact_format', 'context_format'):
                     self.assertNotIn(key, data)
                     with self.assertRaises(ContractError) as caught:
-                        validate_result(stage, data | {key: 'obsolete'}, context, mode)
+                        validate_result(stage, data | {key: 'unexpected'}, context, mode)
                     self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')
                     self.assertEqual(caught.exception.details['path'], '$')
                     self.assertEqual(caught.exception.details['extra_key_count'], 1)
@@ -146,7 +146,8 @@ class RepoFixture(unittest.TestCase):
         result,code=FakeRunner(cfg,self.base/'grouped-run').run()
         self.assertEqual(code,0)
         self.assertEqual(result['status'],'COMPLETE')
-        self.assertNotIn('schema_version',result)
+        self.assertEqual(result['contract_id'],'evidence-ledger')
+        self.assertEqual(result['artifact_format'],'evidence-ledger-artifacts')
         self.assertEqual(result['comparison']['compared_branches'],['test01','dev_01_customerA'])
         self.assertEqual(self.repo.symbolic(),'master')
         self.assertEqual(self.repo.head(),self.master)
@@ -328,9 +329,9 @@ class FakeRunner(Runner):
         validate_result(stage,data,context)
         data = prepare_result(stage, data, context)
         self.publish_result(stage, data, destination)
-        from contracts import CONTRACT_VERSION, ARTIFACT_VERSION
+        from contracts import CONTRACT_ID, ARTIFACT_FORMAT
         return data,{'TEST_ONLY':'mock invocation', 'publication_complete': True,
-                     'contract_version': CONTRACT_VERSION, 'artifact_version': ARTIFACT_VERSION}
+                     'contract_id': CONTRACT_ID, 'artifact_format': ARTIFACT_FORMAT}
 
 class ProcessTests(unittest.TestCase):
     def test_pipe_capture(self):
@@ -571,7 +572,8 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                     self.assertEqual(output['status'],'PREFLIGHT_OK' if check_only else 'COMPLETE')
                     run_dir=Path(output['manifest']).parent
                     manifest=json.loads((run_dir/'manifest.json').read_text())
-                    self.assertNotIn('schema_version',manifest)
+                    self.assertEqual(manifest['contract_id'],'evidence-ledger')
+                    self.assertEqual(manifest['artifact_format'],'evidence-ledger-artifacts')
                     snapshot=json.loads((run_dir/'config.snapshot.json').read_text())
                     self.assertEqual(snapshot['project_description'],cfg.get('project_description',''))
                     self.assertEqual(result.stderr.count('Project description is missing.'),int(check_only))
@@ -580,8 +582,9 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                     self.assertEqual(len(calls),2 if check_only else 12)
                     self.assertEqual(len(invocations),0 if check_only else 10)
                     for call in invocations:
-                        self.assertNotIn('schema_version',call['schema']['properties'])
-                        self.assertNotIn('schema_version',call['schema']['required'])
+                        for field in ('contract_id', 'artifact_format', 'context_format'):
+                            self.assertNotIn(field,call['schema']['properties'])
+                            self.assertNotIn(field,call['schema']['required'])
                         self.assertEqual(call['home'],str(home))
                         self.assertEqual(call['context']['project_description'],cfg['project_description'])
                         compare='baseline_branch' in call['context']
@@ -616,7 +619,9 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                             results.extend(run_dir/branch['directory']/f'{stage}.json'
                                            for stage in ('study','review'))
                         for path in results:
-                            self.assertNotIn('schema_version',json.loads(path.read_text()))
+                            data=json.loads(path.read_text())
+                            for field in ('contract_id', 'artifact_format', 'context_format'):
+                                self.assertNotIn(field,data)
                     self.assertEqual(self.repo.symbolic(),'master')
                     self.assertEqual(self.repo.head(),self.master)
                     self.repo.clean()

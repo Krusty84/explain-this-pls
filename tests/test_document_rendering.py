@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Synthetic current-format fixtures. No historical responses or real model calls."""
+"""Document rendering with synthetic fixtures and no real model calls."""
 import copy
 import json
 from pathlib import Path
@@ -138,7 +138,7 @@ class RenderingTests(unittest.TestCase):
                 ('folder', dict(source_directory='/source', source_fingerprint='abc'))):
             data = response(context)
             data.pop('report_sections')
-            data['report_markdown'] = '# Legacy'
+            data['report_markdown'] = '# Report without author blocks'
             original = copy.deepcopy(data)
             with self.subTest(mode=mode):
                 with self.assertRaises(ContractError) as caught: validate_result('study', data, context, mode)

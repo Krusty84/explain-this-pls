@@ -10,8 +10,8 @@ import re
 from contracts import contract_violation, validate_wire_identity
 from evidence import canonical, sha
 
-RULE = 'EVIDENCE_IDS_V4'
-HASH_FORMAT = 'canonical-json-utf8-v1'
+RULE = 'EVIDENCE_IDS'
+HASH_FORMAT = 'canonical-json-utf8'
 
 
 def normalize_evidence(stage, value, context, mode='git'):

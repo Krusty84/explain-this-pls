@@ -1,10 +1,10 @@
 {
   "type": "object",
   "properties": {
-    "contract_version": {
+    "contract_id": {
       "type": "string",
       "enum": [
-        "evidence-ledger-v4"
+        "evidence-ledger"
       ]
     },
     "origin": {
@@ -228,7 +228,7 @@
     }
   },
   "required": [
-    "contract_version",
+    "contract_id",
     "origin",
     "catalog_status",
     "limitations",

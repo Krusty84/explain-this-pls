@@ -3,13 +3,13 @@
 
 """Artifact-only schemas. These are never sent to a backend as wire schemas."""
 from contracts import (SCHEMAS, FOLDER_SCHEMAS, MATERIALIZED_CLAIM, STRINGS, PRIOR_FINDING,
-                       CONTRACT_VERSION, obj, array, string)
+                       CONTRACT_ID, obj, array, string)
 from document_rendering import materialized_schema
 
 INTEGER = {'type': 'integer', 'minimum': 0}
 NULL_STRING = {'type': ['string', 'null']}
-NORMALIZATION_PROVENANCE = obj(rule=string('EVIDENCE_IDS_V4'),
-    hash_format=string('canonical-json-utf8-v1'), input_sha256=string(),
+NORMALIZATION_PROVENANCE = obj(rule=string('EVIDENCE_IDS'),
+    hash_format=string('canonical-json-utf8'), input_sha256=string(),
     normalized_sha256=string(), replacement_count=INTEGER)
 
 
@@ -22,7 +22,7 @@ IDENTITY = obj(mode=string('git', 'folder'), branch=string(), commit=string(), d
 IDENTITY['required'] = ['mode']
 NULL_IDENTITY = dict(IDENTITY, type=['object', 'null'])
 SOURCE = obj(id=string(), root=string(), identity=IDENTITY)
-COVERAGE_PLAN = obj(contract_version=string(CONTRACT_VERSION), origin=string('AGENT', 'DIRECTORY_FALLBACK'),
+COVERAGE_PLAN = obj(contract_id=string(CONTRACT_ID), origin=string('AGENT', 'DIRECTORY_FALLBACK'),
     catalog_status=string('COMPLETE', 'PARTIAL', 'BLOCKED'), limitations=STRINGS, sources=array(SOURCE), inventory_sha256=string(),
     areas=array(obj(id=string(), name=string(), purpose=string(), paths=STRINGS, entry_paths=STRINGS,
                     file_paths=STRINGS, required={'type': 'boolean'})),

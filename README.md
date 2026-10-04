@@ -237,13 +237,13 @@ The included prompts are ready to use. To customize them, copy an existing
 template, keep its required response format, and set its path in `prompts`.
 Store custom templates outside the source directory. See the
 [commented configuration](config.example.jsonc) for examples.
-Custom prompts must follow the v4 model schemas, including study coverage and review
+Custom prompts must follow the model schemas, including study coverage and review
 closure assessments for previous material findings. Folder responses echo
 `source_snapshot_id`; review responses and comparison references use
 `review_target_id`. These opaque IDs bind responses to the expected snapshot and
 selected revision.
 
-The `compact-context-v2` model view contains the full report text once and one
+The `compact-context` model view contains the full report text once and one
 claim registry. Duplicate locator quotes, service hashes and private provenance
 are omitted from all stages and format repairs. Git commit IDs remain available.
 Full stored locators and integrity hashes are unchanged, and the exact sent prompt
@@ -344,6 +344,8 @@ mode. Catalog failure in strict mode stops that source; continuation to other
 branches follows the same setting. Source integrity, cleanup and publication
 failures stop both policies. Configured format repairs remain bounded. Substantive
 revision is a separate, explicitly bounded cycle, and every old HIGH/MEDIUM finding
-must be assessed again before acceptance. Only the `evidence-ledger-v4` contract is
-supported. Unsupported manifest versions are rejected before any artifact writes.
+must be assessed again before acceptance. The `evidence-ledger` contract uses
+`contract_id: "evidence-ledger"` and `artifact_format: "evidence-ledger-artifacts"`
+in the manifest. Missing or unsupported identifiers are rejected before any artifact
+writes. Use a new run directory when its manifest is incompatible.
 Semantic quality remains `NOT_MEASURED`.

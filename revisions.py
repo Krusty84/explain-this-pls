@@ -5,7 +5,7 @@
 from __future__ import annotations
 import copy
 
-from contracts import accepted, contract_violation, has_program_checks, CONTRACT_VERSION, ARTIFACT_VERSION, ContractError
+from contracts import accepted, contract_violation, has_program_checks, CONTRACT_ID, ARTIFACT_FORMAT, ContractError
 from evidence import canonical, sha
 
 
@@ -42,7 +42,7 @@ def completed_pair(revision):
         return False
     for stage in ('study', 'review'):
         metadata = revision.get(stage + '_invocation') or {}
-        if metadata.get('contract_version') != CONTRACT_VERSION or metadata.get('artifact_version') != ARTIFACT_VERSION:
+        if metadata.get('contract_id') != CONTRACT_ID or metadata.get('artifact_format') != ARTIFACT_FORMAT:
             return False
     from ledger import target
     from document_rendering import validate_materialized

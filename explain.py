@@ -44,10 +44,10 @@ from ledger import prepare_result, review_context
 from study_normalization import normalize_evidence, normalization_provenance
 from document_rendering import materialize_study, validate_materialized
 from evidence import source_catalog, SourceChanged, open_source_directory, read_confined
-from contracts import CONTRACT_VERSION, ARTIFACT_VERSION, has_ledger_structure, validate_schema
+from contracts import CONTRACT_ID, ARTIFACT_FORMAT, has_ledger_structure, validate_schema
 from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
 from presentation import render_stage
-from model_context import CONTEXT_FORMAT_VERSION
+from model_context import CONTEXT_FORMAT
 from model_boundary import BindingRegistry
 from source_decoding import normalize_source_decoding
 from coverage_plan import build_coverage_plan, inventory_summary, verify_coverage_plan
@@ -1019,10 +1019,10 @@ class Runner:
         existing_manifest = self.run_dir / 'manifest.json'
         if existing_manifest.exists():
             previous = strict_json(existing_manifest.read_text(encoding='utf-8'))
-            if (previous.get('contract_version') != CONTRACT_VERSION or
-                    previous.get('artifact_version') != ARTIFACT_VERSION):
-                raise AuditError('Unsupported artifact version; select a new run directory.',
-                                 code='UNSUPPORTED_ARTIFACT_VERSION', failure_layer='publication')
+            if (previous.get('contract_id') != CONTRACT_ID or
+                    previous.get('artifact_format') != ARTIFACT_FORMAT):
+                raise AuditError('Unsupported artifact format; select a new run directory.',
+                                 code='UNSUPPORTED_ARTIFACT_FORMAT', failure_layer='publication')
         self.compromise = config.get('result_policy', 'compromise') == 'compromise'
         self.critical_failure = False
         self.execution = execution_settings(config.get('execution'))
@@ -1738,8 +1738,8 @@ class Runner:
                     finish_reason=None, output_bytes=None, execution=self.execution)
         meta['binding_hashes'] = binding_hashes
         meta['attempt_hashes'] = attempt_hashes
-        meta.update(contract_version=CONTRACT_VERSION, artifact_version=ARTIFACT_VERSION,
-                    context_format_version=CONTEXT_FORMAT_VERSION,
+        meta.update(contract_id=CONTRACT_ID, artifact_format=ARTIFACT_FORMAT,
+                    context_format=CONTEXT_FORMAT,
                     revision_id=context.get('revision_id'), prompt_variant=context.get('prompt_variant', stage),
                     model_actual_source='unknown: backend has not reported model identity',
                     review_quality='NOT_MEASURED', publication_complete=False)
@@ -1891,7 +1891,7 @@ class Runner:
                 except OSError as exc:
                     self.record_error(self.manifest, exc, phase='restoration')
         manifest['result_policy'] = 'compromise' if self.compromise else 'strict'
-        manifest.update(contract_version=CONTRACT_VERSION, artifact_version=ARTIFACT_VERSION,
+        manifest.update(contract_id=CONTRACT_ID, artifact_format=ARTIFACT_FORMAT,
             acceptance_meaning='accepted=true means policy checks satisfied; factual correctness is not established.',
             review_quality='NOT_MEASURED', source_check_meaning='MATCHED_AT_BOUNDARIES means source state matched at performed checks only.')
         manifest['critical_failure'] = self.critical_failure
@@ -2034,7 +2034,7 @@ class Runner:
                                                        'study_material', 'review_material', 'errors', 'selected_revision', 'coverage_plan')} |
                                  {'accepted': accepted(b)} |
                                  {stage + '_invocation': {k: (b.get(stage + '_invocation') or {}).get(k) for k in
-                                    ('publication_complete', 'contract_version', 'artifact_version', 'status', 'model_requested', 'model_actual',
+                                    ('publication_complete', 'contract_id', 'artifact_format', 'status', 'model_requested', 'model_actual',
                                      'model_actual_source', 'source_check_status', 'review_quality')}
                                   for stage in ('study', 'review')} for b in entries],
                     'git_deltas': {b: self.repo.delta(pins[baseline], pins[b]) for b in self.source['branches'] if b != baseline}}

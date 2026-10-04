@@ -68,7 +68,7 @@ class HashlessPipelineTests(FolderFixture):
             expanded = json.loads((attempt / 'expanded.json').read_text())
             binding = json.loads((attempt / 'binding.json').read_text())
             meta = json.loads((attempt / 'invocation.json').read_text())
-            self.assertEqual(meta['context_format_version'], 'compact-context-v2')
+            self.assertEqual(meta['context_format'], 'compact-context')
             self.assertEqual(binding['wire_sha256'], sha(canonical(raw)))
             self.assertEqual(binding['expanded_sha256'], sha(canonical(expanded)))
             self.assertEqual(expanded['source_fingerprint'], manifest['source_fingerprint'])

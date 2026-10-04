@@ -26,6 +26,7 @@ class OpenAPIContractTests(unittest.TestCase):
         candidate['components']['schemas']['Unused'] = {'type': 'string'}
         candidate['info'] = {'title': 'Fork', 'version': 'unknown'}
         result = self.compare(candidate)
+        self.assertEqual(result['format'], 'opencode-openapi-diff')
         self.assertEqual(result['status'], 'MATCH')
         self.assertEqual(result['scope']['candidate_extra_paths_ignored'], 1)
         self.assertEqual(result['total_changes'], 0)

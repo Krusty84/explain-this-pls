@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from contracts import ContractError, validate_result, SCHEMAS, validate_schema, accepted
 from evidence import resolve_evidence, SourceChanged, MAX_FILE_BYTES
-from ledger import freeze_plan, prepare_result, review_context, CONTRACT_VERSION, ARTIFACT_VERSION
+from ledger import freeze_plan, prepare_result, review_context, CONTRACT_ID, ARTIFACT_FORMAT
 from presentation import render_stage, label
 from final_report import render_final_report, recoverable_material
 from document_rendering import materialize_study, validate_materialized
@@ -265,7 +265,7 @@ class LedgerTests(unittest.TestCase):
         doc = prepare_result('study', study(context), context)
         ctx = review_context(doc, context)
         rev = prepare_result('review', review(ctx), ctx)
-        meta = dict(publication_complete=True, contract_version=CONTRACT_VERSION, artifact_version=ARTIFACT_VERSION)
+        meta = dict(publication_complete=True, contract_id=CONTRACT_ID, artifact_format=ARTIFACT_FORMAT)
         return dict(branch=branch, source_commit='abc', study=doc, review=rev,
                     study_invocation=dict(meta), review_invocation=dict(meta))
 
@@ -318,22 +318,22 @@ class LedgerTests(unittest.TestCase):
             self.assertIn(label('SUPPORTED', language), a)
             self.assertIn(label('PASS', language), a)
             self.assertNotIn('print(1)', a)
-        legacy = {'completion_status': 'COMPLETE', 'report_markdown': '# Historical PASS', 'verdict': 'PASS'}
-        self.assertFalse(accepted({'study': legacy, 'review': legacy}))
+        unsupported = {'completion_status': 'COMPLETE', 'report_markdown': '# Unvalidated PASS', 'verdict': 'PASS'}
+        self.assertFalse(accepted({'study': unsupported, 'review': unsupported}))
         with self.assertRaises(ContractError):
-            render_final_report({'status': 'COMPLETE', 'study': legacy, 'review': legacy}, {'path': '/old'}, 'folder', 'English')
-        old = copy.deepcopy(pair)
-        old['study'].pop('materialization_provenance')
-        old['study'].pop('block_map')
-        for records in (old['study']['claims'], old['review']['claim_registry']):
+            render_final_report({'status': 'COMPLETE', 'study': unsupported, 'review': unsupported}, {'path': '/source'}, 'folder', 'English')
+        malformed = copy.deepcopy(pair)
+        malformed['study'].pop('materialization_provenance')
+        malformed['study'].pop('block_map')
+        for records in (malformed['study']['claims'], malformed['review']['claim_registry']):
             for claim in records:
                 claim['document_locator'] = claim.pop('document_locators')[0]
-        original = copy.deepcopy(old)
+        original = copy.deepcopy(malformed)
         for stage in ('study', 'review'):
-            with self.assertRaises(ContractError): render_stage(stage, old[stage], 'English')
-        with self.assertRaises(ContractError): review_context(old['study'], self.context)
-        self.assertFalse(accepted(old))
-        self.assertEqual(old, original)
+            with self.assertRaises(ContractError): render_stage(stage, malformed[stage], 'English')
+        with self.assertRaises(ContractError): review_context(malformed['study'], self.context)
+        self.assertFalse(accepted(malformed))
+        self.assertEqual(malformed, original)
         pair['study']['claims'][0]['scope'] += ' modified'
         self.assertFalse(accepted(pair))
 

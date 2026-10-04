@@ -4,7 +4,7 @@
 """Lossless content projection for model input; never used for validation/hashing."""
 import copy
 
-CONTEXT_FORMAT_VERSION = 'compact-context-v2'
+CONTEXT_FORMAT = 'compact-context'
 
 
 def _registry(claims):

@@ -196,7 +196,7 @@ def compare(baseline, candidate, *, include_docs=False, max_changes=200):
         if len(changes) < max_changes:
             changes.append(change)
     issues = base_issues + candidate_issues
-    return {'format': 'opencode-openapi-diff-v1',
+    return {'format': 'opencode-openapi-diff',
         'status': 'INCOMPLETE' if issues else 'DIFFERENT' if total else 'MATCH',
         'scope': {'paths': paths, 'references': 'transitive local closure',
                   'candidate_extra_paths_ignored': len(set(candidate['paths']) - set(paths)),

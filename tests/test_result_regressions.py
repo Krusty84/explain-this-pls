@@ -41,20 +41,21 @@ class ResultRegressions(unittest.TestCase):
 
     def test_public_schemas_equal_python_source(self):
         from contracts import MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS
-        from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
+        from saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS, COVERAGE_PLAN
         root = Path(__file__).resolve().parents[1]
         for prefix, schemas in (('', MODEL_SCHEMAS), ('folder-', MODEL_FOLDER_SCHEMAS),
                                 ('saved-', SAVED_SCHEMAS), ('saved-folder-', SAVED_FOLDER_SCHEMAS)):
             for stage, schema in schemas.items():
                 saved = json.loads((root / 'schemas' / f'{prefix}{stage}.schema.json').read_text())
                 self.assertEqual(saved, schema)
-                self.assertNotIn('contract_version', saved['properties'])
-                self.assertNotIn('artifact_version', saved['properties'])
+                for field in ('contract_id', 'artifact_format', 'context_format'):
+                    self.assertNotIn(field, saved['properties'])
+        self.assertEqual(json.loads((root / 'schemas/coverage-plan.schema.json').read_text()), COVERAGE_PLAN)
 
-    def test_prompt_has_no_obsolete_schema_versions(self):
+    def test_prompts_exclude_orchestrator_format_metadata(self):
         for path in (Path(__file__).resolve().parents[1] / 'prompts').glob('*.md'):
-            self.assertNotRegex(path.read_text(), r'(?:schema version|using version) [23]\.0')
-            self.assertNotIn('contract_version', path.read_text())
+            for field in ('contract_id', 'artifact_format', 'context_format'):
+                self.assertNotIn(field, path.read_text())
 
     def test_json_cause_is_not_logged_as_internal_error_or_response_excerpt(self):
         text = '{"private_key": "DO_NOT_PRINT_REPORT", invalid}'
