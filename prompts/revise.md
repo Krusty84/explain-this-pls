@@ -48,3 +48,33 @@ that subsequently fail decoding.
 Use output_language. COMPLETE is your work-completion assessment, never proof of
 understanding or correctness; use PARTIAL/BLOCKED with concrete limitations when
 needed. Only the orchestrator publishes this version and chooses the final pair.
+
+## Required PlantUML diagrams
+
+Include two overview diagrams in the existing report sections:
+
+- components: a component diagram showing system boundaries, the main components
+  and dependencies, and external integrations where present.
+- data_and_state: a data-flow diagram showing data sources, processing components,
+  stores and recipients. Use directed arrows labeled with the data being transferred,
+  and distinguish reads from writes.
+
+Put each diagram in its own report_sections[].blocks[] record as a fenced Markdown
+code block labeled plantuml, containing the complete source from @startuml to @enduml.
+Use built-in PlantUML syntax without includes or external dependencies. Each diagram
+must be self-contained. Use output_language for human-readable labels while preserving
+code names, symbols and IDs; keep component names consistent with the report prose.
+Provide a short adjacent explanation of the diagram's scope and relationships.
+Return diagram source in the report only; do not create .puml or image files, run a
+renderer or contact a rendering service.
+
+Register every material assertion shown by nodes, boundaries and relationships in
+claims, and link the corresponding IDs through the diagram block's claim_ids. Reuse
+existing claim IDs for the same assertions. Mark HYPOTHESIS/UNKNOWN visibly in the
+diagram and describe the missing checks in the corresponding claims' uncertainty.
+
+When coverage is partial, show the established portion without inventing components
+or links. If a meaningful diagram cannot be built from the available evidence, explain
+the specific reason in its section and limitations, and use PARTIAL/BLOCKED as
+appropriate. Missing persistent storage alone does not justify omitting the data-flow
+diagram: show applicable inputs, processing, outputs and in-memory state.

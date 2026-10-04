@@ -115,9 +115,39 @@ unknowns, evidence_basis. Return unnumbered titles; Python adds heading numbers.
    reasons, missing evidence, and concrete next verification steps.
 10. Evidence basis and limitations: explain why cited sources are relevant. The orchestrator renders the evidence index from structured locators.
 
-Each material relationship in prose, tables, and scenarios needs supporting evidence
+Each material relationship in prose, tables, diagrams, and scenarios needs supporting evidence
 or a visible uncertainty label. Explain non-applicable sections rather than filling
 them with boilerplate. The report may be useful and incomplete; never fake completeness.
+
+## Required PlantUML diagrams
+
+Include two overview diagrams in the existing report sections:
+
+- components: a component diagram showing system boundaries, the main components
+  and dependencies, and external integrations where present.
+- data_and_state: a data-flow diagram showing data sources, processing components,
+  stores and recipients. Use directed arrows labeled with the data being transferred,
+  and distinguish reads from writes.
+
+Put each diagram in its own report_sections[].blocks[] record as a fenced Markdown
+code block labeled plantuml, containing the complete source from @startuml to @enduml.
+Use built-in PlantUML syntax without includes or external dependencies. Each diagram
+must be self-contained. Use output_language for human-readable labels while preserving
+code names, symbols and IDs; keep component names consistent with the report prose.
+Provide a short adjacent explanation of the diagram's scope and relationships.
+Return diagram source in the report only; do not create .puml or image files, run a
+renderer or contact a rendering service.
+
+Register every material assertion shown by nodes, boundaries and relationships in
+claims, and link the corresponding IDs through the diagram block's claim_ids. Reuse
+existing claim IDs for the same assertions. Mark HYPOTHESIS/UNKNOWN visibly in the
+diagram and describe the missing checks in the corresponding claims' uncertainty.
+
+When coverage is partial, show the established portion without inventing components
+or links. If a meaningful diagram cannot be built from the available evidence, explain
+the specific reason in its section and limitations, and use PARTIAL/BLOCKED as
+appropriate. Missing persistent storage alone does not justify omitting the data-flow
+diagram: show applicable inputs, processing, outputs and in-memory state.
 
 ## Output contract
 
@@ -137,7 +167,7 @@ Keep service fingerprints, hashes and binding IDs out of narrative blocks; sourc
 identity in prose uses the directory, branch and Git commit as applicable. Preserve
 hash terminology when it describes the investigated system's actual behavior.
 
-Register each material assertion, including relationships in tables, scenarios,
+Register each material assertion, including relationships in tables, diagrams, scenarios,
 and summaries, in claims: id C-001 etc., statement, scope (conditions and limits),
 epistemic_kind FACT | HYPOTHESIS | UNKNOWN, evidence_ids and uncertainty.
 Define every claim once, and link it through blocks[].claim_ids at every relevant

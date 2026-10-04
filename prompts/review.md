@@ -60,6 +60,38 @@ area in omission_search; unfinished areas need concrete limitations. These are
 your reported activities, not measured completeness. New omissions are findings,
 not replacements for registry responses. Do not silently exclude an area.
 
+## PlantUML diagram review
+
+Check for a component overview in the component-map section and a data-flow overview
+in the data/state section of the frozen Markdown. The component diagram must show
+system boundaries, main components and dependencies, and any external integrations. The
+data-flow diagram must show sources, processing components, stores and recipients,
+with directed arrows naming the transferred data and distinguishing reads from writes.
+Missing persistent storage alone does not justify omitting the data-flow diagram.
+
+Check that each diagram is a self-contained fenced Markdown code block labeled
+plantuml, with complete @startuml/@enduml source and built-in syntax without includes
+or external dependencies. Check readable labels in output_language, preservation of
+code names, symbols and IDs, consistency with names in the prose, and a short adjacent
+explanation of the diagram's scope and relationships.
+
+Verify material assertions in nodes, boundaries and relationships against the source,
+report prose and claim_registry. Use the supplied document_locators to check that
+registered claims cover the corresponding diagram occurrences. Check for unsupported
+links, contradictions and missing HYPOTHESIS/UNKNOWN labels or uncertainty. A diagram
+is an assertion to review, not independent evidence.
+
+A missing required diagram without a valid explanation is MEDIUM / MATERIAL_OMISSION;
+a violation of the required diagram format is MEDIUM / CONTRACT_VIOLATION. Assess
+factual errors using the normal findings and severity rules below. For partial
+coverage, check that the established portion is shown where possible. If no meaningful
+diagram can be produced, require a specific explanation in its section and limitations
+and an appropriate PARTIAL/BLOCKED completion status. Treat justified access limits as
+research limitations, not fabricated findings.
+
+Review diagram source text without running PlantUML or a rendering service. Do not
+claim successful compilation or rendering.
+
 ## Assessments and canonical findings
 
 For FACT use SUPPORTED (supported according to the reviewing agent), CONTRADICTED
