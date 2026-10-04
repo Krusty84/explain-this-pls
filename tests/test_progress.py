@@ -80,13 +80,37 @@ class ProgressTests(unittest.TestCase):
             line = self.err.getvalue().split('\r')[-1]
             self.assertTrue(line.startswith('[RUN] master / Analyzing project…  '))
             self.assertIn((frame + ' ' if frame else '') + timer, line)
-        r.emit('stage_completed', **CONTEXT, status='COMPLETE', elapsed_seconds=3661)
+        r.emit('stage_completed', **CONTEXT, status='COMPLETE', elapsed_seconds=3661,
+               report_path='/reports/深い folder/ARCHITECTURE.md')
         self.assertTrue(state.stop.is_set())
         self.assertIsNone(r._progress)
         before = self.err.getvalue()
         r._tick_progress(state)
         self.assertEqual(self.err.getvalue(), before)
-        self.assertTrue(before.endswith('[OK] master / Architecture report created. | Elapsed: 01:01:01\n'))
+        self.assertTrue(before.endswith('[OK] master / Architecture report created. | Elapsed: 01:01:01\n'
+                                        '      Report: /reports/深い folder/ARCHITECTURE.md\n'))
+
+    def test_runner_only_announces_existing_report_and_escapes_its_path(self):
+        r = self.reporter(tty=False, mode='json', progress=False)
+        runner = Runner.__new__(Runner)
+        runner.reporter, runner.mode, runner.source_path = r, 'git', Path('/source')
+        runner.cfg = {'_agents': {'study': {'backend': 'codex'}}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / '深い\n\x1b[31m.md'
+            for exists in (False, True):
+                if exists:
+                    path.write_text('report')
+                self.err.seek(0)
+                self.err.truncate()
+                runner.stage_finished('study', {}, {'completion_status': 'PARTIAL'}, self.now,
+                                      report_path=path)
+                text = self.err.getvalue()
+                self.assertEqual('      Report: ' in text, exists)
+                if exists:
+                    self.assertIn('深い\\n\\x1b[31m.md\n', text)
+                    self.assertNotIn('\x1b', text)
+                self.assertIn('[WARN]', text)
+                self.assertEqual(self.out.getvalue(), '')
 
     def test_short_stage_has_only_initial_frame(self):
         r = self.reporter()
@@ -610,18 +634,32 @@ class CLIProgressIntegrationTests(unittest.TestCase):
             'original=reporting.Reporter; reporting.Reporter=lambda **kw: original(progress_interval=0.1,**kw); '
             'sys.argv=sys.argv[2:]; runpy.run_path(sys.argv[0],run_name="__main__")',
             str(ROOT), str(ROOT / 'explain.py'), *args, '--output', 'json']
+        child = subprocess.Popen(command, env=self.env, stdout=subprocess.PIPE, stderr=slave)
+        raw = bytearray()
         try:
-            result = subprocess.run(command, env=self.env, stdout=subprocess.PIPE, stderr=slave, timeout=15)
-            console = os.read(master, 65536).decode()
+            deadline = time.monotonic() + 15
+            while child.poll() is None:
+                self.assertLess(time.monotonic(), deadline, raw.decode(errors='replace'))
+                if select.select([master], [], [], .1)[0]:
+                    raw.extend(os.read(master, 65536))
+            stdout, _ = child.communicate(timeout=5)
+            while select.select([master], [], [], .1)[0]:
+                raw.extend(os.read(master, 65536))
+            console = raw.decode()
         finally:
+            if child.poll() is None:
+                child.kill()
+                child.communicate(timeout=5)
             os.close(master)
             os.close(slave)
-        self.assertEqual(result.returncode, 0, console)
-        run = Path(json.loads(result.stdout)['manifest']).parent
+        self.assertEqual(child.returncode, 0, console)
+        run = Path(json.loads(stdout)['manifest']).parent
         self.assertIn('[RUN] source folder / Analyzing project…  ⠋ 00:00', console)
         self.assertIn('⠙', console)
         self.assertNotIn('      Elapsed:', console)
         self.assertNotIn('private CLI activity', console)
+        for name in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md'):
+            self.assertIn('      Report: ' + str(run / 'revisions/001' / name) + '\r\n', console)
         self.assertEqual((run / 'revisions/001/study.logs/attempt-001/stderr.log').read_bytes(), b'private CLI activity\n')
         records = [json.loads(line) for line in (run / 'run.log').read_text().splitlines()]
         times = [x['elapsed_seconds'] for x in records if x['event'] == 'process_waiting' and x['stage'] == 'study']

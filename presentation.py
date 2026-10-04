@@ -90,6 +90,20 @@ def render_stage(stage, data, language='English'):
     validate_report(stage, data)
     if is_recovered_material(stage, data):
         return '> Text retained after contract rejection; full policy checks are not complete.\n\n'
+    if stage == 'catalog':
+        out = ['# Subsystem catalog', '',
+               'Catalog completion reported by the agent: ' + data['completion_status'], '',
+               '## Subsystems', '', '| ID | Subsystem | Purpose | Paths |', '| --- | --- | --- | --- |']
+        for subsystem in data['subsystems']:
+            out.append('| ' + ' | '.join(cell(v) for v in (subsystem['id'], subsystem['name'],
+                subsystem['purpose'], ', '.join(subsystem['paths']))) + ' |')
+        out += ['', '## Exclusions', '', '| Path | Reason |', '| --- | --- |']
+        for exclusion in data['exclusions']:
+            out.append('| ' + cell(exclusion['path']) + ' | ' + cell(exclusion['reason']) + ' |')
+        for title, values in (('Limitations', data['coverage_plan']['limitations']),
+                              ('Unclassified paths', data['coverage_plan']['unclassified_paths'])):
+            out += ['', '## ' + title, '', *(['- ' + cell(v) for v in values] or ['None.'])]
+        return '\n'.join(out) + '\n'
     checks = data['program_checks']
     out = ['# Program checks and agent assessments', '',
         ('Study processing conditions satisfied; final acceptance depends on review.' if stage == 'study' else

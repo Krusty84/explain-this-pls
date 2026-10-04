@@ -526,7 +526,8 @@ class Reporter(NullReporter):
             meaning = complete if status == 'COMPLETE' else title + (
                 ' failed. See details below.' if status == 'FAILED' else ' may be incomplete. See details below.')
             return [label + self.stage_message(c, meaning) +
-                    ' | Elapsed: ' + duration(c['elapsed_seconds'])]
+                    ' | Elapsed: ' + duration(c['elapsed_seconds']),
+                    *(['      Report: ' + s(c['report_path'])] if c.get('report_path') else [])]
         if name == 'stage_skipped':
             title = 'Review' if c.get('stage') == 'review' else title
             return ['[SKIP] ' + self.stage_message(c, title + ' skipped: no architecture report available.')]

@@ -124,23 +124,23 @@ and review without requiring Git; `git_mode` settings are ignored.
 
 #### Main settings
 
-| Field | Purpose |
-| --- | --- |
-| `mode` | Analyze Git branches (`"git"`) or a directory (`"folder"`). |
-| `git_mode` | Source repository, local branches and the baseline branch. |
-| `folder_mode.path` | Source directory for folder mode. |
-| `reports_dir` | Destination for results; each run gets a separate subfolder. |
-| `project_description` | Optional introduction to the system's purpose and history. |
-| `output_language` | Report language; defaults to `"Russian"`. |
-| `priority_scenarios` | Optional workflows or areas to focus on. |
+| Field                 | Purpose                                                      |
+| --------------------- | ------------------------------------------------------------ |
+| `mode`                | Analyze Git branches (`"git"`) or a directory (`"folder"`).  |
+| `git_mode`            | Source repository, local branches and the baseline branch.   |
+| `folder_mode.path`    | Source directory for folder mode.                            |
+| `reports_dir`         | Destination for results; each run gets a separate subfolder. |
+| `project_description` | Optional introduction to the system's purpose and history.   |
+| `output_language`     | Report language; defaults to `"Russian"`.                    |
+| `priority_scenarios`  | Optional workflows or areas to focus on.                     |
 
 #### Agent settings
 
-| Field | Purpose |
-| --- | --- |
-| `agent.backend` | Coding agent: `codex`, `claude-code`, or `xxx`. |
+| Field              | Purpose                                                                     |
+| ------------------ | --------------------------------------------------------------------------- |
+| `agent.backend`    | Coding agent: `codex`, `claude-code`, or `xxx`.                             |
 | `agent.executable` | CLI command or path; defaults to `codex`, `claude`, or `xxx`, respectively. |
-| `agent.model` | Optional model name; omit it or use `null` for the CLI's configured model. |
+| `agent.model`      | Optional model name; omit it or use `null` for the CLI's configured model.  |
 
 The tool uses your CLI's existing login and settings. No separate API key is needed
 in this configuration.
@@ -199,17 +199,21 @@ script-friendly summary, or `python3 explain.py --help` to see all options.
 
 Each run saves results in a new subfolder of `reports_dir`. Start with these files:
 
-| Report | Contents |
-| --- | --- |
-| `FINAL_REPORT.md` | Start here: studies, reviews, comparison and limitations in one document. |
-| `ARCHITECTURE.md` | How the system works, with component and data-flow diagrams. |
-| `ARCHITECTURE_REVIEW.md` | Tables of review assessments, source references, findings and gaps. |
-| `BRANCH_COMPARISON.md` | A table of differences from the baseline, for two or more Git branches. |
+| Report                   | Contents                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------- |
+| `FINAL_REPORT.md`        | Start here: studies, reviews, comparison and limitations in one document.             |
+| `SUBSYSTEM_CATALOG.md`   | Subsystems, purposes, paths, exclusions, limitations and unclassified source entries. |
+| `ARCHITECTURE.md`        | How the system works, with component and data-flow diagrams.                          |
+| `ARCHITECTURE_REVIEW.md` | Tables of review assessments, source references, findings and gaps.                   |
+| `BRANCH_COMPARISON.md`   | A table of differences from the baseline, for two or more Git branches.               |
 
 `FINAL_REPORT.md` is directly in the run folder. In Git mode, `ARCHITECTURE.md`
 and `ARCHITECTURE_REVIEW.md` are under `branches/<branch-id>/`, and the comparison,
 when applicable, is under `comparison/`. In folder mode, the architecture report
 and review are directly in the run folder.
+`SUBSYSTEM_CATALOG.md` is saved alongside `catalog.json` in the run folder for
+folder mode, or under `branches/<branch-id>/` for Git mode. It is generated from
+the validated catalog and coverage plan without another model call.
 
 #### FINAL_REPORT.md — consolidated results
 
@@ -225,18 +229,18 @@ and review are directly in the run folder.
 
 The report has ten sections; headings use the configured report language.
 
-| Section | What it explains |
-| --- | --- |
-| Scope and evidence basis | The source studied, exclusions and limits of the investigation. |
-| System context and overview | The system's purpose, external boundaries, processes and integrations. |
-| Component map | Main components, responsibilities, dependencies and a PlantUML overview. |
-| Startup and runtime flows | How the system starts and how important scenarios execute. |
-| Data and state | Storage, readers and writers, transactions and a PlantUML data-flow diagram. |
-| Cross-cutting mechanisms | Configuration, security, error handling, logging and concurrency. |
-| Constraints and legacy exceptions | Enforced restrictions, documented rules and observed conventions. |
-| Change navigation | Where to start common changes and which related tests to inspect. |
-| Unknowns and coverage | Areas studied, gaps and next steps for verification. |
-| Evidence basis and limitations | Why the cited sources support the explanation and what remains uncertain. |
+| Section                           | What it explains                                                             |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| Scope and evidence basis          | The source studied, exclusions and limits of the investigation.              |
+| System context and overview       | The system's purpose, external boundaries, processes and integrations.       |
+| Component map                     | Main components, responsibilities, dependencies and a PlantUML overview.     |
+| Startup and runtime flows         | How the system starts and how important scenarios execute.                   |
+| Data and state                    | Storage, readers and writers, transactions and a PlantUML data-flow diagram. |
+| Cross-cutting mechanisms          | Configuration, security, error handling, logging and concurrency.            |
+| Constraints and legacy exceptions | Enforced restrictions, documented rules and observed conventions.            |
+| Change navigation                 | Where to start common changes and which related tests to inspect.            |
+| Unknowns and coverage             | Areas studied, gaps and next steps for verification.                         |
+| Evidence basis and limitations    | Why the cited sources support the explanation and what remains uncertain.    |
 
 The bundled prompts require both diagrams as PlantUML source blocks inside the
 Markdown. Missing evidence must be explained. Viewing them as graphics requires a

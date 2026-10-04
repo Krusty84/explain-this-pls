@@ -69,6 +69,10 @@ review or publication. `study.annotated.md` contains generated checks and the re
 `ARCHITECTURE_REVIEW.md` and `BRANCH_COMPARISON.md` contain generated tables;
 `study.original.md` retains the canonical program assembly of authored blocks.
 `review.original.md` and `compare.original.md` preserve original prose.
+`SUBSYSTEM_CATALOG.md` is generated from the validated catalog and its frozen
+coverage plan, with subsystem tables, exclusions, limitations and unclassified
+paths. It is included in the catalog's `artifact_hashes`; the catalog's
+`report_sha256` continues to identify `catalog.json`.
 The final report places limitations and assessments before narrative,
 and keeps contradictory assessments visible. It is a study and automated review
 summary of the selected architecture revision and its corresponding review.
@@ -85,6 +89,11 @@ manifest. `publication_complete` in invocation metadata and the last run manifes
 is the explicit completion record. A stray Markdown file from a failed write is
 not a completed artifact group and is not advertised by the CLI. A failed run may
 still retain successfully published earlier stages and a diagnostic final report.
+The CLI prints an existing main Markdown file's full path after each published
+stage, including partial results. These paths are emitted on stderr and recorded
+as `report_path` in `stage_completed` events. Study and review paths identify the
+specific revision; recovered material without a published Markdown file is not
+advertised as a report.
 
 ## Evidence locators
 

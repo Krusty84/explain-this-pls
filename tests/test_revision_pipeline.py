@@ -3,12 +3,14 @@
 
 """Offline catalog/revision pipeline with the shared synthetic CLI response."""
 import copy
+import io
 import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 from explain import Runner
+from reporting import Reporter
 from fixtures.ledger_response import response
 from test_folder import FolderFixture
 import test_explain as git_fixtures
@@ -122,6 +124,30 @@ class RevisionPipelineTests(FolderFixture):
         self.assertEqual(self.stages(), ['catalog', 'study', 'review'])
         self.assert_selected_aliases('001')
 
+    def test_revision_report_paths_are_visible_before_the_next_stage(self):
+        err = io.StringIO()
+        reporter = Reporter(stdout=io.StringIO(), stderr=err, progress=False)
+        self.addCleanup(reporter.close)
+        observed = []
+        def change(stage, context, data):
+            observed.append(err.getvalue())
+            return initial_finding(stage, context, data)
+        with patch('explain.NullReporter', return_value=reporter):
+            manifest, code = self.run_case(change)
+        self.assertEqual(code, 0)
+        paths = [self.run_dir / 'SUBSYSTEM_CATALOG.md',
+                 self.run_dir / 'revisions/001/ARCHITECTURE.md',
+                 self.run_dir / 'revisions/001/ARCHITECTURE_REVIEW.md',
+                 self.run_dir / 'revisions/002/ARCHITECTURE.md',
+                 self.run_dir / 'revisions/002/ARCHITECTURE_REVIEW.md']
+        for index, snapshot in enumerate(observed):
+            self.assertEqual([line for line in snapshot.splitlines() if line.startswith('      Report: ')],
+                             ['      Report: ' + str(path) for path in paths[:index]])
+        self.assertEqual([line for line in err.getvalue().splitlines() if line.startswith('      Report: ')],
+                         ['      Report: ' + str(path) for path in paths])
+        self.assertIn('[WARN] source / Report review may be incomplete.', err.getvalue())
+        self.assertIn('[OK] source / Revised architecture report created.', err.getvalue())
+
     def test_partial_initial_review_and_recovered_study_never_trigger_revision(self):
         for defect in ('partial_review', 'recovered_study'):
             def change(stage, context, data):
@@ -137,6 +163,26 @@ class RevisionPipelineTests(FolderFixture):
                 self.assertNotEqual(code, 0)
                 self.assertEqual(self.stages(), ['catalog', 'study', 'review'])
                 self.assertEqual(len(manifest['revisions']), 1)
+
+    def test_failed_and_recovered_studies_do_not_announce_unpublished_reports(self):
+        for recovered in (False, True):
+            with self.subTest(recovered=recovered):
+                err = io.StringIO()
+                reporter = Reporter(stdout=io.StringIO(), stderr=err, progress=False)
+                self.addCleanup(reporter.close)
+                def change(stage, context, data):
+                    return (data | {'unexpected': True} if recovered else 'invalid_json') if stage == 'study' else data
+                with patch('explain.NullReporter', return_value=reporter):
+                    manifest, code = self.run_case(change, policy='compromise')
+                self.assertNotEqual(code, 0)
+                expected = [self.run_dir / 'SUBSYSTEM_CATALOG.md']
+                if recovered:
+                    self.assertTrue(manifest['revisions'][0]['study_invocation']['material_retained'])
+                    expected.append(self.run_dir / 'revisions/001/ARCHITECTURE_REVIEW.md')
+                else:
+                    self.assertIn('[SKIP] source / Review skipped:', err.getvalue())
+                self.assertEqual([line for line in err.getvalue().splitlines() if line.startswith('      Report: ')],
+                                 ['      Report: ' + str(path) for path in expected])
 
     def test_failed_revised_study_or_review_keeps_prior_pair_and_immutable_artifacts(self):
         for failed_stage in ('study', 'review'):
@@ -391,7 +437,10 @@ class RevisionGitPipelineTests(unittest.TestCase):
         config = git_fixtures.RepoFixture.config(self)
         config['git_mode']['branches'] = ['master', 'test01']
         config.update(output_language='English')
-        runner = Runner(config, self.base / 'revision-git')
+        err = io.StringIO()
+        reporter = Reporter(stdout=io.StringIO(), stderr=err, progress=False)
+        self.addCleanup(reporter.close)
+        runner = Runner(config, self.base / 'revision-git', reporter=reporter)
         calls = []
         def process(command, cwd, env, payload, **kwargs):
             context = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n', 1)[1]
@@ -450,6 +499,15 @@ class RevisionGitPipelineTests(unittest.TestCase):
         self.assertEqual(manifest['comparison']['differences'][0]['evidence_refs'][0]['registry_sha256'],
                          selected_plan['registry_sha256'])
         self.assertTrue(manifest['comparison']['program_checks']['policy_satisfied'])
+        paths = []
+        for branch in manifest['branches']:
+            paths.append(runner.run_dir / branch['directory'] / 'SUBSYSTEM_CATALOG.md')
+            for revision in branch['revisions']:
+                paths.extend(runner.run_dir / revision['directory'] / name
+                             for name in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md'))
+        paths.append(runner.run_dir / 'comparison/BRANCH_COMPARISON.md')
+        self.assertEqual([line for line in err.getvalue().splitlines() if line.startswith('      Report: ')],
+                         ['      Report: ' + str(path) for path in paths])
         self.assertEqual(self.repo.symbolic(), 'master')
         self.assertEqual(self.repo.head(), self.master)
         self.repo.clean()

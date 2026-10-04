@@ -679,6 +679,38 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                             self.assertIn('[RUN] Comparing branch reports…', result.stderr)
                             self.assertNotIn('all branches /', result.stderr)
 
+    def test_stage_report_paths_in_both_modes_with_json_and_no_progress(self):
+        for mode in ('folder', 'git'):
+            for quiet in (False, True):
+                with self.subTest(mode=mode, no_progress=quiet):
+                    args = self.prepare(mode) + ['--output', 'json'] + (['--no-progress'] if quiet else [])
+                    result = self.run_cli(args)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    summary = json.loads(result.stdout)
+                    run_dir = Path(summary['manifest']).parent
+                    manifest = json.loads(Path(summary['manifest']).read_text())
+                    expected = []
+                    for source in manifest['branches'] if mode == 'git' else [manifest]:
+                        directory = run_dir / source.get('directory', '.')
+                        expected.append(directory / 'SUBSYSTEM_CATALOG.md')
+                        for revision in source['revisions']:
+                            expected.extend(run_dir / revision['directory'] / name
+                                            for name in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md'))
+                    if mode == 'git':
+                        expected.append(run_dir / 'comparison/BRANCH_COMPARISON.md')
+                    lines = result.stderr.splitlines()
+                    indices = [i for i, line in enumerate(lines) if line.startswith('      Report: ')]
+                    self.assertEqual([lines[i] for i in indices], ['      Report: ' + str(p) for p in expected])
+                    for index, path in zip(indices, expected):
+                        self.assertIn(' | Elapsed: ', lines[index - 1])
+                        self.assertTrue(lines[index - 1].startswith('[OK] '))
+                        self.assertTrue(path.is_file(), path)
+                    records = [json.loads(line) for line in (run_dir / 'run.log').read_text().splitlines()]
+                    completed = [r for r in records if r['event'] == 'stage_completed']
+                    self.assertEqual([r['report_path'] for r in completed], [str(p) for p in expected])
+                    self.assertNotIn('Report:', result.stdout)
+                    self.assertNotIn('\x1b', result.stderr)
+
     def test_missing_origin_falls_back_without_masking_preflight_errors(self):
         args = self.prepare('git', check=True)
         result = self.run_cli(args)

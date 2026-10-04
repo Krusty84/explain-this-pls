@@ -9,6 +9,7 @@ from pathlib import Path
 from contracts import ContractError, validate_result, validate_schema
 from coverage_plan import build_coverage_plan, coverage_checks, inventory_summary, verify_coverage_plan
 from ledger import prepare_result, review_context
+from presentation import render_stage
 from saved_contracts import SAVED_SCHEMAS
 from evidence import canonical, sha
 from fixtures.ledger_response import response
@@ -38,6 +39,35 @@ class CoveragePlanTests(unittest.TestCase):
         self.assertTrue(plan['policy_satisfied'])
         self.assertEqual(plan['exclusions'][1]['entry_paths'], ['linked'])
         self.assertEqual(verify_coverage_plan(plan), plan)
+
+    def test_catalog_markdown_preserves_content_and_escapes_table_values(self):
+        self.catalog.update(completion_status='PARTIAL', limitations=['Не проверено | <linked>\nещё.'])
+        self.catalog['subsystems'][0].update(name='Исходники | <core>', purpose='Код\nприложения\x1b.')
+        self.catalog['exclusions'][0]['reason'] = 'Документация | <users>.'
+        self.inventory['entries'].append({'path': 'данные|new.txt', 'type': 'file', 'sha256': '4'})
+        catalog = prepare_result('catalog', self.catalog, self.context | {'_inventory': self.inventory})
+        original = copy.deepcopy(catalog)
+        markdown = render_stage('catalog', catalog, 'Russian')
+        self.assertIn('# Subsystem catalog\n', markdown)
+        self.assertIn('Catalog completion reported by the agent: PARTIAL', markdown)
+        self.assertIn('| S-001 | Исходники &#124; &lt;core&gt; | Код приложения\\u001b. | src |', markdown)
+        self.assertIn('| README.md | Документация &#124; &lt;users&gt;. |', markdown)
+        self.assertIn('- Не проверено &#124; &lt;linked&gt; ещё.', markdown)
+        self.assertIn('## Unclassified paths\n\n- данные&#124;new.txt', markdown)
+        for key in ('inventory_sha256', 'plan_sha256'):
+            self.assertNotIn(catalog['coverage_plan'][key], markdown)
+        self.assertEqual(catalog, original)
+
+    def test_catalog_markdown_supports_empty_lists(self):
+        self.catalog.update(subsystems=[], exclusions=[])
+        self.inventory['entries'] = [{'path': '.', 'type': 'directory'}]
+        catalog = prepare_result('catalog', self.catalog, self.context | {'_inventory': self.inventory})
+        markdown = render_stage('catalog', catalog)
+        self.assertIn('Catalog completion reported by the agent: COMPLETE', markdown)
+        self.assertIn('| ID | Subsystem | Purpose | Paths |', markdown)
+        self.assertIn('| Path | Reason |', markdown)
+        self.assertIn('## Limitations\n\nNone.', markdown)
+        self.assertIn('## Unclassified paths\n\nNone.', markdown)
 
     def test_unclassified_partial_and_fallback_block_acceptance(self):
         self.catalog['exclusions'] = []

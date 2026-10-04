@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 """Only locally validated and completely published reports are accepted."""
+import io
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ from unittest.mock import patch
 
 from contracts import ContractError
 from explain import AuditError, Folder, Runner, atomic
+from reporting import Reporter
 from test_folder import FolderFixture
 from fixtures.ledger_response import response, model_wire, prompt_context
 
@@ -100,6 +102,9 @@ class PublicationTests(FolderFixture):
 
     def test_publication_write_failure_never_accepts_manifest(self):
         runner, context, data = self.prepare()
+        err = io.StringIO()
+        runner.reporter = Reporter(stdout=io.StringIO(), stderr=err, progress=False)
+        self.addCleanup(runner.reporter.close)
         def process(command, cwd, env, payload, **kwargs):
             supplied = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n')[1]
                                   .split('\n\n# Required final JSON Schema')[0])
@@ -118,6 +123,52 @@ class PublicationTests(FolderFixture):
         self.assertIsNone(manifest['study'])
         summary = json.loads((runner.run_dir / 'revisions/001/study.logs/invocation.json').read_text())
         self.assertEqual(summary['status'], 'FAILED')
+        self.assertTrue((runner.run_dir / 'revisions/001/ARCHITECTURE.md').is_file())
+        self.assertNotIn('      Report: ' + str(runner.run_dir / 'revisions/001/ARCHITECTURE.md'), err.getvalue())
+
+    def test_catalog_markdown_is_hashed_private_and_immutable(self):
+        import hashlib
+        runner, _, _ = self.prepare()
+        def process(command, cwd, env, payload, **kwargs):
+            return self.result(response(prompt_context(payload)))
+        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process) as invoked:
+            manifest, code = runner.run()
+        self.assertEqual(code, 0)
+        self.assertEqual(invoked.call_count, 3)
+        path = runner.run_dir / 'SUBSYSTEM_CATALOG.md'
+        blob = path.read_bytes()
+        meta = manifest['catalog_invocation']
+        self.assertTrue(meta['publication_complete'])
+        self.assertEqual(meta['artifact_hashes'][path.name], {'sha256': hashlib.sha256(blob).hexdigest(), 'bytes': len(blob)})
+        self.assertEqual(meta['report_sha256'], hashlib.sha256((runner.run_dir / 'catalog.json').read_bytes()).hexdigest())
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        path.write_bytes(blob + b'changed')
+        with self.assertRaises(AuditError) as caught:
+            runner.assert_revision_files(manifest)
+        self.assertEqual(caught.exception.code, 'REVIEW_TARGET_CHANGED')
+
+    def test_catalog_write_or_metadata_failure_never_announces_report(self):
+        for failure in ('markdown', 'metadata'):
+            with self.subTest(failure=failure):
+                err = io.StringIO()
+                reporter = Reporter(stdout=io.StringIO(), stderr=err, progress=False)
+                self.addCleanup(reporter.close)
+                runner = Runner(self.config(), self.base / failure, reporter=reporter)
+                def process(command, cwd, env, payload, **kwargs):
+                    return self.result(response(prompt_context(payload)))
+                def fail_write(path, content):
+                    if ((failure == 'markdown' and path.name == 'SUBSYSTEM_CATALOG.md') or
+                            (failure == 'metadata' and path == runner.run_dir / 'catalog.logs/invocation.json'
+                             and json.loads(content).get('publication_complete'))):
+                        raise OSError('fixture disk full')
+                    atomic(path, content)
+                with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process), \
+                        patch('explain.atomic', side_effect=fail_write):
+                    manifest, code = runner.run()
+                self.assertEqual(code, 1)
+                self.assertFalse(manifest['catalog_invocation']['publication_complete'])
+                self.assertEqual((runner.run_dir / 'SUBSYSTEM_CATALOG.md').is_file(), failure == 'metadata')
+                self.assertNotIn('      Report: ', err.getvalue())
 
     def test_document_bytes_plan_and_wire_are_separate(self):
         runner, context, data = self.prepare()

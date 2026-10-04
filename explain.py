@@ -56,7 +56,7 @@ from revisions import revision_inputs, choose_revision, completed_pair
 ROOT = Path(__file__).resolve().parent
 STAGES = ('catalog', 'study', 'review', 'compare')
 SOURCE_STAGES = ('catalog', 'study', 'review')
-ARTIFACTS = {'study': 'ARCHITECTURE.md', 'review': 'ARCHITECTURE_REVIEW.md',
+ARTIFACTS = {'catalog': 'SUBSYSTEM_CATALOG.md', 'study': 'ARCHITECTURE.md', 'review': 'ARCHITECTURE_REVIEW.md',
              'compare': 'BRANCH_COMPARISON.md'}
 BACKENDS = {'codex': 'codex', 'claude-code': 'claude', 'opencode': 'opencode', 'xxx': 'xxx'}
 CLI_ADAPTERS = {'codex': codex, 'claude-code': claude_code}
@@ -1070,14 +1070,15 @@ class Runner:
         self.reporter.emit('stage_started', _started=started, **self.active_stage)
         return started
 
-    def stage_finished(self, stage, context, data, started):
+    def stage_finished(self, stage, context, data, started, *, report_path=None):
         status = data['completion_status']
         if stage == 'review' and data['verdict'] != 'PASS':
             status = 'PARTIAL'
         if stage == 'compare' and status == 'COMPLETE' and not data.get('program_checks', {}).get('policy_satisfied'):
             status = 'PARTIAL'
         self.reporter.emit('stage_completed', **self.stage_context(stage, context), status=status,
-                           elapsed_seconds=self.reporter.clock() - started)
+                           elapsed_seconds=self.reporter.clock() - started,
+                           **({'report_path': report_path} if existing_file(report_path) else {}))
         self.active_stage = {}
 
     def check_cli(self) -> dict:
@@ -1506,7 +1507,8 @@ class Runner:
                 data, meta = self.invoke(stage, stage_context, destination)
                 self.store_stage(state, stage, data, meta, stage_context)
                 if data is not None:
-                    self.stage_finished(stage, stage_context, data, started)
+                    self.stage_finished(stage, stage_context, data, started,
+                        report_path=stage_dir / ARTIFACTS[stage] if meta.get('publication_complete') else None)
                 else:
                     self.reporter.emit('stage_completed', **self.stage_context(stage, stage_context),
                                        status='PARTIAL', elapsed_seconds=self.reporter.clock() - started)
@@ -1631,7 +1633,8 @@ class Runner:
             return (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
         if stage == 'catalog':
             verify_coverage_plan(data['coverage_plan'])
-            return {'coverage.plan.json': encoded(data['coverage_plan']), 'catalog.json': encoded(data)}
+            return {'coverage.plan.json': encoded(data['coverage_plan']), 'catalog.json': encoded(data),
+                    ARTIFACTS[stage]: render_stage(stage, data, self.cfg.get('output_language')).encode('utf-8')}
         report = data['report_markdown'] if stage == 'study' else render_stage(stage, data, self.cfg.get('output_language'))
         contents = {ARTIFACTS[stage]: report.encode('utf-8'),
                     stage + '.original.md': data['report_markdown'].encode('utf-8'),
@@ -2065,7 +2068,8 @@ class Runner:
                         raise
                 manifest['comparison'] = comparison
                 manifest['comparison_invocation'] = meta
-                self.stage_finished('compare', bundle, comparison, started)
+                self.stage_finished('compare', bundle, comparison, started,
+                    report_path=comp_dir / ARTIFACTS['compare'] if meta.get('publication_complete') else None)
                 quality_ok = quality_ok and comparison['program_checks']['policy_satisfied'] and meta['publication_complete']
             failed = any(b['errors'] for b in entries)
             manifest['status'] = 'FAILED' if failed else 'COMPLETE' if quality_ok else 'PARTIAL'
