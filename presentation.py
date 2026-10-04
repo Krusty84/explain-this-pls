@@ -94,7 +94,7 @@ def render_stage(stage, data, language='English'):
     out = ['# Program checks and agent assessments', '',
         ('Study processing conditions satisfied; final acceptance depends on review.' if stage == 'study' else
          'Policy checks satisfied; factual correctness is not established.') if checks['policy_satisfied'] else
-        'Policy checks not satisfied. Review is incomplete or has limitations/issues.', '',
+        'Policy checks not satisfied. Review may be incomplete or have limitations/issues.', '',
         'Semantic review quality is not measured. Resolving a locator does not validate the conclusion.', '']
     out += ['- ' + cell(x) for x in data.get('limitations', [])]
     if stage == 'study':

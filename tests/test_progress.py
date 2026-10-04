@@ -94,7 +94,7 @@ class ProgressTests(unittest.TestCase):
         self.tick(r, .4)
         r.emit('stage_completed', **CONTEXT, status='PARTIAL', elapsed_seconds=.4)
         self.assertEqual(sum(self.err.getvalue().count(c) for c in SPINNER), 1)
-        self.assertIn('master / Project analysis incomplete. See details below. | Elapsed: 00:00\n', self.err.getvalue())
+        self.assertIn('master / Project analysis may be incomplete. See details below. | Elapsed: 00:00\n', self.err.getvalue())
 
     def test_runner_context_retries_and_next_stage_reset(self):
         r = self.reporter()
@@ -118,7 +118,7 @@ class ProgressTests(unittest.TestCase):
         started = runner.stage_started('review', {})
         self.assertIn('[RUN] name / Reviewing report…  ⠋ 00:00', self.err.getvalue())
         runner.stage_finished('review', {}, {'completion_status': 'COMPLETE', 'verdict': 'INCONCLUSIVE'}, started)
-        self.assertIn('name / Report review incomplete. See details below.', self.err.getvalue())
+        self.assertIn('name / Report review may be incomplete. See details below.', self.err.getvalue())
         runner.mode = 'git'
         started = runner.stage_started('compare', {})
         self.assertIn('[RUN] Comparing branch reports…  ⠋ 00:00', self.err.getvalue())

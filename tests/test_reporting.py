@@ -108,8 +108,8 @@ class ReporterTests(unittest.TestCase):
         reporter.attach_log(self.base)
         for status, color, label, message in (
                 ('COMPLETE', 32, 'OK', 'Architecture report created.'),
-                ('PARTIAL', 33, 'WARN', 'Project analysis incomplete. See details below.'),
-                ('BLOCKED', 33, 'WARN', 'Project analysis incomplete. See details below.'),
+                ('PARTIAL', 33, 'WARN', 'Project analysis may be incomplete. See details below.'),
+                ('BLOCKED', 33, 'WARN', 'Project analysis may be incomplete. See details below.'),
                 ('FAILED', 31, 'FAIL', 'Project analysis failed. See details below.')):
             reporter.emit('stage_completed', branch='folder', source_name='COMPLETE 深い [FAIL]',
                           stage='study', backend='codex', status=status, elapsed_seconds=1)
@@ -150,9 +150,9 @@ class ReporterTests(unittest.TestCase):
                 {'branch': 'FAILED', 'accepted': False, 'errors': ['error']},
                 {'branch': 'PARTIAL', 'accepted': False, 'errors': []}], 'pins': {'BLOCKED': 'sha'},
                 'comparison': {'completion_status': 'BLOCKED'}, 'restoration': {'restored': True}},
-             ['\x1b[33m[WARN]\x1b[0m Analysis incomplete. See available results and limitations below.',
+             ['\x1b[33m[WARN]\x1b[0m Analysis may be incomplete. See available results and limitations below.',
               'Branch COMPLETE: \x1b[32mComplete\x1b[0m', 'Branch FAILED: \x1b[31mFailed\x1b[0m',
-              'Branch PARTIAL: \x1b[33mIncomplete\x1b[0m', 'Branch BLOCKED: \x1b[90mNot started\x1b[0m']),
+              'Branch PARTIAL: \x1b[33mMay be incomplete\x1b[0m', 'Branch BLOCKED: \x1b[90mNot started\x1b[0m']),
             ({'status': 'FAILED'}, {}, ['\x1b[31m[FAIL]\x1b[0m Analysis failed.']),
             ({'status': 'FAILED', 'exit_code': 130}, {}, ['\x1b[33m[WARN]\x1b[0m Analysis interrupted.']),
             ({'status': 'FAILED'}, {'restoration': {'restored': False}}, ['\x1b[31m[FAIL]\x1b[0m Analysis failed.'])]
@@ -233,8 +233,8 @@ class ReporterTests(unittest.TestCase):
                 ('compare', 'Branch report comparison', 'Branch report comparison ready.')):
             for status, label, meaning in (
                     ('COMPLETE', 'OK', completed),
-                    ('PARTIAL', 'WARN', noun + ' incomplete. See details below.'),
-                    ('BLOCKED', 'WARN', noun + ' incomplete. See details below.'),
+                    ('PARTIAL', 'WARN', noun + ' may be incomplete. See details below.'),
+                    ('BLOCKED', 'WARN', noun + ' may be incomplete. See details below.'),
                     ('FAILED', 'FAIL', noun + ' failed. See details below.')):
                 with self.subTest(stage=stage, status=status):
                     self.err.seek(0)
@@ -931,8 +931,8 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.env['AUDIT_TEST_PARTIAL'] = '1'
         result = self.run_cli(args + ['--output', 'text'])
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertTrue(result.stdout.startswith('[WARN] Analysis incomplete. See available results and limitations below.'))
-        self.assertIn('[WARN] source folder / Project analysis incomplete. See details below.', result.stderr)
+        self.assertTrue(result.stdout.startswith('[WARN] Analysis may be incomplete. See available results and limitations below.'))
+        self.assertIn('[WARN] source folder / Project analysis may be incomplete. See details below.', result.stderr)
         del self.env['AUDIT_TEST_PARTIAL']
         self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': 'invalid', 'value': 'PRIVATE_MODEL_VALUE'})
         result = self.run_cli(args + ['--verbose'])

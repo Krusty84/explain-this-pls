@@ -2249,7 +2249,7 @@ def main() -> int:
         result['status_meaning'] = ('Local launch prerequisites checked. Source analysis was not performed; '
             'model availability and provider authorization were not tested.' if result['status'] == 'PREFLIGHT_OK' else
             'Policy checks satisfied; factual correctness is not established.' if result['status'] == 'COMPLETE' else
-            'Processing incomplete or evidence insufficient; consult limitations and diagnostics.')
+            'Processing may be incomplete or evidence may be insufficient; consult limitations and diagnostics.')
         result['review_quality'] = 'NOT_MEASURED'
         try:
             reporter.finish(result, manifest, check_only=args.check, config_path=args.config,

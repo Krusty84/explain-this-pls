@@ -25,7 +25,7 @@ from contracts import ContractError, json_error_details
 LABEL_COLORS = {'[WARN]': '\x1b[33m', '[RUN]': '\x1b[36m', '[OK]': '\x1b[32m',
                 '[FAIL]': '\x1b[31m', '[SKIP]': '\x1b[90m'}
 STATUS_COLORS = {'Complete': '\x1b[32m', 'Failed': '\x1b[31m',
-                 'Incomplete': '\x1b[33m', 'Not started': '\x1b[90m'}
+                 'May be incomplete': '\x1b[33m', 'Not started': '\x1b[90m'}
 STAGE_MESSAGES = {
     'catalog': ('Cataloging subsystems…', 'Subsystem catalog', 'Subsystem catalog created.'),
     'study': ('Analyzing project…', 'Project analysis', 'Architecture report created.'),
@@ -524,7 +524,7 @@ class Reporter(NullReporter):
             status = c['status']
             label = '[OK] ' if status == 'COMPLETE' else '[FAIL] ' if status == 'FAILED' else '[WARN] '
             meaning = complete if status == 'COMPLETE' else title + (
-                ' failed. See details below.' if status == 'FAILED' else ' incomplete. See details below.')
+                ' failed. See details below.' if status == 'FAILED' else ' may be incomplete. See details below.')
             return [label + self.stage_message(c, meaning) +
                     ' | Elapsed: ' + duration(c['elapsed_seconds'])]
         if name == 'stage_skipped':
@@ -594,7 +594,7 @@ class Reporter(NullReporter):
         meaning = ('[WARN] Analysis interrupted.' if result['exit_code'] == 130 else
                    '[OK] Local setup checked. Analysis has not started.' if result['status'] == 'PREFLIGHT_OK' else
                    '[OK] Analysis complete. Reports may still contain errors.' if result['status'] == 'COMPLETE' else
-                   '[WARN] Analysis incomplete. See available results and limitations below.' if result['status'] == 'PARTIAL' else
+                   '[WARN] Analysis may be incomplete. See available results and limitations below.' if result['status'] == 'PARTIAL' else
                    '[FAIL] Analysis failed.')
         lines = [meaning, 'Elapsed: ' + duration(elapsed)]
         if result['status'] == 'PREFLIGHT_OK':
@@ -607,8 +607,8 @@ class Reporter(NullReporter):
             for branch in manifest.get('branches', []):
                 partial_material = manifest.get('result_policy') == 'compromise' and branch.get('study_usable')
                 lines += ['Branch ' + s(branch['branch']) + ': ' +
-                          status('Complete' if branch.get('accepted') else 'Incomplete' if partial_material
-                                 else 'Failed' if branch['errors'] else 'Incomplete')]
+                          status('Complete' if branch.get('accepted') else 'May be incomplete' if partial_material
+                                 else 'Failed' if branch['errors'] else 'May be incomplete')]
             analyzed = {branch['branch'] for branch in manifest.get('branches', [])}
             for branch in manifest.get('pins', {}):
                 if branch not in analyzed:
