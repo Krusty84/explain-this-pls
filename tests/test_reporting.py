@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -759,14 +760,22 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.env['TERM'] = 'xterm'
         self.env.pop('NO_COLOR', None)
         master, slave = pty.openpty()
+        chunks, stop = [], threading.Event()
+        def drain_console():
+            while not stop.is_set() or select.select([master], [], [], 0)[0]:
+                if select.select([master], [], [], .05)[0]:
+                    chunks.append(os.read(master, 65536))
+        reader = threading.Thread(target=drain_console)
+        reader.start()
         try:
             result = subprocess.run([sys.executable, '-B', str(ROOT / 'explain.py'), *args, '--output', 'json'],
                 cwd=self.base, env=self.env, stdout=subprocess.PIPE, stderr=slave, text=True, timeout=30)
-            self.assertTrue(select.select([master], [], [], 2)[0])
-            console = os.read(master, 65536).decode()
         finally:
+            stop.set()
+            reader.join(timeout=2)
             os.close(master)
             os.close(slave)
+        console = b''.join(chunks).decode()
         self.assertEqual(result.returncode, 0, console)
         summary = json.loads(result.stdout)
         self.assertEqual(summary['status'], 'COMPLETE')
@@ -989,6 +998,9 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 130, result.stderr)
         manifest = json.loads(Path(data['manifest']).read_text())
         self.assertTrue(manifest['restoration']['restored'])
+        self.assertEqual(data['metrics'], manifest['metrics'])
+        self.assertEqual(data['metrics']['usage']['total_tokens'], 120)
+        self.assertEqual(data['metrics']['usage']['coverage']['total_tokens'], 'partial')
         self.assertEqual(result.stderr.count('[WARN] Stopping analysis…'), 1)
         for message in ('Stopping the active CLI process', 'Restoring the original checkout hierarchy',
                         'Original checkout hierarchy restored'):

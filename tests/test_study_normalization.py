@@ -5,6 +5,7 @@
 import copy
 import io
 import json
+from fixtures.cli_response import cli_result
 import unittest
 from src.reports.document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
@@ -169,7 +170,7 @@ class NormalizationPipelineTests(FolderFixture):
                 def answer(command, cwd, env, payload, **kwargs):
                     model_data = model_wire(wire, prompt_context(payload), ctx)
                     envelope = model_data if backend == 'codex' else {'is_error': False, 'structured_output': model_data}
-                    return {'returncode': 0, 'stdout': json.dumps(envelope).encode(), 'stderr': b''}
+                    return cli_result(command, envelope)
                 with patch('explain.process', side_effect=answer) as process:
                     saved, meta = runner.invoke('review', ctx, runner.run_dir / 'review.logs')
                 self.assertEqual(process.call_count, 1)
@@ -197,7 +198,7 @@ class NormalizationPipelineTests(FolderFixture):
             model_data = model_wire(data, prompt_context(payload), context)
             envelope = model_data if runner.cfg['_agents']['study']['backend'] == 'codex' else {
                 'is_error': False, 'structured_output': model_data}
-            return {'returncode': 0, 'stdout': json.dumps(envelope).encode(), 'stderr': b''}
+            return cli_result(command, envelope)
         with patch('explain.process', side_effect=process):
             return runner.invoke('study', context, runner.run_dir / 'study.logs')
 

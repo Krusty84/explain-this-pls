@@ -5,6 +5,7 @@
 import copy
 import io
 import json
+from fixtures.cli_response import cli_result
 from pathlib import Path
 import unittest
 from src.reports.document_rendering import materialize_study, recover_sections
@@ -83,10 +84,10 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             if outcome == 'failure':
                 return {'returncode': 17, 'stdout': b'', 'stderr': b'private backend error'}
             if outcome == 'malformed':
-                return {'returncode': 0, 'stdout': b'{broken', 'stderr': b''}
+                return cli_result(command, b'{broken')
             originals[stage] = copy.deepcopy(outcome)
             encoded = outcome if backend == 'codex' else {'is_error': False, 'structured_output': outcome}
-            return {'returncode': 0, 'stdout': json.dumps(encoded).encode(), 'stderr': b''}
+            return cli_result(command, encoded)
 
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process), \
                 patch('explain.atomic', side_effect=atomic_override or atomic):
@@ -317,11 +318,11 @@ class CompromiseGit(unittest.TestCase):
             stage = context.get('stage') or ('compare' if 'baseline_branch' in context else 'review' if 'architecture_document' in context else 'study')
             calls.append((stage, context))
             if (stage != 'catalog' and context.get('branch') == failure_branch) or (stage == 'compare' and compare_failure):
-                return {'returncode': 0, 'stdout': b'{broken', 'stderr': b''}
+                return cli_result(command, b'{broken')
             data = response_for(context)
             if stage == 'review':
                 semantic_failure(data)
-            return {'returncode': 0, 'stdout': json.dumps(data).encode(), 'stderr': b''}
+            return cli_result(command, data)
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process), \
                 patch.object(runner.repo, 'restore', side_effect=restore):
             manifest, code = runner.run()

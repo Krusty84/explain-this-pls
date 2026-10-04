@@ -4,6 +4,7 @@
 """Only locally validated and completely published reports are accepted."""
 import io
 import json
+from fixtures.cli_response import cli_result
 import os
 from pathlib import Path
 import stat
@@ -53,12 +54,12 @@ class PublicationTests(FolderFixture):
         return runner, context, data
 
     @staticmethod
-    def result(data):
-        return {'returncode': 0, 'stdout': json.dumps(data).encode(), 'stderr': b''}
+    def result(command, data):
+        return cli_result(command, data)
 
     def process_for(self, data, context):
         def process(command, cwd, env, payload, **kwargs):
-            return self.result(model_wire(data, prompt_context(payload), context))
+            return self.result(command, model_wire(data, prompt_context(payload), context))
         return process
 
     def test_attempts_are_immutable_and_validation_precedes_publication(self):
@@ -108,7 +109,7 @@ class PublicationTests(FolderFixture):
         def process(command, cwd, env, payload, **kwargs):
             supplied = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n')[1]
                                   .split('\n\n# Required final JSON Schema')[0])
-            return self.result(response(supplied))
+            return self.result(command, response(supplied))
         def fail_report_json(path, content):
             if path.name == 'study.json':
                 raise OSError('fixture disk full')
@@ -130,7 +131,7 @@ class PublicationTests(FolderFixture):
         import hashlib
         runner, _, _ = self.prepare()
         def process(command, cwd, env, payload, **kwargs):
-            return self.result(response(prompt_context(payload)))
+            return self.result(command, response(prompt_context(payload)))
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process) as invoked:
             manifest, code = runner.run()
         self.assertEqual(code, 0)
@@ -155,7 +156,7 @@ class PublicationTests(FolderFixture):
                 self.addCleanup(reporter.close)
                 runner = Runner(self.config(), self.base / failure, reporter=reporter)
                 def process(command, cwd, env, payload, **kwargs):
-                    return self.result(response(prompt_context(payload)))
+                    return self.result(command, response(prompt_context(payload)))
                 def fail_write(path, content):
                     if ((failure == 'markdown' and path.name == 'SUBSYSTEM_CATALOG.md') or
                             (failure == 'metadata' and path == runner.run_dir / 'catalog.logs/invocation.json'
@@ -222,7 +223,7 @@ class PublicationTests(FolderFixture):
         raw = response(ctx)
         def tamper(command, cwd, env, payload, **kwargs):
             (runner.run_dir / 'ARCHITECTURE.md').write_text('changed during review')
-            return self.result(model_wire(raw, prompt_context(payload), ctx))
+            return self.result(command, model_wire(raw, prompt_context(payload), ctx))
         with patch('explain.process', side_effect=tamper), self.assertRaises(AuditError):
             runner.invoke('review', ctx, runner.run_dir / 'review.logs')
         self.assertFalse((runner.run_dir / 'review.json').exists())

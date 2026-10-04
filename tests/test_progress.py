@@ -21,6 +21,7 @@ from unittest.mock import patch
 
 from src.contracts.contracts import ContractError
 from src.runtime.execution import Budget
+from src.runtime.metrics import RunMetrics
 from explain import Runner
 from src.runtime.reporting import Reporter, SPINNER, cell_width
 import test_xxx as xxx_fixtures
@@ -94,6 +95,7 @@ class ProgressTests(unittest.TestCase):
         r = self.reporter(tty=False, mode='json', progress=False)
         runner = Runner.__new__(Runner)
         runner.reporter, runner.mode, runner.source_path = r, 'git', Path('/source')
+        runner.metrics = RunMetrics(r.clock)
         runner.cfg = {'_agents': {'study': {'backend': 'codex'}}}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / '深い\n\x1b[31m.md'
@@ -124,6 +126,7 @@ class ProgressTests(unittest.TestCase):
         r = self.reporter()
         runner = Runner.__new__(Runner)
         runner.reporter, runner.mode, runner.source_path = r, 'git', Path('/source/name')
+        runner.metrics = RunMetrics(r.clock)
         runner.cfg = {'_agents': {stage: {'backend': backend} for stage, backend in
                       (('study', 'xxx'), ('review', 'codex'), ('compare', 'claude-code'))}}
         started = runner.stage_started('study', {'branch': 'topic'})

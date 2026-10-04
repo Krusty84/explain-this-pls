@@ -25,6 +25,7 @@ import time
 
 from src.contracts.contracts import ContractError, response_error, strict_json, transport_json
 from src.runtime.execution import Budget, execution_settings
+from src.runtime.metrics import HTTPUsage
 
 WIRE_VERSION = '1.2.27'
 STARTUP_SECONDS = 20
@@ -443,6 +444,7 @@ class Server:
         self.session_id = identifier(created.get('id'), 'ses')
         request_id = 'msg_' + f'{int(time.time() * 1000) * 4096:012x}' + secrets.token_hex(7)
         self.meta.update(session_id=self.session_id, request_id=request_id)
+        usage = HTTPUsage(self.meta.get('backend', 'opencode'), model, self.session_id, request_id, agent_name)
         body = {'messageID': request_id, 'agent': agent_name,
                 'format': {'type': 'json_schema', 'schema': schema, 'retryCount': retries},
                 'parts': [{'type': 'text', 'text': prompt}]}
@@ -465,6 +467,7 @@ class Server:
                 if self.process.poll() is not None:
                     raise response_error('BACKEND_ERROR', 'backend', 'Owned OpenCode server exited during the request.')
                 messages = self.request('GET', f'/session/{self.session_id}/message')
+                self.meta['metrics'] = usage.observe(messages)
                 validate_history(messages, self.session_id, request_id)
                 current = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).digest()
                 if current != fingerprint and messages:
@@ -478,6 +481,7 @@ class Server:
         self.meta['output_bytes'] = len(pending.body)
         self.save(self.artifacts / 'response.json', bytes(pending.body))
         envelope = self.finish(pending)
+        self.meta['metrics'] = usage.observe([envelope])
         info = envelope.get('info') if type(envelope) is dict else None
         if type(info) is dict:
             self.meta['finish_classification'] = classify_finish(info)
@@ -494,9 +498,11 @@ class Server:
                 detail = error.get('data')
                 if type(detail) is dict and type(detail.get('retries')) in (int, float):
                     self.meta['native_retries_reported'] = detail['retries']
-        data, details = extract_result(envelope, self.session_id, request_id, agent_name)
         history = self.request('GET', f'/session/{self.session_id}/message')
+        self.meta['metrics'] = usage.observe(history)
+        data, details = extract_result(envelope, self.session_id, request_id, agent_name)
         validate_history(history, self.session_id, request_id, details['message_id'], envelope)
+        self.meta['metrics'] = usage.observe(history, complete=True)
         self.save(self.artifacts / 'extracted.json', json.dumps(data))
         self.meta.update(details, output_bytes=len(pending.body))
         return data

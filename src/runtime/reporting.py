@@ -121,6 +121,19 @@ def duration(seconds: float) -> str:
     return f'{hours:02}:{minutes:02}:{seconds:02}' if hours else f'{minutes:02}:{seconds:02}'
 
 
+def metric_value(measured, key):
+    value = measured.get(key)
+    if value is None:
+        return 'unavailable'
+    text = f'${value:.4f}' if key == 'cost_usd' else f'{value:,}'
+    notes = []
+    if measured.get('coverage', {}).get(key) == 'partial':
+        notes.append('partial')
+    if key == 'total_tokens' and measured.get('total_tokens_estimated'):
+        notes.append('estimated')
+    return text + (' (' + ', '.join(notes) + ')' if notes else '')
+
+
 def output_mode(requested: str, stdout) -> str:
     return ('text' if stdout.isatty() else 'json') if requested == 'auto' else requested
 
@@ -268,6 +281,34 @@ class Reporter(NullReporter):
     def stage_message(self, context, message):
         source = self.stage_source(context)
         return (self.display(source) + ' / ' if source else '') + self.display(message)
+
+    def metric_models(self, metrics):
+        labels = []
+        for entry in metrics.get('by_model', []):
+            model = entry.get('model_actual')
+            if model:
+                label = entry['backend'] + ': ' + model
+            else:
+                requested = entry.get('model_requested')
+                label = entry['backend'] + ': ' + (requested + ' (requested)' if requested else 'model unavailable')
+            if label not in labels:
+                labels.append(label)
+        return self.display('; '.join(labels) or 'No model calls')
+
+    def metric_lines(self, metrics, *, compact=False):
+        if metrics is None:
+            return []
+        measured = metrics['usage']
+        value = lambda key: metric_value(measured, key)
+        if compact:
+            return ['      Tokens: ' + value('total_tokens') + ' | Agent-estimated cost: ' + value('cost_usd') +
+                    ' | Attempts: ' + str(metrics['attempts']) + ' | ' + self.metric_models(metrics)]
+        return ['      Tokens: ' + value('total_tokens') + ' | Input: ' + value('input_tokens') +
+                ' | Output: ' + value('output_tokens'),
+                '      Cache read/write: ' + value('cache_read_tokens') + ' / ' + value('cache_write_tokens') +
+                ' | Reasoning: ' + value('reasoning_tokens'),
+                '      Agent-estimated cost: ' + value('cost_usd') + ' | Attempts: ' + str(metrics['attempts']) +
+                ' | ' + self.metric_models(metrics)]
 
     def _write(self, stream, text):
         """All console writes, including frames, hold _lock and flush explicitly."""
@@ -527,7 +568,8 @@ class Reporter(NullReporter):
                 ' failed. See details below.' if status == 'FAILED' else ' may be incomplete. See details below.')
             return [label + self.stage_message(c, meaning) +
                     ' | Elapsed: ' + duration(c['elapsed_seconds']),
-                    *(['      Report: ' + s(c['report_path'])] if c.get('report_path') else [])]
+                    *(['      Report: ' + s(c['report_path'])] if c.get('report_path') else []),
+                    *self.metric_lines(c.get('metrics'), compact=True)]
         if name == 'stage_skipped':
             title = 'Review' if c.get('stage') == 'review' else title
             return ['[SKIP] ' + self.stage_message(c, title + ' skipped: no architecture report available.')]
@@ -577,6 +619,7 @@ class Reporter(NullReporter):
                 lines += ['', 'Diagnostic details:', '  ' + s(json.dumps(c['details'], ensure_ascii=False))]
             if existing_file(self.log_path):
                 lines += ['', 'Error details:', '  ' + s(self.log_path)]
+            lines += self.metric_lines(c.get('metrics'), compact=True)
             return lines
         return []
 
@@ -585,8 +628,10 @@ class Reporter(NullReporter):
         if self.finished:
             return
         self.finished = True
-        elapsed = self.clock() - self.started
-        self.emit('run_completed', status=result['status'], exit_code=result['exit_code'], elapsed_seconds=elapsed)
+        metrics = result.get('metrics')
+        elapsed = metrics['duration_seconds'] if metrics else self.clock() - self.started
+        self.emit('run_completed', status=result['status'], exit_code=result['exit_code'], elapsed_seconds=elapsed,
+                  **({'metrics': metrics} if metrics else {}))
         if self.mode == 'json':
             self.write(self.stdout, json.dumps(result, ensure_ascii=True))
             return
@@ -598,6 +643,20 @@ class Reporter(NullReporter):
                    '[WARN] Analysis may be incomplete. See available results and limitations below.' if result['status'] == 'PARTIAL' else
                    '[FAIL] Analysis failed.')
         lines = [meaning, 'Elapsed: ' + duration(elapsed)]
+        if metrics:
+            if not metrics['attempts']:
+                lines += ['No model calls were made.']
+            else:
+                lines += ['', 'Stage | Status | Elapsed | Attempts | Tokens | Agent-estimated cost | Agent / model']
+                for row in metrics['stages']:
+                    title = self.stage_source(row)
+                    title = (title + ' / ' if title else '') + row['stage']
+                    if row.get('revision_id'):
+                        title += ' #' + row['revision_id']
+                    lines += [s(title) + ' | ' + s(row['status']) + ' | ' + duration(row['duration_seconds']) +
+                              ' | ' + str(row['attempts']) + ' | ' + metric_value(row['usage'], 'total_tokens') +
+                              ' | ' + metric_value(row['usage'], 'cost_usd') + ' | ' + self.metric_models(row)]
+                lines += ['', 'Total usage:', *self.metric_lines(metrics)]
         if result['status'] == 'PREFLIGHT_OK':
             command = ['python3', 'explain.py', '--config', str(config_path)]
             if trust:

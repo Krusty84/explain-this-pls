@@ -3,6 +3,7 @@
 
 """Actual model payloads and private binding guards, with no model requests."""
 import json
+from fixtures.cli_response import cli_result
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -38,7 +39,7 @@ class HashlessPipelineTests(FolderFixture):
             if change:
                 data = change(runner, context, data)
             calls.append((context, payload.decode(), data))
-            return {'returncode': 0, 'stdout': json.dumps(data).encode(), 'stderr': b''}
+            return cli_result(command, data)
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
             manifest, code = runner.run()
         return runner, manifest, code, calls

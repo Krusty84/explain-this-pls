@@ -22,7 +22,7 @@ from explain import AuditError, Runner
 
 ADAPTERS = {'codex': codex, 'claude-code': claude_code}
 REQUIRED_FLAGS = {
-    'codex': ['--ephemeral', '--output-schema', '--sandbox'],
+    'codex': ['--ephemeral', '--output-schema', '--sandbox', '--json', '--output-last-message'],
     'claude-code': ['--no-session-persistence', '--json-schema', '--tools',
                     '--allowedTools', '--disallowedTools', '--permission-mode'],
 }
@@ -49,6 +49,9 @@ class CLIAdapterTests(unittest.TestCase):
                                 self.assertIn('--ephemeral', cmd)
                                 self.assertEqual(cmd[cmd.index('--sandbox') + 1], 'read-only')
                                 self.assertEqual(cmd[cmd.index('--output-schema') + 1], str(schema_path))
+                                self.assertIn('--json', cmd)
+                                self.assertEqual(cmd[cmd.index('--output-last-message') + 1],
+                                                 str(schema_path.with_name('final.response.json')))
                                 self.assertIn('approval_policy="never"', cmd)
                                 self.assertIn('web_search="disabled"', cmd)
                                 self.assertEqual('--skip-git-repo-check' in cmd,

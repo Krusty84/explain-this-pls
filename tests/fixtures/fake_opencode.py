@@ -91,16 +91,16 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == '/session' and self.command == 'POST':
             response = {'id': session_id, **({'compactionCount': 0} if xxx else {})}
         elif self.path.endswith('/message') and self.command == 'POST':
-            if scenario == 'interrupt':
-                import signal
-                os.kill(os.getppid(), getattr(signal, os.environ.get('AUDIT_FAKE_SIGNAL', 'SIGTERM')))
-                time.sleep(60)
             prompt = body['parts'][0]['text']
             repair = prompt.startswith('Correct only the format')
             raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]
             context = json.loads(raw.split('\n\n# Required final JSON Schema\n')[0])
             stage = context.get('stage') or ('compare' if 'baseline_branch' in context else
                                             'review' if 'architecture_document' in context else 'study')
+            if scenario == 'interrupt' and os.environ.get('AUDIT_FAKE_INTERRUPT_STAGE', stage) == stage:
+                import signal
+                os.kill(os.getppid(), getattr(signal, os.environ.get('AUDIT_FAKE_SIGNAL', 'SIGTERM')))
+                time.sleep(60)
             if scenario == 'progress-barrier':
                 # No response/history activity until the parent test observes the UI.
                 gate = Path(os.environ['AUDIT_FAKE_PROGRESS_GATE'])

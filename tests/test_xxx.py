@@ -174,6 +174,9 @@ class XXXTests(unittest.TestCase):
             manifest, code = self.run_case('slow')
             self.assertEqual(code, 1, manifest)
             self.assertEqual(manifest['diagnostics'][0]['failure_kind'], 'STAGE_TIMEOUT')
+            self.assertEqual(manifest['metrics']['attempts'], 2)
+            self.assertEqual(manifest['metrics']['usage']['total_tokens'], 20)
+            self.assertEqual(manifest['metrics']['usage']['coverage']['total_tokens'], 'partial')
             for pid in {c['server_pid'] for c in self.recorded()}:
                 with self.assertRaises(ProcessLookupError):
                     os.kill(pid, 0)
@@ -242,13 +245,17 @@ class XXXTests(unittest.TestCase):
         bystander = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
         try:
             for sig in ('SIGINT', 'SIGTERM'):
-                env = os.environ | self.env | {'AUDIT_FAKE_CASE': 'interrupt', 'AUDIT_FAKE_SIGNAL': sig}
+                env = os.environ | self.env | {'AUDIT_FAKE_CASE': 'interrupt', 'AUDIT_FAKE_SIGNAL': sig,
+                                              'AUDIT_FAKE_INTERRUPT_STAGE': 'study'}
                 process = subprocess.run([sys.executable, '-B', str(ROOT / 'explain.py'), '--config', str(path)],
                     env=env, capture_output=True, text=True, timeout=15)
                 self.assertEqual(process.returncode, 130, process.stderr)
                 manifest = json.loads(Path(json.loads(process.stdout)['manifest']).read_text())
                 self.assertFalse(manifest['accepted'])
                 self.assertEqual(manifest['diagnostics'][0]['code'], 'INTERRUPTED')
+                self.assertEqual(manifest['metrics']['attempts'], 2)
+                self.assertEqual(manifest['metrics']['usage']['total_tokens'], 10)
+                self.assertEqual(manifest['metrics']['usage']['coverage']['total_tokens'], 'partial')
                 for pid in {c['server_pid'] for c in self.recorded()}:
                     with self.assertRaises(ProcessLookupError):
                         os.kill(pid, 0)

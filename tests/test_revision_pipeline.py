@@ -5,6 +5,7 @@
 import copy
 import io
 import json
+from fixtures.cli_response import cli_result
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -52,9 +53,9 @@ class RevisionPipelineTests(FolderFixture):
             if outcome == 'transport_failure':
                 return {'returncode': 17, 'stdout': b'', 'stderr': b'fixture transport failed'}
             if outcome == 'invalid_json':
-                return {'returncode': 0, 'stdout': b'{broken', 'stderr': b''}
+                return cli_result(command, b'{broken')
             originals[(stage, context.get('revision_id'))] = copy.deepcopy(outcome)
-            return {'returncode': 0, 'stdout': json.dumps(outcome).encode(), 'stderr': b''}
+            return cli_result(command, outcome)
 
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
             manifest, code = runner.run()
@@ -401,7 +402,7 @@ class RevisionGitPipelineTests(unittest.TestCase):
                                 directory = directory / 'revisions' / '001'
                             with (directory / name).open('ab') as stream:
                                 stream.write(b'\nTAMPERED\n')
-                        return {'returncode': 0, 'stdout': json.dumps(data).encode(), 'stderr': b''}
+                        return cli_result(command, data)
                     with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
                         manifest, code = runner.run()
                     self.assertIn('compare', calls)
@@ -426,7 +427,7 @@ class RevisionGitPipelineTests(unittest.TestCase):
                 first = runner.manifest['branches'][0]
                 with (runner.run_dir / first['directory'] / 'coverage.plan.json').open('ab') as stream:
                     stream.write(b'\nTAMPERED\n')
-            return {'returncode': 0, 'stdout': json.dumps(response(context)).encode(), 'stderr': b''}
+            return cli_result(command, response(context))
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
             manifest, code = runner.run()
         self.assertEqual((code, manifest['status'], manifest['critical_failure']), (1, 'FAILED', True))
@@ -475,7 +476,7 @@ class RevisionGitPipelineTests(unittest.TestCase):
                     classification='CONFIRMED_DIFFERENCE', baseline_statement='Revised master behavior',
                     branch_statement='Test branch behavior', evidence_refs=refs,
                     explanation='The fixture contrasts the two supplied accepted reports.')]
-            return {'returncode': 0, 'stdout': json.dumps(data).encode(), 'stderr': b''}
+            return cli_result(command, data)
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
             manifest, code = runner.run()
         self.assertEqual((code, manifest['status']), (0, 'COMPLETE'))

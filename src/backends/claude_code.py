@@ -5,7 +5,8 @@
 import json
 from pathlib import Path
 
-from src.contracts.contracts import response_error, transport_json
+from src.contracts.contracts import ContractError, response_error, transport_json
+from src.runtime.metrics import claude_usage
 
 
 def help_command(executable: str) -> list[str]:
@@ -40,3 +41,11 @@ def parse_output(output: str) -> tuple[dict, dict]:
         raise response_error('INCOMPLETE_OUTPUT', 'result', 'Claude Code did not return structured_output.')
     metadata = {k: transport[k] for k in ('session_id', 'total_cost_usd', 'usage', 'modelUsage') if k in transport}
     return transport['structured_output'], metadata
+
+
+def collect_metrics(output: str, requested=None) -> dict:
+    try:
+        envelope = transport_json(output.strip())
+    except ContractError:
+        envelope = None
+    return claude_usage(envelope, requested)

@@ -7,7 +7,7 @@
 macOS or Linux, Python 3.11+, and one or more authenticated coding-agent CLIs.
 Git >= 2.34.1 is required only for git mode; folder mode needs no Git.
 No third-party Python packages, worktrees, or source copies.
-The parent is the only artifact writer. The agent receives stdin and returns JSON.
+The parent publishes reports. The agent receives stdin and returns structured JSON.
 """
 from __future__ import annotations
 import argparse
@@ -34,6 +34,7 @@ from urllib.parse import urlsplit
 from src.contracts.contracts import MODEL_FOLDER_SCHEMAS, MODEL_SCHEMAS, ContractError, accepted, jsonc, strict_json, validate_result, schema_diagnostics, result_diagnostics
 from src.runtime.reporting import Diagnostic, NullReporter, Reporter, diagnostic, existing_file, output_mode
 from src.runtime.execution import Budget, execution_settings
+from src.runtime.metrics import RunMetrics, measurement, usage, FIELDS
 from src.backends import codex
 from src.backends import claude_code
 from src.backends import opencode
@@ -1012,6 +1013,8 @@ def load_config(path: Path) -> dict:
 class Runner:
     def __init__(self, config: dict, run_dir: Path, trust_repository: bool = False, reporter=None):
         self.reporter = reporter or NullReporter()
+        self.metrics = RunMetrics(self.reporter.clock)
+        self.metrics.started = getattr(self.reporter, 'started', self.metrics.started)
         self.reported_errors = []
         self.analysis_started = False
         self.active_stage = {}
@@ -1052,6 +1055,8 @@ class Runner:
             if phase in ('run', 'stage') and self.active_stage:
                 phase = 'stage'
                 context = self.active_stage | context
+            if phase == 'stage' and context.get('stage'):
+                context['metrics'] = self.metrics.finish_stage(context, 'FAILED')
             detail = self.reporter.error(exc, phase=phase, analysis_started=self.analysis_started,
                 switches_performed=bool(getattr(self.repo, 'journal', [])), **context)
             manifest.setdefault('diagnostics', []).append(detail | {'phase': phase} | context)
@@ -1067,6 +1072,7 @@ class Runner:
     def stage_started(self, stage, context):
         started = self.reporter.clock()
         self.active_stage = self.stage_context(stage, context)
+        self.metrics.start(self.active_stage)
         self.reporter.emit('stage_started', _started=started, **self.active_stage)
         return started
 
@@ -1078,8 +1084,23 @@ class Runner:
             status = 'PARTIAL'
         self.reporter.emit('stage_completed', **self.stage_context(stage, context), status=status,
                            elapsed_seconds=self.reporter.clock() - started,
+                           metrics=self.metrics.finish_stage(self.stage_context(stage, context), status),
                            **({'report_path': report_path} if existing_file(report_path) else {}))
         self.active_stage = {}
+
+    def record_attempt_metrics(self, meta, context, started):
+        if 'metrics' not in meta:
+            measured = usage() if meta.get('prompt_sent') else usage({key: 0 for key in FIELDS}, source='not_sent')
+            meta['metrics'] = measurement(meta['backend'], meta['model_requested'], meta['model_actual'], measured)
+        meta['metrics'].update(duration_seconds=round(self.reporter.clock() - started, 3), attempts=1)
+        models = list(dict.fromkeys(entry['model_actual'] for entry in meta['metrics']['by_model']
+                                    if entry.get('model_actual')))
+        if models:
+            meta['models_reported'] = models
+            meta['model_actual_source'] = 'backend usage metadata; may include multiple models'
+            if len(models) == 1:
+                meta['model_actual'] = models[0]
+        self.metrics.record(self.stage_context(meta['stage'], context), meta)
 
     def check_cli(self) -> dict:
         result = {}
@@ -1511,7 +1532,8 @@ class Runner:
                         report_path=stage_dir / ARTIFACTS[stage] if meta.get('publication_complete') else None)
                 else:
                     self.reporter.emit('stage_completed', **self.stage_context(stage, stage_context),
-                                       status='PARTIAL', elapsed_seconds=self.reporter.clock() - started)
+                                       status='PARTIAL', elapsed_seconds=self.reporter.clock() - started,
+                                       metrics=self.metrics.finish_stage(self.stage_context(stage, stage_context), 'PARTIAL'))
                     self.active_stage = {}
                 return data
             except (AuditError, ContractError, OSError, UnicodeError) as exc:
@@ -1585,6 +1607,7 @@ class Runner:
                     run_stage('review', revision, review_input, revision_dir)
                 else:
                     revision['review_skipped'] = 'No usable strictly valid revised study.' if previous else 'No usable architecture document.'
+                    self.metrics.finish_stage(self.stage_context('review', current), 'SKIPPED')
                     self.reporter.emit('stage_skipped', **self.stage_context('review', current))
                     if self.repo and not usable_study(revision):
                         item['errors'].append('Review skipped: no usable architecture document.')
@@ -1706,6 +1729,7 @@ class Runner:
     def _invoke_once(self, stage, context, destination, *, budget, repair_index=0,
                      correction=None, repair_model=None, repair_source=None, evidence_pins=None,
                      binding, binding_hashes, attempt_hashes):
+        attempt_started = self.reporter.clock()
         self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
         agent = self.cfg['_agents'][stage]
         template = Path(self.cfg['_prompt_paths'][context.get('prompt_variant', stage)]).read_text()
@@ -1808,15 +1832,26 @@ class Runner:
                                     raise
                     else:
                         cmd = self.command(stage, state, agent, schema_path, env)
-                        r = process(cmd, cwd, env, payload, reporter=self.reporter,
-                                    context=self.stage_context(stage, context), log_dir=attempt,
-                                    clock=self.reporter.clock, progress_interval=self.reporter.progress_interval,
-                                    budget=budget)
+                        r = None
+                        meta['prompt_sent'] = True
+                        try:
+                            r = process(cmd, cwd, env, payload, reporter=self.reporter,
+                                        context=self.stage_context(stage, context), log_dir=attempt,
+                                        clock=self.reporter.clock, progress_interval=self.reporter.progress_interval,
+                                        budget=budget)
+                        finally:
+                            # The private pipe log survives timeout/interruption even without a process result.
+                            with contextlib.suppress(OSError):
+                                output = r['stdout'] if r is not None else (attempt / 'stdout.log').read_bytes()
+                                meta['metrics'] = CLI_ADAPTERS[agent['backend']].collect_metrics(
+                                    output.decode('utf-8', errors='replace'), agent.get('model'))
                         meta.update(returncode=r['returncode'], output_bytes=len(r['stdout']))
                         if r['returncode']:
                             raise AuditError(f'{agent["backend"]} exited with {r["returncode"]}; inspect private attempt logs.',
                                 code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='backend')
-                        data, provider_meta = CLI_ADAPTERS[agent['backend']].parse_output(r['stdout'].decode('utf-8'))
+                        output = (codex.read_response(schema_path)
+                                  if agent['backend'] == 'codex' else r['stdout'].decode('utf-8'))
+                        data, provider_meta = CLI_ADAPTERS[agent['backend']].parse_output(output)
                         meta['backend_result_valid'] = True
                         meta['provider_metadata'] = provider_meta
                         model_usage = provider_meta.get('modelUsage')
@@ -1865,6 +1900,7 @@ class Runner:
             meta.update(status='SUCCEEDED', finished_at=now(), report_sha256=report_hash, publication_complete=True)
             meta['artifact_hashes'] = artifact_hashes
             meta['duration_seconds'] = round(budget.clock() - budget.started, 3)
+            self.record_attempt_metrics(meta, context, attempt_started)
             save_json(attempt / 'invocation.json', meta)
             save_json(destination / 'invocation.json', meta)
             return data, meta
@@ -1877,6 +1913,7 @@ class Runner:
                                                   repair_index - 1, native_retries)
             meta.update(status='FAILED', finished_at=now(), error=asdict(diagnostic(exc)),
                         publication_complete=False, duration_seconds=round(budget.clock() - budget.started, 3))
+            self.record_attempt_metrics(meta, context, attempt_started)
             # A failing diagnostic write must not mask the original exception.
             with contextlib.suppress(OSError):
                 save_json(attempt / 'invocation.json', meta)
@@ -1928,6 +1965,7 @@ class Runner:
         manifest['publication_complete'] = code in (0, 2)
         if self.critical_failure and 'accepted' in manifest:
             manifest['accepted'] = False
+        manifest['metrics'] = self.metrics.snapshot(finish=True)
         save_json(self.run_dir / 'manifest.json', manifest)
         return manifest, code
 
@@ -1943,6 +1981,7 @@ class Runner:
         def persist():
             if hasattr(self.repo, 'journal'):
                 manifest['switch_journal'] = self.repo.journal
+            manifest['metrics'] = self.metrics.snapshot()
             save_json(self.run_dir / 'manifest.json', manifest)
         persist()
         original_branch = original_commit = None
@@ -2100,6 +2139,7 @@ class Runner:
         manifest['publication_complete'] = False
         self.manifest = manifest
         def persist():
+            manifest['metrics'] = self.metrics.snapshot()
             save_json(self.run_dir / 'manifest.json', manifest)
         persist()
         try:
@@ -2225,6 +2265,7 @@ def main() -> int:
         manifest.setdefault('errors', []).append(str(exc) or type(exc).__name__)
         if runner:
             runner.record_error(manifest, exc, phase='run' if runner.analysis_started else 'preflight')
+            manifest['metrics'] = runner.metrics.snapshot(finish=True)
         else:
             manifest.setdefault('diagnostics', []).append(reporter.error(exc, phase='preflight',
                 analysis_started=False, switches_performed=False))
@@ -2255,6 +2296,12 @@ def main() -> int:
             'Policy checks satisfied; factual correctness is not established.' if result['status'] == 'COMPLETE' else
             'Processing may be incomplete or evidence may be insufficient; consult limitations and diagnostics.')
         result['review_quality'] = 'NOT_MEASURED'
+        if 'metrics' in manifest:
+            result['metrics'] = manifest['metrics']
+        else:
+            metrics = RunMetrics(reporter.clock)
+            metrics.started = reporter.started
+            result['metrics'] = metrics.snapshot(finish=True)
         try:
             reporter.finish(result, manifest, check_only=args.check, config_path=args.config,
                             run_dir=run_dir, trust=args.trust_repository)

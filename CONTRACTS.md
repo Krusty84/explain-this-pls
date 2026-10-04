@@ -95,6 +95,79 @@ as `report_path` in `stage_completed` events. Study and review paths identify th
 specific revision; recovered material without a published Markdown file is not
 advertised as a report.
 
+## Execution metrics
+
+Metrics are backend metadata and runner measurements, never model-authored report
+fields. They do not change report acceptance, prompts, saved report schemas, or
+the contents of `FINAL_REPORT.md`. The existing OpenCode compatibility gate remains
+closed; XXX uses the shared HTTP collector with its own checked profile.
+
+Each attempt's `invocation.json` adds `metrics` with `usage`, `by_model`,
+`attempts: 1` and `duration_seconds`. Its enclosing invocation still identifies
+the backend, requested/actual model and `invocation_id`. The new duration measures
+only that attempt. The older top-level `duration_seconds` retains its existing
+meaning: elapsed time against the shared stage budget, including earlier repairs.
+Do not sum that older field across attempts.
+
+The run manifest and final stdout JSON contain the same `metrics` snapshot:
+
+- `duration_seconds`: monotonic wall time of this run, including local preparation,
+  processing, restoration and report publication up to final metrics capture.
+- `attempts`: orchestrator attempts, including failed attempts and format repairs;
+  it is not a count of the backend's internal model requests or tool calls.
+- `usage`: aggregate counters and their availability, described below.
+- `by_backend` and `by_model`: usage breakdowns. Model entries distinguish
+  `model_actual` from `model_requested`; an unknown actual model stays null.
+- `stages`: ordered stage records with branch/folder, revision, stage, status,
+  wall duration, attempts and usage breakdowns. Revised study is named `revise`.
+  Skipped reviews and locally generated blocked comparisons consume no model tokens.
+
+Attempts are registered once by `invocation_id`. All revisions, all branches,
+format repairs and failed calls count, regardless of which report revision is
+selected. Manifest aliases of the selected revision are never additional usage.
+Attempt, stage and run durations are independently measured, not summed.
+Preflight probes are excluded from model attempts. A `--check` run has zero attempts
+and zero usage, even though XXX readiness checks start a local server.
+
+`usage` contains `input_tokens`, `output_tokens`, `cache_read_tokens`,
+`cache_write_tokens`, `reasoning_tokens`, `total_tokens` and `cost_usd`.
+Normalized input includes cache reads and writes. Cache and reasoning are
+breakdowns, not additional tokens to add to total. Each counter has an independent
+entry in `coverage`: `complete`, `partial` (known subtotal), or `unavailable`.
+Missing or invalid numbers remain null, not zero. Optional unavailable breakdowns
+do not make an otherwise reported total incomplete. `sources` records the consumed
+metadata fields; `total_tokens_estimated` marks the XXX fallback calculation.
+`cost_is_estimate` describes backend-reported costs; no tariffs are fetched or
+applied by the runner. A reported zero cost does not establish a free invocation.
+
+Codex uses `--json` for private JSONL events and `--output-last-message` for the
+separate schema response. `turn.completed.usage` supplies tokens; total is input
+plus output, with cached input and optional reasoning already included. No monetary
+cost or actual model identity is inferred from the configured model.
+
+Claude Code prefers per-model `modelUsage` token counters, falling back to `usage`
+only when the model map is absent or empty. Input includes the separate cache read
+and creation counts. The envelope's `total_cost_usd` is the attempt cost; it is
+never added to the per-model cost breakdown. Success and error envelopes can carry
+usage. A crash result (`error_during_execution`) is partial; reported zeros are
+preserved but do not establish zero spend because remaining usage is unknown.
+
+XXX collects all observed assistant messages for the owned session, request and
+agent. For each message it sums unique `step-finish` parts, or uses completed
+assistant-message metadata when steps are absent. Repeated snapshots replace
+earlier snapshots; message totals and step totals are never added together.
+A reported `tokens.total` wins. Otherwise total is computed as
+`input + cache.read + cache.write + output`, assuming the fork preserves OpenCode's
+convention that reasoning is included in output; that total is marked estimated.
+The final validated history establishes complete reported usage. Earlier snapshots
+and usage retained after a backend failure or interruption are partial.
+
+CLI pipe logs and already observed HTTP snapshots can preserve usage after errors,
+timeouts and signals. Missing final counters leave unknown remaining spend; no
+extra model calls, session recovery, or extended cleanup budgets are used to obtain
+it. Complete means the available backend accounting is complete, not that it has
+been reconciled against an invoice or includes unreported backend activity.
+
 ## Evidence locators
 
 An evidence record has `id`, `source_id`, `path`, `start_line`, `end_line`, `quote`.

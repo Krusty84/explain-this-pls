@@ -71,7 +71,9 @@ def action(stage):
             os.close(2)
         time.sleep(spec.get('seconds', 0.5))
     elif kind == 'invalid':
-        print('{"completion_status": "' + spec['value'] + '"}', flush=True)
+        from cli_response import cli_result
+        sys.stdout.buffer.write(cli_result(sys.argv[1:], {'completion_status': spec['value']})['stdout'])
+        sys.stdout.buffer.flush()
         sys.exit(0)
 
 args = sys.argv[1:]
@@ -86,7 +88,7 @@ if '--version' in args:
     print('Fixture startup warning', file=sys.stderr)
     print('fixture-cli 1.0')
 elif '--help' in args:
-    print('--ephemeral --output-schema --sandbox --skip-git-repo-check --no-session-persistence --json-schema '
+    print('--ephemeral --output-schema --sandbox --json --output-last-message --skip-git-repo-check --no-session-persistence --json-schema '
           '--tools --allowedTools --disallowedTools --permission-mode --format --model --agent')
 else:
     prompt = sys.stdin.read()
@@ -121,9 +123,12 @@ else:
                           'part': {'id': 'p1', 'messageID': 'm1', 'text': json.dumps(data)}}))
         print(json.dumps({'type': 'step_finish', 'part': {'messageID': 'm1', 'reason': 'stop'}}))
     elif '--output-format' in args:
-        print(json.dumps({'is_error': False, 'structured_output': data}))
+        print(json.dumps({'is_error': False, 'structured_output': data, 'total_cost_usd': 0.01,
+                          'modelUsage': {'fixture-model': {'inputTokens': 60, 'outputTokens': 20,
+                              'cacheReadInputTokens': 30, 'cacheCreationInputTokens': 10, 'costUSD': 0.01}}}))
     else:
-        print(json.dumps(data))
+        from cli_response import cli_result
+        sys.stdout.buffer.write(cli_result(args, data)['stdout'])
 
 with open(os.environ['AUDIT_TEST_CALL_LOG'], 'a') as stream:
     stream.write(json.dumps(call) + '\n')

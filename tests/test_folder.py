@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from fixtures.cli_response import cli_result
 import os
 from pathlib import Path
 import subprocess
@@ -292,8 +293,7 @@ class FolderPipelineTests(FolderFixture):
             data.pop('branch', None); data.pop('source_commit', None)
             if stage == 'review' and mutate_review:
                 (self.source / 'app.py').unlink()
-            return {'returncode': 0, 'duration_seconds': 0,
-                    'stdout': json.dumps(data).encode(), 'stderr': b''}
+            return cli_result(command, data) | {'duration_seconds': 0}
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=response):
             manifest, code = runner.run()
         return manifest, code, stages

@@ -3,6 +3,7 @@
 
 """Private conversion-chain integrity, using only synthetic local backends."""
 import json
+from fixtures.cli_response import cli_result
 import unittest
 from unittest.mock import patch
 
@@ -37,7 +38,7 @@ class PrivateChainRecoveryTests(FolderFixture):
                     # Structurally valid, so all normalization records exist;
                     # semantically invalid, so compromise would retain the prose.
                     wire['claims'][0]['evidence_ids'] = ['study:E-999']
-                    return {'returncode': 0, 'stdout': json.dumps(wire).encode(), 'stderr': b''}
+                    return cli_result(command, wire)
                 def validate(stage, data, current, attempt, meta, binding, repair_source=None):
                     try:
                         return original(stage, data, current, attempt, meta, binding, repair_source)
@@ -142,7 +143,7 @@ class PrivateChainRecoveryTests(FolderFixture):
                     calls.append(context['stage'])
                     if context['stage'] == 'review':
                         corrupt_json(runner.run_dir / 'revisions/001/study.logs/attempt-001' / filename)
-                    return {'returncode': 0, 'stdout': json.dumps(response(context)).encode(), 'stderr': b''}
+                    return cli_result(command, response(context))
                 with patch.object(runner, 'check_cli', return_value={}), \
                         patch('explain.process', side_effect=process):
                     manifest, code = runner.run()
@@ -173,7 +174,7 @@ class PrivateChainCompareTests(unittest.TestCase):
                         target = (runner.run_dir / branch['directory'] / 'revisions' /
                                   branch['selected_revision'] / 'study.logs/attempt-001' / filename)
                         corrupt_json(target)
-                    return {'returncode': 0, 'stdout': json.dumps(response(context)).encode(), 'stderr': b''}
+                    return cli_result(command, response(context))
                 with patch.object(runner, 'check_cli', return_value={}), \
                         patch('explain.process', side_effect=process):
                     manifest, code = runner.run()

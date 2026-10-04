@@ -20,6 +20,8 @@ read the code without running the project's builds or tests.
 - **Branch comparison** showing differences from a branch you choose as a baseline.
 - **Folder analysis** for source code that does not need to be in Git.
 - **Shareable results** in Markdown and JSON, in your preferred language.
+- **Usage summaries** with reported tokens, estimated costs, elapsed time and attempts
+  for each stage and the whole run.
 
 ## Who is it for?
 
