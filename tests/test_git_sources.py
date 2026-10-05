@@ -214,7 +214,7 @@ class GitSourceTests(unittest.TestCase):
 
     def run_cli(self, backend, branches=('main', 'alias'), check=False, action=None, partial_branches=(), policy='compromise'):
         cli = self.base / ('fake-' + backend)
-        fixture = 'fake_opencode.py' if backend in ('xxx', 'opencode') else 'fake_cli.py'
+        fixture = 'fake_opencode.py' if backend == 'xxx' else 'fake_cli.py'
         cli.write_text('#!' + sys.executable + '\nimport runpy\nrunpy.run_path(' + repr(str(ROOT / 'tests/fixtures' / fixture)) + ', run_name="__main__")\n')
         cli.chmod(0o700)
         calls = self.base / ('calls-' + backend + '.jsonl')
@@ -228,6 +228,7 @@ class GitSourceTests(unittest.TestCase):
         env = {'PATH': os.environ['PATH'], 'HOME': str(self.home), 'AUDIT_TEST_CALL_LOG': str(calls),
                'AUDIT_FAKE_CALLS': str(calls), 'AUDIT_FAKE_BACKEND': backend, 'AUDIT_FAKE_CAPTURE_SOURCES': '1'}
         env['AUDIT_TEST_PARTIAL_BRANCHES'] = json.dumps(partial_branches)
+        if backend == 'opencode': env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23'
         if action: env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': action, 'seconds': 3})
         command = [sys.executable, '-B', str(ROOT / 'explain.py'), '--config', str(config_path)]
         if check: command.append('--check')
@@ -240,7 +241,7 @@ class GitSourceTests(unittest.TestCase):
     def test_cli_agents_read_working_and_untracked_bytes_without_ignored_content(self):
         self.dirty()
         before = self.state()
-        for backend in ('codex', 'claude-code', 'xxx'):
+        for backend in ('codex', 'claude-code', 'xxx', 'opencode'):
             with self.subTest(backend=backend):
                 result, manifest, calls = self.run_cli(backend)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -292,13 +293,14 @@ class GitSourceTests(unittest.TestCase):
         result, manifest, calls = self.run_cli('codex', check=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any('context' in c for c in calls))
-        for action in ('error', 'wait', 'interrupt'):
-            with self.subTest(action=action):
-                result, manifest, calls = self.run_cli('codex', action=action)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(before, self.state())
-                self.assertTrue(manifest['temporary_sources_removed'])
-                self.assertTrue(all(not Path(c['cwd']).exists() for c in calls if 'context' in c))
+        for backend in ('codex', 'opencode'):
+            for action in ('error', 'wait', 'interrupt'):
+                with self.subTest(backend=backend, action=action):
+                    result, manifest, calls = self.run_cli(backend, action=action)
+                    self.assertEqual(result.returncode, 130 if action == 'interrupt' else 1)
+                    self.assertEqual(before, self.state())
+                    self.assertTrue(manifest['temporary_sources_removed'])
+                    self.assertTrue(all(not Path(c['cwd']).exists() for c in calls if 'context' in c))
 
     def test_additional_revision_does_not_replace_selected_comparison(self):
         self.git('branch', 'second')

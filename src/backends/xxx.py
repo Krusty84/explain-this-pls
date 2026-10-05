@@ -5,7 +5,7 @@
 """Explicit XXX profile: native structured result and strict local acceptance.
 
 This profile makes no native format-retry guarantee.
-It does not enable or change the upstream OpenCode capability gate.
+OpenCode V2 uses a separate CLI adapter.
 The shared envelope classifier accepts only the already inspected stop/tool-calls
 finish reasons. Raw finish metadata stays private; unknown reasons stay rejected.
 """

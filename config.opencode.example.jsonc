@@ -1,8 +1,8 @@
 {
   // Default: retain useful text with caveats; use "strict" to reject contract violations. Policy success is not factual proof.
   "result_policy": "compromise",
-  // BLOCKED upstream: inspected OpenCode 1.2.27 does not enforce retryCount.
-  // --check fails before any model request. See docs/structured-output-protocol.md.
+  // OpenCode V2 (checked with 2.0.23): standalone CLI, final JSON validated locally.
+  // --check verifies the CLI version and flags without a model request.
   // Briefly describe the system's purpose and history. Empty/missing means a warning.
   "project_description": "An ERP system originally developed in 1995",
 
@@ -14,12 +14,12 @@
   "git_mode": {
     "repository": "../legacy-app",
     "branches": ["master", "lockheed_ver10.2a.0", "general_ver10.0"],
-    "baseline_branch": "master"
+    "baseline_branch": "master",
   },
 
   // An existing directory; Git is not required. Runs catalog, study and review, with at most one revision.
   "folder_mode": {
-    "path": "../legacy-app"
+    "path": "../legacy-app",
   },
 
   // All relative paths are relative to this configuration file; ~ is supported.
@@ -32,7 +32,7 @@
   "source_decoding": {
     "rules": [
       // {"path": "src/legacy", "encoding": "cp1251"}
-    ]
+    ],
   },
 
   "execution": {
@@ -40,12 +40,13 @@
     "max_revision_rounds": 1,
     "stage_timeout_seconds": 3600,
     "idle_timeout_seconds": null,
-    "opencode_format_retries": 2,
+    // Legacy compatibility key; ignored by OpenCode V2.
+    "opencode_format_retries": 0,
+    // HTTP timeouts apply only to XXX stages.
     "http_timeout_seconds": 5,
     "api_doc_timeout_seconds": 30,
-    // Explicit opt-in to at most one extra model request for format correction.
-    // This does not enable the unsupported upstream native retry capability.
-    "structured_output_repair_attempts": 1
+    // Applies only to XXX; OpenCode V2 makes one CLI invocation per attempt.
+    "structured_output_repair_attempts": 0,
   },
 
   // Shared CLI settings. Authenticate/configure the CLI before starting the runner.
@@ -55,9 +56,9 @@
     // Command on PATH or executable path. Defaults: codex / claude / opencode / xxx.
     "executable": "opencode",
     // null uses the model selected by the configured CLI.
-    "model": null,
-    // null disables this additional pin, not the mandatory API capability gate.
-    "expected_version": null
+    "model": "deepseek/deepseek-flash",
+    // Optional exact --version output pin, for example "opencode v2.0.23".
+    "expected_version": null,
   },
 
   // Uncomment only the fields you want to override; omitted fields inherit agent.
@@ -84,7 +85,7 @@
       // "executable": "opencode",
       // "model": null,
       // "expected_version": null,
-    }
+    },
   },
 
   // Business flows or areas to prioritize, e.g. ["Order creation", "Inventory updates"].
@@ -101,5 +102,5 @@
     // "revise": "./custom-prompts/revise.md",
     // "review": "./custom-prompts/review.md",
     // "compare": "./custom-prompts/compare.md", // Git mode with two or more branches only.
-  }
+  },
 }

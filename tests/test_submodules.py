@@ -140,17 +140,9 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
         for backend in ('codex', 'claude-code', 'opencode'):
             with self.subTest(backend=backend):
                 self.config['agent']['backend'] = backend
+                self.env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
                 self.env['OPENCODE_CONFIG_CONTENT'] = '{"provider":{"custom":{"options":{"baseURL":"https://example.invalid"}}}}'
                 result, manifest = self.execute()
-                if backend == 'opencode':
-                    # This fixture lacks the required HTTP interface and must
-                    # stop before reading any source snapshot.
-                    self.assertEqual(result.returncode, 1, result.stderr)
-                    self.assertEqual(manifest['status'], 'FAILED')
-                    self.assert_original(before)
-                    calls = [json.loads(s) for s in self.calls.read_text().splitlines()]
-                    self.assertFalse(any('context' in c for c in calls))
-                    continue
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(manifest['status'], 'COMPLETE')
                 self.assertTrue(manifest['temporary_sources_removed'])

@@ -155,8 +155,8 @@ The client does not mutate private runtime databases, race polling against
 message edits, or send another prompt while the original synchronous POST runs.
 Its copy of the original schema/task binding, snapshot, coverage plan and access
 restrictions remains authoritative. A model summary cannot reconstruct or amend
-those values or establish new verified evidence. OpenCode's closed capability
-gate and native-retry policy remain unchanged. Native compaction creates no new
+those values or establish new verified evidence. OpenCode V2 uses its separate
+CLI adapter; this HTTP profile applies only to XXX. Native compaction creates no new
 orchestrator attempt; actual configured format repairs still do.
 
 ## Configuration and summary specialization

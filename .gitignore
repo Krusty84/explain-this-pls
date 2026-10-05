@@ -25,3 +25,4 @@ config.jsonc
 !docs/
 docs/*
 !docs/xxx-compaction.md
+config.jsonc_codex

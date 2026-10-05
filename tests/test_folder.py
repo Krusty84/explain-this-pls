@@ -372,16 +372,9 @@ class FolderCLIIntegrationTests(FolderFixture):
                 with self.subTest(backend=backend, check=check):
                     self.calls.write_text('')
                     self.value['agent']['backend'] = backend
+                    self.env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
                     self.value['project_description'] = '' if check else 'ERP-система 1995 года.'
                     result = self.execute(check)
-                    if backend == 'opencode':
-                        # This fixture lacks the required HTTP interface; the pipeline is
-                        # covered separately, with its upstream capability limit explicit.
-                        self.assertEqual(result.returncode, 1, result.stderr)
-                        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-                        self.assertFalse(any('context' in call for call in calls))
-                        self.assertEqual(Folder(self.source).snapshot(), before)
-                        continue
                     self.assertEqual(result.returncode, 0, result.stderr)
                     output = json.loads(result.stdout)
                     self.assertEqual(output['status'], 'PREFLIGHT_OK' if check else 'COMPLETE')
@@ -416,7 +409,7 @@ class FolderCLIIntegrationTests(FolderFixture):
                             self.assertEqual(args[args.index('--tools') + 1], 'Read,Glob,Grep')
                         else:
                             self.assertEqual(call['permissions'], {'*': 'deny', 'read': 'allow',
-                                'glob': 'allow', 'grep': 'allow', 'list': 'allow'})
+                                'glob': 'allow', 'grep': 'allow'})
                     if not check:
                         self.assertNotIn('architecture_document', invocations[0]['context'])
                         self.assertEqual(invocations[2]['context']['architecture_document']['report_markdown'], manifest['study']['report_markdown'])

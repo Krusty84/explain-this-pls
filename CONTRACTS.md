@@ -99,8 +99,8 @@ advertised as a report.
 
 Metrics are backend metadata and runner measurements, never model-authored report
 fields. They do not change report acceptance, prompts, saved report schemas, or
-the contents of `FINAL_REPORT.md`. The existing OpenCode compatibility gate remains
-closed; XXX uses the shared HTTP collector with its own checked profile.
+the contents of `FINAL_REPORT.md`. OpenCode V2 uses CLI events; XXX uses the shared
+HTTP collector with its own checked profile.
 
 Each attempt's `invocation.json` adds `metrics` with `usage`, `by_model`,
 `attempts: 1` and `duration_seconds`. Its enclosing invocation still identifies
@@ -172,6 +172,31 @@ extra model calls, session recovery, or extended cleanup budgets are used to obt
 it. Complete means the available backend accounting is complete, not that it has
 been reconciled against an invoice or includes unreported backend activity.
 
+OpenCode V2 runs `run --standalone --format json`, with prompts on stdin and a
+private agent allowing only read/glob/grep (no tools for comparison). Its final
+JSON comes from the last completed assistant step with finish reason `stop`;
+errors, incomplete output and fenced or otherwise invalid JSON are rejected.
+OpenCode 2.0.23 can omit the terminal event even after emitting the full answer.
+After a successful CLI exit with final text but no finish event, the runner makes
+one local `session export --standalone` call within the same stage budget. It
+requires the same session, agent, latest assistant message and exact answer text,
+plus successful session/idle outcomes, a completion timestamp and `finish: stop`.
+The private export logs are retained. Failed, mismatched or incomplete exports
+remain failures; no model prompt is repeated or session resumed.
+Schema, binding, evidence and source checks still run locally. V1's HTTP/native
+StructuredOutput contract applies only to XXX. OpenCode V2 makes one model call per
+attempt and ignores the retained `opencode_format_retries` and
+`structured_output_repair_attempts` settings. Substantive revision rounds still
+apply. Session history uses OpenCode's standard local storage.
+
+OpenCode CLI usage comes from distinct `step_finish` parts, deduplicated by session,
+message and part ID, with the same token normalization as the HTTP collector.
+A verified export supplies the missing final message's usage once, separately
+labelled `opencode.session_export`; it is not added when that step was reported.
+Incomplete/error streams retain partial counters. The CLI does not report the
+actual model in these events, so that field remains unknown. Counters describe
+reported steps; internal title generation or other unreported activity may be absent.
+
 ## Git source preparation
 
 Existing `mode: "git"` configurations use internal source snapshots by default;
@@ -219,9 +244,9 @@ variables that redirect repository paths are removed from source invocations. `-
 
 An evidence record has `id`, `source_id`, `path`, `start_line`, `end_line`, `quote`.
 IDs are local `E-001` etc.; references use `study:E-001` or `review:E-001`.
-Prefixed references are canonical. Study has the narrowly scoped normalization
-rule below; review always requires explicit namespaces because both its own
-evidence and study evidence are available.
+Prefixed references are canonical. The shared normalization rule below qualifies
+bare references only when their definitions identify one namespace. Review
+requires explicit namespaces when its own evidence and study evidence share an ID.
 The orchestrator assigns `source-001` to the main source and subsequent IDs to
 submodules sorted by root-relative path. Each nested source must be cited through
 its own source ID. Git snapshot identity contains source_type (`commit` or
@@ -298,7 +323,8 @@ when no changes are needed. It first requires the complete internal stage schema
 task, matching pinned Git/folder identity and, for review, unchanged frozen
 context and exact target. The caller verifies transport before calling it.
 It never repairs the schema.
-The rule is `EVIDENCE_IDS` in both strict and compromise.
+The rule is `EVIDENCE_IDS` in both strict and compromise, shared by Codex,
+Claude Code, OpenCode and XXX after their transport checks.
 
 Evidence definitions may pad one/two numeric digits (`E-1`, `E-01` -> `E-001`)
 and remove the stage's own namespace (`study:E-001` in study or `review:E-001`
@@ -307,8 +333,12 @@ An explicit original-definition -> canonical-ID mapping is built first. Duplicat
 definitions and collisions (including `E-1` plus `E-001`) reject the entire
 transformation. Structured references to mapped definitions are updated atomically,
 including review findings. References already using the canonical ID are retained.
-Study alone also qualifies bare references to defined local IDs with `study:`.
-Review requires explicit namespaces and never changes frozen study evidence or C-*.
+Study qualifies bare references to defined local IDs with `study:`. Review
+qualifies references to its own unique definitions with `review:` and exact bare
+references to unique frozen study definitions with `study:`. If the canonical ID
+exists in both sets, all its bare aliases remain invalid, including short own-ID
+spellings such as `E-1`; explicit namespaces are required. Review never changes
+frozen study evidence or C-*.
 
 All other fields, authored blocks, source quotations/code, source identities,
 claim content and record/reference order and counts stay unchanged. Unknown IDs,
@@ -531,8 +561,8 @@ causes `UNSUPPORTED_ARTIFACT_FORMAT` before any artifact writes. Use a new run d
 Ordinary successful execution uses catalog → study → review, optionally one
 revised study → full review, then selection → compare (comparison only for
 multiple Git branches). Format repairs stay bounded and may
-not change already valid facts/evidence/assessments. Backend eligibility gates are
-unchanged, including the unavailable OpenCode native retry capability.
+not change already valid facts/evidence/assessments. Orchestrator format repairs apply
+only to XXX; OpenCode V2 uses final JSON with local validation.
 
 ## Compact model context
 

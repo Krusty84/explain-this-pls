@@ -595,17 +595,12 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     value = jsonc(self.config_path.read_text())
                     value['git_mode']['branches'] = ['master']
                     value['agent']['backend'] = backend
+                    self.env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
+                    value['agent']['expected_version'] = self.env['AUDIT_TEST_CLI_VERSION']
                     value['stage_agents'] = {'compare': {'executable': '/missing/compare-cli'}}
                     value['prompts'] = {'compare': '/missing/compare-prompt'}
                     self.config_path.write_text(json.dumps(value))
                     result = self.run_cli(args + ['--output', 'text'])
-                    if backend == 'opencode':
-                        self.assertEqual(result.returncode, 1, result.stderr)
-                        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-                        self.assertFalse(any('context' in call for call in calls))
-                        self.assertEqual(self.repo.head(), self.master)
-                        self.assertEqual(self.repo.symbolic(), 'master')
-                        continue
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertTrue(result.stdout.startswith('[OK] Local setup checked.' if check else '[OK] Analysis complete.'))
                     calls = [json.loads(line) for line in self.calls.read_text().splitlines()]

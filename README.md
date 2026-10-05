@@ -35,7 +35,7 @@ or compare versions before planning changes.
 - macOS or Linux.
 - Python 3.11 or newer.
 - Git 2.34.1 or newer, only for Git mode.
-- An installed and configured coding-agent CLI: Codex CLI, Claude Code, or the proprietary XXX CLI.
+- An installed and configured coding-agent CLI: Codex CLI, Claude Code, OpenCode V2, or the proprietary XXX CLI.
   Sign in before using explain-this-pls.
 
 ### Get Your Input Data
@@ -74,6 +74,7 @@ Copy the example for your agent to `config.jsonc`:
 
 - [Codex CLI](config.example.jsonc)
 - [Claude Code](config.claude-code.example.jsonc)
+- [OpenCode V2](config.opencode.example.jsonc)
 - [XXX](config.xxx.example.jsonc)
 
 For example, with Codex CLI:
@@ -139,11 +140,11 @@ and review without requiring Git; `git_mode` settings are ignored.
 
 #### Agent settings
 
-| Field              | Purpose                                                                     |
-| ------------------ | --------------------------------------------------------------------------- |
-| `agent.backend`    | Coding agent: `codex`, `claude-code`, or `xxx`.                             |
-| `agent.executable` | CLI command or path; defaults to `codex`, `claude`, or `xxx`, respectively. |
-| `agent.model`      | Optional model name; omit it or use `null` for the CLI's configured model.  |
+| Field              | Purpose                                                                                 |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| `agent.backend`    | Coding agent: `codex`, `claude-code`, `opencode` (V2), or `xxx`.                        |
+| `agent.executable` | CLI command or path; defaults to `codex`, `claude`, `opencode`, or `xxx`, respectively. |
+| `agent.model`      | Optional model name; omit it or use `null` for the CLI's configured model.              |
 
 The tool uses your CLI's existing login and settings. No separate API key is needed
 in this configuration.

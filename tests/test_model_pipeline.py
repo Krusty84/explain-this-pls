@@ -120,7 +120,7 @@ class HashlessNativeTests(unittest.TestCase):
     prompts = native_fixtures.NativeStructuredOutputTests.prompts
 
     def test_actual_format_repair_omits_hash_metadata_and_reuses_bindings(self):
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             with self.subTest(backend=backend):
                 saved, metadata = self.stage(backend, 'repair-hash-metadata', repairs=1)
                 self.assertTrue(metadata['publication_complete'])

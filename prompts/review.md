@@ -117,8 +117,11 @@ Access limits are limitations, not fabricated HIGH/MEDIUM findings.
 Evidence is structured exactly as in study: id E-001, source_id from sources,
 source-root-relative path, positive start_line/end_line, quote ("" unless exact).
 Reference review:E-001 for your pointers and study:E-001 for supplied pointers.
-These explicit namespaces are required in review, where both sets are available.
-The study-only normalization rule for unprefixed local IDs does not apply here.
+Use these explicit namespaces because both sets may contain the same local ID.
+The program can qualify a bare reference only when its definition belongs to
+exactly one set: your review evidence or the supplied study evidence. If both sets
+define the same canonical ID, an explicit namespace is required, including for
+short spellings such as E-1. The frozen study evidence is never modified.
 Source resolution is a separate program check, not support for your conclusion.
 Never compute hashes, follow symlinks, expose source secrets or cite an unlisted
 source. Limits: 256 pointers, 16 KiB/record, 200 lines and 64 KiB/fragment,
@@ -133,8 +136,8 @@ document. Structural linkage does not establish semantic correspondence or full
 registration of material prose. Do not change the frozen registry or renumber
 claims. Keep your evidence definitions local (E-001) and all evidence references
 explicitly namespaced (study:E-001 or review:E-001). Own short numeric evidence IDs
-can be canonicalized only when definitions are unambiguous; bare review references
-and foreign namespaces remain invalid.
+can be canonicalized only when definitions are unambiguous. Bare references that
+match both sets, unknown IDs and foreign namespaces remain invalid.
 
 Return concise report_markdown explaining scope, argument, limitations and
 proposed corrections. Python renders mandatory claim, evidence and omission

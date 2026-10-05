@@ -20,7 +20,7 @@
     ]
   },
   "agent": {
-    // XXX is the explicit fork profile; it does not enable the opencode backend.
+    // XXX uses its explicit HTTP fork profile; opencode uses the separate V2 CLI.
     "backend": "xxx",
     // Replace with the actual executable command or path. No installation is done.
     "executable": "xxx",
@@ -44,7 +44,7 @@
     // Default is 0. All requests share the original stage budget.
     "structured_output_repair_attempts": 1
     // XXX always requests format.retryCount=0 for each request.
-    // opencode_format_retries applies only to backend=opencode, not XXX.
+    // opencode_format_retries is a legacy compatibility key with no effect.
   },
   "stage_agents": {},
   "priority_scenarios": [],

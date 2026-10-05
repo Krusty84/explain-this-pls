@@ -38,6 +38,7 @@ from src.runtime.metrics import RunMetrics, measurement, usage, FIELDS
 from src.backends import codex
 from src.backends import claude_code
 from src.backends import opencode
+from src.backends import opencode_cli
 from src.backends import xxx
 from src.model.structured_output import blocked_comparison, repair_prompt, required_unresolved, retry_policy, validate_repair
 from src.reports.final_report import recoverable_material, stage_document, usable_study, report_entries, comparison_possible, render_final_report
@@ -45,7 +46,7 @@ from src.analysis.ledger import prepare_result, review_context
 from src.analysis.study_normalization import normalize_evidence, normalization_provenance
 from src.reports.document_rendering import materialize_study, validate_materialized
 from src.analysis.evidence import source_catalog, SourceChanged, open_source_directory, read_confined
-from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, has_ledger_structure, validate_schema
+from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, has_ledger_structure, validate_schema, response_error
 from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
 from src.reports.presentation import render_stage
 from src.model.model_context import CONTEXT_FORMAT
@@ -61,7 +62,7 @@ SOURCE_STAGES = ('catalog', 'study', 'review')
 ARTIFACTS = {'catalog': 'SUBSYSTEM_CATALOG.md', 'study': 'ARCHITECTURE.md', 'review': 'ARCHITECTURE_REVIEW.md',
              'compare': 'BRANCH_COMPARISON.md'}
 BACKENDS = {'codex': 'codex', 'claude-code': 'claude', 'opencode': 'opencode', 'xxx': 'xxx'}
-CLI_ADAPTERS = {'codex': codex, 'claude-code': claude_code}
+CLI_ADAPTERS = {'codex': codex, 'claude-code': claude_code, 'opencode': opencode_cli}
 MIN_GIT_VERSION = (2, 34, 1)
 
 class AuditError(RuntimeError):
@@ -1088,8 +1089,7 @@ class Runner:
                 if agent.get('expected_version') and agent['expected_version'] != version:
                     raise AuditError(f'{backend} version differs from expected_version.', code='CLI_VERSION_MISMATCH')
                 if backend == 'opencode':
-                    opencode.verify_version(version)
-                    opencode.verify_native_retries()
+                    opencode_cli.verify_version(version)
                 result[key] = {'version': version, 'required_flags': required}
                 if backend == 'xxx':
                     result[key]['http'] = self.check_xxx(agent, state, env, version)
@@ -1138,8 +1138,10 @@ class Runner:
         adapter = CLI_ADAPTERS.get(agent['backend'])
         if adapter:
             kwargs = {'excluded_root': self.repo.path} if adapter is claude_code and getattr(self, 'git_sources', None) else {}
+            if adapter is opencode_cli:
+                kwargs['agent_name'] = opencode_cli.prepare_environment(env, stage)
             return adapter.build_command(agent, stage, self.mode, self.schemas[stage], schema_path, **kwargs)
-        raise AuditError('OpenCode and XXX use the managed HTTP adapter, not the CLI event stream.',
+        raise AuditError('XXX uses the managed HTTP adapter, not the CLI event stream.',
                          code='BACKEND_INCOMPATIBLE')
 
     def invoke(self, stage: str, context: dict, destination: Path) -> tuple[dict | None, dict]:
@@ -1169,7 +1171,7 @@ class Runner:
         binding = self.bindings.bind(stage, context, self.mode)
         binding_hashes = {}
         attempt_hashes = {}
-        native = self.cfg['_agents'][stage]['backend'] in ('xxx', 'opencode')
+        native = self.cfg['_agents'][stage]['backend'] == 'xxx'
         limit = self.execution['structured_output_repair_attempts'] if native else 0
         correction = None
         repair_model = None
@@ -1246,7 +1248,7 @@ class Runner:
         validation = {'valid': False, 'validated_object': 'extracted.json'}
         try:
             self.pin_attempt_value(attempt, 'extracted.json', data, meta,
-                                   compact=meta['backend'] in ('opencode', 'xxx'))
+                                   compact=meta['backend'] == 'xxx')
             self.save_binding(binding, data, None, attempt, meta)
             binding.validate_identity(data)
             meta['model_identity_verified'] = True
@@ -1680,7 +1682,9 @@ class Runner:
         agent = self.cfg['_agents'][stage]
         template = Path(self.cfg['_prompt_paths'][context.get('prompt_variant', stage)]).read_text()
         output_instruction = ('Use the StructuredOutput tool with the supplied schema. Do not duplicate the result in ordinary text.'
-            if agent['backend'] in ('opencode', 'xxx') else
+            if agent['backend'] == 'xxx' else
+            'Return exactly one JSON object matching the supplied schema as your final answer; no fences or surrounding prose.'
+            if agent['backend'] == 'opencode' else
             'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.')
         # Assemble only this stage's inputs; the configured CLI profile remains available.
         context_json = json.dumps(binding.project(context), ensure_ascii=False)
@@ -1720,8 +1724,8 @@ class Runner:
                     revision_id=context.get('revision_id'), prompt_variant=context.get('prompt_variant', stage),
                     model_actual_source='unknown: backend has not reported model identity',
                     review_quality='NOT_MEASURED', publication_complete=False)
-        native_retries = 0 if agent['backend'] == 'xxx' else self.execution['opencode_format_retries']
-        if agent['backend'] in ('xxx', 'opencode'):
+        native_retries = 0
+        if agent['backend'] == 'xxx':
             meta['retry_policy'] = retry_policy(self.execution['structured_output_repair_attempts'],
                                               repair_index, native_retries)
             meta['repair_index'] = repair_index
@@ -1755,15 +1759,10 @@ class Runner:
                 schema_path = state / 'output.schema.json'
                 save_json(schema_path, self.schemas[stage])
                 try:
-                    if agent['backend'] in ('opencode', 'xxx'):
-                        # This gate is repeated for callers using Runner.invoke directly.
-                        if agent['backend'] == 'opencode':
-                            opencode.verify_version(meta['cli_version'])
-                            opencode.verify_native_retries()
+                    if agent['backend'] == 'xxx':
                         name = opencode.prepare_environment(env, 'repair' if repair_index else stage,
                                                             source_snapshot=bool(getattr(self, 'git_sources', None)))
-                        server_class = xxx.Server if agent['backend'] == 'xxx' else opencode.Server
-                        server = server_class(agent['executable'], cwd, env, attempt, budget, atomic, meta, self.execution)
+                        server = xxx.Server(agent['executable'], cwd, env, attempt, budget, atomic, meta, self.execution)
                         server.emit = lambda event, **fields: self.reporter.emit(
                             event, stage=stage, attempt=attempt.name, **fields)
                         error = None
@@ -1788,6 +1787,8 @@ class Runner:
                                 if error is None:
                                     raise
                     else:
+                        if agent['backend'] == 'opencode':
+                            opencode_cli.verify_version(meta['cli_version'])
                         cmd = self.command(stage, state, agent, schema_path, env)
                         r = None
                         meta['prompt_sent'] = True
@@ -1808,7 +1809,27 @@ class Runner:
                                 code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='backend')
                         output = (codex.read_response(schema_path)
                                   if agent['backend'] == 'codex' else r['stdout'].decode('utf-8'))
-                        data, provider_meta = CLI_ADAPTERS[agent['backend']].parse_output(output)
+                        try:
+                            data, provider_meta = CLI_ADAPTERS[agent['backend']].parse_output(output)
+                        except ContractError as exc:
+                            if (agent['backend'] != 'opencode' or exc.failure_kind != 'INCOMPLETE_OUTPUT'
+                                    or not exc.details.get('session_id')):
+                                raise
+                            # V2 can exit before emitting step_finish; export confirms the same answer.
+                            export_dir = attempt / 'session-export'
+                            private_directory(export_dir)
+                            exported = process([agent['executable'], 'session', 'export', '--standalone',
+                                                exc.details['session_id']], cwd, env, reporter=self.reporter,
+                                               context=self.stage_context(stage, context), log_dir=export_dir,
+                                               clock=self.reporter.clock, budget=budget)
+                            if exported['returncode']:
+                                raise response_error('INCOMPLETE_OUTPUT', 'result',
+                                                     'OpenCode could not export the final session for verification.') from exc
+                            data, provider_meta = opencode_cli.parse_output(
+                                output, exported=exported['stdout'].decode('utf-8'),
+                                agent_name=cmd[cmd.index('--agent') + 1])
+                            meta['metrics'] = opencode_cli.collect_metrics(
+                                output, agent.get('model'), completed=provider_meta['exported_finish'])
                         meta['backend_result_valid'] = True
                         meta['provider_metadata'] = provider_meta
                         model_usage = provider_meta.get('modelUsage')
@@ -1845,7 +1866,7 @@ class Runner:
                 self.assert_source()
             meta['source_check_status'] = 'MATCHED_AT_BOUNDARIES'
             budget.check()
-            if agent['backend'] in ('xxx', 'opencode') and meta.get('model_actual'):
+            if agent['backend'] == 'xxx' and meta.get('model_actual'):
                 meta['model_actual_source'] = 'backend assistant-message metadata'
             if stage == 'review':
                 self.assert_review_files(context, destination.parent)

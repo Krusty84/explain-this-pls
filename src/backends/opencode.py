@@ -2,11 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Owned loopback OpenCode HTTP transport (Python stdlib only).
-
-Wire contract inspected at upstream v1.2.27. See docs/structured-output-protocol.md for
-the upstream retry defect and the deliberately closed production capability gate.
-"""
+"""Legacy OpenCode v1.2.27 HTTP transport shared by the XXX adapter (stdlib only)."""
 from __future__ import annotations
 import base64
 import contextlib
@@ -35,23 +31,6 @@ CLEANUP_SECONDS = 5
 
 def incompatible(message):
     return response_error('BACKEND_INCOMPATIBLE', 'compatibility', message)
-
-
-def verify_version(version):
-    if version != WIRE_VERSION:
-        known = version if type(version) is str and re.fullmatch(r'\d+\.\d+\.\d+', version) else None
-        raise response_error('BACKEND_INCOMPATIBLE', 'compatibility',
-            'OpenCode HTTP adapter requires the inspected 1.2.27 wire interface; '
-            'this CLI version is unsupported. No model request was sent.', cli_version=known)
-
-
-def verify_native_retries():
-    # Do not accept a mock, a documented field, or a successful happy-path model
-    # call as proof of enforcement. Even retryCount=0 is not an enforced bound on
-    # tool-validation corrections in the inspected upstream loop.
-    raise incompatible('OpenCode 1.2.27 does not enforce format.retryCount (including zero). '
-                       'Bounded native structured-output retries are not supported by this build. '
-                       'No model request was sent; see docs/structured-output-protocol.md.')
 
 
 def object_value(value, label):

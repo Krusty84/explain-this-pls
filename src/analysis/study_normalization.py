@@ -18,6 +18,7 @@ def normalize_evidence(stage, value, context, mode='git'):
     if stage not in ('study', 'review'):
         raise ValueError('Evidence normalization requires study or review')
     validate_wire_identity(stage, value, context, mode)
+    study_ids = {e['id'] for e in context['architecture_document'].get('evidence', [])} if stage == 'review' else set()
     definitions, seen, aliases = {}, set(), {}
     for i, evidence in enumerate(value['evidence']):
         original = evidence['id']
@@ -33,9 +34,12 @@ def normalize_evidence(stage, value, context, mode='git'):
         local = original.removeprefix(stage + ':')
         aliases[stage + ':' + local] = stage + ':' + identifier
         aliases[stage + ':' + identifier] = stage + ':' + identifier
-        if stage == 'study':
+        if identifier not in study_ids:
             aliases[local] = stage + ':' + identifier
             aliases[identifier] = stage + ':' + identifier
+    # Bare review references must identify exactly one evidence namespace.
+    for identifier in study_ids - seen:
+        aliases[identifier] = 'study:' + identifier
     candidate = copy.deepcopy(value)
     changes = []
     def change(container, key, after, path):

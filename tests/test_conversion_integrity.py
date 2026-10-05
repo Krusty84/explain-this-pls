@@ -62,9 +62,9 @@ class PrivateChainRecoveryTests(FolderFixture):
             with self.subTest(filename=filename):
                 config = self.config() | {'result_policy': 'compromise',
                                          'execution': {'structured_output_repair_attempts': 1}}
-                config['_agents']['study']['backend'] = 'opencode'
+                config['_agents']['study']['backend'] = 'xxx'
                 runner = Runner(config, self.base / ('repair-' + filename))
-                runner.versions['opencode:' + config['_agents']['study']['executable']] = '1.2.27'
+                runner.versions['xxx:' + config['_agents']['study']['executable']] = '1.2.27'
                 context = {'source_directory': str(self.source),
                            'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
                 calls = []
@@ -84,7 +84,7 @@ class PrivateChainRecoveryTests(FolderFixture):
                         return wire
                     def close(self):
                         corrupt_json(self.artifacts / filename)
-                with patch('src.backends.opencode.Server', SyntheticServer), patch('src.backends.opencode.verify_native_retries'), \
+                with patch('src.backends.xxx.Server', SyntheticServer), \
                         self.assertRaises(AuditError) as caught:
                     runner.invoke('study', context, runner.run_dir / 'study.logs')
                 self.assertEqual(caught.exception.failure_layer, 'integrity')
@@ -98,9 +98,9 @@ class PrivateChainRecoveryTests(FolderFixture):
             with self.subTest(policy=policy):
                 config = self.config() | {'result_policy': policy,
                                          'execution': {'structured_output_repair_attempts': 1}}
-                config['_agents']['study']['backend'] = 'opencode'
+                config['_agents']['study']['backend'] = 'xxx'
                 runner = Runner(config, self.base / ('wrong-task-' + policy))
-                runner.versions['opencode:' + config['_agents']['study']['executable']] = '1.2.27'
+                runner.versions['xxx:' + config['_agents']['study']['executable']] = '1.2.27'
                 context = {'source_directory': str(self.source),
                            'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
                 calls = []
@@ -121,7 +121,7 @@ class PrivateChainRecoveryTests(FolderFixture):
                         self.meta.update(model_actual='synthetic/model', prompt_sent=True)
                         (self.artifacts / 'extracted.json').write_text(json.dumps(wire))
                         return wire
-                with patch('src.backends.opencode.Server', SyntheticServer), patch('src.backends.opencode.verify_native_retries'), \
+                with patch('src.backends.xxx.Server', SyntheticServer), \
                         self.assertRaises(ContractError) as caught:
                     runner.invoke('study', context, runner.run_dir / 'study.logs')
                 self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')

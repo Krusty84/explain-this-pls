@@ -1,10 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Wire tests bypass ONLY the known upstream retry-capability gate, explicitly.
-
-They validate HTTP integration, not a working upstream native retry implementation.
-"""
+"""Legacy wire transport and the XXX pipeline that uses it."""
 import copy
 import io
 import json
@@ -21,7 +18,7 @@ from unittest.mock import patch
 from src.contracts.contracts import ContractError, SCHEMAS, validate_result
 from src.runtime.execution import Budget
 from explain import Runner, atomic, cli_env
-from src.backends.opencode import Server, extract_result, prepare_environment, validate_history, verify_native_retries, verify_version
+from src.backends.opencode import Server, extract_result, prepare_environment, validate_history
 from src.runtime.reporting import Reporter
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -198,12 +195,13 @@ class HTTPFixture(unittest.TestCase):
         return {'result_policy': 'strict', 'mode': 'folder', 'folder_mode': {'path': str(self.source)},
             'reports_dir': str(self.root / 'reports'), 'project_description': 'fixture',
             'priority_scenarios': [], 'output_language': 'English', 'continue_on_error': True,
-            '_agents': {s: {'backend': 'opencode', 'executable': str(self.cli), 'model': None} for s in ('catalog', 'study', 'review')},
+            '_agents': {s: {'backend': 'xxx', 'executable': str(self.cli), 'model': None} for s in ('catalog', 'study', 'review')},
             '_prompt_paths': {s: str(ROOT / 'prompts' / (s + '.md')) for s in ('catalog', 'study', 'review', 'revise')}}
 
-    def test_real_preflight_rejects_unenforced_retries_without_model_request(self):
+    def test_v1_preflight_rejects_before_model_request(self):
         for repairs in (0, 1, 2):
             config = self.config()
+            for agent in config['_agents'].values(): agent['backend'] = 'opencode'
             config['execution'] = {'structured_output_repair_attempts': repairs}
             runner = Runner(config, self.root / f'preflight-{repairs}')
             result, code = runner.run(check_only=True)
@@ -211,9 +209,8 @@ class HTTPFixture(unittest.TestCase):
             self.assertEqual(result['diagnostics'][0]['code'], 'BACKEND_INCOMPATIBLE')
             self.assertFalse(self.calls.exists())
 
-    def test_wire_pipeline_only_with_explicit_test_gate_bypass(self):
-        # This bypass is confined to this test. It proves no upstream retry behavior.
-        with patch('src.backends.opencode.verify_native_retries'), patch.dict(os.environ, self.env):
+    def test_xxx_wire_pipeline(self):
+        with patch.dict(os.environ, self.env | {'AUDIT_FAKE_BACKEND': 'xxx'}):
             runner = Runner(self.config(), self.root / 'pipeline')
             result, code = runner.run()
         self.assertEqual(code, 0, result)
@@ -232,16 +229,15 @@ class HTTPFixture(unittest.TestCase):
     def test_signal_cleans_only_owned_server_and_preserves_exit_code(self):
         config = {'mode': 'folder', 'folder_mode': {'path': str(self.source)},
                   'reports_dir': str(self.root / 'reports'), 'project_description': 'fixture',
-                  'agent': {'backend': 'opencode', 'executable': str(self.cli)}}
+                  'agent': {'backend': 'xxx', 'executable': str(self.cli)}}
         path = self.root / 'config.json'; path.write_text(json.dumps(config))
         # The subprocess is test-owned. No installed OpenCode or user profile is used.
         bootstrap = ('import sys; sys.path.insert(0,sys.argv.pop(1)); '
-                     'from src.backends import opencode; opencode.verify_native_retries=lambda:None; '
                      'import explain; sys.exit(explain.main())')
         bystander = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
         try:
             for sig in ('SIGINT', 'SIGTERM'):
-                env = self.env | {'AUDIT_FAKE_CASE': 'interrupt', 'AUDIT_FAKE_SIGNAL': sig}
+                env = self.env | {'AUDIT_FAKE_BACKEND': 'xxx', 'AUDIT_FAKE_CASE': 'interrupt', 'AUDIT_FAKE_SIGNAL': sig}
                 completed = subprocess.run([sys.executable, '-B', '-c', bootstrap, str(ROOT),
                     '--config', str(path)], env=env, capture_output=True, text=True, timeout=15)
                 self.assertEqual(completed.returncode, 130, completed.stderr)
@@ -258,15 +254,6 @@ class HTTPFixture(unittest.TestCase):
 
 
 class CapabilityTests(unittest.TestCase):
-    def test_unverified_version_and_native_retry_enforcement_fail_closed(self):
-        for version in ('1.18.33', '0.0.0', None, '1.2.27-custom'):
-            with self.assertRaises(ContractError) as caught:
-                verify_version(version)
-            self.assertEqual(caught.exception.failure_kind, 'BACKEND_INCOMPATIBLE')
-        verify_version('1.2.27')
-        with self.assertRaises(ContractError):
-            verify_native_retries()
-
     def test_permissions_and_user_profile_are_preserved(self):
         original = {'provider': {'private': {'options': {'baseURL': 'https://example.invalid'}}},
                     'plugin': ['auth-plugin'], 'model': 'configured/model', 'agent': {'custom': {'mode': 'primary'}}}
@@ -304,7 +291,7 @@ class GitHTTPPipelineTests(unittest.TestCase):
         # The orchestrator's comparison cwd must not follow an inherited TMPDIR
         # back into the inspected tree. Child profile variables remain preserved.
         self.env['TMPDIR'] = str(repo)
-        with patch('src.backends.opencode.verify_native_retries'), patch.dict(os.environ, self.env):
+        with patch.dict(os.environ, self.env | {'AUDIT_FAKE_BACKEND': 'xxx'}):
             runner = Runner(config, self.root / 'git-pipeline')
             self.addCleanup(runner.repo.close)
             manifest, code = runner.run()

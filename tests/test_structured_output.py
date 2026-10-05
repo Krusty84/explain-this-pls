@@ -1,10 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Both native adapters with explicitly synthetic local HTTP runtimes.
-
-The test-only capability bypass proves no native OpenCode retry guarantee.
-"""
+"""XXX native output and shared transport with synthetic local HTTP runtimes."""
 import copy
 import json
 import os
@@ -47,7 +44,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
         self.last_runner = runner
         env = self.env | {'AUDIT_FAKE_BACKEND': backend, 'AUDIT_FAKE_CASE': scenario}
         # A real fixture subprocess, not an installed binary or paid provider.
-        with patch('src.backends.opencode.verify_native_retries'), patch.dict(os.environ, env):
+        with patch.dict(os.environ, env):
             return runner.invoke(stage, context, destination)
 
     def prompts(self):
@@ -56,7 +53,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
 
     def test_native_study_normalization_after_transport_before_frozen_plan(self):
         from src.analysis.evidence import canonical, sha
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             start = len(self.prompts())
             with patch.dict(os.environ, {'AUDIT_FAKE_LOCAL_REFS': '1'}):
                 saved, meta = self.stage(backend, 'valid', repairs=2)
@@ -80,7 +77,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
         def fail_close(server):
             original_close(server)
             raise OSError('synthetic cleanup failure')
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             for scenario in ('no-final', 'foreign-session', 'foreign-request', 'tool-input-mismatch',
                              'wrong-identity', 'source-change', 'cleanup'):
                 (self.source / 'app.py').write_text('print(1)')
@@ -100,7 +97,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
                     self.assertFalse((self.destination / 'attempt-001/normalized.json').exists())
 
     def test_native_review_definition_normalization_keeps_target_and_raw_envelope(self):
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             before = len(self.prompts())
             with patch.dict(os.environ, {'AUDIT_FAKE_SHORT_IDS': '1'}):
                 saved, meta = self.stage(backend, 'valid', repairs=2, stage='review')
@@ -122,7 +119,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
             self.assertTrue(meta['publication_complete'])
 
     def test_native_string_claims_are_retained_and_never_model_repaired(self):
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             for policy in ('strict', 'compromise'):
                 before = len(self.prompts())
                 config = self.config() | {'result_policy': policy}
@@ -139,8 +136,28 @@ class NativeStructuredOutputTests(unittest.TestCase):
                 self.assertFalse((self.destination.parent / 'study.json').exists())
                 self.assertFalse((self.destination / 'attempt-001/normalized.json').exists())
 
-    def test_native_review_bare_references_are_not_normalized(self):
-        for backend in ('xxx', 'opencode'):
+    def test_native_review_unique_bare_references_are_normalized_after_envelope_validation(self):
+        for policy in ('strict', 'compromise'):
+            config = self.config() | {'result_policy': policy}
+            before = len(self.prompts())
+            with self.subTest(policy=policy), patch.object(self, 'config', return_value=config):
+                saved, meta = self.stage('xxx', 'review-bare-unique', repairs=2, stage='review')
+            attempt = self.destination / 'attempt-001'
+            extracted = json.loads((attempt / 'extracted.json').read_text())
+            envelope = json.loads((attempt / 'response.json').read_text())
+            self.assertEqual(extracted, envelope['info']['structured'])
+            self.assertEqual(extracted, envelope['parts'][1]['state']['input'])
+            self.assertEqual(extracted['findings'][0]['evidence_ids'], ['E-002'])
+            self.assertEqual(saved['claims'][0]['evidence_ids'], ['review:E-002', 'study:E-001'])
+            self.assertEqual(saved['findings'][0]['evidence_ids'], ['review:E-002'])
+            self.assertEqual(meta['normalization_provenance']['replacement_count'], 3)
+            self.assertTrue(meta['publication_complete'])
+            self.assertTrue(meta['local_validation'])
+            self.assertEqual(len(self.prompts()) - before, 1)
+            self.assertEqual(meta['retry_policy']['orchestrator_repair_attempts_performed'], 0)
+
+    def test_native_review_ambiguous_bare_references_are_not_normalized(self):
+        for backend in ('xxx',):
             with patch.dict(os.environ, {'AUDIT_FAKE_LOCAL_REFS': '1'}), self.assertRaises(ContractError) as caught:
                 self.stage(backend, 'valid', stage='review')
             self.assertEqual(caught.exception.details['code'], 'UNKNOWN_EVIDENCE_REFERENCE')
@@ -150,7 +167,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
             self.assertEqual(json.loads((attempt / 'normalization.json').read_text())['replacement_count'], 0)
 
     def test_missing_claims_never_triggers_invented_registry_repair(self):
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             for policy in ('strict', 'compromise'):
                 config = self.config() | {'result_policy': policy}
                 before = len(self.prompts())
@@ -168,7 +185,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
                 self.assertEqual(len(self.prompts()) - before, 1)
 
     def test_markdown_study_is_not_recovered_repaired_or_published(self):
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             for policy in ('strict', 'compromise'):
                 config = self.config() | {'result_policy': policy}
                 before = len(self.prompts())
@@ -185,7 +202,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
                 self.assertNotIn('usable_material', metadata)
 
     def test_claim_counts_and_no_normalization_even_empty(self):
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             for scenario, count in (('claims-44', 44), ('claims-40', 40), ('claims-empty', 44)):
                 with self.subTest(backend=backend, scenario=scenario), self.assertRaises(ContractError) as caught:
                     self.stage(backend, scenario, stage='review')
@@ -203,7 +220,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
                 self.assertFalse((self.destination.parent / 'review.json').exists())
 
     def test_explicit_repair_bounds_and_complete_validation(self):
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             for scenario, repairs, expected, count in (
                     ('repair-ok', 0, 'SCHEMA_ERROR', 1),
                     ('repair-ok', 1, None, 2),
@@ -249,7 +266,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
 
     def test_stage_budget_is_shared_with_repair(self):
         original = opencode.Server.start
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             deadlines = []
             def record(server):
                 deadlines.append(server.budget.deadline)
@@ -264,7 +281,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
             self.assertFalse((self.destination.parent / 'study.json').exists())
 
     def test_source_change_is_not_repaired_or_published(self):
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             (self.source / 'app.py').write_text('print(1)')
             start = len(self.prompts())
             with self.assertRaises(AuditError):
@@ -274,7 +291,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
             self.assertFalse((self.destination.parent / 'study.json').exists())
 
     def test_repair_cannot_improve_verdict_or_replace_evidence(self):
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             for scenario in ('repair-verdict', 'repair-evidence'):
                 start = len(self.prompts())
                 with self.assertRaises(ContractError) as caught:
@@ -288,7 +305,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
         def fail(server):
             original(server)
             raise OSError('synthetic cleanup failure')
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             start = len(self.prompts())
             with patch.object(opencode.Server, 'close', fail), self.assertRaises(ContractError) as caught:
                 self.stage(backend, 'repair-ok', 1)
@@ -298,7 +315,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
 
     def test_doc_slower_than_old_five_seconds_then_exactly_one_model_request(self):
         self.env['AUDIT_FAKE_DOC_DELAY'] = '5.1'
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             start = len(self.prompts())
             data, meta = self.stage(backend, 'doc-delay')
             self.assertEqual(data['completion_status'], 'COMPLETE')
@@ -411,14 +428,13 @@ class NativeGitComparisonTests(unittest.TestCase):
 
     def test_unknown_compare_finish_preserves_fixed_study_review_and_diagnostics(self):
         self.init_git(['main', 'other'])
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             for policy in ('strict', 'compromise'):
                 self.value.update(result_policy=policy)
                 self.value['agent']['backend'] = backend
                 self.env['AUDIT_FAKE_BACKEND'] = backend
                 before = len(self.prompts())
-                with patch('src.backends.opencode.verify_native_retries'):
-                    manifest, code = self.run_case('unknown-compare-finish')
+                manifest, code = self.run_case('unknown-compare-finish')
                 self.assertNotEqual(code, 0)
                 self.assertEqual(len(self.prompts()) - before, 7)
                 self.assertTrue(all(b['accepted'] for b in manifest['branches']))
@@ -441,11 +457,11 @@ class NativeGitComparisonTests(unittest.TestCase):
     def test_no_accepted_inputs_never_call_compare_and_keep_failure_exit_code(self):
         self.init_git(['main', 'other'])
         original = self.git('rev-parse', 'HEAD')
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             self.value['agent']['backend'] = backend
             self.env['AUDIT_FAKE_BACKEND'] = backend
             for scenario, expected_code in (('claims-44', 1), ('schema-error', 1), ('partial-review', 2)):
-                with self.subTest(backend=backend, scenario=scenario), patch('src.backends.opencode.verify_native_retries'):
+                with self.subTest(backend=backend, scenario=scenario):
                     start = len(self.prompts())
                     manifest, code = self.run_case(scenario)
                 self.assertEqual(code, expected_code, manifest)
@@ -474,11 +490,10 @@ class NativeGitComparisonTests(unittest.TestCase):
 
     def test_partial_acceptance_passes_authoritative_baseline_status(self):
         self.init_git(['main', 'other'])
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             self.value['agent']['backend'] = backend
             self.env['AUDIT_FAKE_BACKEND'] = backend
-            with patch('src.backends.opencode.verify_native_retries'):
-                manifest, code = self.run_case('fail-main-study')
+            manifest, code = self.run_case('fail-main-study')
             self.assertEqual(code, 1, manifest)
             inputs = json.loads((self.run_dir / 'comparison/inputs.json').read_text())
             self.assertEqual(inputs['required_unresolved_branches'], ['main'])

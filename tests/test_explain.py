@@ -16,7 +16,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from explain import AuditError, Repository, Runner, UnsafeRepository, cli_env, load_config, process, repository_lock, slug
 from src.runtime.reporting import Reporter
-from src.backends.opencode import prepare_environment
+from src.backends.opencode_cli import prepare_environment
 from src.backends import claude_code
 from src.backends import codex
 from src.contracts.contracts import ContractError, review_verdict, strict_json, validate_result
@@ -475,25 +475,24 @@ class AdapterCommandTests(unittest.TestCase):
                      'OPENCODE_CONFIG_CONTENT':json.dumps(original)}
                 name=prepare_environment(env,stage)
                 merged=json.loads(env['OPENCODE_CONFIG_CONTENT'])
-                runtime_agent=merged['agent'].pop(name)
+                runtime_agent=merged['agents'].pop(name)
+                if not merged['agents']: del merged['agents']
                 self.assertEqual(merged,original)
                 self.assertEqual(runtime_agent['mode'],'primary')
-                expected={'*':'deny', 'StructuredOutput':'allow'}
-                if stage!='compare':expected.update(read='allow',glob='allow',grep='allow',list='allow')
-                self.assertEqual(runtime_agent['permission'],expected)
+                expected={'*':'deny'}
+                if stage!='compare':expected.update(read='allow',glob='allow',grep='allow')
+                self.assertEqual({p['action']:p['effect'] for p in runtime_agent['permissions']},expected)
                 self.assertEqual(env['OPENCODE_CONFIG'],'/custom/config.json')
                 self.assertFalse(any(key.startswith('OPENCODE_DISABLE') for key in env))
-                with self.assertRaisesRegex(AuditError, 'managed HTTP'):
-                    self.command('opencode',stage,env)
+                self.assertIn('--standalone',self.command('opencode',stage,env))
     def test_invalid_opencode_overlay_does_not_discard_configuration(self):
-        for raw in ('not json','[]','{"agent": []}'):
+        for raw in ('not json','[]','{"agents": []}'):
             env={'OPENCODE_CONFIG_CONTENT':raw}
             with self.subTest(raw=raw),self.assertRaisesRegex(ContractError,'OPENCODE_CONFIG_CONTENT'):
                 prepare_environment(env,'study')
             self.assertEqual(env['OPENCODE_CONFIG_CONTENT'],raw)
     def test_explicit_models_override_cli_default_for_all_backends(self):
-        # OpenCode's explicit model is checked in test_opencode_http's request body.
-        for backend in ('codex','claude-code'):
+        for backend in ('codex','claude-code','opencode'):
             cmd=self.command(backend,model='chosen-model')
             self.assertEqual(cmd[cmd.index('--model')+1],'chosen-model')
     def test_environment_preserves_profiles_path_and_credentials(self):
@@ -535,28 +534,21 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
              'OPENCODE_CONFIG_CONTENT':json.dumps({'provider':{'custom':{'options':{
                  'baseURL':'https://example.invalid'}}},'plugin':['auth-plugin']})}
         for backend in ('codex','claude-code','opencode'):
+            version = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
+            env['AUDIT_TEST_CLI_VERSION'] = version
             for check_only in (True,False):
                 with self.subTest(backend=backend,check_only=check_only):
                     calls_path.write_text('')
                     cfg={'mode':'git','reports_dir':str(self.base/'reports'),
                          'git_mode':{'repository':str(self.repo_path),
                              'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master'},
-                         'agent':{'backend':backend,'executable':str(cli),'expected_version':'fixture-cli 1.0'}}
+                         'agent':{'backend':backend,'executable':str(cli),'expected_version':version}}
                     # Cover both startup warning and non-ASCII description propagation.
                     if not check_only:cfg['project_description']='ERP-система 1995 года.'
                     config_path=self.base/'config.json';config_path.write_text(json.dumps(cfg))
                     cmd=[sys.executable,'-B',str(root/'explain.py'),'--config',str(config_path)]
                     if check_only:cmd.append('--check')
                     result=subprocess.run(cmd,cwd=self.base,env=env,capture_output=True,text=True,timeout=30)
-                    if backend == 'opencode':
-                        # This fixture lacks the required HTTP interface;
-                        # native HTTP has its own fixtures.
-                        self.assertEqual(result.returncode,1,result.stderr)
-                        calls=[json.loads(line) for line in calls_path.read_text().splitlines()]
-                        self.assertFalse(any('context' in call for call in calls))
-                        self.assertEqual(self.repo.head(),self.master)
-                        self.assertEqual(self.repo.symbolic(),'master')
-                        continue
                     self.assertEqual(result.returncode,0,result.stderr)
                     output=json.loads(result.stdout)
                     self.assertEqual(output['status'],'PREFLIGHT_OK' if check_only else 'COMPLETE')

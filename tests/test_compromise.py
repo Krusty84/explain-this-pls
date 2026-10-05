@@ -400,8 +400,8 @@ class CompromiseNative(unittest.TestCase):
         config.pop('result_policy')
         return config
 
-    def test_both_native_adapters_recover_format_only_after_bounded_attempts(self):
-        for backend in ('xxx', 'opencode'):
+    def test_native_adapter_recovers_format_only_after_bounded_attempts(self):
+        for backend in ('xxx',):
             for repairs in (0, 1, 2):
                 before = len(self.prompts())
                 data, meta = self.stage(backend, 'repair-invalid', repairs)
@@ -411,7 +411,7 @@ class CompromiseNative(unittest.TestCase):
                 self.assertFalse((self.destination.parent / 'study.json').exists())
 
     def test_invalid_repair_does_not_replace_original_facts(self):
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             for scenario in ('repair-evidence', 'repair-verdict'):
                 data, meta = self.stage(backend, scenario, 2, stage='review')
                 self.assertIsNone(data)
@@ -425,7 +425,7 @@ class CompromiseNative(unittest.TestCase):
         def fail(server):
             original_close(server)
             raise OSError('cleanup failed')
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             with self.assertRaises(ContractError):
                 self.stage(backend, 'foreign-session')
             with patch.object(opencode.Server, 'close', fail), self.assertRaises(ContractError):
@@ -434,7 +434,7 @@ class CompromiseNative(unittest.TestCase):
             self.assertFalse((self.destination.parent / 'study.material.json').exists())
 
     def test_timed_out_repair_keeps_original_completed_material(self):
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             before = len(self.prompts())
             data, meta = self.stage(backend, 'repair-timeout', 1, settings={'stage_timeout_seconds': 1.5})
             self.assertIsNone(data)
@@ -455,13 +455,12 @@ class NativeFinalPipeline(unittest.TestCase):
         self.value.pop('result_policy')
 
     def test_native_pipeline_generates_final_without_extra_model_call(self):
-        for backend in ('xxx', 'opencode'):
+        for backend in ('xxx',):
             self.value['agent']['backend'] = backend
             self.env['AUDIT_FAKE_BACKEND'] = backend
             for scenario in ('partial-review', 'material-review'):
                 before = len(self.prompts())
-                with patch('src.backends.opencode.verify_native_retries'):
-                    manifest, code = self.run_case(scenario)
+                manifest, code = self.run_case(scenario)
                 self.assertEqual(code, 2)
                 self.assertEqual(len(self.prompts()) - before, 3)
                 self.assertTrue(Path(manifest['final_report']).is_file())

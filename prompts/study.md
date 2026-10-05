@@ -196,7 +196,7 @@ path relative to that source's root, start_line, end_line and quote. Use "" for
 quote unless quoting the complete normalized range exactly. Do not calculate
 hashes. The canonical reference form is study:E-001; keep evidence definitions
 local (E-001). The program can pad short numeric IDs and remove an own-namespace
-prefix on definitions when unambiguous. Only in study, it also supports exact
+prefix on definitions when unambiguous. In study, it also supports exact
 unprefixed references to unique local definitions. It never repairs unknown IDs,
 spelling, whitespace, foreign namespaces or duplicates.
 Return claims and evidence as arrays of records, never JSON encoded in strings.

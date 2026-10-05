@@ -39,6 +39,7 @@
     "max_revision_rounds": 1,
     "stage_timeout_seconds": 3600,
     "idle_timeout_seconds": null,
+    // Legacy compatibility key; ignored by current backends.
     "opencode_format_retries": 2
   },
 

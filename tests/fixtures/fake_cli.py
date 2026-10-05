@@ -73,10 +73,10 @@ call = {'args': args, 'cwd': str(Path.cwd()), 'home': os.environ['HOME'],
 if '--version' in args:
     action('check')
     print('Fixture startup warning', file=sys.stderr)
-    print('fixture-cli 1.0')
+    print(os.environ.get('AUDIT_TEST_CLI_VERSION', 'fixture-cli 1.0'))
 elif '--help' in args:
     print('--ephemeral --output-schema --sandbox --json --output-last-message --skip-git-repo-check --no-session-persistence --json-schema '
-          '--tools --allowedTools --disallowedTools --permission-mode --format --model --agent')
+          '--tools --allowedTools --disallowedTools --permission-mode --format --model --agent --standalone')
 else:
     prompt = sys.stdin.read()
     raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]
@@ -105,11 +105,9 @@ else:
     if '--format' in args:
         config = json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])
         name = args[args.index('--agent') + 1]
-        call['permissions'] = config['agent'][name]['permission']
-        assert config['provider']['custom']['options']['baseURL'] == 'https://example.invalid'
-        print(json.dumps({'type': 'text', 'sessionID': 'fixture',
-                          'part': {'id': 'p1', 'messageID': 'm1', 'text': json.dumps(data)}}))
-        print(json.dumps({'type': 'step_finish', 'part': {'messageID': 'm1', 'reason': 'stop'}}))
+        call['permissions'] = {p['action']: p['effect'] for p in config['agents'][name]['permissions']}
+        from cli_response import cli_result
+        sys.stdout.buffer.write(cli_result(args, data)['stdout'])
     elif '--output-format' in args:
         print(json.dumps({'is_error': False, 'structured_output': data, 'total_cost_usd': 0.01,
                           'modelUsage': {'fixture-model': {'inputTokens': 60, 'outputTokens': 20,

@@ -192,7 +192,48 @@ class EvidenceIDTests(unittest.TestCase):
             with self.subTest(identifier=identifier), self.assertRaises(ContractError): normalize_evidence('study', wire, self.context)
             self.assertEqual(wire, original)
 
-    def test_review_updates_findings_but_never_study_or_bare_refs(self):
+    def test_review_qualifies_only_unambiguous_local_and_study_references(self):
+        ctx = review_context(materialize_study(response(self.context)), self.context)
+        original_context = copy.deepcopy(ctx)
+        wire = response(ctx)
+        wire['evidence'][0]['id'] = 'review:E-2'
+        wire['claims'][0]['evidence_ids'] = ['E-2', 'E-001']
+        wire['findings'] = [dict(id='F-001', severity='LOW', type='SCOPE_MISMATCH', claim_ids=['C-001'],
+            location='C-001', evidence_ids=['E-002'], impact='Synthetic', proposed_correction='Synthetic')]
+        original = copy.deepcopy(wire)
+        candidate, changes = normalize_evidence('review', wire, ctx)
+        self.assertEqual(candidate['claims'][0]['evidence_ids'], ['review:E-002', 'study:E-001'])
+        self.assertEqual(candidate['findings'][0]['evidence_ids'], ['review:E-002'])
+        self.assertEqual(len(changes), 4)
+        self.assertEqual(wire, original)
+        self.assertEqual(ctx, original_context)
+        validate_result('review', candidate, ctx)
+        self.assertEqual(normalize_evidence('review', candidate, ctx), (candidate, []))
+        for ref in ('E-999', 'E-1', 'E-02', 'e-002', ' E-002', 'E-002 ', 'foreign:E-002'):
+            wire['claims'][0]['evidence_ids'] = [ref]
+            with self.subTest(ref=ref):
+                candidate, _ = normalize_evidence('review', wire, ctx)
+                self.assertEqual(candidate['claims'][0]['evidence_ids'], [ref])
+                with self.assertRaises(ContractError): validate_result('review', candidate, ctx)
+        wire['claims'][0]['evidence_ids'] = ['E-002', 'review:E-002']
+        candidate, _ = normalize_evidence('review', wire, ctx)
+        with self.assertRaises(ContractError) as caught: validate_result('review', candidate, ctx)
+        self.assertEqual(caught.exception.details['code'], 'DUPLICATE_EVIDENCE_REFERENCE')
+
+    def test_review_of_retained_text_qualifies_its_only_evidence_namespace(self):
+        study = response(self.context) | {'claims': 'invalid'}
+        retained = recoverable_material('study', study, self.context, 'git', {})
+        ctx = review_context(retained, self.context)
+        wire = response(ctx)
+        wire['findings'] = [dict(id='F-001', severity='LOW', type='SCOPE_MISMATCH', claim_ids=[],
+            location='Introduction', evidence_ids=['E-001'], impact='Synthetic', proposed_correction='Synthetic')]
+        candidate, changes = normalize_evidence('review', wire, ctx)
+        self.assertEqual(candidate['findings'][0]['evidence_ids'], ['review:E-001'])
+        self.assertEqual(len(changes), 1)
+        validate_result('review', candidate, ctx)
+        self.assertFalse(ctx['review_plan']['eligible_study'])
+
+    def test_review_updates_findings_but_preserves_ambiguous_and_explicit_study_refs(self):
         ctx = review_context(materialize_study(response(self.context)), self.context)
         original_context = copy.deepcopy(ctx)
         wire = response(ctx)
@@ -205,7 +246,7 @@ class EvidenceIDTests(unittest.TestCase):
         self.assertEqual(candidate['claims'][0]['evidence_ids'], ['study:E-001', 'review:E-001'])
         self.assertEqual(candidate['findings'][0]['evidence_ids'], ['review:E-001'])
         self.assertEqual(ctx, original_context)
-        for ref in ('E-1', 'study:E-1', 'foreign:E-1', 'review:E-999'):
+        for ref in ('E-1', 'E-001', 'study:E-1', 'foreign:E-1', 'review:E-999'):
             wire['claims'][0]['evidence_ids'] = [ref]
             candidate, _ = normalize_evidence('review', wire, ctx)
             self.assertEqual(candidate['claims'][0]['evidence_ids'], [ref])

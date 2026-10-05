@@ -161,6 +161,11 @@ class Handler(BaseHTTPRequestHandler):
                 namespace = stage
                 data['evidence'][0]['id'] = namespace + ':E-1'
                 data['claims'][0]['evidence_ids'] = [namespace + ':E-1']
+            if stage == 'review' and scenario == 'review-bare-unique':
+                data['evidence'][0]['id'] = 'E-002'
+                data['claims'][0]['evidence_ids'] = ['E-002', 'E-001']
+                data['findings'] = [dict(id='F-001', severity='LOW', type='SCOPE_MISMATCH', claim_ids=['C-001'],
+                    location='C-001', evidence_ids=['E-002'], impact='Synthetic', proposed_correction='Synthetic')]
             if scenario == 'claims-string' and stage != 'catalog':
                 data['claims'] = '[{"private":"' + 'x' * 21295
             model = body.get('model', {'providerID': 'fixture', 'modelID': 'configured-model'})
