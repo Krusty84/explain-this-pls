@@ -575,9 +575,13 @@ class Reporter(NullReporter):
             return ['[SKIP] ' + self.stage_message(c, title + ' skipped: no architecture report available.')]
         if name == 'stop_requested':
             return ['[WARN] Stopping analysis…']
+        if name == 'sources_prepared':
+            return ['[OK] Source snapshots prepared: working changes included; non-ignored untracked files included (' +
+                    str(c['untracked_files']) + '); ignored files excluded.',
+                    *(['[RUN] Additional revision: ' + s(c['additional_revision'])] if c.get('additional_revision') else [])]
         if name == 'error':
             label = {'preflight': 'Could not prepare analysis.',
-                     'restoration': 'Could not return the repository to its original state.',
+                      'cleanup': 'Could not remove temporary analysis data.',
                      'stage': self.stage_message(c, title + ' failed.')}.get(c['phase'], 'Analysis failed.')
             interrupted = c['code'] == 'INTERRUPTED'
             messages = {

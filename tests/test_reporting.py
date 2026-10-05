@@ -636,7 +636,8 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                             self.assertTrue((branch_dir / report).is_file())
                         for call in invocations:
                             self.assertEqual(call['context']['source_mode'], 'git')
-                            self.assertEqual(Path(call['cwd']), self.repo_path)
+                            self.assertNotEqual(Path(call['cwd']), self.repo_path)
+                            self.assertEqual(call['cwd'], call['context']['repository'])
                     self.assertEqual(self.repo.symbolic(), 'master')
                     self.assertEqual(self.repo.head(), self.master)
                     self.repo.clean()
@@ -872,7 +873,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.assertEqual(self.repo.symbolic(), 'master')
         manifests = list(self.reports.glob('*/manifest.json'))
         self.assertEqual(len(manifests), 1)
-        self.assertTrue(json.loads(manifests[0].read_text())['restoration']['restored'])
+        self.assertTrue(json.loads(manifests[0].read_text())['temporary_sources_removed'])
 
     def test_broken_stderr_preserves_success_and_early_failure_exit_codes(self):
         success = self.prepare('git')
@@ -997,7 +998,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         data = json.loads(result.stdout)
         self.assertEqual(result.returncode, 130, result.stderr)
         manifest = json.loads(Path(data['manifest']).read_text())
-        self.assertTrue(manifest['restoration']['restored'])
+        self.assertTrue(manifest['temporary_sources_removed'])
         self.assertEqual(data['metrics'], manifest['metrics'])
         self.assertEqual(data['metrics']['usage']['total_tokens'], 120)
         self.assertEqual(data['metrics']['usage']['coverage']['total_tokens'], 'partial')
@@ -1007,7 +1008,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
             self.assertNotIn(message, result.stderr)
         records = [json.loads(line) for line in (Path(data['manifest']).parent / 'run.log').read_text().splitlines()]
         events = [record['event'] for record in records]
-        expected = ['stop_requested', 'process_stopping', 'restoration_started', 'restoration_completed']
+        expected = ['stop_requested', 'process_stopping']
         positions = [events.index(event) for event in expected]
         self.assertEqual(positions, sorted(positions))
         self.assertEqual(self.repo.symbolic(), 'master')
@@ -1040,7 +1041,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                 patch('src.runtime.reporting.RunLogHandler.emit', side_effect=OSError('disk full')):
             self.assertEqual(main(), 0)
         manifest = json.loads(Path(json.loads(out.getvalue())['manifest']).read_text())
-        self.assertTrue(manifest['restoration']['restored'])
+        self.assertTrue(manifest['temporary_sources_removed'])
         self.assertEqual(broken.write.call_count, 1)
 
 
@@ -1073,10 +1074,9 @@ class RecursiveDiagnosticTests(recursive.RecursiveFixture, unittest.TestCase):
             manifest, code = runner.run()
         self.assertEqual(code, 1)
         self.assertIn('PRIMARY agent failure', err.getvalue())
-        self.assertIn('[FAIL] Could not return the repository to its original state.', err.getvalue())
-        self.assertEqual(manifest['restoration']['node'], recursive.LEAF)
-        self.assertFalse(manifest['restoration']['restored'])
-        self.assertGreaterEqual(len(manifest['diagnostics']), 2)
+        self.assertTrue(manifest['temporary_sources_removed'])
+        self.assertEqual((self.paths[recursive.LEAF] / 'app.py').read_text(), 'external change')
+        self.assertGreaterEqual(len(manifest['diagnostics']), 1)
 
 
 if __name__ == '__main__':

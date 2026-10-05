@@ -14,7 +14,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from explain import AuditError, Repository, Runner, UnsafeRepository, load_config
+from explain import AuditError, Repository, Runner, UnsafeRepository, load_config, Folder
+from src.analysis.git_sources import GitSources
 
 ROOT = Path(__file__).resolve().parents[1]
 CHILD = 'vendor/модуль with spaces'
@@ -152,7 +153,7 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
                     continue
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(manifest['status'], 'COMPLETE')
-                self.assertTrue(manifest['restoration']['restored'])
+                self.assertTrue(manifest['temporary_sources_removed'])
                 self.assert_original(before)
                 calls = [json.loads(s) for s in self.calls.read_text().splitlines()]
                 stages = [c for c in calls if 'context' in c]
@@ -190,41 +191,40 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
                 summary = json.loads(result.stdout)
                 self.assertEqual(summary['final_report'], manifest['final_report'])
                 self.assertTrue(summary['has_usable_material'])
-                self.assertTrue(manifest['restoration']['restored'])
+                self.assertTrue(manifest['temporary_sources_removed'])
                 self.assert_original(before)
 
     def test_integrity_failure_is_fatal_even_with_continue_on_error(self):
+        before = self.state()
         self.config['continue_on_error'] = True
-        self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': 'file', 'path': str(self.paths[LEAF])})
+        self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': 'file', 'path': LEAF})
         result, manifest = self.execute()
         self.assertEqual(result.returncode, 1)
         self.assertEqual(manifest['status'], 'FAILED')
-        self.assertFalse(manifest['restoration']['restored'])
-        self.assertEqual(manifest['restoration']['node'], LEAF)
+        self.assertTrue(manifest['temporary_sources_removed'])
         self.assertEqual(len(manifest['branches']), 1)
-        self.assertEqual((self.paths[LEAF] / 'app.py').read_text(), 'external modification\n')
+        self.assertEqual(before, self.state())
 
     def test_same_sha_attached_head_is_detected(self):
+        self.config['git_mode']['branches'] = ['master']
         self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'review', 'kind': 'attach', 'path': str(self.paths[CHILD])})
         result, manifest = self.execute()
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual(manifest['restoration']['node'], CHILD)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(git(self.paths[CHILD], 'symbolic-ref', 'HEAD'), 'refs/heads/external-branch')
 
     def test_compare_modification_of_nested_metadata_is_preserved(self):
         self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'compare', 'kind': 'metadata', 'path': str(self.paths[LEAF])})
         result, manifest = self.execute()
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual(manifest['restoration']['node'], LEAF)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(git(self.paths[LEAF], 'config', '--get', 'external.changed'), 'true')
 
-    def test_cli_check_cannot_modify_nested_sources(self):
+    def test_live_source_change_after_fixation_does_not_change_snapshot(self):
         self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'check', 'kind': 'file', 'path': str(self.paths[LEAF])})
         result, manifest = self.execute(check=True)
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual(manifest['status'], 'FAILED')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(manifest['status'], 'PREFLIGHT_OK')
         self.assertEqual(manifest['switch_journal'], [])
-        self.assertIn(LEAF, ' '.join(manifest['errors']))
+        self.assertEqual((self.paths[LEAF] / 'app.py').read_text(), 'external modification\n')
 
     def test_hooks_and_custom_update_are_never_executed(self):
         sentinel = self.base / 'hook-ran'
@@ -262,36 +262,21 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(manifest['original_hierarchy'][LEAF]['git_dir'], str(leaf_gd))
 
-    def test_cli_partial_switch_failure_and_signal_restore_and_record_journal(self):
+    def test_cli_never_runs_mutating_git_commands(self):
         before = self.state()
         shim_dir = self.base / 'git-shim'
         shim_dir.mkdir()
         real_git = shutil.which('git')
         self.env['PATH'] = str(shim_dir) + os.pathsep + self.env['PATH']
-        for relative, after in ((CHILD, False), (LEAF, True)):
-            with self.subTest(node=relative, after=after):
-                shim = shim_dir / 'git'
-                shim.write_text('#!' + sys.executable + '\n' + f'''import os, signal, subprocess, sys
-args = sys.argv[1:]
-if ('switch' in args and args[args.index('-C') + 1] == {str(self.paths[relative])!r}
-        and {self.expected['topic'][relative]['commit']!r} in args):
-    if {after!r}:
-        subprocess.run([{real_git!r}, *args], check=True)
-        os.kill(os.getppid(), signal.SIGTERM)
-        sys.exit(0)
-    print('injected partial switch failure', file=sys.stderr)
-    sys.exit(19)
-os.execv({real_git!r}, [{real_git!r}, *args])
-''')
-                shim.chmod(0o700)
-                result, manifest = self.execute()
-                self.assertEqual(result.returncode, 130 if after else 1, result.stderr)
-                self.assertTrue(manifest['restoration']['restored'])
-                self.assert_original(before)
-                attempts = [item for item in manifest['switch_journal'] if item['path'] == relative
-                            and item['target']['commit'] == self.expected['topic'][relative]['commit']]
-                self.assertEqual(len(attempts), 1)
-                self.assertEqual(attempts[0]['status'], 'COMPLETED' if after else 'UNCHANGED')
+        shim = shim_dir / 'git'
+        shim.write_text('#!' + sys.executable + '\nimport os, sys\n' +
+            "assert not set(sys.argv[1:]) & {'switch', 'checkout', 'reset', 'clean', 'stash', 'add', 'commit'}\n" +
+            'os.execv(' + repr(real_git) + ', [' + repr(real_git) + ', *sys.argv[1:]])\n')
+        shim.chmod(0o700)
+        result, manifest = self.execute()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(manifest['switch_journal'], [])
+        self.assertEqual(before, self.state())
 
 
 class RecursivePreflightTests(RecursiveFixture, unittest.TestCase):
@@ -324,7 +309,15 @@ class RecursivePreflightTests(RecursiveFixture, unittest.TestCase):
                     file.write_text('dirty\n')
                     if kind == 'staged':
                         git(path, 'add', filename)
-                    self.reject_unchanged('Working tree must have no modifications')
+                    before = self.state()
+                    self.repo.preflight(['master', 'topic'])
+                    sources = GitSources(self.repo, Folder, UnsafeRepository, self.base)
+                    self.addCleanup(sources.close)
+                    item = sources.working('master')
+                    copied = item['path'] / (filename if relative == '.' else relative + '/' + filename)
+                    self.assertEqual(copied.exists(), kind != 'ignored')
+                    if kind != 'ignored': self.assertEqual(copied.read_text(), 'dirty\n')
+                    self.assertEqual(before, self.state())
                     if old is None:
                         file.unlink()
                     else:
@@ -346,10 +339,16 @@ class RecursivePreflightTests(RecursiveFixture, unittest.TestCase):
         parent, leaf = self.paths[CHILD], self.paths[LEAF]
         git(parent, 'config', 'submodule.nested logical name.ignore', 'all')
         git(parent, 'update-index', '--cacheinfo', '160000', self.expected['topic'][LEAF]['commit'], 'nested/深い child')
-        self.reject_unchanged('Working tree must have no modifications')
+        self.repo.preflight(['master', 'topic'])
         git(parent, 'update-index', '--cacheinfo', '160000', self.expected['master'][LEAF]['commit'], 'nested/深い child')
         git(leaf, 'switch', 'topic')
-        self.reject_unchanged('Initial HEAD .* does not match gitlink')
+        self.repo.preflight(['master', 'topic'])
+        sources = GitSources(self.repo, Folder, UnsafeRepository, self.base)
+        self.addCleanup(sources.close)
+        item = sources.working('master')
+        leaf_meta = next(s for s in item['submodules'] if s['path'] == LEAF)
+        self.assertNotEqual(leaf_meta['actual_head'], leaf_meta['base_gitlink'])
+        self.assertEqual((item['path'] / LEAF / 'app.py').read_text(), 'topic: ' + LEAF + '\n')
 
     def test_unsafe_committed_paths_and_reused_gitfile_are_rejected(self):
         parent = self.paths[CHILD]
@@ -446,87 +445,54 @@ class RecursivePreflightTests(RecursiveFixture, unittest.TestCase):
             self.repo.preflight(['master', 'topic'])
 
 
-class RecursiveTransitionTests(RecursiveFixture, unittest.TestCase):
-    def test_packed_original_refs_restore_without_rewriting_them(self):
-        for path in self.paths.values():
-            git(path, 'pack-refs', '--all')
+class RecursiveSnapshotTests(RecursiveFixture, unittest.TestCase):
+    def test_packed_refs_and_nested_working_gitlinks_are_preserved(self):
+        for path in self.paths.values(): git(path, 'pack-refs', '--all')
+        # Each of base gitlink, index gitlink, actual child HEAD and file bytes
+        # is independently represented.
+        git(self.paths[LEAF], 'switch', 'topic')
+        git(self.paths[CHILD], 'add', 'nested/深い child')
+        (self.paths[LEAF] / 'app.py').write_text('nested working bytes\n')
+        (self.paths[LEAF] / 'untracked.txt').write_text('nested untracked bytes\n')
+        (self.paths[LEAF] / 'ignored.txt').write_text('nested excluded secret\n')
         before = self.state()
         pins = self.repo.preflight(['master', 'topic'])
-        self.repo.checkout(pins['topic'])
-        self.repo.restore('master', pins['master'])
-        self.assert_original(before)
-        for relative, path in self.paths.items():
-            gd = Path(git(path, 'rev-parse', '--absolute-git-dir'))
-            self.assertEqual((gd / 'packed-refs').read_bytes(), before[relative]['files']['packed-refs'])
+        sources = GitSources(self.repo, Folder, UnsafeRepository, self.base)
+        self.addCleanup(sources.close)
+        working = sources.working('master')
+        committed = sources.commit('topic', pins['topic'])
+        self.assertEqual((working['path'] / LEAF / 'app.py').read_text(), 'nested working bytes\n')
+        self.assertTrue((working['path'] / LEAF / 'untracked.txt').exists())
+        self.assertFalse((working['path'] / LEAF / 'ignored.txt').exists())
+        self.assertEqual((committed['path'] / LEAF / 'app.py').read_text(), 'topic: ' + LEAF + '\n')
+        leaf = next(s for s in working['submodules'] if s['path'] == LEAF)
+        self.assertNotEqual(leaf['base_gitlink'], leaf['index_gitlink'])
+        self.assertEqual(leaf['index_gitlink'], leaf['actual_head'])
+        self.assertEqual(before, self.state())
 
-    def test_partial_switch_error_and_interrupt_at_every_level(self):
-        before = self.state()
-        for relative in self.paths:
-            for after in (False, True):
-                for failure in (AuditError, KeyboardInterrupt):
-                    with self.subTest(node=relative, after=after, error=failure):
-                        repo = Repository(self.path)
-                        pins = repo.preflight(['master', 'topic'])
-                        node = repo.nodes[relative]
-                        original_git = node.git
-                        def fail(*args, **kwargs):
-                            if args[0] == 'switch':
-                                if after:
-                                    original_git(*args, **kwargs)
-                                raise failure('injected switch failure')
-                            return original_git(*args, **kwargs)
-                        with patch.object(node, 'git', side_effect=fail):
-                            with self.assertRaises(failure):
-                                repo.checkout(pins['topic'])
-                        restored = repo.restore('master', pins['master'])
-                        self.assertTrue(restored['restored'])
-                        self.assert_original(before)
-
-    def test_original_ref_movement_and_directory_substitution_refuse_restoration(self):
-        pins = self.repo.preflight(['master', 'topic'])
-        self.repo.checkout(pins['topic'])
+    def test_metadata_changes_during_preparation_are_rejected(self):
+        self.repo.preflight(['master', 'topic'])
         path = self.paths[LEAF]
         git(path, 'update-ref', 'refs/heads/original/start', self.expected['topic'][LEAF]['commit'])
-        with self.assertRaisesRegex(UnsafeRepository, 'Original branch moved'):
-            self.repo.restore('master', pins['master'])
+        with self.assertRaises(UnsafeRepository): self.repo.assert_expected()
         git(path, 'update-ref', 'refs/heads/original/start', self.expected['master'][LEAF]['commit'])
         gd = self.repo.nodes[LEAF].git_dir
         moved = gd.with_name(gd.name + '-preserved')
         gd.rename(moved)
         shutil.copytree(moved, gd)
-        with self.assertRaisesRegex(UnsafeRepository, 'metadata changed'):
-            self.repo.restore('master', pins['master'])
+        with self.assertRaisesRegex(UnsafeRepository, 'metadata changed'): self.repo.assert_expected()
 
-    def test_primary_failure_survives_restoration_error_in_manifest(self):
+    def test_primary_agent_failure_is_preserved_and_only_copies_are_removed(self):
+        before = self.state()
         self.write_config()
         runner = Runner(load_config(self.config_path), self.base / 'run')
-        def fail_invoke(*args):
-            (self.paths[LEAF] / 'app.py').write_text('external change')
-            raise AuditError('PRIMARY agent failure')
-        runner.invoke = fail_invoke
         runner.check_cli = lambda: {}
-        manifest, code = runner.run()
-        self.assertEqual(code, 1)
-        self.assertIn('PRIMARY agent failure', str(manifest['branches']))
-        self.assertEqual(manifest['restoration']['node'], LEAF)
-        self.assertFalse(manifest['restoration']['restored'])
-
-    def test_restoration_git_error_does_not_replace_primary_error(self):
-        self.write_config()
-        runner = Runner(load_config(self.config_path), self.base / 'run')
-        original_git = runner.repo.git
-        def fail_restore(*args, **kwargs):
-            if args[0] == 'switch' and '--no-guess' in args:
-                raise AuditError('SECONDARY restoration Git failure')
-            return original_git(*args, **kwargs)
-        runner.check_cli = lambda: {}
-        with patch.object(runner.repo, 'git', side_effect=fail_restore), \
-                patch.object(runner, 'invoke', side_effect=AuditError('PRIMARY agent failure')):
+        with patch.object(runner, 'invoke', side_effect=AuditError('PRIMARY agent failure')):
             manifest, code = runner.run()
         self.assertEqual(code, 1)
-        self.assertIn('PRIMARY agent failure', manifest['errors'])
-        self.assertIn('SECONDARY restoration Git failure', manifest['restoration']['error'])
-        self.assertEqual(manifest['restoration']['node'], '.')
+        self.assertIn('PRIMARY agent failure', str(manifest['branches']))
+        self.assertTrue(manifest['temporary_sources_removed'])
+        self.assertEqual(before, self.state())
 
 
 @unittest.skipUnless(os.geteuid() == 0, 'Actual UID 0 required; run in the isolated CI container. No mocked ownership.')

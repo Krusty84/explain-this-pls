@@ -58,6 +58,8 @@ def completed_pair(revision):
     plan = study.get('review_plan')
     try:
         return bool(plan and review.get('target') == target(plan) and review.get('review_plan') == plan
+                    and ('source_snapshot' not in revision or
+                         plan['sources'][0]['identity'] == dict(mode='git', **revision['source_snapshot']))
                     and review.get('claim_registry') == study.get('claims')
                     and review.get('revision_id') == study.get('revision_id') == revision.get('revision_id')
                     and plan.get('revision_id') == revision.get('revision_id')

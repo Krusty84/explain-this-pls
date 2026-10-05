@@ -214,6 +214,12 @@ def accepted_pair(item):
         source_matches = (root_identity == {'mode': 'folder', 'directory': doc['source_directory'],
                                             'fingerprint': doc['source_fingerprint']} if 'source_directory' in doc else
                           root_identity == {'mode': 'git', 'branch': doc['branch'], 'commit': doc['source_commit']})
+        if root_identity.get('snapshot_id') and 'source_directory' not in doc:
+            source_matches = (root_identity.get('mode') == 'git'
+                and root_identity.get('base_commit') == doc['source_commit']
+                and root_identity.get('source_type') in ('commit', 'working_tree')
+                and bool(root_identity.get('fingerprint'))
+                and ('source_snapshot' not in item or root_identity == dict(mode='git', **item['source_snapshot'])))
         return (rev.get('target') == target(plan) and rev.get('review_plan') == plan and
             plan['document_sha256'] == sha(doc['report_markdown'].encode('utf-8')) and
             plan['registry_sha256'] == sha(canonical(doc['claims'])) and

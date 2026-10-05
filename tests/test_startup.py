@@ -57,8 +57,7 @@ class RepositoryTrustTests(unittest.TestCase):
                     repo = Repository(alias, trust_repository=trust)
                     self.addCleanup(repo.close)
                     pins = repo.preflight(['master', 'test01'])
-                    repo.checkout(pins['test01'])
-                    repo.restore('master', pins['master'])
+                    repo.assert_expected()
                     repo.delta(pins['master'], pins['test01'])
                     values = repo.git('config', '--get-all', 'safe.directory', allowed=(0, 1))
                     self.assertEqual(values, ('\n' + str(path) + '\n').encode() if trust else b'')
@@ -189,7 +188,7 @@ class StartupCLIIntegrationTests(unittest.TestCase):
             self.assertEqual(self.repo.head(), self.master)
             self.repo.clean()
             if not check:
-                self.assertTrue(manifest['restoration']['restored'])
+                self.assertTrue(manifest['temporary_sources_removed'])
 
     def test_main_with_mocked_euids_completes_real_pipeline_in_both_modes(self):
         for euid in (0, 1000):
@@ -271,15 +270,14 @@ class StartupCLIIntegrationTests(unittest.TestCase):
         self.assertIn('--trust-repository requires git mode', result.stderr)
         self.assertFalse(self.reports.exists())
 
-    def test_trust_still_rejects_dirty_checkout(self):
+    def test_trust_accepts_dirty_checkout(self):
         (self.repo_path / 'app.py').write_text('uncommitted change\n')
         for check in (False, True):
             result = self.execute('git', check, trust=True)
-            self.assertEqual(result.returncode, 1)
-            self.assertEqual(json.loads(result.stdout)['status'], 'FAILED')
-            self.assertIn('Working tree must have no modifications', result.stderr)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(json.loads(result.stdout)['status'], ('COMPLETE', 'PREFLIGHT_OK'))
+            self.assertIn('working changes included', result.stderr)
             self.assertNotIn(OWNERSHIP_HINT, result.stderr)
-            self.assertEqual(self.calls.read_text(), '')
             self.assertEqual(self.repo.symbolic(), 'master')
             self.assertEqual((self.repo_path / 'app.py').read_text(), 'uncommitted change\n')
 

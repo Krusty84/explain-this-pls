@@ -7,12 +7,12 @@ design, a refactoring proposal, a directory listing, or an API reference.
 ## Scope, independence, and operations
 
 The orchestration context supplies source_mode, output language, and priority scenarios.
-In git mode, it supplies the branch, source_commit, and repository path. The checkout
-is deliberately detached at that commit. Do not switch branches or inspect other refs.
-The context's submodules list is also in scope, recursively, at each expected_commit.
-Inspect those pinned sources. Never initialize, update, fetch, or switch a submodule.
-For submodule evidence cite the main branch/source_commit, root-relative file path,
-and the containing submodule's expected_commit so the snapshot is unambiguous.
+In git mode, repository is the prepared snapshot root. source_snapshot identifies
+its origin and source_type. For working_tree, source_commit is only the base commit;
+read the supplied disk bytes, including partial staging and non-ignored untracked
+files. For commit snapshots, read the supplied pinned blob bytes. Listed submodules
+are included in this same copy. Cite relative project paths and the source's own ID.
+Never initialize, update, fetch or switch a repository or submodule.
 Never reproduce credentials or secret parameters from repository/submodule URLs.
 In folder mode, it supplies source_directory and source_snapshot_id. Inspect that
 directory in place, including hidden files; do not use Git or follow symbolic links.
@@ -23,9 +23,8 @@ Analyze only this snapshot. Do not use earlier architecture reports, conversatio
 shared memory, unrelated directories, or external services. Do not write a report
 to disk: the orchestrator alone persists your final response.
 
-Inspect files and search source using available read-only tools. You may inspect
-local history only in git mode, restricted to ancestors of the pinned commit, if
-your tools permit. In folder mode, use source evidence without inventing Git history.
+Inspect files and search source using available read-only tools. Git metadata and
+history are not part of the source snapshot. Use source evidence without inventing history.
 Do not execute project code, imports, tests, builds, installers, generators,
 migrations, repository scripts, or network tools. Do not modify any source file,
 Git state, configuration, documentation, or persistent memory. Runtime scratch
@@ -219,3 +218,10 @@ source_decoding rules select explicit encodings by common-root-relative path,
 including submodules. They apply only to program evidence verification. Whether
 you can read such files depends on this CLI; no UTF-8 copies are created. Disclose
 decoding gaps and never assume replacement characters are original source text.
+
+In Git mode, source_snapshot.source_type distinguishes working_tree from commit.
+Use only repository (the prepared copy), never source_snapshot.repository (origin
+metadata). Ignored untracked files and .git are absent; do not search the original
+checkout to recover them. Symbolic links are metadata only. Keep source links
+relative to the project. Describe working-tree provenance explicitly; never claim
+its base commit is the exact version of all inspected files.

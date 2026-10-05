@@ -91,7 +91,7 @@ class TimeoutRestorationTests(unittest.TestCase):
             manifest, code = runner.run()
         self.assertEqual(code, 1)
         self.assertEqual(manifest['status'], 'FAILED')
-        self.assertTrue(manifest['restoration']['restored'])
+        self.assertTrue(manifest['temporary_sources_removed'])
         self.assertEqual(self.repo.symbolic(), 'master')
         self.assertEqual(self.repo.head(), self.master)
         self.assertEqual(manifest['diagnostics'][0]['failure_kind'], 'STAGE_TIMEOUT')

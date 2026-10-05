@@ -6,7 +6,7 @@
 
 macOS or Linux, Python 3.11+, and one or more authenticated coding-agent CLIs.
 Git >= 2.34.1 is required only for git mode; folder mode needs no Git.
-No third-party Python packages, worktrees, or source copies.
+No third-party Python packages or worktree switches. Git inputs use source copies.
 The parent publishes reports. The agent receives stdin and returns structured JSON.
 """
 from __future__ import annotations
@@ -53,6 +53,7 @@ from src.model.model_boundary import BindingRegistry
 from src.analysis.source_decoding import normalize_source_decoding
 from src.analysis.coverage_plan import build_coverage_plan, inventory_summary, verify_coverage_plan
 from src.analysis.revisions import revision_inputs, choose_revision, completed_pair
+from src.analysis.git_sources import GitSources
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ('catalog', 'study', 'review', 'compare')
@@ -434,16 +435,9 @@ class Repository:
                 except AuditError as exc:
                     raise UnsafeRepository(**vars(exc.with_context(node_path=path).diagnostic())) from exc
             return
-        # Each child is checked directly. During a planned switch its HEAD can
-        # temporarily differ from its parent's gitlink. Still check staged gitlinks.
-        status = self.git('status', '--porcelain=v1', '-z', '--untracked-files=all',
-                          '--ignore-submodules=all')
-        staged = self.git('diff-index', '--cached', '--raw', '-z', '--ignore-submodules=none',
-                          '--no-ext-diff', 'HEAD', '--')
-        ignored = self.git('ls-files', '--others', '--ignored', '--exclude-standard', '-z')
-        if status or staged or ignored:
-            raise UnsafeRepository('Working tree must have no modifications, untracked files, '
-                                   'or ignored files. No automatic stash/reset/clean is performed.')
+        # Historical name retained for callers; dirtiness is valid input.
+        if self.git('ls-files', '--unmerged', '-z'):
+            raise UnsafeRepository('Conflicted Git index.', node_path=str(self.path))
         flags = self.git('ls-files', '-v', '-z').split(b'\0')
         if any(line and (line[:1].islower() or line[:1] == b'S') for line in flags):
             raise UnsafeRepository('assume-unchanged/skip-worktree entries are unsupported.')
@@ -565,7 +559,8 @@ class Repository:
     def policy(self) -> None:
         if self.git('config', '--get-regexp', r'^filter\.', allowed=(0, 1)):
             raise AuditError('Git filters (including Git LFS filters) require a separate supported policy.')
-        for marker in ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-apply', 'rebase-merge', 'BISECT_START'):
+        for marker in ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-apply', 'rebase-merge',
+                       'BISECT_START', 'sequencer', 'index.lock', 'HEAD.lock'):
             if (self.git_dir / marker).exists():
                 raise UnsafeRepository(f'Unfinished Git operation: {marker}')
         if self.text('config', '--bool', '--get', 'core.sparseCheckout', allowed=(0, 1)) == 'true':
@@ -635,9 +630,9 @@ class Repository:
                     self.descriptions[path] = {'path': path, 'parent': None if parent is None else
                         str(parent.path.relative_to(self.path)), 'name': name}
                     actual = node.head()
-                    if required and actual != required:
-                        raise UnsafeRepository(f'Initial HEAD {actual} does not match gitlink.')
-                    required = required or actual
+                    # Working submodules use their actual checkout, independently
+                    # of the base/index gitlink. Commit plans are validated below.
+                    required = actual
                     ref = node.symbolic_ref()
                     if ref and not ref.startswith('refs/heads/'):
                         raise UnsafeRepository(f'Unsupported symbolic HEAD: {ref}')
@@ -678,7 +673,9 @@ class Repository:
         initial = {}
         self.reporter.emit('snapshot_started', snapshot='original')
         visit(self, '.', None, None, None, 'original', initial, True)
-        self.plans[initial['.']] = initial
+        self.base_plan = {}
+        visit(self, '.', None, None, initial['.'], 'working tree base', self.base_plan)
+        self.plans[initial['.']] = self.base_plan
         self.reporter.emit('snapshot_completed', snapshot='original', commit=initial['.'])
         result = {}
         for name in branches:
@@ -707,7 +704,7 @@ class Repository:
                 original = self.original[path]
                 if original['ref'] and (node.reference_metadata(original['ref']) != original['ref_identity'] or
                         node.text('rev-parse', '--verify', original['ref']) != original['commit']):
-                    raise UnsafeRepository('Original branch moved concurrently; refusing automatic restoration.')
+                    raise UnsafeRepository('Original branch moved during source preparation.')
                 node.policy()
                 node.clean(local=True)
             except (AuditError, OSError) as exc:
@@ -716,71 +713,11 @@ class Repository:
                 error.node = path
                 raise error from exc
 
-    def switch_node(self, path: str, commit: str, ref: str | None = None) -> None:
-        self.assert_expected()
-        node = self.nodes[path]
-        before = self.expected[path]
-        target = {'commit': commit, 'ref': ref}
-        entry = {'path': path, 'before': {k: before[k] for k in target}, 'target': target, 'status': 'INTENDED'}
-        self.journal.append(entry)
-        switch_error = None
-        try:
-            if ref:
-                node.git('switch', '--no-guess', '--no-recurse-submodules', '--', ref[len('refs/heads/'):])
-            else:
-                node.git('switch', '--detach', '--no-recurse-submodules', commit)
-        except BaseException as exc:
-            switch_error = exc
-            exc.node = path
-            raise
-        finally:
-            # Git may have completed just before a handled signal or error. Only
-            # accept a clean old or intended state; never infer arbitrary progress.
-            try:
-                node.guard_metadata()
-                actual = {'commit': node.head(), 'ref': node.symbolic_ref()}
-                if actual != target and actual != entry['before']:
-                    raise UnsafeRepository('Unexpected HEAD during interrupted switch.')
-                node.clean(local=True)
-                self.expected[path] = dict(actual, control=node.control_metadata())
-                entry['status'] = 'COMPLETED' if actual == target else 'UNCHANGED'
-            except (AuditError, OSError) as exc:
-                entry.update(status='UNSAFE', error=str(exc))
-                exc.node = path
-                # Keep the last expected state so restoration refuses evidence.
-                if switch_error is None:
-                    raise
-        self.assert_expected()
-
-    def checkout(self, commit: str) -> None:
-        if commit not in getattr(self, 'plans', {}):
-            raise AuditError('Checkout requires a prepared preflight plan.')
-        for path, sha in self.plans[commit].items():
-            self.switch_node(path, sha)
-        self.assert_snapshot(commit)
-
-    def assert_snapshot(self, commit: str) -> None:
-        self.assert_expected()
-        for path, sha in self.plans[commit].items():
-            if self.expected[path]['commit'] != sha or self.expected[path]['ref'] is not None:
-                raise UnsafeRepository(f'{path}: HEAD differs from the detached snapshot plan.')
-
-    def restore(self, branch: str | None, commit: str) -> dict:
-        self.assert_expected()
-        for path, state in self.original.items():
-            if any(self.expected[path][k] != state[k] for k in ('commit', 'ref')):
-                self.switch_node(path, state['commit'], state['ref'])
-        self.assert_expected()
-        return {'restored': True, 'branch': branch, 'commit': commit,
-                'nodes': {p: {'commit': s['commit'], 'ref': s['ref'], 'restored': True}
-                          for p, s in self.original.items()}}
-
     def submodules(self, commit: str, verified: bool = False) -> list[dict]:
         if verified:
-            self.assert_snapshot(commit)
+            self.assert_expected()
         return [dict(self.descriptions[path], expected_commit=sha, available_locally=True,
-                     actual={'commit': self.expected[path]['commit'], 'ref': self.expected[path]['ref'],
-                             'clean': True}, snapshot_verified=verified)
+                     actual={'commit': self.expected[path]['commit'], 'ref': self.expected[path]['ref']}, snapshot_verified=verified)
                 for path, sha in self.plans[commit].items() if path != '.']
 
     def delta(self, baseline: str, other: str) -> dict:
@@ -1041,11 +978,17 @@ class Runner:
         self.bindings = BindingRegistry()
         self.versions: dict[str, str] = {}
 
+    def assert_source(self):
+        if getattr(self, 'git_sources', None) is not None:
+            self.git_sources.assert_intact(getattr(self, 'active_snapshot', None))
+        elif self.repo:
+            self.repo.assert_expected()
+
     def record_error(self, manifest, exc, *, phase='run', **context):
         self.reporter.stop_progress()
         recoverable = isinstance(exc, ContractError) or (isinstance(exc, AuditError)
             and exc.code == 'CLI_FAILED' and exc.failure_layer == 'backend')
-        if (not recoverable or phase in ('preflight', 'restoration')
+        if (not recoverable or phase in ('preflight', 'cleanup')
                 or getattr(exc, 'failure_layer', None) == 'cleanup' or getattr(exc, 'cleanup_failed', False)):
             self.critical_failure = True
         if isinstance(exc, KeyboardInterrupt):
@@ -1192,7 +1135,8 @@ class Runner:
     def command(self, stage: str, state: Path, agent: dict, schema_path: Path, env: dict) -> list[str]:
         adapter = CLI_ADAPTERS.get(agent['backend'])
         if adapter:
-            return adapter.build_command(agent, stage, self.mode, self.schemas[stage], schema_path)
+            kwargs = {'excluded_root': self.repo.path} if adapter is claude_code and getattr(self, 'git_sources', None) else {}
+            return adapter.build_command(agent, stage, self.mode, self.schemas[stage], schema_path, **kwargs)
         raise AuditError('OpenCode and XXX use the managed HTTP adapter, not the CLI event stream.',
                          code='BACKEND_INCOMPATIBLE')
 
@@ -1208,7 +1152,7 @@ class Runner:
             # Pin actual checkout bytes (including Git's legitimate EOL transforms),
             # not blob bytes. No Git control/history files enter this inventory.
             if self.repo:
-                self.repo.assert_expected()
+                self.assert_source()
             inventory = (self.folder or Folder(self.source_path, canonical=True)).snapshot(exclude_git=self.repo is not None)
             if context.get('_inventory') and inventory['source_fingerprint'] != context['_inventory']['source_fingerprint']:
                 raise UnsafeRepository('Source changed from the inventory used for the coverage plan.', failure_layer='integrity')
@@ -1218,7 +1162,7 @@ class Runner:
             if self.folder and inventory['source_fingerprint'] != context['source_fingerprint']:
                 raise UnsafeRepository('Source folder changed from the pinned snapshot before invocation.')
             if self.repo:
-                self.repo.assert_expected()
+                self.assert_source()
             evidence_pins = {e['path']: e['sha256'] for e in inventory['entries'] if e['type'] == 'file'}
         binding = self.bindings.bind(stage, context, self.mode)
         binding_hashes = {}
@@ -1275,7 +1219,7 @@ class Runner:
                     if self.folder:
                         self.folder.assert_snapshot(context['source_fingerprint'])
                     else:
-                        self.repo.assert_expected()
+                        self.assert_source()
                     candidate['artifact_directory'] = candidate_attempt
                     save_json(destination.parent / (stage + '.material.json'), candidate)
                     material_bytes = (json.dumps(candidate, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
@@ -1516,7 +1460,7 @@ class Runner:
             if self.folder:
                 self.folder.assert_snapshot(context['source_fingerprint'])
             else:
-                self.repo.assert_snapshot(context['source_commit'])
+                self.assert_source()
             self.assert_coverage_file(stage_context)
             self.assert_revision_files(item)
 
@@ -1583,7 +1527,7 @@ class Runner:
             for number in range(1, self.execution['max_revision_rounds'] + 2):
                 revision_id = f'{number:03d}'
                 revision_dir = directory / 'revisions' / revision_id
-                revision = {key: item[key] for key in ('branch', 'source_commit', 'source_directory', 'source_fingerprint') if key in item}
+                revision = {key: item[key] for key in ('branch', 'source_commit', 'source_directory', 'source_fingerprint', 'source_snapshot') if key in item}
                 revision.update(revision_id=revision_id, directory=str(revision_dir.relative_to(self.run_dir)),
                                 study=None, review=None, errors=[])
                 item['revisions'].append(revision)
@@ -1711,10 +1655,10 @@ class Runner:
                 'started_at': now(), 'status': 'RUNNING'}
         private_directory(destination)
         try:
-            self.repo.assert_expected()
+            self.assert_source()
             validate_result('compare', data, context)
             meta['local_validation'] = True
-            self.repo.assert_expected()
+            self.assert_source()
             data = prepare_result('compare', data, context | {'generated_by': 'orchestrator'})
             meta['report_sha256'] = self.publish_result('compare', data, destination)
             meta.update(status='SUCCEEDED', finished_at=now(), publication_complete=True)
@@ -1793,11 +1737,15 @@ class Runner:
             if self.folder:
                 self.folder.assert_snapshot(context['source_fingerprint'])
             else:
-                self.repo.assert_expected()
+                self.assert_source()
             with tempfile.TemporaryDirectory(prefix='archaudit-invocation-', dir=neutral_temporary_base(self.source_path)) as raw:
                 state = Path(raw).resolve()
                 cwd = state if stage == 'compare' or repair_index else self.source_path
                 env = cli_env(cwd)
+                if getattr(self, 'git_sources', None):
+                    for key in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE',
+                                'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES'):
+                        env.pop(key, None)
                 schema_path = state / 'output.schema.json'
                 save_json(schema_path, self.schemas[stage])
                 try:
@@ -1806,7 +1754,8 @@ class Runner:
                         if agent['backend'] == 'opencode':
                             opencode.verify_version(meta['cli_version'])
                             opencode.verify_native_retries()
-                        name = opencode.prepare_environment(env, 'repair' if repair_index else stage)
+                        name = opencode.prepare_environment(env, 'repair' if repair_index else stage,
+                                                            source_snapshot=bool(getattr(self, 'git_sources', None)))
                         server_class = xxx.Server if agent['backend'] == 'xxx' else opencode.Server
                         server = server_class(agent['executable'], cwd, env, attempt, budget, atomic, meta, self.execution)
                         error = None
@@ -1869,7 +1818,7 @@ class Runner:
                     if self.folder:
                         self.folder.assert_snapshot(context['source_fingerprint'])
                     else:
-                        self.repo.assert_expected()
+                        self.assert_source()
                     meta['source_integrity_verified'] = True
                 budget.check()
             # Publish after the CLI exits and temporary invocation files are removed.
@@ -1885,7 +1834,7 @@ class Runner:
             if self.folder:
                 self.folder.assert_snapshot(context['source_fingerprint'])
             else:
-                self.repo.assert_expected()
+                self.assert_source()
             meta['source_check_status'] = 'MATCHED_AT_BOUNDARIES'
             budget.check()
             if agent['backend'] in ('xxx', 'opencode') and meta.get('model_actual'):
@@ -1929,7 +1878,7 @@ class Runner:
                 try:
                     self.repo.close()
                 except OSError as exc:
-                    self.record_error(self.manifest, exc, phase='restoration')
+                    self.record_error(self.manifest, exc, phase='cleanup')
         manifest['result_policy'] = 'compromise' if self.compromise else 'strict'
         manifest.update(contract_id=CONTRACT_ID, artifact_format=ARTIFACT_FORMAT,
             acceptance_meaning='accepted=true means policy checks satisfied; factual correctness is not established.',
@@ -1941,7 +1890,7 @@ class Runner:
                 if self.critical_failure or not any(usable_study(b) for b in entries):
                     manifest['status'], code = 'FAILED', 1
                 elif (all(accepted(b) for b in entries) and not manifest.get('diagnostics')
-                      and (self.mode == 'folder' or len(entries) == 1
+                      and (self.mode == 'folder' or len(self.source['branches']) == 1
                            or (manifest.get('comparison', {}).get('program_checks', {}).get('policy_satisfied')
                                and manifest.get('comparison_invocation', {}).get('publication_complete')))):
                     manifest['status'], code = 'COMPLETE', 0
@@ -1970,41 +1919,19 @@ class Runner:
         return manifest, code
 
     def run_git(self, check_only: bool = False) -> tuple[dict, int]:
-        manifest = {'run_id': self.run_dir.name,
-            'started_at': now(), 'repository': str(self.repo.path),
-            'git': self.repo.runtime.manifest(),
-            'baseline_branch': self.source['baseline_branch'], 'status': 'RUNNING',
-            'isolation': 'cli-native-permissions', 'platform': sys.platform,
-            'branches': [], 'errors': []}
-        manifest['publication_complete'] = False
+        manifest = {'run_id': self.run_dir.name, 'started_at': now(), 'repository': str(self.repo.path),
+            'git': self.repo.runtime.manifest(), 'baseline_branch': self.source['baseline_branch'],
+            'status': 'RUNNING', 'isolation': 'independent-source-copies; cli-native-permissions',
+            'platform': sys.platform, 'branches': [], 'errors': [], 'switch_journal': [],
+            'source_preservation': 'Analyzer performs no writes to the original repository.',
+            'publication_complete': False}
         self.manifest = manifest
         def persist():
-            if hasattr(self.repo, 'journal'):
-                manifest['switch_journal'] = self.repo.journal
             manifest['metrics'] = self.metrics.snapshot()
             save_json(self.run_dir / 'manifest.json', manifest)
         persist()
-        original_branch = original_commit = None
-        restored = False
-        restoration_attempted = False
-
-        def restore():
-            nonlocal restored, restoration_attempted
-            restoration_attempted = True
-            self.active_stage = {}
-            self.reporter.emit('restoration_started')
-            try:
-                manifest['restoration'] = self.repo.restore(original_branch, original_commit)
-                restored = True
-                self.reporter.emit('restoration_completed')
-            except BaseException as exc:
-                manifest['restoration'] = {'restored': False, 'node': getattr(exc, 'node', None),
-                                           'error': str(exc) or type(exc).__name__}
-                self.record_error(manifest, exc, phase='restoration')
-                raise
-            finally:
-                persist()
-
+        original_path = self.source_path
+        self.git_sources = None
         try:
             if not self.cfg['project_description']:
                 self.reporter.emit('description_missing')
@@ -2013,120 +1940,124 @@ class Runner:
             original_branch, original_commit = self.repo.symbolic(), self.repo.head()
             manifest['original_checkout'] = {'branch': original_branch, 'commit': original_commit}
             manifest['original_hierarchy'] = self.repo.original
-            manifest['snapshot_plans'] = {name: {'commit': sha, 'submodules': self.repo.submodules(sha)}
-                                          for name, sha in pins.items()}
-            try:
-                manifest['cli_checks'] = self.check_cli()
-            finally:
-                self.repo.assert_expected()
-            persist()
+            self.git_sources = GitSources(self.repo, Folder, UnsafeRepository, neutral_temporary_base(original_path))
+            working_label = original_branch if original_branch in pins else 'working tree (' + (original_branch or 'detached HEAD') + ')'
+            working = self.git_sources.working(working_label)
+            labels = list(self.source['branches'])
+            if original_branch not in pins and working['has_local_changes']:
+                labels.append(working_label)
+            for branch in self.source['branches']:
+                if branch != original_branch:
+                    self.git_sources.commit(branch, pins[branch])
+            manifest['snapshot_plans'] = {name: {
+                'source_snapshot': item['source_snapshot'], 'submodules': item['submodules']}
+                for name, item in self.git_sources.snapshots.items() if name in labels}
+            manifest['working_tree'] = {key: working[key] for key in ('has_local_changes', 'untracked_files', 'git_state')}
+            manifest['working_tree']['ignored_files'] = 'excluded using Git standard rules'
+            self.reporter.emit('sources_prepared', working_changes=working['has_local_changes'],
+                               untracked_files=working['untracked_files'], revisions=labels,
+                               ignored_files='excluded', additional_revision=working_label if working_label not in pins and working['has_local_changes'] else None)
+            self.repo.assert_expected()
+            manifest['cli_checks'] = self.check_cli()
+            self.git_sources.assert_intact()
             if check_only:
-                manifest.update(status='PREFLIGHT_OK', finished_at=now())
-                persist()
-                return manifest, 0
-            analysis_error = None
-            try:
-                for branch in self.source['branches']:
-                    commit = pins[branch]
+                manifest['status'], code = 'PREFLIGHT_OK', 0
+            else:
+                for branch in labels:
+                    prepared = self.git_sources.snapshots[branch]
+                    provenance = prepared['source_snapshot']
+                    commit = provenance['base_commit']
+                    self.source_path = prepared['path']
+                    self.active_snapshot = prepared
                     self.analysis_started = True
                     self.active_stage = {}
-                    self.reporter.emit('branch_started', branch=branch, commit=commit)
+                    self.reporter.emit('branch_started', branch=branch, commit=commit,
+                                       source_type=provenance['source_type'], snapshot_id=provenance['snapshot_id'])
                     branch_dir = self.run_dir / 'branches' / slug(branch)
-                    item: dict[str, Any] = {'branch': branch, 'source_commit': commit,
-                        'directory': str(branch_dir.relative_to(self.run_dir)),
-                        'study': None, 'review': None, 'errors': []}
+                    item = {'branch': branch, 'source_commit': commit, 'source_snapshot': provenance,
+                        'additional_revision': branch not in pins, 'submodules': prepared['submodules'],
+                        'directory': str(branch_dir.relative_to(self.run_dir)), 'study': None, 'review': None, 'errors': []}
                     manifest['branches'].append(item)
+                    save_json(branch_dir / 'source.snapshot.json', {k: v for k, v in prepared.items() if k not in ('path', 'inventory')})
                     persist()
-                    self.repo.checkout(commit)
-                    item['submodules'] = self.repo.submodules(commit, verified=True)
                     context = {'source_mode': 'git', 'branch': branch, 'source_commit': commit,
-                        'submodules': item['submodules'],
-                        'repository': str(self.repo.path), 'output_language': self.cfg['output_language'],
+                        'source_snapshot': provenance, 'submodules': item['submodules'],
+                        'repository': str(self.source_path), 'output_language': self.cfg['output_language'],
                         'project_description': self.cfg['project_description'],
-                        'priority_scenarios': self.cfg['priority_scenarios'],
-                        'execution_mode': 'static-only', 'initial_working_tree': 'clean',
-                        'source_access': 'current checkout; native CLI permissions; other branch reports are outside task scope'}
+                        'priority_scenarios': self.cfg['priority_scenarios'], 'execution_mode': 'static-only',
+                        'source_access': 'Prepared independent copy only; no .git or ignored untracked contents. '
+                            'Symlinks are metadata only. Use relative project paths. For working_tree, source_commit '
+                            'is a base commit, not the identity of file bytes. Native CLI permissions are not full filesystem isolation.'}
                     self.run_source(item, context, branch_dir, persist)
                     item['accepted'] = accepted(item)
                     persist()
-            except BaseException as exc:
-                analysis_error = exc
-                self.record_error(manifest, exc)
-                raise
-            finally:
-                try:
-                    restore()
-                except BaseException as exc:
-                    if analysis_error is None:
-                        raise
-                    manifest['errors'].append('Restoration: ' + (str(exc) or type(exc).__name__))
-            # Include all requested branches even if future policies skip one; missing inputs stay visible.
-            existing = {b['branch']: b for b in manifest['branches']}
-            entries = [existing.get(b, {'branch': b, 'source_commit': pins[b], 'study': None,
-                       'review': None, 'errors': ['Branch was not analyzed.']}) for b in self.source['branches']]
-            quality_ok = all(accepted(b) for b in entries)
-            if len(self.source['branches']) > 1:
-                baseline = self.source['baseline_branch']
-                bundle = {'baseline_branch': baseline, 'baseline_commit': pins[baseline],
-                    'result_policy': 'compromise' if self.compromise else 'strict',
-                    'requested_branches': self.source['branches'], 'output_language': self.cfg['output_language'],
-                    'project_description': self.cfg['project_description'],
-                    'scope': 'reports-only comparison; source inspection is outside task scope',
-                    'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'submodules', 'study', 'review',
-                                                       'study_material', 'review_material', 'errors', 'selected_revision', 'coverage_plan')} |
-                                 {'accepted': accepted(b)} |
-                                 {stage + '_invocation': {k: (b.get(stage + '_invocation') or {}).get(k) for k in
-                                    ('publication_complete', 'contract_id', 'artifact_format', 'status', 'model_requested', 'model_actual',
-                                     'model_actual_source', 'source_check_status', 'review_quality')}
-                                  for stage in ('study', 'review')} for b in entries],
-                    'git_deltas': {b: self.repo.delta(pins[baseline], pins[b]) for b in self.source['branches'] if b != baseline}}
-                bundle['required_unresolved_branches'] = required_unresolved(bundle)
-                comp_dir = self.run_dir / 'comparison'
-                save_json(comp_dir / 'inputs.json', bundle)
-                started = self.stage_started('compare', bundle)
-                try:
-                    self.repo.assert_expected()
-                    for entry in entries:
-                        self.assert_revision_files(entry)
-                    can_compare = (comparison_possible(entries, baseline) if self.compromise
-                                   else any(accepted(b) for b in entries))
-                    if can_compare:
-                        comparison, meta = self.invoke('compare', bundle, comp_dir / 'compare.logs')
-                    else:
-                        comparison, meta = self.publish_blocked_comparison(bundle, comp_dir / 'compare.logs')
-                finally:
-                    # Compare also uses the user's profile, so verify the restored
-                    # checkout even though this stage runs outside the repository.
+                entries = manifest['branches']
+                quality_ok = all(accepted(b) for b in entries)
+                if len(self.source['branches']) > 1:
+                    baseline = self.source['baseline_branch']
+                    selected_entries = [b for b in entries if b['branch'] in self.source['branches']]
+                    bundle = {'baseline_branch': baseline, 'baseline_commit': pins[baseline],
+                        'result_policy': 'compromise' if self.compromise else 'strict',
+                        'requested_branches': self.source['branches'], 'output_language': self.cfg['output_language'],
+                        'project_description': self.cfg['project_description'],
+                        'scope': 'reports-only comparison; source inspection is outside task scope',
+                        'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'source_snapshot', 'submodules', 'study', 'review',
+                                                           'study_material', 'review_material', 'errors', 'selected_revision', 'coverage_plan')} |
+                                     {'accepted': accepted(b)} |
+                                     {stage + '_invocation': {k: (b.get(stage + '_invocation') or {}).get(k) for k in
+                                        ('publication_complete', 'contract_id', 'artifact_format', 'status', 'model_requested', 'model_actual',
+                                         'model_actual_source', 'source_check_status', 'review_quality')}
+                                      for stage in ('study', 'review')} for b in entries if b['branch'] in self.source['branches']],
+                        'git_deltas': {b: self.git_sources.delta(baseline, b) for b in self.source['branches'] if b != baseline}}
+                    bundle['required_unresolved_branches'] = required_unresolved(bundle)
+                    comp_dir = self.run_dir / 'comparison'
+                    save_json(comp_dir / 'inputs.json', bundle)
+                    started = self.stage_started('compare', bundle)
                     try:
-                        self.repo.assert_expected()
+                        self.git_sources.assert_intact()
                         for entry in entries:
                             self.assert_revision_files(entry)
-                    except AuditError as exc:
-                        manifest['restoration'] = {'restored': False, 'node': getattr(exc, 'node', None), 'error': str(exc)}
-                        self.record_error(manifest, exc, phase='restoration')
-                        raise
-                manifest['comparison'] = comparison
-                manifest['comparison_invocation'] = meta
-                self.stage_finished('compare', bundle, comparison, started,
-                    report_path=comp_dir / ARTIFACTS['compare'] if meta.get('publication_complete') else None)
-                quality_ok = quality_ok and comparison['program_checks']['policy_satisfied'] and meta['publication_complete']
-            failed = any(b['errors'] for b in entries)
-            manifest['status'] = 'FAILED' if failed else 'COMPLETE' if quality_ok else 'PARTIAL'
-            code = 1 if failed else 0 if quality_ok else 2
+                        can_compare = (comparison_possible(selected_entries, baseline) if self.compromise
+                                       else any(accepted(b) for b in selected_entries))
+                        if can_compare:
+                            comparison, meta = self.invoke('compare', bundle, comp_dir / 'compare.logs')
+                        else:
+                            comparison, meta = self.publish_blocked_comparison(bundle, comp_dir / 'compare.logs')
+                    finally:
+                        try:
+                            self.git_sources.assert_intact()
+                            for entry in entries:
+                                self.assert_revision_files(entry)
+                        except AuditError as exc:
+                            self.record_error(manifest, exc, phase='integrity')
+                            raise
+                    manifest['comparison'] = comparison
+                    manifest['comparison_invocation'] = meta
+                    self.stage_finished('compare', bundle, comparison, started,
+                        report_path=comp_dir / ARTIFACTS['compare'] if meta.get('publication_complete') else None)
+                    quality_ok = quality_ok and comparison['program_checks']['policy_satisfied'] and meta['publication_complete']
+                failed = any(b['errors'] for b in entries)
+                manifest['status'] = 'FAILED' if failed else 'COMPLETE' if quality_ok else 'PARTIAL'
+                code = 1 if failed else 0 if quality_ok else 2
         except BaseException as exc:
             manifest['errors'].append(str(exc) or type(exc).__name__)
             manifest['status'] = 'FAILED'
             code = 130 if isinstance(exc, KeyboardInterrupt) else 1
-            # Only restore if preflight established an original checkout and restoration
-            # has not already completed; never force away evidence of unexpected writes.
-            if original_commit and not restored and not restoration_attempted and not check_only:
-                try:
-                    restore()
-                except BaseException as restore_error:
-                    manifest['errors'].append('Restoration: ' + (str(restore_error) or type(restore_error).__name__))
             self.record_error(manifest, exc, phase='run' if self.analysis_started else 'preflight')
-        manifest['finished_at'] = now()
-        manifest['exit_code'] = code
+        finally:
+            self.source_path = original_path
+            self.active_snapshot = None
+            if self.git_sources is not None:
+                try:
+                    self.git_sources.close()
+                    manifest['temporary_sources_removed'] = True
+                except OSError as exc:
+                    manifest['temporary_sources_removed'] = False
+                    manifest['errors'].append('Temporary source cleanup failed.')
+                    manifest['status'] = 'FAILED'
+                    code = 130 if code == 130 else 1
+                    self.record_error(manifest, exc, phase='cleanup')
+        manifest.update(finished_at=now(), exit_code=code)
         persist()
         return manifest, code
 
@@ -2275,7 +2206,7 @@ def main() -> int:
             except OSError as save_error:
                 reporter.error(save_error)
     finally:
-        # Presentation failures never bypass source restoration or resource cleanup.
+        # Presentation failures never bypass temporary-source or resource cleanup.
         if runner and runner.repo:
             try:
                 runner.repo.close()

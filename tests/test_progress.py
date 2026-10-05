@@ -568,7 +568,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         self.assertIn('[FAIL] main / Project analysis failed.', r.stderr.getvalue())
         self.assertIn('[RUN] other / Analyzing project…', r.stderr.getvalue())
         self.assertIn('[RUN] Comparing branch reports…', r.stderr.getvalue())
-        self.assertTrue(manifest['restoration']['restored'])
+        self.assertTrue(manifest['temporary_sources_removed'])
         self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
 
     def test_ctrl_c_clears_live_http_spinner_and_no_progress_remains_plain(self):

@@ -116,9 +116,7 @@ class HeadTests(unittest.TestCase):
         self.assertEqual(self.repo.symbolic(), 'alias')
         refs = {str(p): p.read_bytes() for p in (self.repo_path / '.git/refs').rglob('*') if p.is_file()}
         pins = self.repo.preflight(['master', 'test01'])
-        self.repo.checkout(pins['test01'])
-        self.assertIsNone(self.repo.symbolic_ref())
-        self.repo.restore('alias', self.master)
+        self.repo.assert_expected()
         self.assertEqual(self.repo.symbolic_ref(), 'refs/heads/alias')
         self.assertEqual(refs, {str(p): p.read_bytes() for p in (self.repo_path / '.git/refs').rglob('*') if p.is_file()})
 
@@ -184,8 +182,7 @@ class HeadTests(unittest.TestCase):
         pins = repo.preflight(['master'])
         self.assertEqual(len(repo.head()), 64)
         self.assertIsNone(repo.symbolic_ref())
-        repo.checkout(pins['master'])
-        self.assertTrue(repo.restore(None, pins['master'])['restored'])
+        repo.assert_expected()
 
     def test_transport_denial_without_relying_on_no_lazy_fetch(self):
         sentinel = self.base / 'transport-called'
@@ -241,8 +238,8 @@ class CompatibilityCLI(unittest.TestCase):
                 self.assertEqual(self.execute('git', check=True).returncode, 0)
                 (self.repo_path / 'app.py').write_bytes(b'changed despite the cached monitor state\n')
                 result = self.execute('git', check=True)
-                self.assertEqual(result.returncode, 1, result.stderr)
-                self.assertIn('Working tree must have no modifications', result.stderr)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('working changes included', result.stderr)
                 self.assertFalse(sentinel.exists())
                 self.assertEqual(index, (self.repo_path / '.git/index').read_bytes())
                 self.assertEqual(config, (self.repo_path / '.git/config').read_bytes())
@@ -316,7 +313,7 @@ class RecursiveCompatibilityCLI(recursive.RecursiveFixture, unittest.TestCase):
                     self.assertEqual(manifest['status'], 'PARTIAL')
                     self.assertTrue(Path(manifest['final_report']).is_file())
                 self.assert_original(before)
-                self.assertTrue(manifest['restoration']['restored'])
+                self.assertTrue(manifest['temporary_sources_removed'])
                 self.assertEqual(manifest['original_checkout']['branch'], 'alias')
                 for relative, state in manifest['original_hierarchy'].items():
                     self.assertEqual(state['ref'], 'refs/heads/alias')

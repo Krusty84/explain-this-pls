@@ -305,11 +305,11 @@ class CompromiseGit(unittest.TestCase):
         if single:
             config['git_mode']['branches'] = ['master']
         runner = Runner(config, self.base / 'run')
-        original_restore = runner.repo.restore
+        original_restore = runner.repo.close
         def restore(*args):
             result = original_restore(*args)
             if restore_failure:
-                raise OSError('fixture restoration verification failed')
+                raise OSError('fixture temporary cleanup failed')
             return result
         calls = []
         def process(command, cwd, env, payload, **kwargs):
@@ -324,7 +324,7 @@ class CompromiseGit(unittest.TestCase):
                 semantic_failure(data)
             return cli_result(command, data)
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process), \
-                patch.object(runner.repo, 'restore', side_effect=restore):
+                patch.object(runner.repo, 'close', side_effect=restore):
             manifest, code = runner.run()
         self.assertEqual(self.repo.symbolic(), 'master')
         self.assertEqual(self.repo.head(), self.master)
@@ -373,6 +373,8 @@ class CompromiseGit(unittest.TestCase):
         self.assertEqual((manifest['status'], code), ('FAILED', 1))
         self.assertTrue(manifest['critical_failure'])
         self.assertTrue(manifest['has_usable_material'])
+        self.assertTrue(any(d['phase'] == 'cleanup' for d in manifest['diagnostics']))
+        self.assertFalse(any(d['phase'] == 'restoration' for d in manifest['diagnostics']))
         self.assertIn('Критическая ошибка', Path(manifest['final_report']).read_text())
 
     def test_comparison_cannot_confirm_unaccepted_pair(self):

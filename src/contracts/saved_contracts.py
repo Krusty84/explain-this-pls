@@ -20,6 +20,8 @@ def mapping(items):
 IDENTITY = obj(mode=string('git', 'folder'), branch=string(), commit=string(), directory=string(),
                fingerprint=string(), parent_commit=string(), submodule_path=string())
 IDENTITY['required'] = ['mode']
+IDENTITY['properties'].update(repository=string(), branch=NULL_STRING, base_commit=string(),
+    source_type=string('commit', 'working_tree'), snapshot_id=string(), submodule_head=string())
 NULL_IDENTITY = dict(IDENTITY, type=['object', 'null'])
 SOURCE = obj(id=string(), root=string(), identity=IDENTITY)
 COVERAGE_PLAN = obj(contract_id=string(CONTRACT_ID), origin=string('AGENT', 'DIRECTORY_FALLBACK'),

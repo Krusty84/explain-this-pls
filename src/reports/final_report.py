@@ -64,8 +64,9 @@ def report_entries(manifest, source, mode):
     if mode == 'folder':
         return [manifest]
     entries = {b['branch']: b for b in manifest.get('branches', [])}
+    labels = source['branches'] + [b for b in entries if b not in source['branches']]
     return [entries.get(branch, {'branch': branch, 'source_commit': manifest.get('pins', {}).get(branch),
-                                'errors': []}) for branch in source['branches']]
+                                'errors': []}) for branch in labels]
 
 
 def comparison_possible(entries, baseline):
@@ -108,13 +109,23 @@ def render_final_report(manifest, source, mode, language='Russian'):
         out += ['> ' + t('Диагностическая сводка: пригодное исследование отсутствует.',
                           'Diagnostic summary: no usable study is available.'), '']
     if manifest.get('critical_failure'):
-        out += ['> ' + t('Критическая ошибка запуска; учитывайте диагностику целостности и восстановления.',
-                          'Critical run failure; consult integrity and restoration diagnostics.'), '']
+        out += ['> ' + t('Критическая ошибка запуска; учитывайте диагностику целостности и очистки временных данных.',
+                          'Critical run failure; consult integrity and temporary-data cleanup diagnostics.'), '']
     for b in entries:
         out += ['## ' + cell(b.get('branch', manifest.get('source_directory', source.get('path', '')))), '',
             t('Условия политики обработки и ревью выполнены.', 'Processing and review policy checks satisfied.') if accepted(b) else
             t('Условия политики не выполнены; причины указаны в диагностике.',
               'Policy checks not satisfied; see diagnostics for the reasons.'), '']
+        snapshot = b.get('source_snapshot')
+        if snapshot:
+            out += [t('Источник: ', 'Source: ') + cell(snapshot['source_type']) +
+                    '; snapshot: ' + cell(snapshot['snapshot_id']) + '; fingerprint: ' + cell(snapshot['fingerprint']),
+                    t('Базовый коммит: ', 'Base commit: ') + cell(snapshot['base_commit']), '']
+            if snapshot['source_type'] == 'working_tree':
+                out += [t('Исследованы байты рабочего дерева, включая локальные изменения и неигнорируемые untracked-файлы. '
+                          'Базовый коммит не идентифицирует эти байты.',
+                          'Inspected working-tree bytes, including local changes and non-ignored untracked files. '
+                          'The base commit does not identify these bytes.'), '']
         if not b.get('review') or not accepted(b):
             out += ['> ' + t('Проверка реестра не завершена с положительным результатом политики.',
                               'Registry review has not completed with a positive policy result.'), '']

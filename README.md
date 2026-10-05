@@ -53,19 +53,22 @@ Choose how to provide your source code:
 
 - **Git mode:** use a standalone local clone with one or more local branches.
   Choose a baseline for comparison. Fetch the branches you need before starting.
-  The clone must be clean, with no unfinished Git operations, uncommitted changes,
-  untracked files, or ignored files.
+  Working changes and non-ignored untracked files are included by default. Ignored
+  files stay untouched and are excluded. Conflicted indexes and unfinished Git
+  operations must be resolved before analysis.
 - **Folder mode:** use an existing directory containing your source files.
   Git and a clean checkout are not required. Hidden files are included too.
 
-If the project uses submodules, prepare them with
-`git submodule update --init --recursive --checkout` in the source repository.
-All submodules, including nested ones, must be clean and at their recorded versions.
+Submodules, including nested ones, must already be initialized locally. Their
+working changes and non-ignored untracked files are included in the working
+snapshot; their actual HEAD may differ from the base or staged gitlink.
 Versions needed by the selected branches must be available locally, and submodule
 names and paths must match across those branches and the original checkout.
 
-Keep this package outside the source directory. Do not edit the source or switch
-branches while analysis is running.
+Keep this package outside the source directory. Avoid editing allowed sources,
+the index or ignore rules while snapshots are being prepared. Once preparation
+finishes, every analysis stage reads the same independent copy. Later edits to the
+original source, including ignored files, do not change that copy.
 
 ### Configuration
 
@@ -107,8 +110,8 @@ This example analyzes two branches and writes reports in English:
 ```
 
 For a single branch, set `git_mode.branches` to `["main"]` and
-`git_mode.baseline_branch` to `"main"`. Comparison is skipped. Git mode restores
-the original checkout after analysis.
+`git_mode.baseline_branch` to `"main"`. Comparison is skipped. Git mode never
+switches, stashes, resets, cleans, stages or commits the original checkout.
 
 For folder analysis, replace the source settings with:
 

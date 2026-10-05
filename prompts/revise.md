@@ -78,3 +78,10 @@ or links. If a meaningful diagram cannot be built from the available evidence, e
 the specific reason in its section and limitations, and use PARTIAL/BLOCKED as
 appropriate. Missing persistent storage alone does not justify omitting the data-flow
 diagram: show applicable inputs, processing, outputs and in-memory state.
+
+In Git mode, source_snapshot.source_type distinguishes working_tree from commit.
+Use only repository (the prepared copy), never source_snapshot.repository (origin
+metadata). Ignored untracked files and .git are absent; do not search the original
+checkout to recover them. Symbolic links are metadata only. Keep source links
+relative to the project. Describe working-tree provenance explicitly; never claim
+its base commit is the exact version of all inspected files.

@@ -112,7 +112,7 @@ Do not sum that older field across attempts.
 The run manifest and final stdout JSON contain the same `metrics` snapshot:
 
 - `duration_seconds`: monotonic wall time of this run, including local preparation,
-  processing, restoration and report publication up to final metrics capture.
+  processing, temporary-source cleanup and report publication up to final metrics capture.
 - `attempts`: orchestrator attempts, including failed attempts and format repairs;
   it is not a count of the backend's internal model requests or tool calls.
 - `usage`: aggregate counters and their availability, described below.
@@ -168,6 +168,49 @@ extra model calls, session recovery, or extended cleanup budgets are used to obt
 it. Complete means the available backend accounting is complete, not that it has
 been reconciled against an invoice or includes unreported backend activity.
 
+## Git source preparation
+
+Existing `mode: "git"` configurations use internal source snapshots by default;
+there are no dirty/untracked/snapshot options. The original repository is read-only
+throughout preparation and analysis. No stash, reset, clean, checkout, switch,
+index update or restoration is performed by the analyzer. Only owned temporary
+sources and invocation data are removed. Folder mode retains its original behavior.
+
+The current branch is matched by its immediate symbolic HEAD identity, never by
+SHA alone. When selected, it uses working bytes. Other selected branches use pinned
+commits. An unselected current branch or detached HEAD with analyzable local changes
+adds a labeled working-tree revision. Ignored-only changes add none. Baseline and
+requested branch comparisons remain unchanged. Deltas compare snapshot contents
+recursively, including additions, removals, modes and submodules; renames appear as
+deletion plus addition. A base SHA is provenance, not a working snapshot identity.
+
+Git selects cached and non-ignored untracked paths with NUL-delimited output and
+`--exclude-standard`. Standard root/nested rules, negation, info/exclude and global
+excludes apply. A read-only Git config query imports only the effective
+`core.excludesFile`; normal Git commands retain the hardened runtime config.
+Tracked files matching an ignore pattern stay in scope. Missing files are recorded
+as deletions. Partial staging never substitutes index bytes for disk bytes. Index
+mode/object IDs and status are preserved separately. No hard links are used.
+Symlinks are metadata only, excluded from readable files and source coverage.
+
+Recursive submodules use their actual checkout for working snapshots, including
+local modifications and untracked files. Metadata distinguishes the parent's base
+gitlink, staged gitlink and actual child HEAD. Commit snapshots use the gitlinks of
+each pinned commit. Required objects must exist locally. Changed submodule paths
+or logical names, uninitialized nodes, conflicts, unfinished operations, sparse
+checkout, unsafe metadata and configured filters remain rejected.
+
+Preparation scans the allowed paths and ignore rules before, during and after
+copying, with descriptor-relative no-follow reads and index/HEAD guards. A mismatch
+fails with SOURCE_CHANGED rather than publishing mixed states. Ignored contents
+are never fingerprinted. Every later stage—including substantive revisions,
+review and evidence checks—reads the same independent copy. Its fingerprint is
+checked at stage boundaries. These checks do not guarantee continuous OS-level
+immutability or sandbox arbitrary native CLI code. Claude denies reads of the
+original checkout through its native Read rules; OpenCode/XXX deny external
+directory access; Codex retains its native read-only sandbox. Git environment
+variables that redirect repository paths are removed from source invocations. `--check` prepares and discards the same sources, with no model calls.
+
 ## Evidence locators
 
 An evidence record has `id`, `source_id`, `path`, `start_line`, `end_line`, `quote`.
@@ -176,8 +219,12 @@ Prefixed references are canonical. Study has the narrowly scoped normalization
 rule below; review always requires explicit namespaces because both its own
 evidence and study evidence are available.
 The orchestrator assigns `source-001` to the main source and subsequent IDs to
-submodules sorted by root-relative path. Each nested source has its exact commit,
-root path and containing main commit; it must be cited through its own source ID.
+submodules sorted by root-relative path. Each nested source must be cited through
+its own source ID. Git snapshot identity contains source_type (`commit` or
+`working_tree`), original repository, branch (null for detached HEAD), base_commit,
+snapshot_id and fingerprint. Submodule identities share the snapshot identity and
+add their root path and pinned/actual HEAD. A working snapshot is not identified
+by its base commit alone.
 The internal folder identity is its fingerprint and canonical directory; the model
 receives `source_directory` and `source_snapshot_id` instead. Folder mode does not
 call Git. The resolver uses no network.
@@ -190,9 +237,10 @@ checked before/after access. No symlink target or special file is read, includin
 during component replacement races. Detected source changes are fatal integrity
 failures, not recoverable model format failures.
 Before an agent call the runner inventories source-file hashes under the source
-guards (excluding Git control directories in Git mode). Resolved bytes must match
-that private inventory, including nested sources. This uses actual checkout bytes
-so legitimate Git EOL transformations do not produce false blob mismatches.
+guards. In Git mode this is the prepared copy, not the original checkout. Evidence
+paths must belong to the allowed inventory before any content read. Resolved bytes
+must match that inventory, including nested sources. Working copies preserve the
+actual disk bytes; commit copies use raw Git blobs without checkout transforms.
 Inventories do not enter prompts and do not count as agent source inspection.
 
 Lines are positive integers (booleans are not integers), inclusive and ordered.

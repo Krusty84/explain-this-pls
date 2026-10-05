@@ -55,7 +55,7 @@ class CLIAdapterTests(unittest.TestCase):
                                 self.assertIn('approval_policy="never"', cmd)
                                 self.assertIn('web_search="disabled"', cmd)
                                 self.assertEqual('--skip-git-repo-check' in cmd,
-                                                 mode == 'folder' or stage == 'compare')
+                                                 True)
                                 self.assertEqual('features.shell_tool=false' in cmd, stage == 'compare')
                             else:
                                 self.assertEqual(cmd[1], '-p')
@@ -77,7 +77,7 @@ class CLIAdapterTests(unittest.TestCase):
             for mode in ('git', 'folder'):
                 with self.subTest(backend=backend, mode=mode):
                     expected = REQUIRED_FLAGS[backend] + (
-                        ['--skip-git-repo-check'] if backend == 'codex' and mode == 'folder' else [])
+                        ['--skip-git-repo-check'] if backend == 'codex' else [])
                     flags = adapter.required_flags(mode)
                     self.assertEqual(flags, expected)
                     flags.clear()

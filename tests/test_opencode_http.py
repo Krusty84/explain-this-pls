@@ -309,7 +309,7 @@ class GitHTTPPipelineTests(unittest.TestCase):
             self.addCleanup(runner.repo.close)
             manifest, code = runner.run()
         self.assertEqual(code, 0, manifest)
-        self.assertTrue(manifest['restoration']['restored'])
+        self.assertTrue(manifest['temporary_sources_removed'])
         self.assertEqual(git('rev-parse', 'HEAD'), original)
         self.assertEqual(git('symbolic-ref', '--short', 'HEAD'), 'main')
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
@@ -317,7 +317,9 @@ class GitHTTPPipelineTests(unittest.TestCase):
         self.assertEqual(len(prompts), 7)
         self.assertEqual(len({c['path'] for c in prompts}), 7)
         self.assertNotEqual(prompts[-1]['cwd'], str(repo))
-        self.assertTrue(all(c['cwd'] == str(repo) for c in prompts[:-1]))
+        self.assertTrue(all(c['cwd'] != str(repo) for c in prompts[:-1]))
+        self.assertEqual(len({c['cwd'] for c in prompts[:-1]}), 2)
+        self.assertTrue(all(c['permissions']['external_directory'] == 'deny' for c in prompts[:-1]))
 
 
 if __name__ == '__main__':

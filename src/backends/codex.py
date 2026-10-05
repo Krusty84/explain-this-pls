@@ -14,8 +14,7 @@ def help_command(executable: str) -> list[str]:
 
 def required_flags(mode: str) -> list[str]:
     flags = ['--ephemeral', '--output-schema', '--sandbox', '--json', '--output-last-message']
-    if mode == 'folder':
-        flags.append('--skip-git-repo-check')
+    flags.append('--skip-git-repo-check')
     return flags
 
 
@@ -26,8 +25,7 @@ def build_command(agent: dict, stage: str, mode: str, schema: dict,
         '--output-schema', str(schema_path), '--json',
         '--output-last-message', str(schema_path.with_name('final.response.json')), '-c', 'approval_policy="never"',
         '-c', 'web_search="disabled"']
-    if compare or mode == 'folder':
-        cmd += ['--skip-git-repo-check']
+    cmd += ['--skip-git-repo-check']
     if compare:
         cmd += ['-c', 'features.shell_tool=false']
     if agent.get('model'):

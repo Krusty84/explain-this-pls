@@ -211,7 +211,7 @@ def validate_history(messages, session_id, request_id, final_id=None, final_enve
                                  'Returned result differs from the final history snapshot.', code='FINAL_SNAPSHOT_MISMATCH')
 
 
-def prepare_environment(env, stage):
+def prepare_environment(env, stage, *, source_snapshot=False):
     try:
         config = strict_json(env.get('OPENCODE_CONFIG_CONTENT') or '{}')
     except ContractError as exc:
@@ -221,6 +221,10 @@ def prepare_environment(env, stage):
     permission = {'*': 'deny'}
     if stage not in ('compare', 'repair'):
         permission.update(read='allow', glob='allow', grep='allow', list='allow')
+        if source_snapshot:
+            # Covers all path-taking tools, including glob/grep whose own rules
+            # match search patterns: https://opencode.ai/docs/permissions/
+            permission['external_directory'] = 'deny'
     # v1.2.27 LLM.resolveTools filters this exact, case-sensitive tool name.
     permission['StructuredOutput'] = 'allow'
     name = 'architecture-audit-' + secrets.token_hex(16)

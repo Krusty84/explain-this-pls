@@ -64,6 +64,9 @@ class Handler(BaseHTTPRequestHandler):
         call = {'method': self.command, 'path': self.path, 'body': body, 'cwd': str(Path.cwd()), 'server_pid': os.getpid()}
         if isinstance(body, dict) and 'agent' in body:
             call['permissions'] = json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])['agent'][body['agent']]['permission']
+            if os.environ.get('AUDIT_FAKE_CAPTURE_SOURCES'):
+                call['source_files'] = {str(p.relative_to(Path.cwd())): p.read_text(errors='replace')
+                    for p in Path.cwd().rglob('*') if p.is_file() and not p.is_symlink()}
         log = os.environ.get('AUDIT_FAKE_CALLS')
         if log:
             with open(log, 'a') as stream:

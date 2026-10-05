@@ -17,30 +17,17 @@ def inspect_sources(context):
     expected = (json.loads(Path(expected_path).read_text())[context['branch']] if expected_path else
                 {'.': {'commit': context['source_commit']}})
     observed = {}
+    root = Path(context['repository'])
+    assert root == Path.cwd()
+    assert not any(p.name == '.git' for p in root.rglob('*'))
     for relative, record in expected.items():
-        path = Path(context['repository']) / relative
-        # The fixture makes its own explicit read authorization, independently of
-        # runner trust. Never import runner Git configuration into the child.
-        with tempfile.TemporaryDirectory(prefix='fake-cli-git-', dir='/tmp') as neutral:
-            config = Path(neutral) / 'config'
-            env = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=str(config))
-            subprocess.run(['git', 'config', '--file', str(config), 'safe.directory', str(path)],
-                           cwd=neutral, env=env, check=True)
-            cmd = ['git', '-C', str(path)]
-            sha = subprocess.check_output(cmd + ['rev-parse', 'HEAD'], env=env).decode().strip()
-            ref = subprocess.run(cmd + ['symbolic-ref', '-q', 'HEAD'], env=env, capture_output=True)
-            expected_content = record.get('content')
-            if expected_content is None:
-                expected_content = subprocess.check_output(cmd + ['show', record['commit'] + ':app.py'], env=env).decode()
-        assert sha == record['commit'], (relative, sha, record)
-        assert ref.returncode == 1, (relative, ref.stdout)
+        path = root / relative
         content = (path / 'app.py').read_text()
-        assert content == expected_content, (relative, content, record)
-        if relative != '.':
-            supplied = next(item for item in context['submodules'] if item['path'] == relative)
-            assert supplied['expected_commit'] == sha
-            assert supplied['actual'] == {'commit': sha, 'ref': None, 'clean': True}
-        observed[relative] = {'commit': sha, 'content': content}
+        if 'content' in record:
+            assert content == record['content'], (relative, content, record)
+        observed[relative] = {'commit': record['commit'], 'content': content}
+    call['source_files'] = {str(p.relative_to(root)): p.read_text(errors='replace')
+                            for p in root.rglob('*') if p.is_file() and not p.is_symlink()}
     call['observed'] = observed
 
 
@@ -110,7 +97,8 @@ else:
     sys.dont_write_bytecode = True
     from ledger_response import response
     data = response(context)
-    if os.environ.get('AUDIT_TEST_PARTIAL') and stage == 'study':
+    if stage == 'study' and (os.environ.get('AUDIT_TEST_PARTIAL') or
+            context.get('branch') in json.loads(os.environ.get('AUDIT_TEST_PARTIAL_BRANCHES', '[]'))):
         data.update(completion_status='PARTIAL', limitations=['Fixture coverage is incomplete.'])
     if context.get('source_mode') == 'folder' and os.environ.get('AUDIT_TEST_MUTATE_SOURCE'):
         (Path(context['source_directory']) / 'modified.txt').write_text('agent modification')

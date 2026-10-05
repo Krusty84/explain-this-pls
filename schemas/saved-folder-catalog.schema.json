@@ -132,7 +132,10 @@
                     ]
                   },
                   "branch": {
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "commit": {
                     "type": "string"
@@ -147,6 +150,25 @@
                     "type": "string"
                   },
                   "submodule_path": {
+                    "type": "string"
+                  },
+                  "repository": {
+                    "type": "string"
+                  },
+                  "base_commit": {
+                    "type": "string"
+                  },
+                  "source_type": {
+                    "type": "string",
+                    "enum": [
+                      "commit",
+                      "working_tree"
+                    ]
+                  },
+                  "snapshot_id": {
+                    "type": "string"
+                  },
+                  "submodule_head": {
                     "type": "string"
                   }
                 },
@@ -299,7 +321,10 @@
                     ]
                   },
                   "branch": {
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "commit": {
                     "type": "string"
@@ -314,6 +339,25 @@
                     "type": "string"
                   },
                   "submodule_path": {
+                    "type": "string"
+                  },
+                  "repository": {
+                    "type": "string"
+                  },
+                  "base_commit": {
+                    "type": "string"
+                  },
+                  "source_type": {
+                    "type": "string",
+                    "enum": [
+                      "commit",
+                      "working_tree"
+                    ]
+                  },
+                  "snapshot_id": {
+                    "type": "string"
+                  },
+                  "submodule_head": {
                     "type": "string"
                   }
                 },
