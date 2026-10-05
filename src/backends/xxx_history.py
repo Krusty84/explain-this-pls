@@ -3,10 +3,8 @@
 
 """XXX session membership, independent of IDs' spelling and model summaries.
 
-Only the start of auto/non-overflow compaction is evidenced for XXX. The
-continuation recognizer is an upstream-reference shape, NOT a capability claim.
-Production authorization stays closed until a fork's pre-model format retention
-mechanism is verified. Tests override that one gate for explicitly synthetic data.
+Accepts a bounded, format-preserving wire profile, not a claim about unseen
+backend internals. Reference/synthetic tests exercise this production validator.
 """
 from __future__ import annotations
 
@@ -18,12 +16,57 @@ from src.backends.opencode import identifier, native_error, object_value, json_e
 
 CONTINUE_TEXT = 'Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.'
 
+# ECMAScript WhiteSpace + LineTerminator (trimEnd), explicitly enumerated.
+# Python's default rstrip additionally removes e.g. U+0085, and misses U+FEFF.
+TRIM_END = ('\u0009\u000b\u000c\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005'
+            '\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000\ufeff\u000a\u000d\u2028\u2029')
+USER_FIELDS = frozenset(('id', 'sessionID', 'role', 'time', 'agent', 'model',
+                         'format', 'system', 'tools', 'variant', 'summary'))
+ASSISTANT_FIELDS = frozenset(('id', 'sessionID', 'role', 'time', 'parentID', 'agent',
+    'mode', 'providerID', 'modelID', 'path', 'summary', 'cost', 'tokens', 'structured',
+    'variant', 'finish', 'error'))
+USER_PROTECTED = ('id', 'sessionID', 'role', 'parentID', 'agent', 'model', 'format',
+                  'system', 'tools', 'variant')
+ASSISTANT_PROTECTED = ('id', 'sessionID', 'role', 'parentID', 'agent', 'summary',
+                       'mode', 'providerID', 'modelID', 'path', 'variant')
+PART_PROTECTED = ('id', 'messageID', 'sessionID', 'type', 'tool', 'callID',
+                  'synthetic', 'ignored', 'auto', 'overflow')
+SAFE_FIELDS = frozenset('info.' + k for k in USER_FIELDS | ASSISTANT_FIELDS) | frozenset(
+    'part.' + k for k in PART_PROTECTED + ('text', 'time', 'state', 'metadata')) | frozenset(
+    ('info.time.created', 'info.time.completed', 'info.unknown', 'part.unknown', 'message.unknown'))
+PART_TYPES = frozenset(('text', 'reasoning', 'tool', 'compaction', 'step-start',
+    'step-finish', 'snapshot', 'patch', 'file', 'agent', 'subtask', 'retry'))
 
-def timestamp(value):
+
+def same_field(before, after, key):
+    return (key in before) == (key in after) and equal(before.get(key), after.get(key))
+
+
+def user_summary(value):
+    """Closed metadata shape from UserMessage.summary / FileDiff declarations."""
+    if (type(value) is not dict or set(value) - {'title', 'body', 'diffs'} or
+            type(value.get('diffs')) is not list or
+            any(type(value[k]) is not str for k in ('title', 'body') if k in value)):
+        return False
+    for diff in value['diffs']:
+        if (type(diff) is not dict or
+                set(diff) - {'file', 'before', 'after', 'additions', 'deletions', 'status'} or
+                any(type(diff.get(k)) is not str for k in ('file', 'before', 'after')) or
+                any(not finite_number(diff.get(k)) for k in ('additions', 'deletions')) or
+                ('status' in diff and diff['status'] not in ('added', 'deleted', 'modified'))):
+            return False
+    return True
+
+
+def finite_number(value):
     try:
-        return type(value) in (int, float) and value >= 0 and math.isfinite(value)
+        return type(value) in (int, float) and math.isfinite(value)
     except OverflowError:
         return False
+
+
+def timestamp(value):
+    return finite_number(value) and value >= 0
 
 
 class SessionHistory:
@@ -47,6 +90,8 @@ class SessionHistory:
         self.service_id = None
         self.pending_user = None
         self.last_assistant = None
+        self.diagnostic_role = 'unknown'
+        self.diagnostic_part = None
 
     def event(self, name, **details):
         value = {'event': name, 'transitions': self.transitions, **details}
@@ -54,61 +99,118 @@ class SessionHistory:
             self.events.append(value)
             self.emit(name, transitions=self.transitions, **details)
 
-    def reject(self, code, *, compatibility=False):
+    def reject(self, code, *, compatibility=False, field=None):
         self.failed = True
-        self.event('compaction_rejected', reason=code)
+        details = {'phase': self.phase, 'role': self.diagnostic_role}
+        if field is not None:
+            details['field'] = field if field in SAFE_FIELDS else 'info.unknown'
+        if self.diagnostic_part is not None:
+            details['part_type'] = self.diagnostic_part
+        self.event('compaction_rejected' if self.transitions else 'session_rejected', reason=code, **details)
         raise response_error('BACKEND_INCOMPATIBLE' if compatibility else 'TRANSPORT_ERROR',
                              'compatibility' if compatibility else 'transport',
-                             'XXX session transition rejected: ' + code + '.', code=code,
-                             transitions=self.transitions)
+                             'XXX session transition rejected: ' + code + '. ' +
+                             ' '.join(f'{k}={v}' for k, v in details.items()) +
+                             f' transitions={self.transitions}', code=code,
+                             transitions=self.transitions, **details)
 
-    def authorize_continuation(self):
-        # No environment/config/version/API-schema bypass. A wire snapshot cannot
-        # prove that format was retained BEFORE the next provider call.
-        self.reject('COMPACTION_FORMAT_RETENTION_UNVERIFIED', compatibility=True)
+    def authorize_continuation(self, mid):
+        """Authorize observed membership/settings; cannot attest pre-model internals."""
+        if (self.phase != 'continuation' or self.completed != self.transitions or
+                self.continuations + 1 != self.completed or
+                self.origins.get(self.service_id) != 'request' or
+                self.origins.get(self.summary_id) != 'compaction'):
+            self.reject('CONTINUATION_CHAIN_INVALID')
+        # User messages have no parentID in this profile. Their position after
+        # the linked summary, plus the exact service part, supplies membership.
+        index = self.order.index(mid)
+        if index == 0 or self.order[index - 1] != self.summary_id:
+            self.reject('CONTINUATION_CHAIN_INVALID')
+        info = self.messages[mid]['info']
+        self._user_settings(info)
+        self._format(info)
 
     def _format(self, info, *, required=True):
         if 'format' not in info:
             if required:
-                self.reject('COMPACTION_FORMAT_MISSING', compatibility=True)
+                self.reject('COMPACTION_FORMAT_MISSING', compatibility=True, field='info.format')
         elif not equal(info['format'], self.body['format']):
-            self.reject('COMPACTION_FORMAT_CHANGED', compatibility=True)
+            self.reject('COMPACTION_FORMAT_CHANGED', compatibility=True, field='info.format')
 
     def _user_settings(self, info):
         root = self.messages[self.request_id]['info']
         if info.get('agent') != self.agent:
-            self.reject('USER_AGENT_CHANGED')
+            self.reject('USER_AGENT_CHANGED', field='info.agent')
         for key in ('model', 'variant', 'tools', 'system'):
-            if not equal(info.get(key), root.get(key)):
-                self.reject('USER_SETTINGS_CHANGED')
+            if not same_field(info, root, key):
+                self.reject('USER_SETTINGS_CHANGED', field='info.' + key)
+
+    def _info_shape(self, info):
+        role = info.get('role')
+        if role not in ('user', 'assistant'):
+            self.reject('MESSAGE_ROLE_UNSUPPORTED', field='info.role')
+        allowed = USER_FIELDS if role == 'user' else ASSISTANT_FIELDS
+        if role == 'user' and 'parentID' in info:
+            self.reject('USER_PARENT_UNSUPPORTED', field='info.parentID')
+        if set(info) - allowed:
+            self.reject('MESSAGE_FIELD_UNSUPPORTED', field='info.unknown')
+        if 'summary' in info:
+            if role == 'user' and not user_summary(info['summary']):
+                self.reject('USER_SUMMARY_INVALID', field='info.summary')
+            if role == 'assistant' and type(info['summary']) is not bool:
+                self.reject('ASSISTANT_SUMMARY_INVALID', field='info.summary')
+        if role == 'user':
+            model = info.get('model')
+            if (type(model) is not dict or set(model) != {'providerID', 'modelID'} or
+                    any(type(model[k]) is not str or not model[k] for k in model)):
+                self.reject('USER_SETTINGS_INVALID', field='info.model')
+            for key in ('agent', 'system', 'variant'):
+                if (key == 'agent' or key in info) and type(info.get(key)) is not str:
+                    self.reject('USER_SETTINGS_INVALID', field='info.' + key)
+            if 'tools' in info and (type(info['tools']) is not dict or
+                    any(type(v) is not bool for v in info['tools'].values())):
+                self.reject('USER_SETTINGS_INVALID', field='info.tools')
 
     def _merge(self, old, new, *, part=False):
         before, after = (old, new) if part else (old['info'], new['info'])
-        keys = (('id', 'messageID', 'sessionID', 'type', 'tool', 'callID', 'synthetic', 'auto', 'overflow')
-                if part else ('id', 'sessionID', 'role', 'parentID', 'agent', 'summary', 'mode',
-                              'providerID', 'modelID', 'path', 'model', 'format', 'variant', 'tools', 'system'))
+        keys = PART_PROTECTED if part else (USER_PROTECTED if before['role'] == 'user' else ASSISTANT_PROTECTED)
         for key in keys:
-            if not equal(before.get(key), after.get(key)):
-                self.reject('PART_IDENTITY_CHANGED' if part else 'MESSAGE_IDENTITY_CHANGED')
+            if not same_field(before, after, key):
+                self.reject('PART_IDENTITY_CHANGED' if part else 'MESSAGE_IDENTITY_CHANGED',
+                            field=('part.' if part else 'info.') + key)
         if not part:
             for key in ('created', 'completed'):
                 value = before.get('time', {}).get(key)
                 if value is not None and not equal(value, after.get('time', {}).get(key)):
-                    self.reject('MESSAGE_TIME_CHANGED')
+                    self.reject('MESSAGE_TIME_CHANGED', field='info.time.' + key)
             for key in ('structured', 'finish', 'error'):
                 if key in before and not equal(before[key], after.get(key)):
-                    self.reject('MESSAGE_RESULT_CHANGED')
-            if before['role'] == 'user' and not equal(before, after):
-                self.reject('USER_IDENTITY_CHANGED')
+                    self.reject('MESSAGE_RESULT_CHANGED', field='info.' + key)
+            if 'completed' in before.get('time', {}):
+                for key in ('cost', 'tokens'):
+                    if key in before and not same_field(before, after, key):
+                        self.reject('COMPLETED_USAGE_CHANGED', field='info.' + key)
             return
         kind = before['type']
         if self.origins.get(before['messageID']) == 'request' and not equal(before, after):
             self.reject('USER_PART_CHANGED')
         if kind in ('text', 'reasoning'):
             text, update = before.get('text'), after.get('text')
-            if (type(text) is not str or type(update) is not str or not update.startswith(text)
-                    or (before.get('time', {}).get('end') is not None and text != update)):
-                self.reject('PART_CONTENT_CHANGED')
+            old_time, new_time = before.get('time', {}), after.get('time', {})
+            for key in ('start', 'end'):
+                if key in old_time and not same_field(old_time, new_time, key):
+                    self.reject('PART_TIME_CHANGED', field='part.time')
+            finished = 'end' in old_time
+            finishing = not finished and 'end' in new_time
+            # A poll may include both the last chunk and finalization. It must
+            # preserve the entire observed prefix, or remove only its final
+            # ECMAScript whitespace. Never trim an observed prefix then append.
+            valid_text = (text == update if finished else
+                          update.startswith(text) or (finishing and update == text.rstrip(TRIM_END)))
+            if not valid_text:
+                self.reject('PART_CONTENT_CHANGED', field='part.text')
+            if finished and not equal(before, after):
+                self.reject('COMPLETED_PART_CHANGED', field='part.metadata')
         elif kind == 'tool':
             previous, current = before.get('state', {}), after.get('state', {})
             allowed = {'pending': ('pending', 'running', 'completed', 'error'),
@@ -126,30 +228,49 @@ class SessionHistory:
         elif not equal(before, after):
             self.reject('PART_CONTENT_CHANGED')
 
+    @staticmethod
+    def _activity(message):
+        """A separate projection: never strip metadata from stored/raw snapshots."""
+        info = message['info']
+        fields = ('time', 'cost', 'tokens', 'structured', 'finish', 'error') if info.get('role') == 'assistant' else ()
+        return {'info': {k: info[k] for k in fields if k in info}, 'parts': message['parts']}
+
     def _ingest(self, snapshot):
         if type(snapshot) is not list:
             self.reject('HISTORY_NOT_LIST')
         mids, pids = set(), set()
         previous_position = -1
-        changed = False
+        active = False
         # Validate all ownership/duplicates before counting any new usage.
         for message in snapshot:
             info = object_value(object_value(message, 'session message').get('info'), 'message info')
+            self.diagnostic_role = info.get('role') if info.get('role') in ('user', 'assistant') else 'unknown'
+            self.diagnostic_part = None
+            if set(message) - {'info', 'parts'}:
+                self.reject('MESSAGE_FIELD_UNSUPPORTED', field='message.unknown')
             mid = identifier(info.get('id'), 'msg')
             if mid in mids:
                 self.reject('DUPLICATE_MESSAGE_ID')
             mids.add(mid)
             if info.get('sessionID') != self.session_id:
-                self.reject('FOREIGN_SESSION')
+                self.reject('FOREIGN_SESSION', field='info.sessionID')
             timing = info.get('time')
             if (type(timing) is not dict or not timestamp(timing.get('created')) or
                     ('completed' in timing and (not timestamp(timing['completed']) or
                                                timing['completed'] < timing['created']))):
-                self.reject('MESSAGE_TIME_INVALID')
+                self.reject('MESSAGE_TIME_INVALID', field='info.time')
+            old = self.messages.get(mid)
+            if old is not None:
+                self._merge(old, message)
+            self._info_shape(info)
+            if set(timing) - ({'created'} if info['role'] == 'user' else {'created', 'completed'}):
+                self.reject('MESSAGE_FIELD_UNSUPPORTED', field='info.time')
             if type(message.get('parts')) is not list:
                 self.reject('PARTS_NOT_LIST')
             for part in message['parts']:
                 object_value(part, 'history part')
+                kind = part.get('type')
+                self.diagnostic_part = kind if type(kind) is str and kind in PART_TYPES else 'unknown'
                 pid = identifier(part.get('id'), 'prt')
                 if pid in pids:
                     self.reject('DUPLICATE_PART_ID')
@@ -163,6 +284,16 @@ class SessionHistory:
                 if part['type'] in ('text', 'reasoning'):
                     if type(part.get('text')) is not str or ('time' in part and type(part['time']) is not dict):
                         self.reject('TEXT_PART_INVALID')
+                    if set(part) - {'id', 'messageID', 'sessionID', 'type', 'text', 'synthetic', 'ignored', 'time', 'metadata'}:
+                        self.reject('PART_FIELD_UNSUPPORTED', field='part.unknown')
+                    if any(type(part[k]) is not bool for k in ('synthetic', 'ignored') if k in part):
+                        self.reject('TEXT_PART_INVALID')
+                    timing = part.get('time', {})
+                    if 'time' in part and (set(timing) - {'start', 'end'} or not timestamp(timing.get('start')) or
+                            ('end' in timing and (not timestamp(timing['end']) or timing['end'] < timing['start']))):
+                        self.reject('PART_TIME_INVALID', field='part.time')
+                    if 'metadata' in part and type(part['metadata']) is not dict:
+                        self.reject('TEXT_PART_INVALID', field='part.metadata')
                 if part['type'] == 'tool':
                     state = part.get('state')
                     if (type(state) is not dict or type(state.get('input')) is not dict or
@@ -170,12 +301,20 @@ class SessionHistory:
                             any(type(part.get(k)) is not str or not part[k] for k in ('tool', 'callID')) or
                             ('time' in state and type(state['time']) is not dict)):
                         self.reject('TOOL_PART_INVALID')
+                    if (set(part) - {'id', 'messageID', 'sessionID', 'type', 'tool', 'callID', 'state', 'metadata'} or
+                            set(state) - {'status', 'input', 'raw', 'title', 'metadata', 'time', 'output', 'attachments', 'error'}):
+                        self.reject('PART_FIELD_UNSUPPORTED', field='part.unknown')
+                    timing = state.get('time', {})
+                    if ('compacted' in timing and (state['status'] != 'completed' or
+                            not timestamp(timing['compacted']))):
+                        self.reject('TOOL_PART_INVALID', field='part.time')
         for message in snapshot:
+            self.diagnostic_role = message['info']['role']
+            self.diagnostic_part = None
             mid = message['info']['id']
             old = self.messages.get(mid)
             if old is not None:
                 position = self.order.index(mid)
-                self._merge(old, message)
             else:
                 position = len(self.order)
                 self.order.append(mid)
@@ -187,6 +326,7 @@ class SessionHistory:
             positions = {pid: i for i, pid in enumerate(merged_parts)}
             previous_part = -1
             for part in message['parts']:
+                self.diagnostic_part = part['type'] if part['type'] in PART_TYPES else 'unknown'
                 if (message['info'].get('summary') is True and part['type'] not in
                         ('text', 'reasoning', 'step-start', 'step-finish')):
                     self.reject('COMPACTION_SUMMARY_PART_UNSUPPORTED')
@@ -203,9 +343,10 @@ class SessionHistory:
                 merged_parts[pid] = copy.deepcopy(part)
                 self.part_owners[pid] = mid
             merged = {'info': copy.deepcopy(message['info']), 'parts': list(merged_parts.values())}
-            changed |= not equal(old, merged)
+            active |= not old['info'] or not equal(self._activity(old), self._activity(merged))
             self.messages[mid] = merged
-        return changed
+        self.diagnostic_part = None
+        return active
 
     def _complete_summary(self):
         if self.phase != 'summary':
@@ -227,6 +368,9 @@ class SessionHistory:
         if not any(p['type'] == 'text' and type(p.get('text')) is str and p['text'].strip()
                    for p in summary['parts']):
             return
+        if any(p['type'] in ('text', 'reasoning') and 'time' in p and 'end' not in p['time']
+               for p in summary['parts']):
+            return
         self.phase = 'continuation'
         self.completed += 1
         self.event('compaction_completed', completed=self.completed)
@@ -242,8 +386,9 @@ class SessionHistory:
             if info.get('agent') != self.agent:
                 self.reject('ROOT_AGENT_MISMATCH')
             self._format(info)
-            if 'model' in self.body and not equal(info.get('model'), self.body['model']):
-                self.reject('ROOT_MODEL_MISMATCH')
+            for key in ('model', 'system', 'tools', 'variant'):
+                if key in self.body and not equal(info.get(key), self.body[key]):
+                    self.reject('ROOT_SETTINGS_MISMATCH', field='info.' + key)
             if not parts:
                 return False
             if len(parts) != 1 or parts[0].get('type') != 'text' or parts[0].get('text') != self.body['parts'][0]['text']:
@@ -287,7 +432,7 @@ class SessionHistory:
                 type(timing.get('end')) not in (int, float) or timing['end'] < timing['start']):
             self.reject('CONTINUATION_TIME_INVALID')
         self._format(info)
-        self.authorize_continuation()
+        self.authorize_continuation(mid)
         self.current_request = mid
         self.continuations += 1
         self.last_assistant = None
@@ -303,6 +448,8 @@ class SessionHistory:
             for mid in self.order:
                 message = self.messages[mid]
                 info = message['info']
+                self.diagnostic_role = info['role']
+                self.diagnostic_part = None
                 if mid in self.origins:
                     if 'error' in info:
                         native_error(info['error'])
@@ -338,8 +485,10 @@ class SessionHistory:
             return changed
         except ContractError as exc:
             self.failed = True
-            if not self.events or self.events[-1]['event'] != 'compaction_rejected':
-                self.event('compaction_rejected', reason=exc.details.get('code', exc.failure_kind))
+            if not self.events or self.events[-1]['event'] not in ('compaction_rejected', 'session_rejected'):
+                self.event('compaction_rejected' if self.transitions else 'session_rejected',
+                           reason=exc.details.get('code', exc.failure_kind), phase=self.phase,
+                           role=self.diagnostic_role)
             raise
 
     def usage_messages(self):
@@ -350,6 +499,8 @@ class SessionHistory:
         if self.failed:
             self.reject('HISTORY_ALREADY_REJECTED')
         info = object_value(object_value(envelope, 'final envelope').get('info'), 'final info')
+        self.diagnostic_role = info.get('role') if info.get('role') in ('user', 'assistant') else 'unknown'
+        self.diagnostic_part = None
         mid = identifier(info.get('id'), 'msg')
         if info.get('agent') == 'compaction' or info.get('summary') is True:
             self.reject('COMPACTION_IS_NOT_STAGE_RESULT')
@@ -364,7 +515,8 @@ class SessionHistory:
         return self.current_request
 
     def metadata(self):
-        return {'profile': 'xxx-observed-auto-prefix', 'format_retention': 'unverified',
+        return {'profile': 'xxx-auto-format-preserving-v1', 'format_retention': 'checked_on_continuation',
+                'backend_pre_model_retention': 'unverified', 'phase': self.phase,
                 'summary_hook': 'not_applied_unverified', 'transitions': self.transitions,
                 'hook_conflict_check': 'unavailable', 'applied_settings': {},
                 'settings_policy': 'preserve_backend_profile',

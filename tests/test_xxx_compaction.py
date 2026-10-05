@@ -10,11 +10,10 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
-from unittest.mock import patch, Mock
+from unittest.mock import Mock
 from types import SimpleNamespace
 
 import test_xxx as base
-from src.backends.xxx_history import SessionHistory
 from src.backends.opencode import prepare_environment
 from src.runtime.reporting import Reporter
 from src.runtime.metrics import measurement
@@ -28,15 +27,56 @@ class CompactionHTTPTests(unittest.TestCase):
     git = base.XXXTests.git
     init_git = base.XXXTests.init_git
 
-    def synthetic(self, scenario, **kwargs):
-        # A fake's preserved format cannot establish production compatibility.
-        with patch.object(SessionHistory, 'authorize_continuation', lambda self: None):
-            return self.run_case(scenario, **kwargs)
+    def test_metadata_and_stream_finalization_publish_through_production_runner(self):
+        for scenario, count in (('history-metadata', 0), ('compact-metadata', 1)):
+            with self.subTest(scenario=scenario):
+                manifest, code = self.run_case(scenario)
+                self.assertEqual(code, 0, manifest)
+                self.assertTrue(manifest['accepted'])
+                self.assertTrue((self.run_dir / 'ARCHITECTURE.md').exists())
+                self.assertEqual(manifest['metrics']['attempts'], 3)
+                meta = manifest['study_invocation']
+                self.assertTrue(meta['native_envelope_valid'])
+                self.assertTrue(meta['backend_result_valid'])
+                self.assertEqual(meta['compaction']['continuations'], count)
+                self.assertEqual(meta['metrics']['usage']['total_tokens'], 10 + 8 * count)
+                artifacts = Path(meta['artifact_directory'])
+                envelope = json.loads((artifacts / 'response.json').read_text())
+                self.assertEqual(envelope['parts'][0]['text'], 'Результат.')
+                self.assertEqual(envelope['parts'][1]['text'], 'Ход\nГотово.')
+                histories = [json.loads((artifacts / r['artifact']).read_text()) for r in meta['http_responses']
+                             if r['operation'] == 'GET /session/{sessionID}/message']
+                self.assertTrue(any(h[0]['info'].get('summary') == {'diffs': []} for h in histories))
+                self.assertTrue(any(h[0]['info'].get('summary', {}).get('title') == 'Synthetic title' for h in histories))
+                self.assertTrue(any(h[-1] == envelope for h in histories))
+                self.assertEqual((self.source / 'app.py').read_text(), 'print(1)\n')
+
+    def test_metadata_does_not_extend_idle_and_identity_diagnostic_is_safe(self):
+        self.value['execution'] = {'stage_timeout_seconds': 5, 'idle_timeout_seconds': .5}
+        manifest, code = self.run_case('history-metadata-idle')
+        self.assertEqual(code, 1, manifest)
+        self.assertEqual(manifest['diagnostics'][0]['failure_kind'], 'IDLE_TIMEOUT')
+        self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
+        self.value['execution'] = {'stage_timeout_seconds': 5}
+        manifest, code = self.run_case('history-agent-change')
+        self.assertEqual(code, 1, manifest)
+        details = manifest['diagnostics'][0]['details']
+        self.assertEqual(details['code'], 'MESSAGE_IDENTITY_CHANGED')
+        self.assertEqual(details['field'], 'info.agent')
+        self.assertEqual(details['role'], 'user')
+        self.assertEqual(details['phase'], 'stage')
+        self.assertEqual(details['transitions'], 0)
+        self.assertNotIn('private-changed-agent', json.dumps(manifest['diagnostics']))
+        for pid in {c['server_pid'] for c in self.recorded()}:
+            with self.assertRaises(ProcessLookupError): os.kill(pid, 0)
+        calls = self.recorded()
+        self.assertTrue(any(c['path'].endswith('/abort') for c in calls))
+        self.assertTrue(any(c['method'] == 'DELETE' for c in calls))
 
     def test_one_and_multiple_compactions_in_folder_and_git(self):
         for scenario in ('compact-one', 'compact-multiple'):
             with self.subTest(scenario=scenario):
-                manifest, code = self.synthetic(scenario)
+                manifest, code = self.run_case(scenario)
                 self.assertEqual(code, 0, manifest)
                 self.assertTrue(manifest['accepted'])
                 self.assertEqual(manifest['metrics']['attempts'], 3)
@@ -54,14 +94,13 @@ class CompactionHTTPTests(unittest.TestCase):
                 self.assertTrue(measurements['text_schema_copy'])
                 self.assertIsNone(measurements['tokens'])
         self.init_git(['main'])
-        manifest, code = self.synthetic('compact-one')
+        manifest, code = self.run_case('compact-one')
         self.assertEqual(code, 0, manifest)
         self.assertTrue(manifest['branches'][0]['accepted'])
         self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
 
-    def test_production_rejects_unverified_or_lost_format_with_precise_reason(self):
+    def test_production_rejects_lost_format_and_foreign_continuations(self):
         for scenario, reason in (
-                ('compact-one', 'COMPACTION_FORMAT_RETENTION_UNVERIFIED'),
                 ('compact-lost-format', 'COMPACTION_FORMAT_MISSING'),
                 ('compact-changed-schema', 'COMPACTION_FORMAT_CHANGED'),
                 ('compact-forged', 'CONTINUATION_FORM_UNSUPPORTED'),
@@ -80,7 +119,7 @@ class CompactionHTTPTests(unittest.TestCase):
         for scenario in ('compact-summary-result', 'compact-mismatch', 'compact-no-native',
                          'compact-no-tool', 'compact-unfinished-tool'):
             with self.subTest(scenario=scenario):
-                manifest, code = self.synthetic(scenario)
+                manifest, code = self.run_case(scenario)
                 self.assertEqual(code, 1, manifest)
                 self.assertFalse(manifest['accepted'])
                 self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
@@ -120,7 +159,7 @@ class CompactionHTTPTests(unittest.TestCase):
         stream = io.StringIO()
         reporter = Reporter(stdout=io.StringIO(), stderr=stream, progress=False, verbose=True)
         self.addCleanup(reporter.close)
-        manifest, code = self.synthetic('compact-one', reporter=reporter)
+        manifest, code = self.run_case('compact-one', reporter=reporter)
         self.assertEqual(code, 0, manifest)
         meta = manifest['study_invocation']['compaction']
         self.assertEqual(meta['summary_hook'], 'not_applied_unverified')

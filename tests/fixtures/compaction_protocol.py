@@ -100,7 +100,7 @@ def snapshots(messages):
     """A user/message and its parts need not arrive in the same HTTP snapshot."""
     result = []
     for i, message in enumerate(messages):
-        if message['info'].get('summary'):
+        if message['info'].get('summary') is True:
             partial = copy.deepcopy(message)
             partial['parts'] = []
             partial['info']['time'].pop('completed')
@@ -114,4 +114,33 @@ def snapshots(messages):
             partial['parts'] = []
             result.append(copy.deepcopy(messages[:i]) + [partial])
         result.append(copy.deepcopy(messages[:i + 1]))
+    return result
+
+
+def metadata_stream_snapshots(messages):
+    """Synthetic metadata + text/reasoning lifecycle, including coalesced final chunk."""
+    messages = copy.deepcopy(messages)
+    result = [copy.deepcopy(messages[:1])]
+    messages[0]['info']['summary'] = {'diffs': []}
+    result.extend([copy.deepcopy(messages[:1])] * 2)
+    messages[0]['info']['summary'] = {'title': 'Synthetic title', 'body': 'Metadata only', 'diffs': []}
+    result.extend(snapshots(messages[:-1]))
+    final = messages[-1]
+    text = final['parts'][0]
+    text.update(text='Результат.', time={'start': 1, 'end': 2})
+    reasoning = part(final['info']['id'], 'reasoning', text='Ход\nГотово.', time={'start': 1, 'end': 2})
+    reasoning['sessionID'] = final['info']['sessionID']
+    final['parts'].insert(1, reasoning)
+    for content, thought in (('Результат', 'Ход'), ('Результат.\n', 'Ход\n')):
+        partial = copy.deepcopy(messages)
+        pending = partial[-1]
+        for key in ('structured', 'finish'):
+            pending['info'].pop(key, None)
+        pending['info']['time'].pop('completed')
+        pending['parts'] = pending['parts'][:2]
+        for item, value in zip(pending['parts'], (content, thought)):
+            item['text'] = value
+            item['time'].pop('end')
+        result.append(partial)
+    result.append(messages)
     return result

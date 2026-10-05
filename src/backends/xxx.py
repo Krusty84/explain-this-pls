@@ -63,7 +63,8 @@ class Server(OpenCodeServer):
     def session_history(self, request_id, body):
         from src.backends.xxx_history import SessionHistory
         self.history = SessionHistory(self.session_id, request_id, body, emit=getattr(self, 'emit', None))
-        self.history.event('compaction_capability', format_retention='unverified',
+        self.history.event('compaction_capability', format_retention='checked_on_continuation',
+                           backend_pre_model_retention='unverified',
                            summary_hook='not_applied_unverified', settings='backend_profile_unchanged',
                            hook_conflict_check='unavailable')
         self.meta['compaction'] = self.history.metadata()
@@ -122,6 +123,9 @@ class Server(OpenCodeServer):
             if history is not None and history.transitions:
                 reason = (exc.details.get('code', exc.failure_kind) if isinstance(exc, ContractError) else
                           'INTERRUPTED' if isinstance(exc, KeyboardInterrupt) else 'BACKEND_ERROR')
-                history.event('compaction_rejected', reason=reason)
+                # History rejections already carry their safe field/role/phase.
+                # Add an event only for failures outside that validator (e.g. timeout).
+                if not history.failed:
+                    history.event('compaction_rejected', reason=reason, phase=history.phase)
                 self.meta['compaction'] = history.metadata()
             raise

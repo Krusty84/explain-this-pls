@@ -14,15 +14,9 @@ from src.runtime.metrics import HTTPUsage, summarize
 from fixtures.compaction_protocol import assistant, body, chain, part, snapshots
 
 
-class SyntheticHistory(SessionHistory):
-    """Test-only assumed pre-model preservation; no production setting enables it."""
-    def authorize_continuation(self):
-        pass
-
-
 class HistoryTests(unittest.TestCase):
-    def history(self, cls=SyntheticHistory):
-        return cls('ses_test', 'msg_root', body())
+    def history(self):
+        return SessionHistory('ses_test', 'msg_root', body())
 
     def rejected(self, messages, code, *, history=None):
         history = history or self.history()
@@ -51,7 +45,7 @@ class HistoryTests(unittest.TestCase):
         messages[-1]['parts'] = []
         messages[-1]['info']['time'].pop('completed')
         messages[-1]['info'].pop('finish')
-        history = self.history(SessionHistory)
+        history = self.history()
         self.assertTrue(history.observe(messages))
         self.assertFalse(history.observe(messages))
         self.assertEqual(history.phase, 'summary')
@@ -60,9 +54,264 @@ class HistoryTests(unittest.TestCase):
             history.validate_final(messages, messages[-1])
         self.assertEqual(caught.exception.details['code'], 'COMPACTION_IS_NOT_STAGE_RESULT')
 
-    def test_production_gate_does_not_treat_wire_format_as_pre_model_proof(self):
-        error = self.rejected(chain(), 'COMPACTION_FORMAT_RETENTION_UNVERIFIED', history=self.history(SessionHistory))
-        self.assertEqual(error.failure_kind, 'BACKEND_INCOMPATIBLE')
+    def test_user_summary_updates_are_saved_without_activity_or_input_mutation(self):
+        messages = chain(0)
+        history = self.history()
+        history.observe(messages)
+        for summary in ({'diffs': []}, {'title': 'Title', 'body': 'Metadata', 'diffs': []},
+                        {'title': 'Updated', 'diffs': [{'file': 'fixture.py', 'before': '',
+                            'after': 'data', 'additions': 1, 'deletions': 0, 'status': 'added'}]}):
+            messages[0]['info']['summary'] = summary
+            original = copy.deepcopy(messages)
+            self.assertFalse(history.observe(messages))
+            self.assertFalse(history.observe(messages))
+            self.assertEqual(messages, original)
+            self.assertEqual(history.messages['msg_root'], original[0])
+            history.validate_final(messages, messages[-1])
+        self.assertEqual(history.transitions, 0)
+        self.assertEqual(history.body, body())
+
+    def test_user_summary_shape_and_assistant_summary_type(self):
+        for summary in (True, 1, None, [], {}, {'diffs': {}}, {'diffs': [], 'title': 1},
+                        {'diffs': [], 'body': False}, {'diffs': [], 'instructions': 'private'},
+                        {'diffs': [{'file': 'x', 'before': '', 'after': '', 'additions': True, 'deletions': 0}]}):
+            messages = chain(0)
+            messages[0]['info']['summary'] = summary
+            with self.subTest(summary=summary):
+                self.rejected(messages, 'USER_SUMMARY_INVALID')
+        for summary in ({'diffs': []}, 1, None):
+            messages = chain(0)
+            messages[-1]['info']['summary'] = summary
+            self.rejected(messages, 'ASSISTANT_SUMMARY_INVALID')
+
+    def test_stream_append_trim_and_last_chunk_with_finalization(self):
+        for kind in ('text', 'reasoning'):
+            for previous, update in (('Result.\n', 'Result.'), ('Result', 'Result. done'),
+                                     ('Result.\n', 'Result.\nNext'), ('Result.\ufeff', 'Result.')):
+                with self.subTest(kind=kind, previous=previous, update=update):
+                    messages = chain(0)
+                    streamed = messages[-1]['parts'][0]
+                    streamed.update(type=kind, text=previous, time={'start': 1})
+                    history = self.history()
+                    history.observe(messages)
+                    streamed.update(text=update, time={'start': 1, 'end': 2})
+                    original = copy.deepcopy(messages)
+                    self.assertTrue(history.observe(messages))
+                    self.assertFalse(history.observe(messages))
+                    self.assertEqual(messages, original)
+                    history.validate_final(messages, messages[-1])
+
+    def test_summary_does_not_weaken_protected_fields(self):
+        cases = (('sessionID', 'ses_other'), ('role', 'assistant'), ('agent', 'private-agent'),
+                 ('parentID', 'msg_other'), ('format', body()['format'] | {'retryCount': True}),
+                 ('model', {'providerID': 'provider', 'modelID': 'other'}), ('system', 'private-system'),
+                 ('tools', {'read': False}), ('variant', 'other'), ('time', {'created': 1}))
+        for with_summary in (False, True):
+            for key, value in cases:
+                with self.subTest(key=key, summary=with_summary):
+                    messages = chain(0)
+                    history = self.history()
+                    history.observe(messages)
+                    messages[0]['info'][key] = value
+                    if with_summary:
+                        messages[0]['info']['summary'] = {'title': 'private-title', 'diffs': []}
+                    with self.assertRaises(ContractError) as caught:
+                        history.observe(messages)
+                    self.assertEqual(caught.exception.details['field'], 'info.time.created' if key == 'time' else 'info.' + key)
+                    self.assertEqual(caught.exception.details['transitions'], 0)
+                    self.assertEqual(caught.exception.details['phase'], 'stage')
+                    self.assertNotIn('private-', str(caught.exception))
+                    self.assertEqual(history.events[-1]['event'], 'session_rejected')
+        # A changed message ID is also bound by the unchanged part ownership.
+        messages = chain(0)
+        history = self.history()
+        history.observe(messages)
+        messages[0]['info']['id'] = 'msg_replacement'
+        messages[0]['parts'][0]['messageID'] = 'msg_replacement'
+        self.rejected(messages, 'PART_OWNER_CHANGED', history=history)
+        # Changing the entire root identity does not establish another request.
+        messages[0]['parts'][0]['id'] = 'prt_replacement'
+        self.rejected(messages, 'ROOT_REQUEST_MISSING')
+
+    def test_user_summary_does_not_relax_assistant_summary_identity(self):
+        for previous, update in ((None, True), (False, True), (True, False), (False, 0), (True, 1)):
+            messages = chain()[:4] if previous is True else chain(0)
+            if previous is not None:
+                messages[-1]['info']['summary'] = previous
+            history = self.history()
+            history.observe(messages)
+            messages[0]['info']['summary'] = {'diffs': []}
+            messages[-1]['info']['summary'] = update
+            self.rejected(messages, 'MESSAGE_IDENTITY_CHANGED', history=history)
+
+    def test_replaced_assistant_ids_cannot_erase_the_observed_final_history(self):
+        messages = chain(0)
+        history = self.history()
+        history.observe(messages)
+        messages[-1]['info']['id'] = 'msg_replacement'
+        for index, item in enumerate(messages[-1]['parts']):
+            item.update(messageID='msg_replacement', id='prt_replacement' + str(index))
+        history.observe(messages)  # A new assistant may appear in a subset poll.
+        with self.assertRaises(ContractError) as caught:
+            history.validate_final(messages, messages[-1])
+        self.assertEqual(caught.exception.details['code'], 'FINAL_HISTORY_INCOMPLETE')
+
+    def test_unknown_info_fields_have_closed_policy_and_safe_diagnostics(self):
+        for index in (0, -1):
+            for initial in (False, True):
+                messages = chain(0)
+                history = self.history()
+                if not initial:
+                    history.observe(messages)
+                messages[index]['info']['private-secret-key'] = 'private-value'
+                error = self.rejected(messages, 'MESSAGE_FIELD_UNSUPPORTED', history=history)
+                self.assertEqual(error.details['field'], 'info.unknown')
+                self.assertNotIn('private', str(error))
+                self.assertNotIn('private', str(history.events))
+
+    def test_stream_rewrites_truncation_and_completed_changes_are_rejected(self):
+        for kind in ('text', 'reasoning'):
+            for previous, update, ended, closing in (
+                    ('Result.\n', 'Result.', False, False),
+                    ('Result.', 'Result', False, True),
+                    ('Result.', 'Replaced.', False, True),
+                    ('Result.\n', 'Result.More', False, True),
+                    ('Result.\x85', 'Result.', False, True),
+                    ('Result.\x1c', 'Result.', False, True),
+                    ('Result.\u200b', 'Result.', False, True),
+                    ('Result.\n', 'Result.', True, True),
+                    ('Result.', 'Result.More', True, True)):
+                with self.subTest(kind=kind, previous=previous, update=update, ended=ended, closing=closing):
+                    messages = chain(0)
+                    streamed = messages[-1]['parts'][0]
+                    streamed.update(type=kind, text=previous, time={'start': 1})
+                    if ended: streamed['time']['end'] = 2
+                    history = self.history()
+                    history.observe(messages)
+                    streamed['text'] = update
+                    if closing: streamed['time']['end'] = 2
+                    error = self.rejected(messages, 'PART_CONTENT_CHANGED', history=history)
+                    self.assertEqual(error.details['part_type'], kind)
+                    self.assertEqual(error.details['field'], 'part.text')
+
+    def test_stream_timing_and_terminal_metadata_are_protected(self):
+        for update, code in (({'start': 2}, 'PART_TIME_CHANGED'),
+                             ({'start': 1, 'end': True}, 'PART_TIME_INVALID'),
+                             ({'start': 1, 'end': 0}, 'PART_TIME_INVALID')):
+            messages = chain(0)
+            messages[-1]['parts'][0]['time'] = {'start': 1}
+            history = self.history()
+            history.observe(messages)
+            messages[-1]['parts'][0]['time'] = update
+            self.rejected(messages, code, history=history)
+        messages = chain(0)
+        messages[-1]['parts'][0]['time'] = {'start': 1, 'end': 2}
+        history = self.history()
+        history.observe(messages)
+        messages[-1]['parts'][0]['metadata'] = {'private': 'new'}
+        self.rejected(messages, 'COMPLETED_PART_CHANGED', history=history)
+
+    def test_ecmascript_final_whitespace_set_and_open_append(self):
+        # Independent reference list; do not derive expected behavior from the validator.
+        characters = [9, 10, 11, 12, 13, 32, 0xa0, 0x1680, *range(0x2000, 0x200b),
+                      0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff]
+        for kind in ('text', 'reasoning'):
+            for codepoint in characters:
+                messages = chain(0)
+                streamed = messages[-1]['parts'][0]
+                streamed.update(type=kind, text='Text', time={'start': 1})
+                history = self.history()
+                history.observe(messages)
+                streamed['text'] += '.' + chr(codepoint)
+                self.assertTrue(history.observe(messages))
+                streamed.update(text='Text.', time={'start': 1, 'end': 2})
+                self.assertTrue(history.observe(messages))
+
+    def test_partial_message_and_part_timing_shape_is_checked_on_each_update(self):
+        for timing in (None, [], {'created': True}, {'created': 0, 'completed': False}):
+            messages = chain(0)
+            history = self.history()
+            history.observe(messages)
+            messages[-1]['info']['time'] = timing
+            self.rejected(messages, 'MESSAGE_TIME_INVALID', history=history)
+        messages = chain()[:4]
+        messages[-1]['parts'][0]['time'] = {'start': 1}
+        history = self.history()
+        history.observe(messages)
+        self.assertEqual(history.phase, 'summary')
+        messages[-1]['parts'][0]['time']['end'] = 2
+        history.observe(messages)
+        self.assertEqual(history.phase, 'continuation')
+
+    def test_received_root_settings_are_checked_against_the_request(self):
+        for key, value in (('system', 'original'), ('variant', 'original'), ('tools', {'read': True}),
+                           ('model', {'providerID': 'provider', 'modelID': 'other'})):
+            request = body() | {key: value}
+            history = SessionHistory('ses_test', 'msg_root', request)
+            error = self.rejected(chain(0), 'ROOT_SETTINGS_MISMATCH', history=history)
+            self.assertEqual(error.details['field'], 'info.' + key)
+
+    def test_summary_metadata_and_repeats_do_not_refresh_idle_or_usage(self):
+        now = [0]
+        budget = Budget(5, 2, clock=lambda: now[0])
+        messages = chain(0)
+        history = self.history()
+        history.observe(messages)
+        collector = HTTPUsage('xxx', None, 'ses_test', 'msg_root', 'audit')
+        usage = collector.validated(history)
+        for moment in (1, 1.5, 2):
+            now[0] = moment
+            messages[0]['info']['summary'] = {'title': str(moment), 'diffs': []}
+            if history.observe(messages): budget.activity()
+            self.assertEqual(collector.validated(history), usage)
+        self.assertEqual(budget.last_activity, 0)
+        with self.assertRaises(ContractError) as caught: budget.check()
+        self.assertEqual(caught.exception.failure_kind, 'IDLE_TIMEOUT')
+
+    def test_continuations_cannot_restart_total_budget(self):
+        now = [0]
+        budget = Budget(5, 2, clock=lambda: now[0])
+        history = self.history()
+        for moment, count in ((1, 1), (2, 2), (3, 3)):
+            now[0] = moment
+            # Observe each full transition, before the final stage response.
+            if history.observe(chain(count)[:-1]): budget.activity()
+        self.assertEqual(budget.deadline, 5)
+        now[0] = 5
+        with self.assertRaises(ContractError) as caught: budget.check()
+        self.assertEqual(caught.exception.failure_kind, 'STAGE_TIMEOUT')
+
+    def test_synthetic_flag_alone_or_incomplete_summary_never_authorizes(self):
+        messages = chain()
+        messages[2]['parts'] = copy.deepcopy(messages[4]['parts'])
+        messages[2]['info']['format'] = body()['format']
+        for item in messages[2]['parts']:
+            item.update(messageID=messages[2]['info']['id'], id='prt_forged')
+        self.rejected(messages, 'UNEXPECTED_USER_REQUEST')
+        for missing in ('completed', 'text'):
+            messages = chain()
+            if missing == 'completed': messages[3]['info']['time'].pop('completed')
+            else: messages[3]['parts'] = []
+            self.rejected(messages, 'UNEXPECTED_USER_REQUEST')
+        messages = chain()
+        messages[4]['info']['parentID'] = messages[3]['info']['id']
+        self.rejected(messages, 'USER_PARENT_UNSUPPORTED')
+
+    def test_continuation_settings_preserved_with_summary_updates(self):
+        for field, value in (('system', 'private'), ('tools', {'read': True}), ('variant', 'selected')):
+            messages = chain()
+            for message in messages:
+                if message['info']['role'] == 'user':
+                    message['info'][field] = value
+                    message['info']['summary'] = {'diffs': []}
+            history = self.history()
+            history.observe(messages)
+            history.validate_final(messages, messages[-1])
+            for replacement in (None, {'changed': True} if field == 'tools' else 'other'):
+                changed = copy.deepcopy(messages)
+                if replacement is None: changed[4]['info'].pop(field)
+                else: changed[4]['info'][field] = replacement
+                self.rejected(changed, 'USER_SETTINGS_CHANGED')
 
     def test_format_is_authoritative_not_taken_from_summary(self):
         for change, code in ((None, 'COMPACTION_FORMAT_MISSING'),
@@ -204,7 +453,7 @@ class HistoryTests(unittest.TestCase):
     def test_order_comes_from_sequence_not_sortable_message_ids(self):
         request = body() | {'messageID': 'msg_zzzz'}
         messages = chain(0, request=request)
-        history = SyntheticHistory('ses_test', request['messageID'], request)
+        history = SessionHistory('ses_test', request['messageID'], request)
         history.observe(messages)
         self.assertEqual(history.validate_final(messages, messages[-1]), 'msg_zzzz')
         self.rejected(list(reversed(messages)), 'HISTORY_ORDER_CHANGED', history=history)
@@ -262,10 +511,32 @@ class HistoryTests(unittest.TestCase):
 
 
 class CompactionUsageTests(unittest.TestCase):
+    def test_usage_progresses_until_completion_then_totals_are_protected(self):
+        messages = chain(0)
+        info = messages[-1]['info']
+        info['time'].pop('completed')
+        info['tokens']['output'] = 0
+        history = SessionHistory('ses_test', 'msg_root', body())
+        history.observe(messages)
+        collector = HTTPUsage('xxx', None, 'ses_test', 'msg_root', 'audit')
+        self.assertIsNone(collector.validated(history)['usage']['total_tokens'])
+        info['tokens']['output'] = 1
+        info['time']['completed'] = 2
+        history.observe(messages)
+        history.validate_final(messages, messages[-1])
+        result = collector.validated(history, complete=True)
+        self.assertEqual(result['usage']['total_tokens'], 4)
+        info['tokens']['output'] = True  # bool cannot masquerade as 1
+        with self.assertRaises(ContractError) as caught:
+            history.observe(messages)
+        self.assertEqual(caught.exception.details['code'], 'COMPLETED_USAGE_CHANGED')
+        self.assertEqual(collector.validated(history)['usage']['total_tokens'], 4)
+        self.assertEqual(collector.validated(history)['usage']['coverage']['total_tokens'], 'partial')
+
     def test_same_actual_model_keeps_distinct_origins(self):
         messages = chain()
         messages[3]['info']['modelID'] = 'study'
-        history = SyntheticHistory('ses_test', 'msg_root', body())
+        history = SessionHistory('ses_test', 'msg_root', body())
         history.observe(messages)
         collector = HTTPUsage('xxx', None, 'ses_test', 'msg_root', 'audit')
         result = summarize([{'backend': 'xxx', 'metrics': collector.validated(history, complete=True)}])
@@ -273,7 +544,7 @@ class CompactionUsageTests(unittest.TestCase):
         self.assertEqual({e['origin'] for e in result['by_model']}, {'stage', 'compaction'})
 
     def test_usage_before_during_and_after_with_dedup_and_provenance(self):
-        history = SyntheticHistory('ses_test', 'msg_root', body())
+        history = SessionHistory('ses_test', 'msg_root', body())
         collector = HTTPUsage('xxx', 'provider/study', 'ses_test', 'msg_root', 'audit')
         messages = chain(2)
         messages[1]['info']['tokens'] = messages[1]['info']['tokens'] | {'total': 999}  # steps win
@@ -295,7 +566,9 @@ class CompactionUsageTests(unittest.TestCase):
 
     def test_failed_continuation_keeps_only_verified_partial_usage(self):
         history = SessionHistory('ses_test', 'msg_root', body())
-        with self.assertRaises(ContractError): history.observe(chain())
+        messages = chain()
+        del messages[4]['info']['format']
+        with self.assertRaises(ContractError): history.observe(messages)
         collector = HTTPUsage('xxx', None, 'ses_test', 'msg_root', 'audit')
         result = collector.validated(history, complete=True)
         self.assertEqual(result['usage']['total_tokens'], 8)
@@ -305,7 +578,7 @@ class CompactionUsageTests(unittest.TestCase):
     def test_missing_summary_counters_stay_unavailable(self):
         messages = chain()
         messages[3]['info'].pop('tokens')
-        history = SyntheticHistory('ses_test', 'msg_root', body())
+        history = SessionHistory('ses_test', 'msg_root', body())
         history.observe(messages)
         result = HTTPUsage('xxx', None, 'ses_test', 'msg_root', 'audit').validated(history, complete=True)
         summary = next(e for e in result['by_model'] if e['origin'] == 'compaction')

@@ -637,13 +637,24 @@ FINISH_INVALID_TYPE, FINISH_UNKNOWN, FINISH_TRUNCATED (`length`), FINISH_ERROR
 and envelope remain private; classification is separate. Session/request/agent,
 completion timestamp, errors, pending tools, native structured result, completed
 StructuredOutput/input equality and exact final history snapshot equality remain mandatory.
-The XXX transition model additionally rejects changes to previously observed
-identities, unsupported user/parent/part forms, summary results and format loss.
-Empty compaction summaries can remain pending across polls within the original
-budget. Only verified membership contributes to usage; repeated snapshots and
-native transitions never create new orchestrator attempts. Full continuation
-authorization is currently closed because a pre-model format-retention mechanism
-has not been verified for the fork. See [XXX compaction compatibility](docs/xxx-compaction.md).
+The XXX transition model compares a role-specific projection of protected fields:
+IDs/session/role/parent/agent, task settings and creation time remain immutable.
+`user.summary` is mutable metadata with required FileDiff array `diffs` and optional
+string `title`/`body`; `assistant.summary` is a protected boolean. Unknown message
+fields require an explicit profile update. JSON booleans and numbers remain distinct.
+Raw HTTP objects are preserved; the final envelope must match the full final history.
+Text/reasoning may append while open and trim only trailing ECMAScript whitespace
+when part time acquires `end`, including a final chunk coalesced with completion.
+Content replacement, non-whitespace truncation and changes after completion fail.
+Empty/incomplete compaction summaries can remain pending within the original budget.
+Production continuation accepts only the auto/non-overflow service request, its
+linked completed summary and exact reference continuation shape with unchanged
+settings and original `format`. Missing/changed format yields a factual refusal;
+no external certificate or developer live smoke is required. The wire checks do
+not prove backend actions before a model call. Overflow/replay and other service
+forms remain unsupported. Only verified membership contributes to usage; summary
+metadata/repeats do not extend idle time or create attempts, and native transitions
+never restart the stage budget. See [XXX history and compaction](docs/xxx-compaction.md).
 A complete-looking JSON never overrides these checks. Compare failure preserves
 prior study/review and the diagnostic summary with a nonzero exit and no assertion
 that differences are absent.

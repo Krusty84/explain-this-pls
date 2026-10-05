@@ -202,6 +202,22 @@ class Handler(BaseHTTPRequestHandler):
                     'role': 'user', 'agent': body['agent'], 'model': model, 'format': body['format'],
                     'time': {'created': 0}}, 'parts': [{'id': 'prt_request', 'messageID': body['messageID'],
                     'sessionID': session_id, 'type': 'text', 'text': prompt}]})
+            if scenario in ('history-metadata', 'history-metadata-idle', 'history-agent-change'):
+                from compaction_protocol import metadata_stream_snapshots
+                history_script[:] = metadata_stream_snapshots(messages)
+                response = history_script[-1][-1]
+                if scenario == 'history-agent-change':
+                    history_script[1][0]['info']['agent'] = 'private-changed-agent'
+                if scenario == 'history-metadata-idle':
+                    # Only user metadata changes after the initial root snapshot.
+                    import copy
+                    initial = copy.deepcopy(history_script[0])
+                    history_script[:] = [initial]
+                    for tick in range(200):
+                        update = copy.deepcopy(initial)
+                        update[0]['info']['summary'] = {'title': str(tick), 'diffs': []}
+                        history_script.append(update)
+                history_consumed.wait(10)
             if scenario and scenario.startswith('compact-') and stage != 'catalog':
                 # Explicitly synthetic required protocol, not a real XXX trace.
                 from compaction_protocol import chain, snapshots
@@ -217,6 +233,10 @@ class Handler(BaseHTTPRequestHandler):
                 if scenario == 'compact-no-native': generated[-1]['info'].pop('structured')
                 if scenario == 'compact-mismatch': response['parts'][0]['text'] = 'different envelope'
                 history_script[:] = snapshots(generated)
+                if scenario == 'compact-metadata':
+                    from compaction_protocol import metadata_stream_snapshots
+                    history_script[:] = metadata_stream_snapshots(generated)
+                    generated = history_script[-1]
                 if scenario in ('compact-slow', 'compact-active', 'compact-interrupt'):
                     generated = generated[:4]
                     generated[-1]['parts'] = []

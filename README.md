@@ -38,13 +38,6 @@ or compare versions before planning changes.
 - An installed and configured coding-agent CLI: Codex CLI, Claude Code, or the proprietary XXX CLI.
   Sign in before using explain-this-pls.
 
-The OpenCode backend is currently unavailable in this package.
-
-XXX recognizes the observed start of automatic compaction and accounts for its
-work. Full continuation support remains gated on verified preservation of native
-StructuredOutput in the installed fork. An unsupported transition fails explicitly;
-it does not publish a text fallback. See [XXX compaction status, tests and measurements](docs/xxx-compaction.md).
-
 ### Get Your Input Data
 
 Download this package, or clone it outside the source directory you want to inspect:

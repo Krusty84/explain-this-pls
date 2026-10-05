@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""OPT IN ONLY: potentially paid installed XXX. No production gate is bypassed."""
+"""OPT IN ONLY: potentially paid installed XXX. Uses the production validator."""
 import json
 import os
 from pathlib import Path
@@ -51,8 +51,8 @@ class InstalledXXXCompactionSmoke(unittest.TestCase):
                 'prompts': {'study': str(template)}}))
             runner = Runner(load_config(config), root / 'run')
             manifest, code = runner.run()
-            # Missing compaction, unverified retention, and local schema/identity/
-            # semantic errors all FAIL; a normal small successful run is not proof.
+            # Missing compaction, format loss and local schema/identity/semantic
+            # errors all FAIL; a normal small successful run is not proof.
             self.assertEqual(code, 0, manifest.get('diagnostics'))
             self.assertTrue(manifest['accepted'])
             attempts = [json.loads(p.read_text()) for p in (root / 'run').rglob('attempt-*/invocation.json')]
