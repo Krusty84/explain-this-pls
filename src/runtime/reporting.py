@@ -282,6 +282,11 @@ class Reporter(NullReporter):
         source = self.stage_source(context)
         return (self.display(source) + ' / ' if source else '') + self.display(message)
 
+    def progress_message(self, context):
+        if 'check_only' in context:
+            return 'Checking local setup…' if context['check_only'] else 'Preparing analysis…'
+        return STAGE_MESSAGES.get(context.get('stage'), STAGE_MESSAGES['study'])[0]
+
     def metric_models(self, metrics):
         labels = []
         for entry in metrics.get('by_model', []):
@@ -361,7 +366,7 @@ class Reporter(NullReporter):
             text = self.display(value)
             return text.encode(self._encoding, errors='backslashreplace').decode(self._encoding)
         source = display(self.stage_source(c))
-        stage = display(STAGE_MESSAGES[c['stage']][0])
+        stage = display(self.progress_message(c))
         fixed = '[RUN]  / ' + stage + tail
         # Reserve the hours field so a truncated source does not move the stage
         # label when MM:SS becomes HH:MM:SS.
@@ -483,7 +488,7 @@ class Reporter(NullReporter):
                 self.early.append(event)
 
     def emit(self, event, level=logging.INFO, *, exception=None, _started=None, **context):
-        if event in ('stage_started', 'stage_completed', 'error', 'stop_requested',
+        if event in ('run_started', 'stage_started', 'stage_completed', 'error', 'stop_requested',
                      'restoration_started', 'run_completed'):
             self.stop_progress()
         with self._lock:
@@ -495,7 +500,7 @@ class Reporter(NullReporter):
         item = Event(event, level, dt.datetime.now(dt.timezone.utc).isoformat(), self.run_id,
                      self.clean(context), exception)
         self.log(item)
-        if (event == 'stage_started' and context.get('stage') in STAGE_MESSAGES
+        if ((event == 'run_started' or event == 'stage_started' and context.get('stage') in STAGE_MESSAGES)
                 and self.progress and not self._closed and not self.finished and not self.stopping
                 and id(self.stderr) not in self.failed_streams):
             started = self.clock() if _started is None else _started
@@ -507,7 +512,7 @@ class Reporter(NullReporter):
             details = item.context | {'run_id': item.run_id} if event == 'run_started' else item.context
             self.write(self.stderr, '[RUN] Detail: ' + self.display(event) + ' ' +
                        self.display(json.dumps(details, ensure_ascii=False)))
-        if event == 'stage_started' and self._progress:
+        if event in ('run_started', 'stage_started') and self._progress:
             self._draw_progress(self._progress)
             if not self._progress.stop.is_set():
                 self._start_worker(self._progress)
@@ -542,8 +547,10 @@ class Reporter(NullReporter):
             return ['[WARN] ' + self.stage_message(c, 'Report text saved, but it did not pass all checks.')]
         active, title, complete = STAGE_MESSAGES.get(c.get('stage'), ('Analyzing project…', 'Analysis', 'Analysis complete.'))
         if name == 'run_started':
-            return ['[RUN] ' + ('Checking local setup.' if c['check_only'] else 'Preparing analysis.'),
-                    *(['Source: ' + s(c['source'])] if c.get('source') else [])]
+            lines = ['Source: ' + s(c['source'])] if c.get('source') else []
+            if not self._progress or self._progress_line(self._progress) is None:
+                lines.insert(0, '[RUN] ' + ('Checking local setup.' if c['check_only'] else 'Preparing analysis.'))
+            return lines
         if name == 'root_warning':
             return ['[WARN] Running with administrator privileges.']
         if name == 'description_missing':
@@ -559,7 +566,7 @@ class Reporter(NullReporter):
             if self.verbose and 'last_output_seconds' in c:
                 last = ' | ' + ('No CLI output received yet' if c['last_output_seconds'] is None else
                                 'Last CLI output: ' + duration(c['last_output_seconds']) + ' ago')
-            return ['[RUN] ' + self.stage_message(c, active), '      Elapsed: ' + duration(c['elapsed_seconds']) +
+            return ['[RUN] ' + self.stage_message(c, self.progress_message(c)), '      Elapsed: ' + duration(c['elapsed_seconds']) +
                     last]
         if name == 'stage_completed':
             status = c['status']

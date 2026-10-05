@@ -194,7 +194,7 @@ python3 explain.py --config config.jsonc
 ```
 
 Progress messages show the current branch or folder and analysis stage. The final
-summary shows the outcome and paths to the results. Console messages are in English;
+summary shows the outcome and paths to the results.
 `output_language` controls the reports.
 
 Use `--no-progress` to hide the spinner and waiting messages, `--output json` for a

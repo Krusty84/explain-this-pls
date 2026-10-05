@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Stage-owned presentation: deterministic ticks and real offline PTY/HTTP I/O."""
+"""Preparation and stage presentation: deterministic ticks and offline PTY/HTTP I/O."""
 import io
 import json
 import os
@@ -66,6 +66,67 @@ class ProgressTests(unittest.TestCase):
     def start(self, r, **context):
         r.emit('stage_started', _started=self.now, **(CONTEXT | context))
         return r._progress
+
+    def test_preparation_keeps_one_clock_and_hands_off_to_stage(self):
+        for check in (False, True):
+            with self.subTest(check=check):
+                r = self.reporter(mode='json')
+                label = 'Checking local setup…' if check else 'Preparing analysis…'
+                r.emit('run_started', check_only=check, source='/source/深い\nfolder')
+                state = r._progress
+                self.assertEqual(self.err.getvalue(), 'Source: /source/深い\\nfolder\n'
+                                 f'[RUN] {label}  ⠋ 00:00\x1b[K')
+                self.assertNotIn('stage', state.context)
+                self.tick(r, .5)
+                self.assertIn(f'[RUN] {label}  ⠙ 00:00', self.err.getvalue())
+                for event, context in (('preflight_started', {'check': 'inventory'}),
+                                       ('preflight_completed', {'check': 'inventory'}),
+                                       ('snapshot_completed', {'snapshot': 'master'}),
+                                       ('preflight_started', {'check': 'cli'}),
+                                       ('preflight_completed', {'check': 'cli'})):
+                    r.emit(event, **context)
+                    self.assertIs(r._progress, state)
+                self.assertTrue(r.cli_started())
+                self.tick(r, 31)
+                self.assertIn(f'[RUN] {label}  ⠴ 00:31', self.err.getvalue())
+                self.assertNotIn('Elapsed:', self.err.getvalue())
+                if check:
+                    result = {'status': 'PREFLIGHT_OK', 'exit_code': 0}
+                    r.finish(result, {}, check_only=True, config_path=Path('/config.json'))
+                    self.assertEqual(json.loads(self.out.getvalue()), result)
+                    self.assertIsNone(r._progress)
+                else:
+                    self.start(r)
+                    self.assertEqual(r._progress.started, self.now)
+                    self.assertIn('Analyzing project…  ⠋ 00:00', self.err.getvalue())
+                    self.assertEqual(self.out.getvalue(), '')
+                self.assertTrue(state.stop.is_set())
+                before = self.err.getvalue()
+                r._tick_progress(state)
+                self.assertEqual(self.err.getvalue(), before)
+                r.close()
+
+    def test_preparation_plain_waits_and_no_progress(self):
+        for options, columns in (({'tty': False}, 100), ({'env': {'TERM': 'dumb'}}, 100),
+                                 ({}, 10), ({'progress': False}, 100)):
+            with self.subTest(options=options, columns=columns):
+                r = self.reporter(**options)
+                r.columns = columns
+                r.emit('run_started', check_only=True, source='/source')
+                self.assertEqual(self.err.getvalue(), '[RUN] Checking local setup.\nSource: /source\n')
+                if r.progress:
+                    self.assertTrue(r.cli_started())
+                    for elapsed in (29.9, 30, 30, 60):
+                        self.tick(r, elapsed)
+                    self.assertEqual(self.err.getvalue().count('      Elapsed:'), 2)
+                    self.assertIn('Checking local setup…\n      Elapsed: 01:00', self.err.getvalue())
+                    self.assertNotIn('Analyzing project', self.err.getvalue())
+                else:
+                    self.assertIsNone(r._progress)
+                    r.emit('process_waiting', check_only=True, elapsed_seconds=30)
+                    self.assertNotIn('Elapsed:', self.err.getvalue())
+                self.assertNotIn('\x1b', self.err.getvalue())
+                r.close()
 
     def test_immediate_line_delayed_animation_and_stage_elapsed(self):
         r = self.reporter()
@@ -180,6 +241,7 @@ class ProgressTests(unittest.TestCase):
     def test_no_progress_and_non_analysis_events_never_start_worker(self):
         r = self.reporter(progress=False)
         with patch.object(r, '_start_worker') as worker:
+            r.emit('run_started', check_only=True)
             self.start(r)
             r.emit('process_waiting', **CONTEXT, elapsed_seconds=60)
             r.emit('stage_completed', **CONTEXT, status='COMPLETE', elapsed_seconds=60)
@@ -367,15 +429,20 @@ class ProgressTests(unittest.TestCase):
         for event, kwargs in (('stage_completed', CONTEXT | {'status': 'BLOCKED', 'elapsed_seconds': 1}),
                               ('error', {'phase': 'run', 'code': 'INTERRUPTED', 'message': 'Interrupted'}),
                               ('stop_requested', {}), ('restoration_started', {}), ('run_completed', {})):
-            r = self.reporter()
-            state = self.start(r)
-            r.emit(event, **kwargs)
-            before = self.err.getvalue()
-            r._tick_progress(state)
-            self.assertEqual(before, self.err.getvalue())
-            self.assertIsNone(r._progress)
-            self.assertTrue(state.stop.is_set())
-            r.close()
+            for preparation in (False, True):
+                r = self.reporter()
+                if preparation:
+                    r.emit('run_started', check_only=True)
+                else:
+                    self.start(r)
+                state = r._progress
+                r.emit(event, **kwargs)
+                before = self.err.getvalue()
+                r._tick_progress(state)
+                self.assertEqual(before, self.err.getvalue())
+                self.assertIsNone(r._progress)
+                self.assertTrue(state.stop.is_set())
+                r.close()
         r = self.reporter()
         self.start(r)
         r.error(OSError('failed'), phase='stage', **CONTEXT)
@@ -626,6 +693,73 @@ class CLIProgressIntegrationTests(unittest.TestCase):
     git = cli_fixtures.ReportingCLIIntegrationTests.git
     prepare = cli_fixtures.ReportingCLIIntegrationTests.prepare
 
+    def test_preparation_is_live_before_source_preparation_finishes(self):
+        script = '''
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import explain
+owner, method = ((explain.Folder, 'snapshot') if sys.argv[2] == 'folder'
+                 else (explain.GitSources, 'working'))
+gate = Path(sys.argv[3])
+original = getattr(owner, method)
+def delayed(*args, **kwargs):
+    deadline = time.monotonic() + 10
+    while not gate.exists():
+        if time.monotonic() >= deadline:
+            raise RuntimeError('Preparation indicator did not advance')
+        time.sleep(.01)
+    return original(*args, **kwargs)
+setattr(owner, method, delayed)
+sys.argv = ['explain.py', *sys.argv[4:]]
+sys.exit(explain.main())
+'''
+        self.env.update(TERM='xterm', NO_COLOR='1')
+        for mode in ('folder', 'git'):
+            for check in (False, True):
+                with self.subTest(mode=mode, check=check):
+                    args = self.prepare(mode, check=check)
+                    label = 'Checking local setup…' if check else 'Preparing analysis…'
+                    gate = self.base / f'continue-{mode}-{check}'
+                    master, slave = pty.openpty()
+                    termios.tcsetwinsize(slave, (24, 100))
+                    child = subprocess.Popen([sys.executable, '-B', '-c', script, str(ROOT),
+                                              mode, str(gate), *args, '--output', 'json'],
+                                             env=self.env, stdout=subprocess.PIPE, stderr=slave)
+                    raw = bytearray()
+                    try:
+                        deadline = time.monotonic() + 20
+                        while child.poll() is None:
+                            self.assertLess(time.monotonic(), deadline, raw.decode(errors='replace'))
+                            if select.select([master], [], [], .1)[0]:
+                                raw.extend(os.read(master, 65536))
+                            if not gate.exists() and re.search(re.escape(label) + r'  [^ ] 00:01',
+                                                               raw.decode(errors='replace')):
+                                gate.touch()
+                        stdout, _ = child.communicate(timeout=5)
+                        while select.select([master], [], [], .1)[0]:
+                            raw.extend(os.read(master, 65536))
+                    finally:
+                        if child.poll() is None:
+                            child.kill()
+                            child.communicate(timeout=5)
+                        os.close(master)
+                        os.close(slave)
+                    console = raw.decode()
+                    self.assertEqual(child.returncode, 0, console)
+                    self.assertTrue(gate.exists(), console)
+                    result = json.loads(stdout)
+                    self.assertEqual(result['status'], 'PREFLIGHT_OK' if check else 'COMPLETE')
+                    self.assertNotIn(b'\x1b', stdout)
+                    self.assertIn(f'Source: {self.folder if mode == "folder" else self.repo_path}', console)
+                    self.assertNotIn('      Elapsed:', console)
+                    if check:
+                        self.assertEqual(result['metrics']['attempts'], 0)
+                        self.assertEqual(result['metrics']['stages'], [])
+                    else:
+                        self.assertIn('Cataloging subsystems…  ⠋ 00:00', console)
+                    self.assertNotIn('Traceback', console)
+
     def test_live_cli_spinner_preserves_private_raw_output_and_no_waiting_scroll(self):
         args = self.prepare('folder')
         self.env.update(TERM='xterm', NO_COLOR='1', AUDIT_TEST_ACTION=json.dumps(
@@ -665,7 +799,7 @@ class CLIProgressIntegrationTests(unittest.TestCase):
             self.assertIn('      Report: ' + str(run / 'revisions/001' / name) + '\r\n', console)
         self.assertEqual((run / 'revisions/001/study.logs/attempt-001/stderr.log').read_bytes(), b'private CLI activity\n')
         records = [json.loads(line) for line in (run / 'run.log').read_text().splitlines()]
-        times = [x['elapsed_seconds'] for x in records if x['event'] == 'process_waiting' and x['stage'] == 'study']
+        times = [x['elapsed_seconds'] for x in records if x['event'] == 'process_waiting' and x.get('stage') == 'study']
         self.assertGreater(len(times), 1)
         self.assertTrue(all(b - a >= .099 for a, b in zip(times, times[1:])))
         self.assertTrue(any('last_output_seconds' in x for x in records if x['event'] == 'process_waiting'))
