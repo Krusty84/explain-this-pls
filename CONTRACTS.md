@@ -152,8 +152,12 @@ never added to the per-model cost breakdown. Success and error envelopes can car
 usage. A crash result (`error_during_execution`) is partial; reported zeros are
 preserved but do not establish zero spend because remaining usage is unknown.
 
-XXX collects all observed assistant messages for the owned session, request and
-agent. For each message it sums unique `step-finish` parts, or uses completed
+XXX collects assistant messages admitted by its stateful transport membership
+model for the owned session and unchanged root request. Internal compaction and
+continuation IDs are separate; they never replace that root. Per-model entries
+retain `origin=stage` or `origin=compaction` through run aggregation; compaction's
+actual model may differ and its requested model is not inferred from the stage.
+For each message it sums unique `step-finish` parts, or uses completed
 assistant-message metadata when steps are absent. Repeated snapshots replace
 earlier snapshots; message totals and step totals are never added together.
 A reported `tokens.total` wins. Otherwise total is computed as
@@ -633,6 +637,13 @@ FINISH_INVALID_TYPE, FINISH_UNKNOWN, FINISH_TRUNCATED (`length`), FINISH_ERROR
 and envelope remain private; classification is separate. Session/request/agent,
 completion timestamp, errors, pending tools, native structured result, completed
 StructuredOutput/input equality and exact final history snapshot equality remain mandatory.
+The XXX transition model additionally rejects changes to previously observed
+identities, unsupported user/parent/part forms, summary results and format loss.
+Empty compaction summaries can remain pending across polls within the original
+budget. Only verified membership contributes to usage; repeated snapshots and
+native transitions never create new orchestrator attempts. Full continuation
+authorization is currently closed because a pre-model format-retention mechanism
+has not been verified for the fork. See [XXX compaction compatibility](docs/xxx-compaction.md).
 A complete-looking JSON never overrides these checks. Compare failure preserves
 prior study/review and the diagnostic summary with a nonzero exit and no assertion
 that differences are absent.

@@ -30,6 +30,10 @@
     "expected_version": null
   },
   "execution": {
+    // Compaction is native backend configuration, not an execution setting.
+    // Its transitions share these budgets and do not create orchestrator attempts.
+    // Full XXX continuation/format retention and summary hooks remain unverified:
+    // see docs/xxx-compaction.md. No compaction defaults/plugins are applied here.
     // One substantive revision and full review after material findings; use 0 to disable.
     "max_revision_rounds": 1,
     "stage_timeout_seconds": 3600,

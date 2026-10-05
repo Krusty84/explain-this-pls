@@ -48,6 +48,17 @@ record a specific gap rather than asking for permissions or inventing evidence.
 
 ## Investigation protocol
 
+For each investigation step: find the symbol or registration in relevant
+directories -> read the relevant range -> verify the relationship and activation
+conditions -> retain a brief conclusion with exact source_id, path, symbols and
+line ranges. Start with about 100–200 lines and expand whenever necessary; this
+is a reading guide, not a hard cutoff. Widen searches for unresolved links.
+Do not reread a range without a specific reason, copy large code/search outputs
+into notes, or repeatedly draft the entire report. Keep exact evidence locators
+verbatim. Missing checks remain gaps, not established facts. This does not reduce
+required coverage, end-to-end scenarios, report sections or diagrams, and does not
+exclude tests, SQL, configuration, generators or third-party code for size alone.
+
 1. Inventory applications, build units, languages, entry points, startup wiring,
    registration, configuration variants, stores, schemas, migrations, integrations,
    and tests. Separate first-party, generated, vendor, example, and build content.

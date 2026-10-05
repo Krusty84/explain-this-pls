@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
+# SPDX-License-Identifier: MIT
+
+"""Owned fake HTTP integration; never evidence of a real XXX continuation/hook."""
+import io
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import unittest
+from unittest.mock import patch, Mock
+from types import SimpleNamespace
+
+import test_xxx as base
+from src.backends.xxx_history import SessionHistory
+from src.backends.opencode import prepare_environment
+from src.runtime.reporting import Reporter
+from src.runtime.metrics import measurement
+
+
+class CompactionHTTPTests(unittest.TestCase):
+    setUp = base.XXXTests.setUp
+    run_case = base.XXXTests.run_case
+    recorded = base.XXXTests.recorded
+    prompts = base.XXXTests.prompts
+    git = base.XXXTests.git
+    init_git = base.XXXTests.init_git
+
+    def synthetic(self, scenario, **kwargs):
+        # A fake's preserved format cannot establish production compatibility.
+        with patch.object(SessionHistory, 'authorize_continuation', lambda self: None):
+            return self.run_case(scenario, **kwargs)
+
+    def test_one_and_multiple_compactions_in_folder_and_git(self):
+        for scenario in ('compact-one', 'compact-multiple'):
+            with self.subTest(scenario=scenario):
+                manifest, code = self.synthetic(scenario)
+                self.assertEqual(code, 0, manifest)
+                self.assertTrue(manifest['accepted'])
+                self.assertEqual(manifest['metrics']['attempts'], 3)
+                meta = manifest['study_invocation']
+                count = 2 if scenario == 'compact-multiple' else 1
+                self.assertEqual(meta['compaction']['continuations'], count)
+                self.assertEqual(meta['compaction']['completed'], count)
+                request = json.loads((Path(meta['artifact_directory']) / 'request.json').read_text())
+                self.assertEqual(meta['request_id'], request['messageID'])
+                self.assertEqual(meta['metrics']['usage']['total_tokens'], 10 + 8 * count)
+                self.assertEqual(meta['metrics']['usage']['coverage']['total_tokens'], 'complete')
+                self.assertEqual(meta['metrics']['attempts'], 1)
+                measurements = meta['input_measurements']
+                self.assertEqual(measurements['prompt']['utf8_bytes'], meta['input_bytes'])
+                self.assertTrue(measurements['text_schema_copy'])
+                self.assertIsNone(measurements['tokens'])
+        self.init_git(['main'])
+        manifest, code = self.synthetic('compact-one')
+        self.assertEqual(code, 0, manifest)
+        self.assertTrue(manifest['branches'][0]['accepted'])
+        self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
+
+    def test_production_rejects_unverified_or_lost_format_with_precise_reason(self):
+        for scenario, reason in (
+                ('compact-one', 'COMPACTION_FORMAT_RETENTION_UNVERIFIED'),
+                ('compact-lost-format', 'COMPACTION_FORMAT_MISSING'),
+                ('compact-changed-schema', 'COMPACTION_FORMAT_CHANGED'),
+                ('compact-forged', 'CONTINUATION_FORM_UNSUPPORTED'),
+                ('compact-foreign', 'COMPACTION_SUMMARY_IDENTITY')):
+            manifest, code = self.run_case(scenario)
+            self.assertEqual(code, 1, manifest)
+            self.assertEqual(manifest['diagnostics'][0]['details']['code'], reason)
+            self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
+            self.assertEqual(manifest['metrics']['attempts'], 2)
+            self.assertEqual(manifest['metrics']['usage']['coverage']['total_tokens'], 'partial')
+            calls = self.recorded()
+            self.assertTrue(any(c['path'].endswith('/abort') for c in calls))
+            self.assertTrue(any(c['method'] == 'DELETE' for c in calls))
+
+    def test_final_summary_mismatch_missing_native_and_unfinished_tool_never_publish(self):
+        for scenario in ('compact-summary-result', 'compact-mismatch', 'compact-no-native',
+                         'compact-no-tool', 'compact-unfinished-tool'):
+            with self.subTest(scenario=scenario):
+                manifest, code = self.synthetic(scenario)
+                self.assertEqual(code, 1, manifest)
+                self.assertFalse(manifest['accepted'])
+                self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
+                self.assertEqual(manifest['metrics']['attempts'], 2)
+
+    def test_timeouts_and_backend_error_cleanup_during_compaction(self):
+        for scenario, execution, kind in (
+                ('compact-slow', {'stage_timeout_seconds': 3, 'idle_timeout_seconds': .5}, 'IDLE_TIMEOUT'),
+                ('compact-active', {'stage_timeout_seconds': .9}, 'STAGE_TIMEOUT'),
+                ('compact-error', {'stage_timeout_seconds': 5}, 'BACKEND_ERROR')):
+            self.value['execution'] = execution
+            manifest, code = self.run_case(scenario)
+            self.assertEqual(code, 1, manifest)
+            self.assertEqual(manifest['diagnostics'][0]['failure_kind'], kind)
+            self.assertFalse(manifest['accepted'])
+            self.assertEqual(manifest['metrics']['attempts'], 2)
+            self.assertEqual(manifest['metrics']['usage']['coverage']['total_tokens'], 'partial')
+            for pid in {c['server_pid'] for c in self.recorded()}:
+                with self.assertRaises(ProcessLookupError): os.kill(pid, 0)
+
+    def test_interrupt_during_compaction_aborts_owned_session(self):
+        path = self.root / 'config.json'
+        path.write_text(json.dumps(self.value))
+        for signal in ('SIGINT', 'SIGTERM'):
+            result = subprocess.run([sys.executable, '-B', str(base.ROOT / 'explain.py'), '--config', str(path)],
+                env=os.environ | self.env | {'AUDIT_FAKE_CASE': 'compact-interrupt', 'AUDIT_FAKE_SIGNAL': signal},
+                capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 130, result.stderr)
+            manifest = json.loads(Path(json.loads(result.stdout)['manifest']).read_text())
+            self.assertFalse(manifest['accepted'])
+            self.assertEqual(manifest['metrics']['attempts'], 2)
+            self.assertEqual(manifest['metrics']['usage']['coverage']['total_tokens'], 'partial')
+            for pid in {c['server_pid'] for c in self.recorded()}:
+                with self.assertRaises(ProcessLookupError): os.kill(pid, 0)
+
+    def test_events_are_safe_and_hook_unavailability_is_explicit(self):
+        stream = io.StringIO()
+        reporter = Reporter(stdout=io.StringIO(), stderr=stream, progress=False, verbose=True)
+        self.addCleanup(reporter.close)
+        manifest, code = self.synthetic('compact-one', reporter=reporter)
+        self.assertEqual(code, 0, manifest)
+        meta = manifest['study_invocation']['compaction']
+        self.assertEqual(meta['summary_hook'], 'not_applied_unverified')
+        events = [e['event'] for e in meta['events']]
+        self.assertEqual(events.count('compaction_started'), 1)
+        self.assertEqual(events.count('compaction_completed'), 1)
+        self.assertEqual(events.count('session_continued'), 1)
+        self.assertNotIn('Synthetic summary', stream.getvalue())
+        self.assertNotIn('Original task', stream.getvalue())
+        self.assertNotIn('Authorization', stream.getvalue())
+
+
+class CompactionConfigurationTests(unittest.TestCase):
+    def test_summary_model_is_not_used_as_the_stages_actual_model(self):
+        runner = base.Runner.__new__(base.Runner)
+        runner.reporter = SimpleNamespace(clock=lambda: 1)
+        runner.metrics = Mock()
+        runner.stage_context = lambda stage, context: {'stage': stage}
+        metrics = measurement('xxx', None, 'provider/small')
+        metrics['by_model'][0]['origin'] = 'compaction'
+        meta = {'backend': 'xxx', 'model_requested': None, 'model_actual': None,
+                'stage': 'study', 'invocation_id': 'test', 'metrics': metrics}
+        runner.record_attempt_metrics(meta, {}, 0)
+        self.assertIsNone(meta['model_actual'])
+        self.assertEqual(meta['models_reported'], ['provider/small'])
+
+    def test_overlay_preserves_user_compaction_and_hooks_without_installing_any(self):
+        config = {'plugin': ['user-hook.js'], 'model': 'private/model', 'agent': {'compaction': {'model': 'p/small'}},
+                  'compaction': {'auto': True, 'prune': False, 'reserved': 1234}, 'unrelated': {'keep': True}}
+        env = {'OPENCODE_CONFIG_CONTENT': json.dumps(config), 'OPENCODE_CONFIG': '/user/profile'}
+        name = prepare_environment(env, 'study')
+        merged = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+        del merged['agent'][name]
+        self.assertEqual(merged, config)
+        self.assertEqual(env['OPENCODE_CONFIG'], '/user/profile')
+        self.assertEqual(config['plugin'], ['user-hook.js'])
+
+
+if __name__ == '__main__':
+    unittest.main()

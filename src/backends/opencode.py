@@ -60,6 +60,11 @@ def object_value(value, label):
     return value
 
 
+def json_equal(left, right):
+    """Exact JSON values; Python equality alone equates True with 1."""
+    return json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
+
+
 def identifier(value, prefix):
     if type(value) is not str or not re.fullmatch(prefix + r'_[A-Za-z0-9]+', value):
         raise response_error('TRANSPORT_ERROR', 'transport', 'Invalid protocol identifier.')
@@ -98,7 +103,7 @@ def classify_finish(info):
     return 'FINISH_UNKNOWN'
 
 
-def extract_result(value, session_id, request_id, agent_name):
+def extract_result(value, session_id, request_id, agent_name, *, expected_parent=None):
     envelope = object_value(value, 'message envelope')
     info = object_value(envelope.get('info'), 'assistant info')
     parts = envelope.get('parts')
@@ -107,7 +112,8 @@ def extract_result(value, session_id, request_id, agent_name):
     mid = identifier(info.get('id'), 'msg')
     identifier(info.get('sessionID'), 'ses')
     identifier(info.get('parentID'), 'msg')
-    if info['sessionID'] != session_id or info['parentID'] != request_id or info.get('agent') != agent_name:
+    if (info['sessionID'] != session_id or info['parentID'] != (expected_parent or request_id)
+            or info.get('agent') != agent_name or info.get('summary') is True):
         raise response_error('TRANSPORT_ERROR', 'transport', 'Response identity does not match this request/session/stage.')
     if info.get('role') != 'assistant':
         raise response_error('TRANSPORT_ERROR', 'transport', 'Expected assistant response.')
@@ -168,7 +174,7 @@ def extract_result(value, session_id, request_id, agent_name):
         raise response_error('INCOMPLETE_OUTPUT', 'result', 'No native structured result; text is not a substitute.')
     if not structured_calls:
         raise response_error('INCOMPLETE_OUTPUT', 'result', 'No completed StructuredOutput tool call.')
-    if not any(p['state']['input'] == info['structured'] for p in structured_calls):
+    if not any(json_equal(p['state']['input'], info['structured']) for p in structured_calls):
         raise response_error('TRANSPORT_ERROR', 'transport', 'Native result differs from its completed tool input.')
     # Its type and contents are checked by validate_result, independently of upstream.
     return info['structured'], {'session_id': session_id, 'request_id': request_id,
@@ -443,12 +449,15 @@ class Server:
         except (KeyError, TypeError, AssertionError):
             raise incompatible('OpenCode /doc does not match the inspected structured-output interface.') from None
 
+    def session_history(self, request_id, body):
+        # XXX alone supplies a transition model. This does not widen OpenCode.
+        return None
+
     def invoke(self, prompt, schema, agent_name, model, retries):
         created = object_value(self.request('POST', '/session', {}), 'session response')
         self.session_id = identifier(created.get('id'), 'ses')
         request_id = 'msg_' + f'{int(time.time() * 1000) * 4096:012x}' + secrets.token_hex(7)
         self.meta.update(session_id=self.session_id, request_id=request_id)
-        usage = HTTPUsage(self.meta.get('backend', 'opencode'), model, self.session_id, request_id, agent_name)
         body = {'messageID': request_id, 'agent': agent_name,
                 'format': {'type': 'json_schema', 'schema': schema, 'retryCount': retries},
                 'parts': [{'type': 'text', 'text': prompt}]}
@@ -457,7 +466,26 @@ class Server:
                 raise incompatible('OpenCode model must have provider/model syntax.')
             provider, model_id = model.split('/', 1)
             body['model'] = {'providerID': provider, 'modelID': model_id}
+        history_model = self.session_history(request_id, body)
+        usage = HTTPUsage(self.meta.get('backend', 'opencode'), model, self.session_id, request_id, agent_name)
+
+        def observe(messages, *, complete=False):
+            if history_model is None:
+                self.meta['metrics'] = usage.observe(messages, complete=complete)
+                validate_history(messages, self.session_id, request_id)
+                return None
+            try:
+                return history_model.observe(messages)
+            finally:
+                self.meta['metrics'] = usage.validated(history_model, complete=complete)
+                self.meta['compaction'] = history_model.metadata()
+
         self.save(self.artifacts / 'request.json', json.dumps(body))
+        self.meta['http_input_measurements'] = {
+            'request_body_utf8_bytes': len(json.dumps(body).encode('utf-8')),
+            'native_format_utf8_bytes': len(json.dumps(body['format']).encode('utf-8')),
+            'native_schema_utf8_bytes': len(json.dumps(schema).encode('utf-8')),
+            'tokens': None}
         self.budget.check()
         self.meta['prompt_sent'] = True
         pending = self.begin('POST', f'/session/{self.session_id}/message', body,
@@ -471,12 +499,13 @@ class Server:
                 if self.process.poll() is not None:
                     raise response_error('BACKEND_ERROR', 'backend', 'Owned OpenCode server exited during the request.')
                 messages = self.request('GET', f'/session/{self.session_id}/message')
-                self.meta['metrics'] = usage.observe(messages)
-                validate_history(messages, self.session_id, request_id)
-                current = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).digest()
-                if current != fingerprint and messages:
+                changed = observe(messages)
+                if history_model is None:
+                    current = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).digest()
+                    changed = current != fingerprint and bool(messages)
+                    fingerprint = current
+                if changed:
                     self.budget.activity()
-                fingerprint = current
             self.budget.check()
         except ContractError as exc:
             if exc.failure_kind in ('STAGE_TIMEOUT', 'IDLE_TIMEOUT') and 'operation' not in exc.details:
@@ -485,7 +514,8 @@ class Server:
         self.meta['output_bytes'] = len(pending.body)
         self.save(self.artifacts / 'response.json', bytes(pending.body))
         envelope = self.finish(pending)
-        self.meta['metrics'] = usage.observe([envelope])
+        if history_model is None:
+            self.meta['metrics'] = usage.observe([envelope])
         info = envelope.get('info') if type(envelope) is dict else None
         if type(info) is dict:
             self.meta['finish_classification'] = classify_finish(info)
@@ -503,10 +533,20 @@ class Server:
                 if type(detail) is dict and type(detail.get('retries')) in (int, float):
                     self.meta['native_retries_reported'] = detail['retries']
         history = self.request('GET', f'/session/{self.session_id}/message')
-        self.meta['metrics'] = usage.observe(history)
-        data, details = extract_result(envelope, self.session_id, request_id, agent_name)
-        validate_history(history, self.session_id, request_id, details['message_id'], envelope)
-        self.meta['metrics'] = usage.observe(history, complete=True)
+        observe(history)
+        expected_parent = None
+        if history_model is not None:
+            try:
+                expected_parent = history_model.validate_final(history, envelope)
+            finally:
+                self.meta['compaction'] = history_model.metadata()
+        data, details = extract_result(envelope, self.session_id, request_id, agent_name,
+                                       expected_parent=expected_parent)
+        if history_model is None:
+            validate_history(history, self.session_id, request_id, details['message_id'], envelope)
+            self.meta['metrics'] = usage.observe(history, complete=True)
+        else:
+            self.meta['metrics'] = usage.validated(history_model, complete=True)
         self.save(self.artifacts / 'extracted.json', json.dumps(data))
         self.meta.update(details, output_bytes=len(pending.body))
         return data

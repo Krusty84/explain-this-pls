@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
+# SPDX-License-Identifier: MIT
+
 import copy
 import json
 import unittest
@@ -5,11 +9,22 @@ import unittest
 from src.reports.document_rendering import materialize_study
 from fixtures.ledger_response import response
 from src.analysis.ledger import review_context, verify_review_context
-from src.model.model_context import project_model_context
+from src.model.model_context import project_model_context, input_measurements
 from src.model.structured_output import repair_prompt
 
 
 class ModelContextTests(unittest.TestCase):
+    def test_sizes_are_exact_bytes_and_characters_without_token_claims(self):
+        measured = input_measurements('АБ', '{"x":1}', '{}', 'АБ test')
+        self.assertEqual(measured['template'], {'characters': 2, 'utf8_bytes': 4})
+        self.assertEqual(measured['projected_context']['utf8_bytes'], 7)
+        self.assertEqual(measured['schema']['utf8_bytes'], 2)
+        self.assertIsNone(measured['tokens'])
+        self.assertTrue(measured['text_schema_copy'])
+        correction = input_measurements('unused template', '{}', '{}', 'correction', correction=True)
+        self.assertEqual(correction['template']['utf8_bytes'], 0)
+        self.assertFalse(correction['template_applied'])
+
     def test_twenty_claim_table_is_sent_once_without_changing_frozen_context(self):
         context = {'branch': 'main', 'source_commit': 'abc'}
         wire = response(context)

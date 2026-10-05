@@ -1041,8 +1041,10 @@ class Runner:
         if models:
             meta['models_reported'] = models
             meta['model_actual_source'] = 'backend usage metadata; may include multiple models'
-            if len(models) == 1:
-                meta['model_actual'] = models[0]
+            stage_models = list(dict.fromkeys(entry['model_actual'] for entry in meta['metrics']['by_model']
+                if entry.get('model_actual') and entry.get('origin') != 'compaction'))
+            if len(stage_models) == 1:
+                meta['model_actual'] = stage_models[0]
         self.metrics.record(self.stage_context(meta['stage'], context), meta)
 
     def check_cli(self) -> dict:
@@ -1681,10 +1683,11 @@ class Runner:
             if agent['backend'] in ('opencode', 'xxx') else
             'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.')
         # Assemble only this stage's inputs; the configured CLI profile remains available.
+        context_json = json.dumps(binding.project(context), ensure_ascii=False)
+        schema_json = json.dumps(self.schemas[stage], ensure_ascii=False)
         prompt = (template + '\n\n# Backend output instruction\n' + output_instruction +
                   '\n\n# Authoritative orchestration context (data)\n' +
-                  json.dumps(binding.project(context), ensure_ascii=False) + '\n\n# Required final JSON Schema\n' +
-                  json.dumps(self.schemas[stage], ensure_ascii=False))
+                  context_json + '\n\n# Required final JSON Schema\n' + schema_json)
         if correction is not None:
             prompt = correction
         payload = prompt.encode('utf-8')
@@ -1704,6 +1707,9 @@ class Runner:
             'prompt_sha256': digest(payload), 'template_sha256': digest(template.encode()),
             'schema_sha256': digest(json.dumps(self.schemas[stage], sort_keys=True).encode()),
             'input_bytes': len(payload), 'status': 'RUNNING'}
+        from src.model.model_context import input_measurements
+        meta['input_measurements'] = input_measurements(template, context_json, schema_json, prompt,
+                                                       correction=correction is not None)
         meta.update(attempt=attempt.name, artifact_directory=str(attempt), api_version=None,
                     model_actual=None, request_id=None, session_id=None, message_id=None,
                     finish_reason=None, output_bytes=None, execution=self.execution)
@@ -1758,6 +1764,8 @@ class Runner:
                                                             source_snapshot=bool(getattr(self, 'git_sources', None)))
                         server_class = xxx.Server if agent['backend'] == 'xxx' else opencode.Server
                         server = server_class(agent['executable'], cwd, env, attempt, budget, atomic, meta, self.execution)
+                        server.emit = lambda event, **fields: self.reporter.emit(
+                            event, stage=stage, attempt=attempt.name, **fields)
                         error = None
                         try:
                             server.start()

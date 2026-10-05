@@ -6,6 +6,16 @@ contains source identity, a compact directory summary and source_decoding rules;
 the orchestrator separately checks your paths against its complete inventory.
 Directory names alone do not establish architectural responsibilities.
 
+Keep source reading focused: find a symbol or registration in relevant directories,
+read the relevant range (initially about 100–200 lines, expanding when needed),
+verify the relationship and activation conditions, then retain a brief conclusion
+with exact source_id, path, symbols and line ranges. Widen searches when evidence
+requires it. Do not reread a range without a specific unresolved question, copy
+large code/search outputs into notes, or repeatedly draft the full catalog.
+This reading guide does not reduce coverage: tests, SQL, configuration, generators
+and third-party code remain relevant when they determine behavior. Mark missing
+checks as gaps; never promote an unverified grouping to an established fact.
+
 Return only the appended wire schema: task architecture_catalog, exact supplied
 source identity, completion_status, limitations, subsystems and exclusions.
 In folder mode echo source_directory and source_snapshot_id. Keep service

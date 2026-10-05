@@ -60,6 +60,15 @@ def owns_listener(pid, port):
 class Server(OpenCodeServer):
     api_doc_checks = 3
 
+    def session_history(self, request_id, body):
+        from src.backends.xxx_history import SessionHistory
+        self.history = SessionHistory(self.session_id, request_id, body, emit=getattr(self, 'emit', None))
+        self.history.event('compaction_capability', format_retention='unverified',
+                           summary_hook='not_applied_unverified', settings='backend_profile_unchanged',
+                           hook_conflict_check='unavailable')
+        self.meta['compaction'] = self.history.metadata()
+        return self.history
+
     def listener_ready(self):
         if sys.platform.startswith('linux'):
             ready = owns_listener(self.process.pid, self.port)
@@ -106,4 +115,13 @@ class Server(OpenCodeServer):
     def invoke(self, prompt, schema, agent_name, model, retries=0):
         if retries != 0:
             raise incompatible('XXX requires format.retryCount=0 for each orchestrator request.')
-        return super().invoke(prompt, schema, agent_name, model, 0)
+        try:
+            return super().invoke(prompt, schema, agent_name, model, 0)
+        except BaseException as exc:
+            history = getattr(self, 'history', None)
+            if history is not None and history.transitions:
+                reason = (exc.details.get('code', exc.failure_kind) if isinstance(exc, ContractError) else
+                          'INTERRUPTED' if isinstance(exc, KeyboardInterrupt) else 'BACKEND_ERROR')
+                history.event('compaction_rejected', reason=reason)
+                self.meta['compaction'] = history.metadata()
+            raise

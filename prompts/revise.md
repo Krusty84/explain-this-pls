@@ -49,6 +49,19 @@ Use output_language. COMPLETE is your work-completion assessment, never proof of
 understanding or correctness; use PARTIAL/BLOCKED with concrete limitations when
 needed. Only the orchestrator publishes this version and chooses the final pair.
 
+## Focused source reading
+
+Find a symbol or registration within relevant directories, read its relevant
+range, verify the relationship and activation conditions, then retain a brief
+conclusion with exact source_id, path, symbols and line ranges. Start with about
+100–200 lines; expand as needed rather than treating this as a cutoff. Widen
+searches for unresolved links. Do not reread ranges without a specific reason,
+copy large code/search outputs into notes, or repeatedly draft the whole report.
+Preserve evidence locators verbatim and mark unverified assertions as gaps.
+All coverage areas, end-to-end scenarios, required sections and diagrams still
+apply. Tests, SQL, configuration, generators and third-party code remain in scope
+when relevant; size alone is not a reason to exclude them.
+
 ## Required PlantUML diagrams
 
 Include two overview diagrams in the existing report sections:

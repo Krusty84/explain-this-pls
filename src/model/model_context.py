@@ -7,6 +7,16 @@ import copy
 CONTEXT_FORMAT = 'compact-context'
 
 
+def input_measurements(template, context_json, schema_json, prompt, *, correction=False):
+    """Exact wire text sizes, NOT tokenizer estimates or quality measurements."""
+    def size(text):
+        return {'characters': len(text), 'utf8_bytes': len(text.encode('utf-8'))}
+    return {'template': size('' if correction else template), 'projected_context': size(context_json),
+            'schema': size(schema_json), 'prompt': size(prompt),
+            'text_schema_copy': True, 'correction_prompt': correction, 'template_applied': not correction,
+            'tokens': None, 'token_measurement': 'unavailable'}
+
+
 def _registry(claims):
     for claim in claims:
         if isinstance(claim, dict):

@@ -155,6 +155,17 @@ class HTTPUsage:
         self.backend, self.requested = backend, requested
         self.session, self.request, self.agent = session, request, agent
         self.messages = {}
+        self.origins = {}
+
+    def validated(self, history, *, complete=False):
+        """Consume exactly the transport's accepted membership, including summaries.
+
+        Never reclassify a raw user/assistant envelope independently of transport.
+        A failed history remains partial even if a caller asks for complete totals.
+        """
+        self.messages = {m['info']['id']: m for m, _ in history.usage_messages()}
+        self.origins = {m['info']['id']: origin for m, origin in history.usage_messages()}
+        return self._measure(complete=complete and not history.failed)
 
     def observe(self, messages, *, complete=False):
         valid = type(messages) is list
@@ -171,6 +182,10 @@ class HTTPUsage:
                 valid = False
                 continue
             self.messages[info['id']] = message
+        return self._measure(complete=complete and valid)
+
+    def _measure(self, *, complete):
+        valid = True
         entries = []
         for mid, message in self.messages.items():
             info = message['info']
@@ -188,13 +203,20 @@ class HTTPUsage:
                 complete = False
             actual = (info['providerID'] + '/' + info['modelID'] if
                       all(type(info.get(k)) is str and info[k] for k in ('providerID', 'modelID')) else None)
+            origin = self.origins.get(mid, 'stage')
+            requested = self.requested if origin == 'stage' else None
+
+            def entry(measured):
+                return model_entry(self.backend, requested, actual, measured) | {
+                    'origin': origin, 'agent': info.get('agent')}
+
             samples = list(parts.values()) if parts else [info] if finished else []
             if not samples:
-                entries.append(model_entry(self.backend, self.requested, actual, usage()))
+                entries.append(entry(usage()))
             for sample in samples:
                 measured = native_usage(sample.get('tokens'), sample.get('cost'),
                                         self.backend + ('.step-finish' if parts else '.assistant'), True)
-                entries.append(model_entry(self.backend, self.requested, actual, measured))
+                entries.append(entry(measured))
         if not complete or not valid:
             for entry in entries:
                 measured = entry['usage']
@@ -216,7 +238,7 @@ def summarize(attempts):
             'by_backend': group_usage([{'backend': a['backend'], 'usage': a['metrics']['usage']}
                                        for a in attempts], ('backend',)),
             'by_model': group_usage([entry for a in attempts for entry in a['metrics']['by_model']],
-                                    ('backend', 'model_actual', 'model_requested'))}
+                                    ('backend', 'model_actual', 'model_requested', 'origin'))}
 
 
 class RunMetrics:

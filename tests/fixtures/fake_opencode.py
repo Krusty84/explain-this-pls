@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import sys
 import time
+import threading
 import uuid
 
 args = sys.argv[1:]
@@ -32,6 +33,8 @@ port = int(args[args.index('--port') + 1])
 authorization = 'Basic ' + base64.b64encode(('opencode:' + os.environ['OPENCODE_SERVER_PASSWORD']).encode()).decode()
 session_id = 'ses_' + uuid.uuid4().hex
 messages = []
+history_script = []
+history_consumed = threading.Event()
 scenario = os.environ.get('AUDIT_FAKE_CASE')
 
 
@@ -194,6 +197,45 @@ class Handler(BaseHTTPRequestHandler):
             if scenario == 'foreign-request' and stage != 'catalog':
                 info['parentID'] = 'msg_old'
             messages[:] = [response]
+            if xxx:
+                messages.insert(0, {'info': {'id': body['messageID'], 'sessionID': session_id,
+                    'role': 'user', 'agent': body['agent'], 'model': model, 'format': body['format'],
+                    'time': {'created': 0}}, 'parts': [{'id': 'prt_request', 'messageID': body['messageID'],
+                    'sessionID': session_id, 'type': 'text', 'text': prompt}]})
+            if scenario and scenario.startswith('compact-') and stage != 'catalog':
+                # Explicitly synthetic required protocol, not a real XXX trace.
+                from compaction_protocol import chain, snapshots
+                generated = chain(2 if scenario == 'compact-multiple' else 1, body, response)
+                if scenario == 'compact-lost-format': del generated[4]['info']['format']
+                if scenario == 'compact-changed-schema': generated[4]['info']['format']['schema'] = {}
+                if scenario == 'compact-forged': generated[4]['parts'][0]['text'] = 'forged continuation'
+                if scenario == 'compact-foreign': generated[3]['info']['parentID'] = 'msg_foreign'
+                if scenario == 'compact-error':
+                    generated[3]['info']['error'] = {'name': 'APIError', 'data': {'message': 'PRIVATE'}}
+                if scenario == 'compact-no-tool': response['parts'].pop()
+                if scenario == 'compact-unfinished-tool': generated[-1]['parts'][-1]['state']['status'] = 'running'
+                if scenario == 'compact-no-native': generated[-1]['info'].pop('structured')
+                if scenario == 'compact-mismatch': response['parts'][0]['text'] = 'different envelope'
+                history_script[:] = snapshots(generated)
+                if scenario in ('compact-slow', 'compact-active', 'compact-interrupt'):
+                    generated = generated[:4]
+                    generated[-1]['parts'] = []
+                    generated[-1]['info']['time'].pop('completed')
+                    generated[-1]['info'].pop('finish')
+                    history_script[:] = [generated]
+                    if scenario == 'compact-interrupt':
+                        history_consumed.wait(5)
+                        import signal
+                        os.kill(os.getppid(), getattr(signal, os.environ.get('AUDIT_FAKE_SIGNAL', 'SIGTERM')))
+                    for tick in range(600):
+                        if scenario == 'compact-active':
+                            generated[-1]['parts'] = [{'id': 'prt_stream', 'sessionID': session_id,
+                                'messageID': generated[-1]['info']['id'], 'type': 'text', 'text': 'x' * (tick + 1)}]
+                        time.sleep(.05)
+                history_consumed.wait(10)
+                response = generated[-1] if scenario not in ('compact-mismatch', 'compact-no-tool') else response
+                if scenario == 'compact-summary-result': response = generated[3]
+                if scenario == 'compact-no-tool': response['info']['parentID'] = generated[-1]['info']['parentID']
             if scenario in ('slow', 'active') and stage != 'catalog':
                 for tick in range(40):
                     if scenario == 'active':
@@ -202,6 +244,10 @@ class Handler(BaseHTTPRequestHandler):
             if scenario == 'malformed' and stage != 'catalog':
                 self.send_response(200); self.end_headers(); self.wfile.write(b'{broken'); return
         elif self.path.endswith('/message'):
+            if history_script:
+                messages[:] = history_script.pop(0)
+                if not history_script:
+                    history_consumed.set()
             response = messages
         else:
             response = True
