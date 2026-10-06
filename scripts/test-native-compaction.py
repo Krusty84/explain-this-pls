@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Verify the versioned native patch in a disposable pinned OpenCode checkout.
+"""Verify stock OpenCode 1.2.27 or its reference patch in a disposable checkout.
 
 No model requests or global installs. --install prepares only the runtime's
 workspace dependencies; run the verification itself in a network namespace.
@@ -29,6 +29,8 @@ def main():
     parser.add_argument('source', type=Path)
     parser.add_argument('--bun', required=True, type=Path)
     parser.add_argument('--install', action='store_true', help='Prepare dependencies only; requires network')
+    parser.add_argument('--stock-only', action='store_true',
+                        help='Verify unpatched native behavior and client acceptance; never apply the reference patch')
     args = parser.parse_args()
     source, bun = args.source.resolve(), args.bun.resolve()
     for name, digest in HASHES.items():
@@ -75,17 +77,22 @@ def main():
             shutil.copyfile(ROOT / 'tests/native/compaction-format.test.ts', test)
             command = [str(bun), 'test', '--timeout', '30000', str(test)]
             subprocess.run(command, cwd=package, env=env | {'NATIVE_COMPACTION_BASELINE': '1'}, check=True)
-            subprocess.run(['git', 'apply', '--check', str(patch)], cwd=source, check=True)
-            subprocess.run(['git', 'apply', str(patch)], cwd=source, check=True)
-            subprocess.run(command, cwd=package, env=env | {'NATIVE_COMPACTION_BASELINE': '0'}, check=True)
-            subprocess.run([sys.executable, '-B', str(ROOT / 'tests/native/validate_compaction.py'), directory],
+            if not args.stock_only:
+                subprocess.run(['git', 'apply', '--check', str(patch)], cwd=source, check=True)
+                subprocess.run(['git', 'apply', str(patch)], cwd=source, check=True)
+                subprocess.run(command, cwd=package, env=env | {'NATIVE_COMPACTION_BASELINE': '0'}, check=True)
+            validation = [sys.executable, '-B', str(ROOT / 'tests/native/validate_compaction.py'), directory]
+            if args.stock_only:
+                validation.append('--stock-only')
+            subprocess.run(validation,
                            cwd=ROOT, check=True)
             subprocess.run([str(bun), 'test', '--timeout', '30000', 'test/session/compaction.test.ts',
                             'test/session/structured-output.test.ts'], cwd=package, env=env, check=True)
             subprocess.run([str(bun), 'run', 'typecheck'], cwd=package, env=env, check=True)
         finally:
-            for name, data in originals.items():
-                (source / name).write_bytes(data)
+            if not args.stock_only:
+                for name, data in originals.items():
+                    (source / name).write_bytes(data)
             test.unlink(missing_ok=True)
 
 

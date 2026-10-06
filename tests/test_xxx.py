@@ -60,7 +60,9 @@ class XXXTests(unittest.TestCase):
         check = next(iter(manifest['cli_checks'].values()))
         self.assertEqual(check['version'], 'XXX fixture-unknown')
         self.assertEqual(check['http']['api_version'], 'XXX fixture-unknown')
-        self.assertEqual(check['http']['compatibility_profile'], 'xxx-http')
+        self.assertEqual(check['http']['compatibility_profile'], 'opencode-v1.2.27-http')
+        self.assertEqual(check['http']['api_allowed_extensions'],
+                         ['compactionCount', 'queued', 'unattended_retry'])
         for pid in {c['server_pid'] for c in self.recorded()}:
             with self.assertRaises(ProcessLookupError):
                 os.kill(pid, 0)
@@ -88,6 +90,39 @@ class XXXTests(unittest.TestCase):
         self.assertEqual(manifest['study_invocation']['retry_policy']['orchestrator_retries'], 0)
         self.assertFalse(manifest['study_invocation']['retry_policy']['native_enforcement_verified'])
 
+    def test_stock_api_preflight_preserves_versions_and_creates_no_session(self):
+        self.env['AUDIT_FAKE_API_EXTENSIONS'] = ''
+        for cli_version, api_version in (('1.2.27', '1.2.27'), ('XXX custom', 'XXX runtime')):
+            with self.subTest(cli=cli_version):
+                self.env.update(AUDIT_FAKE_VERSION=cli_version, AUDIT_FAKE_API_VERSION=api_version)
+                self.value['agent']['expected_version'] = cli_version
+                manifest, code = self.run_case(check=True)
+                self.assertEqual(code, 0, manifest)
+                check = next(iter(manifest['cli_checks'].values()))
+                self.assertEqual(check['version'], cli_version)
+                self.assertEqual(check['http']['api_version'], api_version)
+                self.assertEqual(check['http']['api_changes'], 0)
+                self.assertEqual(check['http']['api_allowed_extensions'], [])
+                self.assertFalse(any(c['method'] == 'POST' for c in self.recorded()))
+
+    def test_stock_api_folder_and_multi_branch_pipeline(self):
+        self.env.update(AUDIT_FAKE_API_EXTENSIONS='', AUDIT_FAKE_VERSION='1.2.27')
+        manifest, code = self.run_case()
+        self.assertEqual(code, 0, manifest)
+        self.assertTrue(manifest['accepted'])
+        self.assertEqual(manifest['study_invocation']['compatibility_profile'], 'opencode-v1.2.27-http')
+        self.assertNotEqual(manifest['study_invocation']['session_id'], manifest['review_invocation']['session_id'])
+        self.init_git(['main', 'other'])
+        manifest, code = self.run_case()
+        self.assertEqual(code, 0, manifest)
+        self.assertTrue(all(branch['accepted'] for branch in manifest['branches']))
+        self.assertTrue(manifest['comparison_invocation']['publication_complete'])
+        for call in self.prompts():
+            self.assertEqual(call['body']['format']['retryCount'], 0)
+        comparisons = [call for call in self.prompts()
+                       if call['permissions'] == {'*': 'deny', 'StructuredOutput': 'allow'}]
+        self.assertEqual(len(comparisons), 1)
+
     def test_explicit_model_and_expected_version_are_preserved(self):
         self.value['agent'].update(model='chosen/custom', expected_version='XXX fixture-unknown')
         manifest, code = self.run_case()
@@ -99,7 +134,7 @@ class XXXTests(unittest.TestCase):
         self.assertEqual(manifest['diagnostics'][0]['code'], 'CLI_VERSION_MISMATCH')
 
     def test_interface_and_authentication_fail_before_prompt(self):
-        for scenario in ('bad-api', 'null-doc', 'no-auth', 'bad-health'):
+        for scenario in ('bad-api', 'bad-api-extension', 'null-doc', 'no-auth', 'bad-health'):
             with self.subTest(scenario=scenario):
                 manifest, code = self.run_case(scenario, check=True)
                 self.assertEqual(code, 1, manifest)

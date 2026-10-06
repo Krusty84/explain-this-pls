@@ -152,7 +152,7 @@ never added to the per-model cost breakdown. Success and error envelopes can car
 usage. A crash result (`error_during_execution`) is partial; reported zeros are
 preserved but do not establish zero spend because remaining usage is unknown.
 
-XXX collects assistant messages admitted by its stateful transport membership
+XXX (OpenCode 1.2.27) collects assistant messages admitted by its stateful transport membership
 model for the owned session and unchanged root request. Internal compaction and
 continuation IDs are separate; they never replace that root. Per-model entries
 retain `origin=stage` or `origin=compaction` through run aggregation; compaction's
@@ -161,7 +161,7 @@ For each message it sums unique `step-finish` parts, or uses completed
 assistant-message metadata when steps are absent. Repeated snapshots replace
 earlier snapshots; message totals and step totals are never added together.
 A reported `tokens.total` wins. Otherwise total is computed as
-`input + cache.read + cache.write + output`, assuming the fork preserves OpenCode's
+`input + cache.read + cache.write + output`, using OpenCode 1.2.27's
 convention that reasoning is included in output; that total is marked estimated.
 The final validated history establishes complete reported usage. Earlier snapshots
 and usage retained after a backend failure or interruption are partial.
@@ -171,6 +171,30 @@ timeouts and signals. Missing final counters leave unknown remaining spend; no
 extra model calls, session recovery, or extended cleanup budgets are used to obtain
 it. Complete means the available backend accounting is complete, not that it has
 been reconciled against an invoice or includes unreported backend activity.
+
+`backend: "xxx"` selects OpenCode 1.2.27 over HTTP, including XXX-branded
+executables. Its `compatibility_profile` is `opencode-v1.2.27-http`; CLI and health
+versions are recorded verbatim. Optional `expected_version` still compares the
+exact CLI output. Executable names and version branding do not select another
+protocol or model. The production declaration baseline is generated from the
+pinned upstream OpenAPI (commit `4ee426ba549131c4903a71dfb6259200467aca81`).
+The six selected paths and their referenced declarations are compared at preflight
+and every stage server startup. `compactionCount: number` on Session (with or
+without its required-list entry), and the recorded `queued` / `unattended_retry`
+SessionStatus variants are independently optional. Only their exact known shapes
+are admitted; modified/duplicate variants and unrelated contract changes fail.
+Documentation/order and unused endpoints retain the comparator's existing rules.
+Private `api-delta.json` retains the original comparison. `api-compatibility.json`
+records `accepted_extensions` and `residual_delta`; metadata records raw
+`api_changes` and `api_allowed_extensions`. An incompatible API or failed
+authentication check prevents a model request. `--check` creates no session.
+
+XXX sends the schema in `format: {type: "json_schema", schema, retryCount: 0}`
+and extracts only `info.structured`, followed by local validation. A zero value
+requests no native format retries but is not proof of internal retry enforcement.
+`structured_output_repair_attempts` retains its default zero and explicit bounded
+repair behavior; `opencode_format_retries` remains a compatibility setting without
+effect. A compaction compatibility failure cannot trigger a format repair.
 
 OpenCode V2 runs `run --standalone --format json`, with prompts on stdin and a
 private agent allowing only read/glob/grep (no tools for comparison). Its final
@@ -677,9 +701,14 @@ Text/reasoning may append while open and trim only trailing ECMAScript whitespac
 when part time acquires `end`, including a final chunk coalesced with completion.
 Content replacement, non-whitespace truncation and changes after completion fail.
 Empty/incomplete compaction summaries can remain pending within the original budget.
-Production continuation accepts only the auto/non-overflow service request, its
+Production continuation accepts only the auto/non-overflow service request
+(`auto: true`, `overflow` absent or exactly `false`), its
 linked completed summary and exact reference continuation shape with unchanged
-settings and original `format`. Missing/changed format yields a factual refusal;
+settings and original `format`. Stock 1.2.27 omits format on the service request
+and ordinary continuation; missing continuation format fails with
+`BACKEND_INCOMPATIBLE / COMPACTION_FORMAT_MISSING`, and a different format with
+`COMPACTION_FORMAT_CHANGED`. The client preserves raw history and applies no
+native patch, format reconstruction, compaction override or extra model request;
 no external certificate or developer live smoke is required. The wire checks do
 not prove backend actions before a model call. Overflow/replay and other service
 forms remain unsupported. Only verified membership contributes to usage; summary

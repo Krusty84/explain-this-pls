@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Explicit XXX profile: native structured result and strict local acceptance.
+"""XXX is the OpenCode 1.2.27 HTTP profile, with known optional extensions.
 
 This profile makes no native format-retry guarantee.
 OpenCode V2 uses a separate CLI adapter.
@@ -19,11 +19,47 @@ import secrets
 import sys
 
 from src.contracts.contracts import ContractError, strict_json
-from src.backends.openapi_contract import DiffError, compare
+from src.backends.openapi_contract import DiffError, compare, normalize
 from src.backends.opencode import Server as OpenCodeServer, incompatible, object_value
 
-PROFILE = 'xxx-http'
-PROFILE_PATH = Path(__file__).resolve().parents[2] / 'schemas/xxx-declarations.json'
+PROFILE = 'opencode-v1.2.27-http'
+PROFILE_PATH = Path(__file__).resolve().parents[2] / 'schemas/opencode-v1.2.27-declarations.json'
+
+
+def compatible_api(spec):
+    """Remove only exact known extensions from a private comparison copy.
+
+    The raw document/delta stay intact. Duplicate or changed declarations remain
+    visible to the ordinary strict comparator, as do all unrelated differences.
+    """
+    candidate = normalize(spec)
+    accepted = []
+    components = candidate.get('components')
+    schemas = components.get('schemas') if type(components) is dict else None
+    if type(schemas) is not dict:
+        return candidate, accepted
+    session = schemas.get('Session')
+    if type(session) is dict:
+        props, required = session.get('properties'), session.get('required')
+        if type(props) is dict and props.get('compactionCount') == {'type': 'number'}:
+            del props['compactionCount']
+            if type(required) is list and required.count('compactionCount') == 1:
+                required.remove('compactionCount')
+            accepted.append('compactionCount')
+    status = schemas.get('SessionStatus')
+    variants = status.get('anyOf') if type(status) is dict else None
+    if type(variants) is list:
+        for name, props in (
+                ('queued', {'runningTaskSize': {'type': 'number'}, 'waitingQueueIndex': {'type': 'number'}}),
+                ('unattended_retry', {'attempt': {'type': 'number'}, 'message': {'type': 'string'},
+                                      'next': {'type': 'number'}})):
+            props['type'] = {'const': name, 'type': 'string'}
+            expected = {'type': 'object', 'properties': props, 'required': sorted(props)}
+            # Remove at most one; duplicate variants are not a known extension.
+            if expected in variants:
+                variants.remove(expected)
+                accepted.append(name)
+    return candidate, accepted
 
 
 def retry_policy(configured=0, performed=0):
@@ -105,12 +141,18 @@ class Server(OpenCodeServer):
         try:
             expected = strict_json(PROFILE_PATH.read_text())
             delta = compare(expected, spec, max_changes=50)
+            candidate, accepted = compatible_api(spec)
+            residual = compare(expected, candidate, max_changes=50)
         except (OSError, DiffError, ContractError) as exc:
             raise incompatible('XXX OpenAPI/profile could not be verified; inspect private HTTP artifacts.') from exc
         self.save(self.artifacts / 'api-delta.json', json.dumps(delta))
-        self.meta.update(compatibility_profile=PROFILE, api_changes=delta['total_changes'])
-        if delta['status'] != 'MATCH':
-            raise incompatible('XXX OpenAPI differs from profile xxx-http; inspect private api-delta.json. '
+        self.save(self.artifacts / 'api-compatibility.json', json.dumps({
+            'profile': PROFILE, 'accepted_extensions': accepted, 'residual_delta': residual}))
+        self.meta.update(compatibility_profile=PROFILE, api_changes=delta['total_changes'],
+                         api_allowed_extensions=accepted)
+        if residual['status'] != 'MATCH':
+            raise incompatible('XXX OpenAPI differs from profile ' + PROFILE + '; '
+                               'inspect private api-delta.json and api-compatibility.json. '
                                'No model request was sent.')
 
     def invoke(self, prompt, schema, agent_name, model, retries=0):

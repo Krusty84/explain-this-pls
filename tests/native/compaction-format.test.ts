@@ -236,7 +236,9 @@ async function run(count: number, threshold = false, text: false | "explicit" | 
   })
 }
 
+test.skipIf(!baseline)("stock runtime produces native structured output without compaction", () => run(0))
 test.skipIf(!baseline)("original runtime loses the native contract after automatic compaction", () => run(1))
+test.skipIf(!baseline)("stock threshold compaction omits overflow and loses the native contract", () => run(1, true))
 for (const count of [0, 1, 2]) {
   test.skipIf(baseline)(`native structured result after ${count} processor compactions`, () => run(count))
 }

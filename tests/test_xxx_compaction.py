@@ -153,15 +153,17 @@ class CompactionHTTPTests(unittest.TestCase):
         self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
 
     def test_production_rejects_lost_format_and_foreign_continuations(self):
+        self.value['execution'] = {'structured_output_repair_attempts': 2}
         for scenario, reason in (
                 ('compact-lost-format', 'COMPACTION_FORMAT_MISSING'),
+                ('compact-stock-lost-format', 'COMPACTION_FORMAT_MISSING'),
                 ('compact-changed-schema', 'COMPACTION_FORMAT_CHANGED'),
                 ('compact-forged', 'CONTINUATION_FORM_UNSUPPORTED'),
                 ('compact-foreign', 'COMPACTION_SUMMARY_IDENTITY')):
             manifest, code = self.run_case(scenario)
             self.assertEqual(code, 1, manifest)
             self.assertEqual(manifest['diagnostics'][0]['details']['code'], reason)
-            if scenario == 'compact-lost-format':
+            if scenario in ('compact-lost-format', 'compact-stock-lost-format'):
                 diagnostic = manifest['diagnostics'][0]
                 self.assertEqual(diagnostic['failure_kind'], 'BACKEND_INCOMPATIBLE')
                 self.assertEqual(diagnostic['details']['phase'], 'continuation')

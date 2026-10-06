@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""XXX session membership, independent of IDs' spelling and model summaries.
+"""OpenCode 1.2.27 / XXX session membership and structured-result acceptance.
 
 Accepts a bounded, format-preserving wire profile, not a claim about unseen
 backend internals. Reference/synthetic tests exercise this production validator.
@@ -413,7 +413,9 @@ class SessionHistory:
                 self.reject('COMPACTION_OUT_OF_ORDER')
             if 'structured' in self.messages[self.last_assistant]['info']:
                 self.reject('COMPACTION_AFTER_STAGE_RESULT')
-            if part.get('auto') is not True or part.get('overflow') is not False:
+            # The stock threshold path omits overflow; the processor path sends
+            # false. Keep the original wire object and distinguish false from 0.
+            if part.get('auto') is not True or part.get('overflow', False) is not False:
                 self.reject('COMPACTION_FORM_UNSUPPORTED', compatibility=True)
             if set(part) - {'id', 'sessionID', 'messageID', 'type', 'auto', 'overflow'}:
                 self.reject('COMPACTION_PART_UNSUPPORTED')

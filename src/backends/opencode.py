@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Legacy OpenCode v1.2.27 HTTP transport shared by the XXX adapter (stdlib only)."""
+"""OpenCode v1.2.27 HTTP transport used by the XXX adapter (stdlib only)."""
 from __future__ import annotations
 import base64
 import contextlib
@@ -429,7 +429,7 @@ class Server:
             raise incompatible('OpenCode /doc does not match the inspected structured-output interface.') from None
 
     def session_history(self, request_id, body):
-        # XXX alone supplies a transition model. This does not widen OpenCode.
+        # The XXX (OpenCode 1.2.27) profile supplies the stateful transition model.
         return None
 
     def invoke(self, prompt, schema, agent_name, model, retries):

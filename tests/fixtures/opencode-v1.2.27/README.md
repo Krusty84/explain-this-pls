@@ -17,4 +17,11 @@ they are synthetic fixtures, not recordings of a real model. Its labelled
 `AUDIT_FAKE_CASE` cases intentionally violate the protocol. The abbreviated
 session creation response carries only the ID consumed by the client; assistant
 responses include required fields. Tests do not claim the upstream retryCount
-setting works; production explicitly refuses that unsupported guarantee.
+setting works. The XXX profile sends zero without claiming native enforcement;
+the separate OpenCode V2 backend uses CLI events.
+
+`schemas/opencode-v1.2.27-declarations.json` is the production baseline: this
+subset projected through `src.backends.openapi_contract.normalize` / `project`
+(documentation removed and schema sets sorted). No fork extensions are included.
+The XXX adapter separately admits the exact optional `compactionCount`, `queued`
+and `unattended_retry` declarations; raw responses and deltas are preserved.

@@ -2506,13 +2506,9 @@
             "required": [
               "messageID"
             ]
-          },
-          "compactionCount": {
-            "type": "number"
           }
         },
         "required": [
-          "compactionCount",
           "directory",
           "id",
           "projectID",
@@ -2580,50 +2576,6 @@
               "next",
               "type"
             ]
-          },
-          {
-            "properties": {
-              "attempt": {
-                "type": "number"
-              },
-              "message": {
-                "type": "string"
-              },
-              "next": {
-                "type": "number"
-              },
-              "type": {
-                "const": "unattended_retry",
-                "type": "string"
-              }
-            },
-            "required": [
-              "attempt",
-              "message",
-              "next",
-              "type"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "runningTaskSize": {
-                "type": "number"
-              },
-              "type": {
-                "const": "queued",
-                "type": "string"
-              },
-              "waitingQueueIndex": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "runningTaskSize",
-              "type",
-              "waitingQueueIndex"
-            ],
-            "type": "object"
           },
           {
             "type": "object",

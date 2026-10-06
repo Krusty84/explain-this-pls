@@ -19,7 +19,7 @@ import uuid
 
 args = sys.argv[1:]
 xxx = os.environ.get('AUDIT_FAKE_BACKEND') == 'xxx'
-version = 'XXX fixture-unknown' if xxx else '1.2.27'
+version = os.environ.get('AUDIT_FAKE_VERSION', 'XXX fixture-unknown' if xxx else '1.2.27')
 if '--version' in args:
     print(version)
     sys.exit(0)
@@ -77,21 +77,28 @@ class Handler(BaseHTTPRequestHandler):
         if scenario == 'http-hang':
             time.sleep(60)
         if self.path == '/global/health':
-            response = {'healthy': scenario != 'bad-health', 'version': version}
+            response = {'healthy': scenario != 'bad-health',
+                        'version': os.environ.get('AUDIT_FAKE_API_VERSION', version)}
         elif self.path == '/doc':
             response = json.loads((Path(__file__).parent / 'opencode-v1.2.27/openapi.json').read_text())
             if xxx:
                 # Reconstruct the user-reported delta independently of the runtime profile.
+                extensions = os.environ.get('AUDIT_FAKE_API_EXTENSIONS',
+                    'compactionCount,queued,unattended_retry').split(',')
                 schemas = response['components']['schemas']
-                schemas['Session']['properties']['compactionCount'] = {'type': 'number'}
-                schemas['Session']['required'].append('compactionCount')
+                if 'compactionCount' in extensions:
+                    schemas['Session']['properties']['compactionCount'] = {'type': 'number'}
+                    schemas['Session']['required'].append('compactionCount')
                 for name, props in [('unattended_retry', {'attempt': {'type': 'number'},
                         'message': {'type': 'string'}, 'next': {'type': 'number'}}),
                         ('queued', {'runningTaskSize': {'type': 'number'}, 'waitingQueueIndex': {'type': 'number'}})]:
                     props['type'] = {'const': name, 'type': 'string'}
-                    schemas['SessionStatus']['anyOf'].append({'type': 'object', 'properties': props, 'required': list(props)})
-                if scenario == 'bad-api':
-                    del schemas['AssistantMessage']['properties']['structured']
+                    if name in extensions:
+                        schemas['SessionStatus']['anyOf'].append({'type': 'object', 'properties': props, 'required': list(props)})
+                if scenario == 'bad-api-extension':
+                    schemas['Session']['properties']['compactionCount'] = {'type': 'string'}
+            if scenario == 'bad-api':
+                del response['components']['schemas']['AssistantMessage']['properties']['structured']
             if scenario == 'null-doc':
                 response = None
         elif self.path == '/session' and self.command == 'POST':
@@ -240,7 +247,10 @@ class Handler(BaseHTTPRequestHandler):
                 # Explicitly synthetic required protocol, not a real XXX trace.
                 from compaction_protocol import chain, snapshots
                 generated = chain(2 if scenario == 'compact-multiple' else 1, body, response)
-                if scenario == 'compact-lost-format': del generated[4]['info']['format']
+                if scenario in ('compact-lost-format', 'compact-stock-lost-format'):
+                    del generated[4]['info']['format']
+                if scenario == 'compact-stock-lost-format':
+                    del generated[2]['parts'][0]['overflow']
                 if scenario == 'compact-changed-schema': generated[4]['info']['format']['schema'] = {}
                 if scenario == 'compact-forged': generated[4]['parts'][0]['text'] = 'forged continuation'
                 if scenario == 'compact-foreign': generated[3]['info']['parentID'] = 'msg_foreign'

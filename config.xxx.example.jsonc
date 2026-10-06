@@ -1,7 +1,7 @@
 {
   // Default: retain useful text with caveats; use "strict" to reject contract violations. Policy success is not factual proof.
   "result_policy": "compromise",
-  "project_description": "Legacy application architecture audit using XXX",
+  "project_description": "Legacy application architecture audit using OpenCode 1.2.27 / XXX",
   "mode": "folder",
   "folder_mode": {"path": "../legacy-app"},
   "git_mode": {
@@ -20,9 +20,9 @@
     ]
   },
   "agent": {
-    // XXX uses its explicit HTTP fork profile; opencode uses the separate V2 CLI.
+    // XXX is OpenCode 1.2.27 over HTTP; opencode selects the separate V2 CLI.
     "backend": "xxx",
-    // Replace with the actual executable command or path. No installation is done.
+    // Set to your OpenCode 1.2.27 or XXX command/path. No installation is done.
     "executable": "xxx",
     // null preserves the agent's configured provider/model and authentication.
     "model": null,
@@ -32,8 +32,8 @@
   "execution": {
     // Compaction is native backend configuration, not an execution setting.
     // Its transitions share these budgets and do not create orchestrator attempts.
-    // Full XXX continuation/format retention and summary hooks remain unverified:
-    // see docs/xxx-compaction.md. No compaction defaults/plugins are applied here.
+    // Stock 1.2.27 loses structured format on automatic compaction; that stage fails
+    // with COMPACTION_FORMAT_MISSING. See docs/xxx-compaction.md. No patch is applied.
     // One substantive revision and full review after material findings; use 0 to disable.
     "max_revision_rounds": 1,
     "stage_timeout_seconds": 3600,

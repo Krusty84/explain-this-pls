@@ -1,4 +1,109 @@
-# XXX history: metadata, streaming and checked compaction continuation
+# OpenCode 1.2.27 / XXX: HTTP compatibility and compaction
+
+## Current supported profile
+
+`backend: "xxx"` names the OpenCode **1.2.27** HTTP integration, including
+XXX-branded executables. Use `agent.executable` for the installed command or path;
+the existing `backend: "opencode"` continues to select the V2 CLI. No backend
+alias, automatic version switching or installation is involved. CLI and health
+version strings are preserved; optional `expected_version` still requires the
+exact CLI output. Model selection and the user's authentication stay with the
+configured executable.
+
+The profile is `opencode-v1.2.27-http`, based on the six used paths and referenced
+schemas from upstream commit `4ee426ba549131c4903a71dfb6259200467aca81`. The production
+declarations are generated from the pinned test fixture. `compactionCount: number`
+on Session (required or optional) and the recorded `queued` / `unattended_retry`
+SessionStatus variants are independently optional extensions. Only those exact
+shapes are allowed; unknown changes, changed shapes and duplicate declarations
+are rejected. Status extensions do not prove completion or refresh idle time.
+
+Preflight and each stage server check authentication and the API before sending
+a model request. `--check` creates no session. Private `api-delta.json` contains
+the original delta, while `api-compatibility.json` lists `accepted_extensions`
+and the remaining `residual_delta`. Invocation metadata records raw `api_changes`
+and `api_allowed_extensions`. Thus stock 1.2.27 has zero API changes; the full
+previous XXX extension set retains all four permitted changes in the diagnostic.
+
+Requests carry `format: {type: "json_schema", schema, retryCount: 0}`. Results
+come from `info.structured` with native-envelope and local contract validation.
+There is no native retry-enforcement guarantee. Explicit orchestrator format
+repairs keep their existing setting/default and stage budget; they do not repair
+transport identity or compaction compatibility failures.
+
+Automatic compaction accepts `auto: true` with `overflow` absent (stock threshold
+path) or exactly `false` (processor path). Wire fields remain unchanged and
+immutable across observations. Manual compaction and `overflow: true`/replay
+remain unsupported with `COMPACTION_FORM_UNSUPPORTED`. Linked summary and
+continuation identity, settings and format checks still apply.
+
+Stock 1.2.27 loses `format` when creating a compaction service user and its
+ordinary continuation. A completed summary does not fix that loss: the continuation
+fails with `BACKEND_INCOMPATIBLE / COMPACTION_FORMAT_MISSING`, with
+`phase=continuation`, `role=user`, `field=info.format`. A different format fails
+with `COMPACTION_FORMAT_CHANGED`. The stage is not published as successful;
+owned-session cleanup, private artifacts and the configured continuation policy
+remain active. No history rewriting, schema inference, competing prompt, native
+patch or change to global compaction settings is applied.
+
+The existing native patch below is separate reference material. It is **not** a
+requirement or an automatically applied part of this stock integration. The
+historical verification sections record earlier behavior and test counts; the
+current profile above supersedes their explicit-overflow-only restriction.
+
+### Reproduce stock native behavior without a model provider
+
+Use a disposable checkout of the pinned upstream commit with its runtime
+dependencies and Bun already prepared. This mode never applies the reference patch:
+
+```sh
+bash .github/ci/offline-tests.sh python3.11 scripts/test-native-compaction.py \
+  /path/to/disposable/opencode --bun /path/to/bun --stock-only
+```
+
+The native harness substitutes only the language provider with deterministic local
+responses. It exercises normal structured output and both automatic compaction
+paths. Unmodified native histories pass through the production Python validator:
+normal results must succeed and both format-loss paths must report the exact
+continuation diagnostic. The injected test is removed afterward. No installed
+agent binary or global runtime configuration is modified.
+
+### Stock-profile verification (2026-10-06)
+
+Implementation started at `4232598` with a clean tracked tree. Checks used WSL
+AlmaLinux 9, Python 3.11.13, Git 2.52.0 and Bun 1.3.10. HTTP/native/full tests
+ran with external networking disabled and no paid model or installed-agent smoke.
+
+| Check | Result |
+| --- | --- |
+| OpenAPI, extension combinations and history regressions | 65 tests passed |
+| HTTP, structured output and V2 CLI integration | All covered cases passed in final full discovery; the initial focused run exposed a new test's incorrect comparison-field assertion, corrected and rerun |
+| Stock native prompt/compaction path | 3 tests passed across 6 sessions; 6 reference-patch cases intentionally skipped |
+| Unmodified native histories through Python | 2 normal results accepted; 4 exact format-loss rejections across both compaction paths |
+| Existing native compaction/structured-output tests and type checking | 47 tests passed; `bun run typecheck` passed |
+| Full Python discovery | 597 tests in 456.485 s; 16 failures, 29 errors, 5 skips |
+| Permission cases rerun as the normal WSL user | All 3 passed |
+| Source integrity / whitespace | Original native source hashes unchanged; injected test removed; `git diff --check` passed |
+
+The full discovery is **not green**. Its only project-test failure is the existing
+`test_all_examples_load_without_credentials` subtest for the unchanged V2 example:
+it expects `model: null`, while the committed example sets
+`deepseek/deepseek-flash`. The other 44 failure/error entries belong to unchanged,
+Git-ignored `test_openapi_diff.py` / `test_verify_agent.py`, whose local utilities
+still import missing top-level modules. All XXX/OpenCode HTTP, history, repair,
+V2, timeout and cleanup tests passed in that same discovery. Of its five skips,
+the three root-related permission checks passed separately; the two installed
+agent smokes remain explicitly not run. This is not a real-provider quality test.
+
+The full discovery used `unittest.defaultTestLoader.discover('tests')` and the
+standard verbose `TextTestRunner`, equivalent to:
+
+```sh
+EXPLAIN_OPENCODE_SMOKE=0 EXPLAIN_XXX_COMPACTION_SMOKE=0 AUDIT_GIT_BUILD=modern \
+  bash .github/ci/offline-tests.sh python3.11 -B -m unittest discover -s tests -v
+```
+
+## Historical reference-patch investigation
 
 ## 2026-10-06: native format-retention patch, verified without XXX
 
@@ -30,8 +135,8 @@ has two automatic creation sites: the threshold check before normal processing
 and the `result === "compact"` branch after processing. Both need the active
 request's contract before `SessionCompaction.create()` replaces the latest user.
 The latter sets `overflow` from the absence of a finish reason; the former omits
-that field. This client still requires explicit `overflow=false`. Do not relabel
-overflow or broaden the profile to make a test pass.
+that field. At that revision the client required explicit `overflow=false`;
+the current stock profile accepts the omitted field without rewriting it.
 
 The patch adds five lines across the two native files:
 
@@ -67,7 +172,7 @@ StructuredOutput execution and result capture all run. No HTTP fixture fabricate
   required tool choice, first-save format, new identities and final integrity.
 - The pre-loop threshold branch is exercised before a second processor-triggered
   compaction. Its original omitted overflow flag remains omitted; it is tested
-  natively, not promoted into the client's explicit `overflow=false` profile.
+  natively. The current client also validates these unchanged threshold histories.
 - Two distinct schemas run in separate sessions in one native instance. Explicit
   text format and omitted format remain text after two compactions. Summaries
   contain ordinary text, no structured tool, and no accepted stage result.
@@ -193,7 +298,8 @@ represented as recordings from that run. Old run artifacts are not changed.
 Reference sources (not proof about XXX):
 
 - [OpenCode v1.2.27 message-v2.ts](https://github.com/anomalyco/opencode/blob/v1.2.27/packages/opencode/src/session/message-v2.ts)
-  and the saved `schemas/xxx-declarations.json`: distinct user/assistant summary shapes.
+  and the then-current XXX declarations (now replaced by the stock 1.2.27
+  baseline): distinct user/assistant summary shapes.
 - [OpenCode v1.2.27 summary.ts](https://github.com/anomalyco/opencode/blob/v1.2.27/packages/opencode/src/session/summary.ts):
   user summary metadata receives diff updates, including empty arrays.
 - [OpenCode v1.2.27 processor.ts, commit 4ee426ba](https://github.com/anomalyco/opencode/blob/4ee426ba549131c4903a71dfb6259200467aca81/packages/opencode/src/session/processor.ts#L291-L340):

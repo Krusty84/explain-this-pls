@@ -2,7 +2,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Run unchanged client validation on histories produced by the native runtime."""
+"""Run production client validation on unmodified histories from the native runtime."""
+import argparse
 import json
 from pathlib import Path
 import sys
@@ -13,18 +14,20 @@ from src.backends.xxx_history import SessionHistory
 from src.contracts.contracts import ContractError, validate_schema
 
 
-def verify(directory):
+def verify(directory, *, stock_only=False):
     accepted = rejected = excluded = 0
     for path in sorted(Path(directory).glob('*.json')):
         data = json.loads(path.read_text())
-        if data['text'] or data['threshold']:
-            # Text is outside this structured client. The stock threshold path
-            # omits overflow=false and must NOT be normalized into acceptance.
+        if stock_only:
+            assert data['baseline'], 'Stock verification must not include patched histories'
+        if data['text']:
+            # Text is outside this structured client. Threshold histories are
+            # checked unchanged: omitted overflow is valid stock wire behavior.
             excluded += 1
             continue
         body = data['body']
         history = SessionHistory(body['sessionID'], body['messageID'], body)
-        if data['baseline']:
+        if data['baseline'] and data['count']:
             try:
                 for snapshot in data['snapshots']:
                     history.observe(snapshot)
@@ -49,8 +52,13 @@ def verify(directory):
         assert data['final'] == data['snapshots'][-1][-1]
         accepted += 1
         print(f'{path.name}: native envelope, history and local schema accepted ({data["count"]} compactions)')
-    assert (accepted, rejected, excluded) == (6, 2, 4), (accepted, rejected, excluded)
+    expected = (2, 4, 0) if stock_only else (10, 4, 2)
+    assert (accepted, rejected, excluded) == expected, (accepted, rejected, excluded)
 
 
 if __name__ == '__main__':
-    verify(sys.argv[1])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('directory')
+    parser.add_argument('--stock-only', action='store_true')
+    args = parser.parse_args()
+    verify(args.directory, stock_only=args.stock_only)

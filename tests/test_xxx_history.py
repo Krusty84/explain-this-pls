@@ -54,6 +54,50 @@ class HistoryTests(unittest.TestCase):
             history.validate_final(messages, messages[-1])
         self.assertEqual(caught.exception.details['code'], 'COMPACTION_IS_NOT_STAGE_RESULT')
 
+    def test_stock_threshold_compaction_preserves_wire_and_reports_format_loss(self):
+        for count in (1, 2):
+            for retained in (False, True):
+                with self.subTest(count=count, retained=retained):
+                    messages = chain(count)
+                    for message in messages:
+                        if message['parts'][0]['type'] == 'compaction':
+                            del message['parts'][0]['overflow']
+                    if not retained:
+                        del messages[-2]['info']['format']
+                    original = copy.deepcopy(messages)
+                    history = self.history()
+                    for snapshot in snapshots(messages[:-2]):
+                        history.observe(snapshot)
+                    if retained:
+                        history.observe(messages)
+                        history.validate_final(messages, messages[-1])
+                        self.assertEqual(history.continuations, count)
+                    else:
+                        error = self.rejected(messages, 'COMPACTION_FORMAT_MISSING', history=history)
+                        self.assertEqual(error.failure_kind, 'BACKEND_INCOMPATIBLE')
+                        self.assertEqual(error.details['phase'], 'continuation')
+                        self.assertEqual(error.details['field'], 'info.format')
+                        self.assertEqual(history.completed, count)
+                        self.assertEqual(history.continuations, count - 1)
+                    self.assertEqual(messages, original)
+
+    def test_stock_overflow_field_remains_typed_and_immutable(self):
+        for value in (True, None, 0, 1, 'false'):
+            messages = chain()
+            messages[2]['parts'][0]['overflow'] = value
+            self.rejected(messages, 'COMPACTION_FORM_UNSUPPORTED')
+        for before, after in ((False, None), (None, False)):
+            messages = chain()[:4]
+            if before is None:
+                del messages[2]['parts'][0]['overflow']
+            history = self.history()
+            history.observe(messages)
+            if after is None:
+                del messages[2]['parts'][0]['overflow']
+            else:
+                messages[2]['parts'][0]['overflow'] = after
+            self.rejected(messages, 'PART_IDENTITY_CHANGED', history=history)
+
     def test_user_summary_updates_are_saved_without_activity_or_input_mutation(self):
         messages = chain(0)
         history = self.history()

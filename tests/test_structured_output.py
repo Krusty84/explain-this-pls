@@ -220,7 +220,9 @@ class NativeStructuredOutputTests(unittest.TestCase):
                 self.assertFalse((self.destination.parent / 'review.json').exists())
 
     def test_explicit_repair_bounds_and_complete_validation(self):
-        for backend in ('xxx',):
+        for extensions in ('compactionCount,queued,unattended_retry', ''):
+            backend = 'xxx'
+            self.env.update(AUDIT_FAKE_API_EXTENSIONS=extensions, AUDIT_FAKE_VERSION='1.2.27')
             for scenario, repairs, expected, count in (
                     ('repair-ok', 0, 'SCHEMA_ERROR', 1),
                     ('repair-ok', 1, None, 2),
@@ -231,7 +233,7 @@ class NativeStructuredOutputTests(unittest.TestCase):
                     ('foreign-request', 2, 'TRANSPORT_ERROR', 1),
                     ('backend-error', 2, 'BACKEND_ERROR', 1),
                     ('prose-only', 2, 'INCOMPLETE_OUTPUT', 1)):
-                with self.subTest(backend=backend, scenario=scenario, repairs=repairs):
+                with self.subTest(extensions=extensions, scenario=scenario, repairs=repairs):
                     start = len(self.prompts())
                     if expected:
                         with self.assertRaises(ContractError) as caught:
