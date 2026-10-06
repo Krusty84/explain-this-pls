@@ -36,8 +36,11 @@ Reference sources (not proof about XXX):
   and the saved `schemas/xxx-declarations.json`: distinct user/assistant summary shapes.
 - [OpenCode v1.2.27 summary.ts](https://github.com/anomalyco/opencode/blob/v1.2.27/packages/opencode/src/session/summary.ts):
   user summary metadata receives diff updates, including empty arrays.
-- [OpenCode v1.2.27 processor.ts](https://github.com/anomalyco/opencode/blob/v1.2.27/packages/opencode/src/session/processor.ts):
-  text/reasoning finalization applies `trimEnd()`; arbitrary completion-hook rewrites
+- [OpenCode v1.2.27 processor.ts, commit 4ee426ba](https://github.com/anomalyco/opencode/blob/4ee426ba549131c4903a71dfb6259200467aca81/packages/opencode/src/session/processor.ts#L291-L340):
+  text finalization applies `trimEnd()` and replaces `time` with separate
+  `Date.now()` calls for `start` and `end`.
+  [Reasoning completion](https://github.com/anomalyco/opencode/blob/4ee426ba549131c4903a71dfb6259200467aca81/packages/opencode/src/session/processor.ts#L63-L108)
+  preserves the existing start and adds end. Arbitrary completion-hook rewrites
   are outside the supported client profile.
 - [OpenCode v1.2.27 compaction.ts](https://github.com/anomalyco/opencode/blob/v1.2.27/packages/opencode/src/session/compaction.ts):
   the ordinary auto continuation omits format; overflow replay takes a different path.
@@ -86,11 +89,29 @@ completion together; the existing prefix must still match. Removing whitespace
 from inside the observed prefix before appending content is rejected. The client
 checks both received strings and never normalizes the saved text itself.
 
+For a text part that previously had no `part.time.end`, the first valid end may
+arrive with a replacement `part.time.start`. For example, an empty text part
+with `{"start":100}` may become `"Result."` with `{"start":120,"end":121}`.
+Completion is determined by **the part's end**, independently of
+`info.time.completed`, `info.finish`, stage name or compaction count. This also
+applies while the assistant message remains running. Preserving the original
+start is still valid; reasoning parts must preserve it. Open text start changes
+without an end, or changes to either timestamp after completion, remain errors.
+All supplied timestamps must still be finite, nonnegative JSON numbers (never
+booleans), with `end >= start`; `start == end` is not required. Ownership,
+identity, content and user/request protections run unchanged. Received timestamps
+are retained exactly in stored snapshots and HTTP artifacts, never restored to
+the old start to make comparisons pass.
+
+This repairs one known OpenCode 1.2.27 text completion lifecycle defect. It does
+not establish compatibility with every XXX feature or fix compaction format
+retention; the format and final native StructuredOutput requirements below remain.
+
 The explicit supported trim set is U+0009–000D, U+0020, U+00A0, U+1680,
 U+2000–200A, U+2028–2029, U+202F, U+205F, U+3000 and U+FEFF, following
 [ECMAScript TrimString](https://tc39.es/ecma262/multipage/text-processing.html#sec-trimstring).
 Python's default `rstrip()` is not used: U+0085/U+001C are not removable, while
-U+FEFF is. Content rewrites, non-whitespace removal, timestamp regression and
+U+FEFF is. Content rewrites, non-whitespace removal, unsupported timestamp changes and
 changes to an ended part remain errors. Completed tool calls retain their
 existing integrity checks (only native prune's compacted timestamp is special).
 
@@ -270,6 +291,17 @@ validation and publication on a minimal artificial source tree. Backend HTTP and
 unit-test clocks are synthetic; business checks are not bypassed. Successful
 test continuations must never be cited as real XXX evidence.
 
+The text completion regression starts from complete valid snapshots with stable
+session/message/part IDs and consistent message/tool times. It calls production
+`observe()`, closes text both before and with message completion, and continues
+to native StructuredOutput extraction. It also checks preserved starts, reasoning,
+append/trimEnd, repeated observations, input immutability and rejection boundaries.
+The fake HTTP `history-text-completion` scenario advances one snapshot per GET
+and holds the synchronous POST until the script is consumed. Thus the client
+must validate the open and closed-but-running snapshots before requesting the
+native result. Assertions inspect the saved HTTP artifacts and local publication.
+The metadata fixture also resets text start while preserving reasoning start.
+
 Installed-runtime smoke is skipped by default and **was not run** here:
 
 ```sh
@@ -327,6 +359,69 @@ directory and the real non-root CLI test; all passed when loaded explicitly by
 behavioral matrix case remains skipped because `AUDIT_GIT_BUILD` is not configured
 in this environment. Real XXX smoke remains not run by task definition. No
 checks of the analyzed user's project were executed.
+
+### Text completion repair verification (2026-10-06)
+
+Implementation used the current `main` at
+`c1d59713a2054262b5f76c68e629fa33390d0359`; all six relevant files still matched
+the investigation commit and the tracked tree was clean. The original history
+suite passed all 36 tests. With only the new exact-transition regression and its
+fixture added, the following command failed in both subtests (text closes before
+or with message completion):
+
+```sh
+EXPLAIN_XXX_COMPACTION_SMOKE=0 python3.11 -B -m unittest discover -s tests \
+  -p test_xxx_history.py -k test_text_completion_replaces_start_before_or_with_message_completion -v
+```
+
+Both errors were `PART_TIME_CHANGED`, through `observe -> _ingest -> _merge`,
+with `phase=stage role=assistant field=part.time part_type=text transitions=0`.
+After the fix, that regression and the expanded rejection/variant coverage pass.
+AlmaLinux 9 in WSL used Python 3.11.13 (the default `python3` is only 3.9).
+Focused verification commands:
+
+```sh
+EXPLAIN_XXX_COMPACTION_SMOKE=0 python3.11 -B -m unittest discover -s tests -p test_xxx_history.py -v
+EXPLAIN_XXX_COMPACTION_SMOKE=0 bash .github/ci/offline-tests.sh \
+  python3.11 -B -m unittest discover -s tests -p test_xxx_compaction.py -v
+git diff --check
+```
+
+Results: **42 history tests passed** (0.136 s), **11 fake HTTP tests passed**
+(55.425 s), and the whitespace check passed. The HTTP command ran as WSL root
+only for the existing network-namespace/ownership setup; production startup and
+listener ownership checks were not changed. After guarding the metadata test's
+artifact assertions against valid empty polls, that test was rerun: one test,
+both ordinary/compaction scenarios, passed in 9.334 s. Three permission tests
+passed separately as the normal WSL user (4.131 s); the actual Git ownership probe
+passed with `AUDIT_GIT_BUILD=modern` and Git 2.52.0 (0.367 s).
+
+Required full discovery was also run as WSL root with external networking disabled:
+
+```sh
+EXPLAIN_XXX_COMPACTION_SMOKE=0 bash .github/ci/offline-tests.sh \
+  python3.11 -B -m unittest discover -s tests -v
+```
+
+It ran **584 tests in 443.172 s: FAILED (16 failures, 29 errors, 6 skips)**.
+The tracked 544 cases account for 537 passes, one failure and six skips in that
+same run; this is not a claim that full discovery passed. The tracked failure is
+`test_all_examples_load_without_credentials`: the unchanged
+`config.opencode.example.jsonc` already specifies `deepseek/deepseek-flash` at
+the investigation commit, while the test expects `None`. It also failed when
+isolated as the normal user. The other 44 failure/error entries are from the
+same two pre-existing Git-ignored utility modules described above, with missing
+top-level `openapi_contract` / `contracts` imports. None of those files was changed.
+All history and compaction HTTP tests passed again within full discovery.
+
+Of the six skips, three permission tests and the installed Git probe passed in
+the separate runs above. The remaining two are the opt-in installed OpenCode
+and XXX smoke tests, which were **not run**. The macOS, other Python-version and
+other Git-package CI matrix jobs were not reproduced locally.
+
+No installed proprietary XXX runtime or paid model was used. This verifies the
+client lifecycle repair against synthetic offline snapshots, not real runtime
+compatibility or compaction format retention.
 
 ## Owner follow-up (later, outside offline acceptance)
 

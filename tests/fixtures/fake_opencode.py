@@ -201,15 +201,28 @@ class Handler(BaseHTTPRequestHandler):
                 info['sessionID'] = 'ses_foreign'
             if scenario == 'foreign-request' and stage != 'catalog':
                 info['parentID'] = 'msg_old'
-            messages[:] = [response]
+            initial = [response]
             if xxx:
-                messages.insert(0, {'info': {'id': body['messageID'], 'sessionID': session_id,
+                initial.insert(0, {'info': {'id': body['messageID'], 'sessionID': session_id,
                     'role': 'user', 'agent': body['agent'], 'model': model, 'format': body['format'],
                     'time': {'created': 0}}, 'parts': [{'id': 'prt_request', 'messageID': body['messageID'],
                     'sessionID': session_id, 'type': 'text', 'text': prompt}]})
+            # Scripted histories publish one snapshot per poll. Do not expose the
+            # final response while the POST handler is still building the script.
+            scripted = scenario in ('history-text-completion', 'history-metadata',
+                                   'history-metadata-idle', 'history-agent-change') or (
+                scenario and scenario.startswith('compact-') and stage != 'catalog')
+            if not scripted:
+                messages[:] = initial
+            if scenario == 'history-text-completion':
+                from compaction_protocol import text_completion_snapshots
+                history_script[:] = text_completion_snapshots(initial)
+                response = history_script[-1][-1]
+                if not history_consumed.wait(10):
+                    raise RuntimeError('Text completion history was not consumed')
             if scenario in ('history-metadata', 'history-metadata-idle', 'history-agent-change'):
                 from compaction_protocol import metadata_stream_snapshots
-                history_script[:] = metadata_stream_snapshots(messages)
+                history_script[:] = metadata_stream_snapshots(initial)
                 response = history_script[-1][-1]
                 if scenario == 'history-agent-change':
                     history_script[1][0]['info']['agent'] = 'private-changed-agent'

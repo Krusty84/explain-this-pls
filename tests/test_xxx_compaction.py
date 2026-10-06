@@ -27,6 +27,44 @@ class CompactionHTTPTests(unittest.TestCase):
     git = base.XXXTests.git
     init_git = base.XXXTests.init_git
 
+    def test_text_start_reset_is_observed_before_native_result_through_runner(self):
+        manifest, code = self.run_case('history-text-completion')
+        self.assertEqual(code, 0, manifest)
+        self.assertTrue(manifest['accepted'])
+        self.assertTrue((self.run_dir / 'ARCHITECTURE.md').exists())
+        self.assertEqual(manifest['metrics']['attempts'], 3)
+        meta = manifest['study_invocation']
+        self.assertTrue(meta['native_envelope_valid'])
+        self.assertTrue(meta['backend_result_valid'])
+        self.assertEqual(meta['compaction']['transitions'], 0)
+        artifacts = Path(meta['artifact_directory'])
+        responses = meta['http_responses']
+        histories = [json.loads((artifacts / r['artifact']).read_text()) for r in responses
+                     if r['operation'] == 'GET /session/{sessionID}/message']
+        # A GET advances the script once; POST waits for all three GETs. The
+        # client's sequential polling validates opened and closed before it can
+        # request final. Assert the private wire artifacts as well as acceptance.
+        observed = [h for h in histories if len(h) == 2]
+        self.assertGreaterEqual(len(observed), 3)
+        opened, closed, final = observed[:3]
+        for snapshot in (opened, closed):
+            self.assertNotIn('completed', snapshot[-1]['info']['time'])
+            self.assertNotIn('finish', snapshot[-1]['info'])
+            self.assertNotIn('structured', snapshot[-1]['info'])
+            self.assertEqual(len(snapshot[-1]['parts']), 1)
+        self.assertEqual(opened[-1]['parts'][0]['text'], '')
+        self.assertEqual(opened[-1]['parts'][0]['time'], {'start': 100})
+        self.assertEqual(closed[-1]['parts'][0]['text'], 'Result.')
+        self.assertEqual(closed[-1]['parts'][0]['time'], {'start': 120, 'end': 121})
+        for key in ('id', 'messageID', 'sessionID', 'type'):
+            self.assertEqual(opened[-1]['parts'][0][key], closed[-1]['parts'][0][key])
+        envelope = json.loads((artifacts / 'response.json').read_text())
+        self.assertEqual(final[-1], envelope)
+        self.assertEqual(envelope['parts'][0], closed[-1]['parts'][0])
+        self.assertEqual(envelope['parts'][-1]['tool'], 'StructuredOutput')
+        self.assertEqual(envelope['parts'][-1]['state']['input'], envelope['info']['structured'])
+        self.assertEqual((self.source / 'app.py').read_text(), 'print(1)\n')
+
     def test_metadata_and_stream_finalization_publish_through_production_runner(self):
         for scenario, count in (('history-metadata', 0), ('compact-metadata', 1)):
             with self.subTest(scenario=scenario):
@@ -44,11 +82,18 @@ class CompactionHTTPTests(unittest.TestCase):
                 envelope = json.loads((artifacts / 'response.json').read_text())
                 self.assertEqual(envelope['parts'][0]['text'], 'Результат.')
                 self.assertEqual(envelope['parts'][1]['text'], 'Ход\nГотово.')
+                self.assertEqual(envelope['parts'][0]['time'], {'start': 120, 'end': 121})
+                self.assertEqual(envelope['parts'][1]['time'], {'start': 100, 'end': 121})
                 histories = [json.loads((artifacts / r['artifact']).read_text()) for r in meta['http_responses']
                              if r['operation'] == 'GET /session/{sessionID}/message']
+                histories = [h for h in histories if h]  # Polls before script publication may be empty.
                 self.assertTrue(any(h[0]['info'].get('summary') == {'diffs': []} for h in histories))
                 self.assertTrue(any(h[0]['info'].get('summary', {}).get('title') == 'Synthetic title' for h in histories))
                 self.assertTrue(any(h[-1] == envelope for h in histories))
+                pending = [h[-1] for h in histories if h[-1]['info']['id'] == envelope['info']['id']
+                           and 'completed' not in h[-1]['info']['time']]
+                self.assertTrue(any(p['parts'][0]['time'] == {'start': 100} for p in pending))
+                self.assertTrue(any(p['parts'][0]['time'] == {'start': 120, 'end': 121} for p in pending))
                 self.assertEqual((self.source / 'app.py').read_text(), 'print(1)\n')
 
     def test_metadata_does_not_extend_idle_and_identity_diagnostic_is_safe(self):

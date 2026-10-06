@@ -197,11 +197,15 @@ class SessionHistory:
         if kind in ('text', 'reasoning'):
             text, update = before.get('text'), after.get('text')
             old_time, new_time = before.get('time', {}), after.get('time', {})
-            for key in ('start', 'end'):
-                if key in old_time and not same_field(old_time, new_time, key):
-                    self.reject('PART_TIME_CHANGED', field='part.time')
             finished = 'end' in old_time
             finishing = not finished and 'end' in new_time
+            for key in ('start', 'end'):
+                if key in old_time and not same_field(old_time, new_time, key):
+                    # OpenCode 1.2.27 text-end replaces the time object. _ingest
+                    # has validated its shape/order; reasoning retains start.
+                    if key == 'start' and kind == 'text' and finishing:
+                        continue
+                    self.reject('PART_TIME_CHANGED', field='part.time')
             # A poll may include both the last chunk and finalization. It must
             # preserve the entire observed prefix, or remove only its final
             # ECMAScript whitespace. Never trim an observed prefix then append.

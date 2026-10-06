@@ -117,6 +117,24 @@ def snapshots(messages):
     return result
 
 
+def text_completion_snapshots(messages):
+    """OpenCode 1.2.27 text-end resets start before the native result arrives."""
+    final = copy.deepcopy(messages)
+    message = final[-1]
+    message['info']['time'] = {'created': 90, 'completed': 130}
+    message['parts'][0].update(text='Result.', time={'start': 120, 'end': 121})
+    message['parts'][-1]['state']['time'] = {'start': 122, 'end': 129}
+    closed = copy.deepcopy(final)
+    pending = closed[-1]
+    pending['info']['time'].pop('completed')
+    for key in ('structured', 'finish'):
+        pending['info'].pop(key)
+    pending['parts'] = pending['parts'][:1]
+    opened = copy.deepcopy(closed)
+    opened[-1]['parts'][0].update(text='', time={'start': 100})
+    return [opened, closed, final]
+
+
 def metadata_stream_snapshots(messages):
     """Synthetic metadata + text/reasoning lifecycle, including coalesced final chunk."""
     messages = copy.deepcopy(messages)
@@ -126,9 +144,11 @@ def metadata_stream_snapshots(messages):
     messages[0]['info']['summary'] = {'title': 'Synthetic title', 'body': 'Metadata only', 'diffs': []}
     result.extend(snapshots(messages[:-1]))
     final = messages[-1]
+    final['info']['time'] = {'created': 90, 'completed': 130}
+    final['parts'][-1]['state']['time'] = {'start': 122, 'end': 129}
     text = final['parts'][0]
-    text.update(text='Результат.', time={'start': 1, 'end': 2})
-    reasoning = part(final['info']['id'], 'reasoning', text='Ход\nГотово.', time={'start': 1, 'end': 2})
+    text.update(text='Результат.', time={'start': 120, 'end': 121})
+    reasoning = part(final['info']['id'], 'reasoning', text='Ход\nГотово.', time={'start': 100, 'end': 121})
     reasoning['sessionID'] = final['info']['sessionID']
     final['parts'].insert(1, reasoning)
     for content, thought in (('Результат', 'Ход'), ('Результат.\n', 'Ход\n')):
@@ -140,7 +160,15 @@ def metadata_stream_snapshots(messages):
         pending['parts'] = pending['parts'][:2]
         for item, value in zip(pending['parts'], (content, thought)):
             item['text'] = value
-            item['time'].pop('end')
+            item['time'] = {'start': 100}
         result.append(partial)
+    # Both parts close while the message is still running; the text start resets,
+    # whereas reasoning-end preserves it. Native StructuredOutput arrives later.
+    closed = copy.deepcopy(messages)
+    closed[-1]['info']['time'].pop('completed')
+    for key in ('structured', 'finish'):
+        closed[-1]['info'].pop(key)
+    closed[-1]['parts'] = closed[-1]['parts'][:2]
+    result.append(closed)
     result.append(messages)
     return result

@@ -11,7 +11,7 @@ from src.backends.opencode import extract_result, validate_history
 from src.contracts.contracts import ContractError
 from src.runtime.execution import Budget
 from src.runtime.metrics import HTTPUsage, summarize
-from fixtures.compaction_protocol import assistant, body, chain, part, snapshots
+from fixtures.compaction_protocol import assistant, body, chain, part, snapshots, text_completion_snapshots
 
 
 class HistoryTests(unittest.TestCase):
@@ -85,21 +85,164 @@ class HistoryTests(unittest.TestCase):
             self.rejected(messages, 'ASSISTANT_SUMMARY_INVALID')
 
     def test_stream_append_trim_and_last_chunk_with_finalization(self):
-        for kind in ('text', 'reasoning'):
-            for previous, update in (('Result.\n', 'Result.'), ('Result', 'Result. done'),
+        for kind, start in (('text', 120), ('text', 100), ('reasoning', 100)):
+            for previous, update in (('', 'Result.'), ('Result.', 'Result.'),
+                                     ('Result.\n', 'Result.'), ('Result', 'Result. done'),
                                      ('Result.\n', 'Result.\nNext'), ('Result.\ufeff', 'Result.')):
-                with self.subTest(kind=kind, previous=previous, update=update):
-                    messages = chain(0)
-                    streamed = messages[-1]['parts'][0]
-                    streamed.update(type=kind, text=previous, time={'start': 1})
+                with self.subTest(kind=kind, start=start, previous=previous, update=update):
+                    opened, closed, final = text_completion_snapshots(chain(0))
+                    opened[-1]['parts'][0].update(type=kind, text=previous)
+                    for snapshot in (closed, final):
+                        snapshot[-1]['parts'][0].update(type=kind, text=update, time={'start': start, 'end': 121})
                     history = self.history()
-                    history.observe(messages)
-                    streamed.update(text=update, time={'start': 1, 'end': 2})
-                    original = copy.deepcopy(messages)
-                    self.assertTrue(history.observe(messages))
-                    self.assertFalse(history.observe(messages))
-                    self.assertEqual(messages, original)
-                    history.validate_final(messages, messages[-1])
+                    originals = copy.deepcopy([opened, closed, final])
+                    for snapshot in (opened, closed, final):
+                        self.assertTrue(history.observe(snapshot))
+                        self.assertFalse(history.observe(snapshot))
+                    self.assertEqual([opened, closed, final], originals)
+                    self.assertEqual(history.messages['msg_final'], final[-1])
+                    parent = history.validate_final(final, final[-1])
+                    data, _ = extract_result(final[-1], 'ses_test', 'msg_root', 'audit', expected_parent=parent)
+                    self.assertEqual(data, {'ok': True})
+
+    def test_text_completion_replaces_start_before_or_with_message_completion(self):
+        for completes_message in (False, True):
+            with self.subTest(completes_message=completes_message):
+                opened, closed, final = text_completion_snapshots(chain(0))
+                history = self.history()
+                self.assertNotIn('completed', opened[-1]['info']['time'])
+                self.assertNotIn('finish', opened[-1]['info'])
+                self.assertEqual(opened[-1]['parts'][0]['time'], {'start': 100})
+                self.assertEqual(opened[-1]['parts'][0]['text'], '')
+                sequence = [opened, final] if completes_message else [opened, closed, final]
+                originals = copy.deepcopy(sequence)
+                for snapshot in sequence:
+                    self.assertTrue(history.observe(snapshot))
+                    self.assertFalse(history.observe(snapshot))
+                    self.assertEqual(history.messages['msg_final'], snapshot[-1])
+                self.assertEqual(sequence, originals)
+                self.assertNotIn('completed', closed[-1]['info']['time'])
+                self.assertNotIn('finish', closed[-1]['info'])
+                self.assertEqual(history.messages['msg_final']['parts'][0]['time'],
+                                 {'start': 120, 'end': 121})
+                parent = history.validate_final(final, final[-1])
+                data, _ = extract_result(final[-1], 'ses_test', 'msg_root', 'audit', expected_parent=parent)
+                self.assertEqual(data, {'ok': True})
+
+    def test_text_completion_is_independent_of_compaction_count_and_phase(self):
+        for count in (1, 3):
+            with self.subTest(compactions=count):
+                history = self.history()
+                sequence = text_completion_snapshots(chain(count))
+                for snapshot in sequence:
+                    history.observe(snapshot)
+                self.assertEqual(history.transitions, count)
+                history.validate_final(sequence[-1], sequence[-1][-1])
+        messages = chain()[:4]
+        summary = messages[-1]
+        summary['info']['time'] = {'created': 90}
+        summary['info'].pop('finish')
+        summary['parts'][0].update(text='', time={'start': 100})
+        history = self.history()
+        history.observe(messages)
+        self.assertEqual(history.phase, 'summary')
+        summary['parts'][0].update(text='Summary.', time={'start': 120, 'end': 121})
+        self.assertTrue(history.observe(messages))
+        self.assertEqual(history.phase, 'summary')
+        summary['info'].update(time={'created': 90, 'completed': 130}, finish='stop')
+        history.observe(messages)
+        self.assertEqual(history.phase, 'continuation')
+        self.assertEqual(history.completed, 1)
+
+    def test_completion_does_not_relax_other_timestamp_transitions(self):
+        for kind, ended, timing in (
+                ('text', False, {'start': 120}),
+                ('reasoning', False, {'start': 120}),
+                ('reasoning', False, {'start': 120, 'end': 121}),
+                ('text', True, {'start': 119, 'end': 121}),
+                ('text', True, {'start': 120, 'end': 122}),
+                ('text', True, {'start': 120}),
+                ('text', True, None)):
+            with self.subTest(kind=kind, ended=ended, timing=timing):
+                opened, closed, _ = text_completion_snapshots(chain(0))
+                messages = closed if ended else opened
+                streamed = messages[-1]['parts'][0]
+                streamed['type'] = kind
+                history = self.history()
+                history.observe(messages)
+                if timing is None:
+                    streamed.pop('time')
+                else:
+                    streamed['time'] = timing
+                self.rejected(messages, 'PART_TIME_CHANGED', history=history)
+
+    def test_completion_validates_received_timestamp_shape_before_merging(self):
+        invalid = (True, False, None, '120', float('nan'), float('inf'), -float('inf'), -1, 10 ** 400)
+        timings = [{'start': value, 'end': 121} for value in invalid]
+        timings += [{'start': 120, 'end': value} for value in invalid]
+        timings += [{'end': 121}, {'start': 120, 'end': 119},
+                    {'start': 120, 'end': 121, 'extra': 1}]
+        for timing in timings:
+            with self.subTest(timing=timing):
+                opened, closed, _ = text_completion_snapshots(chain(0))
+                history = self.history()
+                history.observe(opened)
+                closed[-1]['parts'][0]['time'] = timing
+                self.rejected(closed, 'PART_TIME_INVALID', history=history)
+        # The existing numeric policy accepts finite floats and equal endpoints.
+        for timing in ({'start': 120.5, 'end': 121.5}, {'start': 120, 'end': 120}):
+            opened, closed, _ = text_completion_snapshots(chain(0))
+            history = self.history()
+            history.observe(opened)
+            closed[-1]['parts'][0]['time'] = timing
+            history.observe(closed)
+            self.assertEqual(history.messages['msg_final']['parts'][0]['time'], timing)
+
+    def test_text_completion_preserves_identity_ownership_and_request_protection(self):
+        for target, key, value, code in (
+                ('info', 'sessionID', 'ses_other', 'FOREIGN_SESSION'),
+                ('info', 'parentID', 'msg_other', 'MESSAGE_IDENTITY_CHANGED'),
+                ('info', 'agent', 'other', 'MESSAGE_IDENTITY_CHANGED'),
+                ('info', 'id', 'msg_other', 'FOREIGN_PART'),
+                ('part', 'sessionID', 'ses_other', 'FOREIGN_PART'),
+                ('part', 'messageID', 'msg_other', 'FOREIGN_PART'),
+                ('part', 'type', 'reasoning', 'PART_IDENTITY_CHANGED'),
+                ('part', 'synthetic', True, 'PART_IDENTITY_CHANGED'),
+                ('part', 'ignored', True, 'PART_IDENTITY_CHANGED')):
+            with self.subTest(target=target, key=key):
+                opened, closed, _ = text_completion_snapshots(chain(0))
+                history = self.history()
+                history.observe(opened)
+                value_target = closed[-1]['info'] if target == 'info' else closed[-1]['parts'][0]
+                value_target[key] = value
+                self.rejected(closed, code, history=history)
+        for rewrite in (False, True):
+            opened, closed, _ = text_completion_snapshots(chain(0))
+            opened[0]['parts'][0]['time'] = {'start': 0}
+            closed[0]['parts'][0]['time'] = {'start': 1, 'end': 2}
+            if rewrite:
+                closed[0]['parts'][0]['text'] += ' changed'
+            history = self.history()
+            history.observe(opened)
+            self.rejected(closed, 'USER_PART_CHANGED', history=history)
+
+    def test_text_completion_does_not_accept_invalid_native_results(self):
+        for invalid in ('missing-native', 'missing-tool', 'unfinished', 'mismatch', 'type-mismatch'):
+            with self.subTest(invalid=invalid):
+                opened, closed, final = text_completion_snapshots(chain(0))
+                history = self.history()
+                history.observe(opened)
+                history.observe(closed)
+                envelope = final[-1]
+                if invalid == 'missing-native': envelope['info'].pop('structured')
+                if invalid == 'missing-tool': envelope['parts'].pop()
+                if invalid == 'unfinished': envelope['parts'][-1]['state']['status'] = 'running'
+                if invalid == 'mismatch': envelope['parts'][-1]['state']['input'] = {}
+                if invalid == 'type-mismatch': envelope['parts'][-1]['state']['input'] = {'ok': 1}
+                history.observe(final)
+                parent = history.validate_final(final, envelope)
+                with self.assertRaises(ContractError):
+                    extract_result(envelope, 'ses_test', 'msg_root', 'audit', expected_parent=parent)
 
     def test_summary_does_not_weaken_protected_fields(self):
         cases = (('sessionID', 'ses_other'), ('role', 'assistant'), ('agent', 'private-agent'),
@@ -190,6 +333,7 @@ class HistoryTests(unittest.TestCase):
                     history.observe(messages)
                     streamed['text'] = update
                     if closing: streamed['time']['end'] = 2
+                    if closing and not ended and kind == 'text': streamed['time']['start'] = 2
                     error = self.rejected(messages, 'PART_CONTENT_CHANGED', history=history)
                     self.assertEqual(error.details['part_type'], kind)
                     self.assertEqual(error.details['field'], 'part.text')
@@ -224,7 +368,7 @@ class HistoryTests(unittest.TestCase):
                 history.observe(messages)
                 streamed['text'] += '.' + chr(codepoint)
                 self.assertTrue(history.observe(messages))
-                streamed.update(text='Text.', time={'start': 1, 'end': 2})
+                streamed.update(text='Text.', time={'start': 2 if kind == 'text' else 1, 'end': 2})
                 self.assertTrue(history.observe(messages))
 
     def test_partial_message_and_part_timing_shape_is_checked_on_each_update(self):
