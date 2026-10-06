@@ -155,7 +155,7 @@ preserved but do not establish zero spend because remaining usage is unknown.
 XXX (OpenCode 1.2.27) collects assistant messages admitted by its stateful transport membership
 model for the owned session and unchanged root request. Internal compaction and
 continuation IDs are separate; they never replace that root. Per-model entries
-retain `origin=stage` or `origin=compaction` through run aggregation; compaction's
+retain `origin=stage`, `origin=compaction`, or `origin=discarded` through run aggregation; compaction's
 actual model may differ and its requested model is not inferred from the stage.
 For each message it sums unique `step-finish` parts, or uses completed
 assistant-message metadata when steps are absent. Repeated snapshots replace
@@ -163,8 +163,10 @@ earlier snapshots; message totals and step totals are never added together.
 A reported `tokens.total` wins. Otherwise total is computed as
 `input + cache.read + cache.write + output`, using OpenCode 1.2.27's
 convention that reasoning is included in output; that total is marked estimated.
-The final validated history establishes complete reported usage. Earlier snapshots
-and usage retained after a backend failure or interruption are partial.
+The final validated history establishes complete reported usage. Discarded
+unformatted continuation messages are counted once by message/part ID. Earlier
+snapshots, unfinished messages, cancellation/error envelopes and usage retained
+after a backend failure or interruption are partial.
 
 CLI pipe logs and already observed HTTP snapshots can preserve usage after errors,
 timeouts and signals. Missing final counters leave unknown remaining spend; no
@@ -704,16 +706,49 @@ Empty/incomplete compaction summaries can remain pending within the original bud
 Production continuation accepts only the auto/non-overflow service request
 (`auto: true`, `overflow` absent or exactly `false`), its
 linked completed summary and exact reference continuation shape with unchanged
-settings and original `format`. Stock 1.2.27 omits format on the service request
-and ordinary continuation; missing continuation format fails with
-`BACKEND_INCOMPATIBLE / COMPACTION_FORMAT_MISSING`, and a different format with
-`COMPACTION_FORMAT_CHANGED`. The client preserves raw history and applies no
-native patch, format reconstruction, compaction override or extra model request;
-no external certificate or developer live smoke is required. The wire checks do
-not prove backend actions before a model call. Overflow/replay and other service
-forms remain unsupported. Only verified membership contributes to usage; summary
-metadata/repeats do not extend idle time or create attempts, and native transitions
-never restart the stage budget. See [XXX history and compaction](docs/xxx-compaction.md).
+settings. Retained `format` must equal the original contract exactly. Only a
+missing format after this verified chain returns internal `RecoveryRequired`;
+it does not poison history or bypass an arbitrary ContractError. Changed format
+still fails with `COMPACTION_FORMAT_CHANGED`; unrelated missing formats, incomplete
+summaries, foreign IDs/settings, manual compaction and overflow/replay remain errors.
+
+Only XXX may recover. If the synchronous message POST is pending, the client
+requests abort and waits for that original HTTP response to complete normally.
+Abort acknowledgement, idle status, connection loss or local socket closure do
+not prove completion. A naturally finished POST needs no recovery abort. Stopping
+is bounded by `http_timeout_seconds` and the original stage/idle budgets. Without
+proof the client sends no further message and fails with `TRANSPORT_ERROR` /
+`COMPACTION_RECOVERY_STOP_UNCONFIRMED`, unless a more specific failure or timeout
+already applies. Ordinary resource cleanup still runs.
+
+After stopping, a fresh full history and the returned envelope must agree. The
+unformatted continuation's streaming/text/error messages retain checked session,
+parent, agent and model membership and contribute usage, but cannot be results.
+Only `MessageAbortedError` on the particular continuation cancelled by this
+mechanism is exempted; unrelated errors remain failures. Before sending, the
+validator registers a fresh recovery message ID. The separate user message carries
+the original schema and `retryCount: 0`, verified original agent/selected model,
+applicable original `system`, `tools`, `variant`, and a fixed short instruction to
+continue using saved context and finish with StructuredOutput. History, summary,
+synthetic continuation and research prompt are never rewritten or replayed.
+
+The internal cap is two recovery messages per `Runner.invoke`, shared by its
+structured-output repair attempts. Recovery does not consume those attempts.
+The next loss fails with `BACKEND_INCOMPATIBLE` /
+`COMPACTION_RECOVERY_LIMIT_EXCEEDED`, reason `COMPACTION_FORMAT_MISSING`. Recovery
+POSTs with uncertain outcomes are not retried. The root `request_id` stays fixed;
+`recovery_ids` and `final_parent_id` are separate. Original request/response,
+numbered HTTP snapshots and `recovery-NNN-request/response.json` preserve each
+cycle; private compaction events record detection, stopping, sending and result.
+
+The result must belong to the registered recovery or a subsequent verified
+compaction chain. Native completion, StructuredOutput/input equality,
+`info.structured`, schema, evidence and source-binding validation still apply.
+No native patch, global configuration change, new backend or option is needed.
+OpenCode V2 and session-free `--check` keep their behavior. Only verified membership
+contributes to usage; metadata/repeats do not extend idle time or create attempts,
+and recovery never restarts the stage budget.
+See [XXX history and compaction](docs/xxx-compaction.md).
 A complete-looking JSON never overrides these checks. Compare failure preserves
 prior study/review and the diagnostic summary with a nonzero exit and no assertion
 that differences are absent.

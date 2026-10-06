@@ -90,7 +90,8 @@ def chain(rounds=1, request=None, final=None):
         if info['role'] == 'user':
             info.update(agent=request['agent'], model=copy.deepcopy(model))
         elif not info.get('summary'):
-            info.update(agent=request['agent'], mode=request['agent'])
+            info.update(agent=request['agent'], mode=request['agent'],
+                        providerID=model['providerID'], modelID=model['modelID'])
         for item in message['parts']:
             item['sessionID'] = session
     return messages

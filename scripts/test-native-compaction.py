@@ -4,7 +4,7 @@
 
 """Verify stock OpenCode 1.2.27 or its reference patch in a disposable checkout.
 
-No model requests or global installs. --install prepares only the runtime's
+No external model requests or global installs. --install prepares only the runtime's
 workspace dependencies; run the verification itself in a network namespace.
 """
 import argparse
@@ -31,6 +31,7 @@ def main():
     parser.add_argument('--install', action='store_true', help='Prepare dependencies only; requires network')
     parser.add_argument('--stock-only', action='store_true',
                         help='Verify unpatched native behavior and client acceptance; never apply the reference patch')
+    parser.add_argument('--artifacts-dir', type=Path, help='Preserve native histories and real HTTP artifacts in a new directory')
     args = parser.parse_args()
     source, bun = args.source.resolve(), args.bun.resolve()
     for name, digest in HASHES.items():
@@ -65,18 +66,26 @@ def main():
         return
     package = source / 'packages/opencode'
     test = package / 'test/session/compaction-format.test.ts'
+    recovery_test = package / 'test/session/compaction-recovery.test.ts'
     if test.exists():
         parser.error(f'Refusing to replace existing test: {test}')
+    if recovery_test.exists():
+        parser.error(f'Refusing to replace existing test: {recovery_test}')
     originals = {name: (source / name).read_bytes() for name in HASHES}
     patch = ROOT / 'patches/opencode-v1.2.27-compaction-format.patch'
     with tempfile.TemporaryDirectory(prefix='native-compaction-') as directory:
         env.update(NATIVE_COMPACTION_ARTIFACT_DIR=directory,
+                   NATIVE_COMPACTION_PYTHON=sys.executable,
+                   NATIVE_COMPACTION_CLIENT=str(ROOT / 'tests/native/recovery_client.py'),
                    OPENCODE_DISABLE_DEFAULT_PLUGINS='1', OPENCODE_DISABLE_MODELS_FETCH='1',
                    OPENCODE_VERSION='1.2.27', OPENCODE_CHANNEL='test')
         try:
             shutil.copyfile(ROOT / 'tests/native/compaction-format.test.ts', test)
             command = [str(bun), 'test', '--timeout', '30000', str(test)]
             subprocess.run(command, cwd=package, env=env | {'NATIVE_COMPACTION_BASELINE': '1'}, check=True)
+            shutil.copyfile(ROOT / 'tests/native/compaction-recovery.test.ts', recovery_test)
+            subprocess.run([str(bun), 'test', '--timeout', '30000', str(recovery_test)],
+                           cwd=package, env=env, check=True)
             if not args.stock_only:
                 subprocess.run(['git', 'apply', '--check', str(patch)], cwd=source, check=True)
                 subprocess.run(['git', 'apply', str(patch)], cwd=source, check=True)
@@ -94,6 +103,9 @@ def main():
                 for name, data in originals.items():
                     (source / name).write_bytes(data)
             test.unlink(missing_ok=True)
+            recovery_test.unlink(missing_ok=True)
+            if args.artifacts_dir:
+                shutil.copytree(directory, args.artifacts_dir)
 
 
 if __name__ == '__main__':

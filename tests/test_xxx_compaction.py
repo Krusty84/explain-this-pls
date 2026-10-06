@@ -155,8 +155,8 @@ class CompactionHTTPTests(unittest.TestCase):
     def test_production_rejects_lost_format_and_foreign_continuations(self):
         self.value['execution'] = {'structured_output_repair_attempts': 2}
         for scenario, reason in (
-                ('compact-lost-format', 'COMPACTION_FORMAT_MISSING'),
-                ('compact-stock-lost-format', 'COMPACTION_FORMAT_MISSING'),
+                ('compact-lost-format', 'COMPACTION_RECOVERY_STOP_UNCONFIRMED'),
+                ('compact-stock-lost-format', 'COMPACTION_RECOVERY_STOP_UNCONFIRMED'),
                 ('compact-changed-schema', 'COMPACTION_FORMAT_CHANGED'),
                 ('compact-forged', 'CONTINUATION_FORM_UNSUPPORTED'),
                 ('compact-foreign', 'COMPACTION_SUMMARY_IDENTITY')):
@@ -165,21 +165,85 @@ class CompactionHTTPTests(unittest.TestCase):
             self.assertEqual(manifest['diagnostics'][0]['details']['code'], reason)
             if scenario in ('compact-lost-format', 'compact-stock-lost-format'):
                 diagnostic = manifest['diagnostics'][0]
-                self.assertEqual(diagnostic['failure_kind'], 'BACKEND_INCOMPATIBLE')
-                self.assertEqual(diagnostic['details']['phase'], 'continuation')
-                self.assertEqual(diagnostic['details']['role'], 'user')
-                self.assertEqual(diagnostic['details']['field'], 'info.format')
-                self.assertEqual(diagnostic['details']['transitions'], 1)
+                self.assertEqual(diagnostic['failure_kind'], 'TRANSPORT_ERROR')
                 invocation = json.loads((self.run_dir / 'revisions/001/study.logs/invocation.json').read_text())
                 events = invocation['compaction']['events']
-                self.assertEqual([event['event'] for event in events[-3:]],
-                                 ['compaction_started', 'compaction_completed', 'compaction_rejected'])
+                self.assertIn('compaction_recovery_detected', [e['event'] for e in events])
+                self.assertNotIn('compaction_recovery_sent', [e['event'] for e in events])
             self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
             self.assertEqual(manifest['metrics']['attempts'], 2)
             self.assertEqual(manifest['metrics']['usage']['coverage']['total_tokens'], 'partial')
             calls = self.recorded()
             self.assertTrue(any(c['path'].endswith('/abort') for c in calls))
             self.assertTrue(any(c['method'] == 'DELETE' for c in calls))
+
+    def test_recovery_folder_git_review_and_comparison_keep_local_validation(self):
+        for scenario, count in (('recovery-one', 1), ('recovery-two', 2)):
+            with self.subTest(scenario=scenario):
+                manifest, code = self.run_case(scenario)
+                self.assertEqual(code, 0, manifest)
+                self.assertTrue(manifest['accepted'])
+                for name in ('study_invocation', 'review_invocation'):
+                    meta = manifest[name]
+                    self.assertTrue(meta['native_envelope_valid'])
+                    self.assertTrue(meta['backend_result_valid'])
+                    self.assertEqual(len(meta['recovery_ids']), count)
+                    self.assertEqual(meta['retry_policy']['orchestrator_repair_attempts_performed'], 0)
+                self.assertNotEqual(manifest['study_invocation']['session_id'], manifest['review_invocation']['session_id'])
+        self.init_git(['main', 'other'])
+        manifest, code = self.run_case('recovery-one')
+        self.assertEqual(code, 0, manifest)
+        self.assertTrue(all(branch['accepted'] for branch in manifest['branches']))
+        self.assertTrue(manifest['comparison_invocation']['publication_complete'])
+        self.assertEqual(len(manifest['comparison_invocation']['recovery_ids']), 1)
+        self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
+
+    def test_recovery_does_not_consume_repairs_and_limit_spans_attempts(self):
+        self.value['execution'] = {'structured_output_repair_attempts': 2}
+        manifest, code = self.run_case('recovery-repair')
+        self.assertEqual(code, 0, manifest)
+        self.assertTrue(manifest['accepted'])
+        meta = manifest['study_invocation']
+        self.assertEqual(meta['retry_policy']['orchestrator_repair_attempts_performed'], 1)
+        self.assertEqual(meta['compaction_recoveries_used'], 2)
+        # Each attempt has its own session, while both share the recovery cap.
+        self.assertTrue((Path(meta['artifact_directory']).parent / 'attempt-001/recovery-001-request.json').exists())
+        self.assertTrue((Path(meta['artifact_directory']) / 'recovery-002-request.json').exists())
+        manifest, code = self.run_case('recovery-repair-limit')
+        self.assertEqual(code, 1, manifest)
+        self.assertEqual(manifest['diagnostics'][0]['details']['code'], 'COMPACTION_RECOVERY_LIMIT_EXCEEDED')
+        self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
+        for pid in {c['server_pid'] for c in self.recorded()}:
+            with self.assertRaises(ProcessLookupError): os.kill(pid, 0)
+
+    def test_interrupt_during_recovery_wait_cleans_up_without_a_second_post(self):
+        path = self.root / 'config.json'
+        path.write_text(json.dumps(self.value))
+        result = subprocess.run([sys.executable, '-B', str(base.ROOT / 'explain.py'), '--config', str(path)],
+            env=os.environ | self.env | {'AUDIT_FAKE_CASE': 'recovery-interrupt'},
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 130, result.stderr)
+        calls = self.recorded()
+        self.assertEqual(len(self.prompts()), 2)  # catalog and original study
+        self.assertTrue(any(c['method'] == 'DELETE' for c in calls))
+        for pid in {c['server_pid'] for c in calls}:
+            with self.assertRaises(ProcessLookupError): os.kill(pid, 0)
+
+    def test_recovery_stop_failures_cleanup_owned_resources(self):
+        self.value['execution'] = {'http_timeout_seconds': .4, 'stage_timeout_seconds': 5}
+        for scenario, kind in (('recovery-drop', 'TRANSPORT_ERROR'),
+                               ('recovery-stop-hang', 'TRANSPORT_ERROR'),
+                               ('recovery-abort-hang', 'STAGE_TIMEOUT')):
+            with self.subTest(scenario=scenario):
+                before = len(self.prompts())
+                manifest, code = self.run_case(scenario)
+                self.assertEqual(code, 1, manifest)
+                self.assertEqual(manifest['diagnostics'][0]['failure_kind'], kind, manifest['diagnostics'])
+                self.assertEqual(len(self.prompts()) - before, 2)
+                self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
+                self.assertTrue(any(c['method'] == 'DELETE' for c in self.recorded()))
+                for pid in {c['server_pid'] for c in self.recorded()}:
+                    with self.assertRaises(ProcessLookupError): os.kill(pid, 0)
 
     def test_final_summary_mismatch_missing_native_and_unfinished_tool_never_publish(self):
         for scenario in ('compact-summary-result', 'compact-mismatch', 'compact-no-native',

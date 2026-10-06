@@ -6,7 +6,7 @@
 import copy
 import unittest
 
-from src.backends.xxx_history import SessionHistory
+from src.backends.xxx_history import SessionHistory, RecoveryRequired
 from src.backends.opencode import extract_result, validate_history
 from src.contracts.contracts import ContractError
 from src.runtime.execution import Budget
@@ -73,12 +73,11 @@ class HistoryTests(unittest.TestCase):
                         history.validate_final(messages, messages[-1])
                         self.assertEqual(history.continuations, count)
                     else:
-                        error = self.rejected(messages, 'COMPACTION_FORMAT_MISSING', history=history)
-                        self.assertEqual(error.failure_kind, 'BACKEND_INCOMPATIBLE')
-                        self.assertEqual(error.details['phase'], 'continuation')
-                        self.assertEqual(error.details['field'], 'info.format')
+                        state = history.observe(messages)
+                        self.assertIsInstance(state, RecoveryRequired)
+                        self.assertFalse(history.failed)
                         self.assertEqual(history.completed, count)
-                        self.assertEqual(history.continuations, count - 1)
+                        self.assertEqual(history.continuations, count)
                     self.assertEqual(messages, original)
 
     def test_stock_overflow_field_remains_typed_and_immutable(self):
@@ -512,9 +511,12 @@ class HistoryTests(unittest.TestCase):
                     del messages[index]['info']['format']
                 else:
                     messages[index]['info']['format'] = change
-                self.rejected(messages, code)
+                if change is None and index == 4:
+                    self.assertIsInstance(self.history().observe(messages), RecoveryRequired)
+                else:
+                    self.rejected(messages, code)
 
-    def test_missing_format_after_completed_summary_has_exact_failure(self):
+    def test_missing_format_after_completed_summary_has_typed_recoverable_state(self):
         # Reproduce the reported failure, including loss on a later compaction.
         # Stop at the continuation: no fabricated final result is needed.
         for count in (1, 2):
@@ -528,15 +530,13 @@ class HistoryTests(unittest.TestCase):
                 self.assertEqual(history.phase, 'continuation')
                 self.assertEqual(history.completed, count)
                 self.assertEqual(history.continuations, count - 1)
-                error = self.rejected(messages, 'COMPACTION_FORMAT_MISSING', history=history)
-                self.assertEqual(error.failure_kind, 'BACKEND_INCOMPATIBLE')
-                self.assertEqual(error.details['phase'], 'continuation')
-                self.assertEqual(error.details['role'], 'user')
-                self.assertEqual(error.details['field'], 'info.format')
-                self.assertEqual(error.details['transitions'], count)
+                state = history.observe(messages)
+                self.assertIsInstance(state, RecoveryRequired)
+                self.assertEqual(state.continuation_id, messages[-1]['info']['id'])
+                self.assertFalse(history.failed)
                 self.assertEqual([e['event'] for e in history.events[-3:]],
-                                 ['compaction_started', 'compaction_completed', 'compaction_rejected'])
-                self.assertNotIn(messages[-1]['info']['id'], history.origins)
+                                 ['compaction_started', 'compaction_completed', 'compaction_recovery_detected'])
+                self.assertIn(messages[-1]['info']['id'], history.origins)
                 self.assertEqual(messages, original)
 
     def test_service_format_is_optional_but_never_allowed_to_conflict(self):
@@ -833,16 +833,16 @@ class CompactionUsageTests(unittest.TestCase):
         self.assertIsNone(entries['compaction']['model_requested'])
         self.assertEqual(entries['stage']['usage']['total_tokens'], 12)
 
-    def test_failed_continuation_keeps_only_verified_partial_usage(self):
+    def test_recoverable_continuation_accounts_verified_discarded_usage_as_partial(self):
         history = SessionHistory('ses_test', 'msg_root', body())
         messages = chain()
         del messages[4]['info']['format']
-        with self.assertRaises(ContractError): history.observe(messages)
+        self.assertIsInstance(history.observe(messages), RecoveryRequired)
         collector = HTTPUsage('xxx', None, 'ses_test', 'msg_root', 'audit')
         result = collector.validated(history, complete=True)
-        self.assertEqual(result['usage']['total_tokens'], 8)
+        self.assertEqual(result['usage']['total_tokens'], 12)
         self.assertEqual(result['usage']['coverage']['total_tokens'], 'partial')
-        self.assertEqual({r['origin'] for r in result['by_model']}, {'stage', 'compaction'})
+        self.assertEqual({r['origin'] for r in result['by_model']}, {'stage', 'compaction', 'discarded'})
 
     def test_missing_summary_counters_stay_unavailable(self):
         messages = chain()

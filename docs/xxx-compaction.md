@@ -38,18 +38,54 @@ remain unsupported with `COMPACTION_FORM_UNSUPPORTED`. Linked summary and
 continuation identity, settings and format checks still apply.
 
 Stock 1.2.27 loses `format` when creating a compaction service user and its
-ordinary continuation. A completed summary does not fix that loss: the continuation
-fails with `BACKEND_INCOMPATIBLE / COMPACTION_FORMAT_MISSING`, with
-`phase=continuation`, `role=user`, `field=info.format`. A different format fails
-with `COMPACTION_FORMAT_CHANGED`. The stage is not published as successful;
-owned-session cleanup, private artifacts and the configured continuation policy
-remain active. No history rewriting, schema inference, competing prompt, native
-patch or change to global compaction settings is applied.
+ordinary continuation. After a fully verified automatic chain, the validator now
+returns typed `RecoveryRequired` without setting `history.failed`. It validates
+any already present continuation response as `origin=discarded`; streaming or
+completed text cannot be accepted as the result. Missing format anywhere else,
+changed schema (`COMPACTION_FORMAT_CHANGED`), foreign IDs/settings, unfinished
+summary, manual compaction and overflow/replay still fail.
+
+The client aborts a pending synchronous message POST and waits for **that original
+HTTP request** to return completely. `abort=true`, idle status and a locally closed
+socket do not suffice. Naturally completed requests need no recovery abort. It
+then fetches and validates a fresh full history, including the discarded response.
+Only the expected `MessageAbortedError` for the continuation cancelled by this
+mechanism is exempted. All other errors retain their meaning. An unconfirmed stop
+fails with `TRANSPORT_ERROR / COMPACTION_RECOVERY_STOP_UNCONFIRMED` unless a more
+specific error or timeout has already occurred. No next POST is sent in that case.
+
+After confirmed stopping, the validator registers a new user message ID. Its POST
+uses the same session, original `format`/schema and `retryCount: 0`, verified
+original agent and actually selected model, and original applicable `system`,
+`tools`, `variant`. Its fixed short instruction asks to continue the previous task
+from preserved context and finish through StructuredOutput. It does not repeat
+the research prompt or history. The accepted result must have the registered
+parent or belong to a later verified compaction chain and still pass native
+StructuredOutput, schema, evidence and source-binding validation.
+
+There are at most **two recovery messages per `Runner.invoke`**, summed across
+its structured-output repair attempts. This internal limit has no setting.
+Recovery does not consume `structured_output_repair_attempts`. The next format
+loss fails with `BACKEND_INCOMPATIBLE / COMPACTION_RECOVERY_LIMIT_EXCEEDED`, reason
+`COMPACTION_FORMAT_MISSING`. The original deadline and idle budget remain active;
+stopping additionally uses `http_timeout_seconds`. An uncertain recovery send is
+never automatically repeated. Cleanup runs on timeout, error and user interrupt.
+
+Private artifacts keep `request.json` and the original `response.json`, every
+numbered HTTP response/history, each `recovery-NNN-request.json` and
+`recovery-NNN-response.json`, and detection/stop/continuation/result events in
+invocation metadata. `request_id` stays the operation root; `recovery_ids` and
+`final_parent_id` identify later messages. Usage includes original work,
+compaction and discarded continuations, deduplicated by message/part identity.
+Incomplete or cancelled work remains marked partial even if recovery succeeds.
+The application changes no installed agent, global configuration, history,
+summary or synthetic message. V2 and session-free `--check` remain unchanged.
 
 The existing native patch below is separate reference material. It is **not** a
 requirement or an automatically applied part of this stock integration. The
 historical verification sections record earlier behavior and test counts; the
-current profile above supersedes their explicit-overflow-only restriction.
+current profile above supersedes their explicit-overflow-only restriction and
+their immediate failure on missing continuation format.
 
 ### Reproduce stock native behavior without a model provider
 
@@ -58,17 +94,103 @@ dependencies and Bun already prepared. This mode never applies the reference pat
 
 ```sh
 bash .github/ci/offline-tests.sh python3.11 scripts/test-native-compaction.py \
-  /path/to/disposable/opencode --bun /path/to/bun --stock-only
+  /path/to/disposable/opencode --bun /path/to/bun --stock-only \
+  --artifacts-dir /path/to/new-private-artifact-directory
 ```
 
 The native harness substitutes only the language provider with deterministic local
 responses. It exercises normal structured output and both automatic compaction
 paths. Unmodified native histories pass through the production Python validator:
-normal results must succeed and both format-loss paths must report the exact
-continuation diagnostic. The injected test is removed afterward. No installed
-agent binary or global runtime configuration is modified.
+normal results must succeed and both format-loss paths must require recovery.
+`compaction-recovery.test.ts` additionally runs the production Python HTTP client
+against the real native HTTP routes, with only the language provider replaced.
+It covers one/two recoveries, natural text completion, streaming cancellation,
+early abort/idle, delayed original HTTP completion and the third-loss limit.
+The native runtime itself creates and executes StructuredOutput and sets
+`info.structured`; no HTTP fixture supplies that value. The client checks the
+native envelope and schema. Existing 47 native tests and TypeScript checking run
+afterward. Bun, runtime dependencies and a local `rg` in PATH are prerequisites
+for this offline HTTP server test. Injected tests are removed afterward; source
+hashes remain pinned. `--artifacts-dir` preserves native histories and HTTP
+artifacts in a new directory even on failure. No installed agent or global
+runtime configuration is modified.
 
-### Stock-profile verification (2026-10-06)
+### Recovery verification (2026-10-06)
+
+Implemented from repository HEAD `8a9b7b1`. All checks used WSL AlmaLinux 9,
+Python 3.11.13, Git 2.52.0 and Bun 1.3.10. External networking was disabled with
+the existing namespace harness; only loopback and deterministic local providers
+were used. No installed-agent smoke, paid model call, native patch or global
+configuration change was performed.
+
+| Check | Result |
+| --- | --- |
+| Stock prompt/compaction baseline | 3 passed across 6 sessions; 6 reference-patch cases intentionally skipped |
+| Native HTTP recovery | 4 passed: natural text, one/two aborted streaming continuations, third-loss limit |
+| Native history validation | 2 original structured results accepted; 4 format-loss histories require recovery and cannot be final results |
+| Existing upstream tests | 47 passed; `bun run typecheck` passed |
+| Final focused Python suite | 121 passed in 82.668 s: recovery, history, owned cleanup, HTTP, structured repair, V2 CLI and metrics |
+| Owned Runner compaction suite | 14 passed in 76.331 s: Folder/Git, separate review, branch comparison, shared repair cap and interruption |
+| Full Python discovery | 611 tests in 495.101 s; 16 failures, 29 errors, 5 skips, all failure entries classified below |
+| Non-root permission checks | 3 passed in 4.306 s |
+| Native source integrity | All 398 `packages/opencode/src` files byte-equal to the pinned archive; both existing SHA-256 checks match; injected tests removed |
+| Whitespace | `git diff --check` passed |
+
+The final focused suite ran after full discovery and also includes the additional
+owned stop-failure cleanup regression and final timeout/idle adjustments. An
+initial version of that new fixture hung catalog cleanup as well as the intended
+study abort; it was corrected to target the recovery cycle and rerun successfully.
+The full-discovery count above is the actual completed run, not a claim that the
+currently collected suite or all local tests are green.
+
+The stock native HTTP cases use two, three and three message POSTs for one,
+two and three losses respectively. Each successful case executes one native
+StructuredOutput callback and passes the production client plus local schema
+validation. The third-loss case executes no final StructuredOutput and reports
+`COMPACTION_RECOVERY_LIMIT_EXCEEDED` with reason `COMPACTION_FORMAT_MISSING`.
+Native traces show abort/idle returning about 200 ms before the original HTTP
+response; the next POST occurs only after that response completes. Natural
+completion retains complete reported usage; aborted cases correctly remain partial.
+
+Previously existing failures reproduced separately:
+
+- `test_all_examples_load_without_credentials`, subtest
+  `config.opencode.example.jsonc`: the unchanged example selects
+  `deepseek/deepseek-flash`; the test expects `None` (one failure).
+- Git-ignored local `test_openapi_diff.py`: 20 failure/error entries caused by
+  its utility importing missing top-level `openapi_contract`.
+- Git-ignored local `test_verify_agent.py`: 24 failure/error entries, including
+  subprocess assertions, caused by missing top-level `contracts` imports in its
+  local utilities. Those files and imports were not modified.
+
+The five skips are the three actual non-root checks (passed separately) and the
+two opt-in installed-agent smokes. No remaining product-test regression was
+observed. A runtime that fails to finish its original HTTP request after abort
+still receives a diagnostic stop failure and ordinary owned-resource cleanup;
+it cannot send a competing recovery message.
+
+Local private verification artifacts are retained in
+`docs/compaction-recovery-20261006-artifacts/` (Git-ignored):
+[summary](compaction-recovery-20261006-artifacts/summary.json),
+[full log](compaction-recovery-20261006-artifacts/full.log),
+[focused log](compaction-recovery-20261006-artifacts/focused.log),
+[native log](compaction-recovery-20261006-artifacts/native.log), and
+[source verification](compaction-recovery-20261006-artifacts/source-verification.json).
+The `native/http-*` directories contain each original/recovery request, untouched
+HTTP history/response, client metadata and the native event trace.
+
+Reproduce the focused and full Python checks:
+
+```sh
+PYTHONPATH=tests bash .github/ci/offline-tests.sh python3.11 -B -m unittest \
+  test_xxx_recovery test_xxx_history \
+  test_xxx_compaction.CompactionHTTPTests.test_recovery_stop_failures_cleanup_owned_resources \
+  test_opencode_http test_structured_output test_opencode_cli test_metrics -v
+EXPLAIN_OPENCODE_SMOKE=0 EXPLAIN_XXX_COMPACTION_SMOKE=0 AUDIT_GIT_BUILD=modern \
+  bash .github/ci/offline-tests.sh python3.11 -B -m unittest discover -s tests -v
+```
+
+### Earlier stock-profile verification (2026-10-06, before recovery)
 
 Implementation started at `4232598` with a clean tracked tree. Checks used WSL
 AlmaLinux 9, Python 3.11.13, Git 2.52.0 and Bun 1.3.10. HTTP/native/full tests

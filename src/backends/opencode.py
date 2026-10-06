@@ -29,6 +29,10 @@ HTTP_SECONDS = 5
 CLEANUP_SECONDS = 5
 
 
+def message_id():
+    return 'msg_' + f'{int(time.time() * 1000) * 4096:012x}' + secrets.token_hex(7)
+
+
 def incompatible(message):
     return response_error('BACKEND_INCOMPATIBLE', 'compatibility', message)
 
@@ -228,6 +232,7 @@ class Request:
         self.status = None
         self.body = bytearray()
         self.error = None
+        self.response_complete = False
         self.started = time.monotonic()
         def run():
             try:
@@ -242,6 +247,9 @@ class Request:
                 self.status = response.status
                 while block := response.read1(65536):
                     self.body.extend(block)
+                if response.length not in (None, 0):
+                    raise http.client.IncompleteRead(bytes(self.body), response.length)
+                self.response_complete = True
             except Exception as exc:
                 self.error = exc
             finally:
@@ -371,6 +379,8 @@ class Server:
 
     def request(self, method, path, body=None, *, budget=None, cleanup=False):
         budget = budget or self.budget
+        if not cleanup:
+            self.budget.check()
         remaining = budget.check()
         limiting_budget = budget
         if not cleanup:
@@ -387,14 +397,14 @@ class Server:
         error = None
         try:
             while not request.done.wait(.02):
-                budget.check()
                 if not cleanup:
                     self.budget.check()
+                budget.check()
                 if time.monotonic() - request.started >= limit:
                     raise self.timeout_error(request)
-            budget.check()
             if not cleanup:
                 self.budget.check()
+            budget.check()
             if time.monotonic() - request.started >= limit:
                 raise self.timeout_error(request)
             return self.finish(request)
@@ -432,10 +442,39 @@ class Server:
         # The XXX (OpenCode 1.2.27) profile supplies the stateful transition model.
         return None
 
+    def stop_for_recovery(self, pending, history):
+        """Abort is only a request to stop. Only the original HTTP EOF proves return."""
+        stop_end = time.monotonic() + self.execution['http_timeout_seconds']
+        if not pending.done.is_set():
+            history.expect_cancellation()
+            history.event('compaction_recovery_stop_requested', continuation_id=history.current_request)
+            result = self.request('POST', f'/session/{self.session_id}/abort',
+                                  budget=Budget(max(.001, stop_end - time.monotonic()), label='recovery_stop'))
+            history.event('compaction_recovery_abort_returned', acknowledged=result is True)
+        while not pending.done.wait(.02):
+            self.budget.check()
+            if self.process.poll() is not None:
+                raise response_error('BACKEND_ERROR', 'backend', 'Owned OpenCode server exited during recovery.')
+            if time.monotonic() >= stop_end:
+                raise response_error('TRANSPORT_ERROR', 'transport',
+                    'Original HTTP request did not finish after compaction abort.',
+                    code='COMPACTION_RECOVERY_STOP_UNCONFIRMED')
+        self.budget.check()
+        if time.monotonic() >= stop_end:
+            raise response_error('TRANSPORT_ERROR', 'transport',
+                'Original HTTP request exceeded the recovery stop deadline.',
+                code='COMPACTION_RECOVERY_STOP_UNCONFIRMED')
+        if pending.cancelled.is_set() or not pending.response_complete:
+            if isinstance(pending.error, TimeoutError):
+                raise self.timeout_error(pending) from pending.error
+            raise response_error('TRANSPORT_ERROR', 'transport',
+                'Original HTTP completion could not be confirmed.',
+                code='COMPACTION_RECOVERY_STOP_UNCONFIRMED')
+
     def invoke(self, prompt, schema, agent_name, model, retries):
         created = object_value(self.request('POST', '/session', {}), 'session response')
         self.session_id = identifier(created.get('id'), 'ses')
-        request_id = 'msg_' + f'{int(time.time() * 1000) * 4096:012x}' + secrets.token_hex(7)
+        request_id = message_id()
         self.meta.update(session_id=self.session_id, request_id=request_id)
         body = {'messageID': request_id, 'agent': agent_name,
                 'format': {'type': 'json_schema', 'schema': schema, 'retryCount': retries},
@@ -446,6 +485,9 @@ class Server:
             provider, model_id = model.split('/', 1)
             body['model'] = {'providerID': provider, 'modelID': model_id}
         history_model = self.session_history(request_id, body)
+        if history_model is not None:
+            from src.backends.xxx_history import RecoveryBudget, RecoveryRequired
+            recovery_budget = getattr(self, 'recovery_budget', None) or RecoveryBudget()
         usage = HTTPUsage(self.meta.get('backend', 'opencode'), model, self.session_id, request_id, agent_name)
 
         def observe(messages, *, complete=False):
@@ -469,30 +511,71 @@ class Server:
         self.meta['prompt_sent'] = True
         pending = self.begin('POST', f'/session/{self.session_id}/message', body,
                              timeout=self.budget.deadline - self.budget.clock(), budget_source=self.budget.label)
-        # Prompt's synchronous response confirms the native loop returned. Polling
-        # is observational, never a second prompt or an outer repair loop.
         fingerprint = None
+        cycle = 0
+
+        def receive():
+            name = 'response.json' if cycle == 0 else f'recovery-{cycle:03d}-response.json'
+            self.save(self.artifacts / name, bytes(pending.body))
+            return self.finish(pending)
+
         try:
-            while not pending.done.wait(.1):
+            while True:
+                recovery = None
+                envelope = None
+                while not pending.done.wait(.1):
+                    self.budget.check()
+                    if self.process.poll() is not None:
+                        raise response_error('BACKEND_ERROR', 'backend', 'Owned OpenCode server exited during the request.')
+                    messages = self.request('GET', f'/session/{self.session_id}/message')
+                    changed = observe(messages)
+                    if history_model is None:
+                        current = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).digest()
+                        changed = current != fingerprint and bool(messages)
+                        fingerprint = current
+                    elif isinstance(changed, RecoveryRequired):
+                        recovery, changed = changed, changed.changed
+                    if changed:
+                        self.budget.activity()
+                    if recovery is not None:
+                        break
                 self.budget.check()
-                if self.process.poll() is not None:
-                    raise response_error('BACKEND_ERROR', 'backend', 'Owned OpenCode server exited during the request.')
-                messages = self.request('GET', f'/session/{self.session_id}/message')
-                changed = observe(messages)
-                if history_model is None:
-                    current = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).digest()
-                    changed = current != fingerprint and bool(messages)
-                    fingerprint = current
-                if changed:
+                if recovery is None:
+                    envelope = receive()
+                    history = self.request('GET', f'/session/{self.session_id}/message')
+                    observed = observe(history)
+                    if history_model is not None and isinstance(observed, RecoveryRequired):
+                        recovery = observed
+                        if observed.changed:
+                            self.budget.activity()
+                    else:
+                        break
+                # This counter belongs to the stage invocation, including repairs.
+                # Reserve before any send; uncertain outcomes are never retried.
+                number = recovery_budget.reserve()
+                self.stop_for_recovery(pending, history_model)
+                if envelope is None:
+                    envelope = receive()
+                history = self.request('GET', f'/session/{self.session_id}/message')
+                observed = observe(history)
+                if isinstance(observed, RecoveryRequired) and observed.changed:
                     self.budget.activity()
-            self.budget.check()
+                history_model.confirm_stopped(history, envelope)
+                body = history_model.register_recovery(message_id())
+                cycle = number
+                self.save(self.artifacts / f'recovery-{cycle:03d}-request.json', json.dumps(body))
+                self.meta.setdefault('recovery_ids', []).append(body['messageID'])
+                self.meta['compaction_recoveries_used'] = recovery_budget.sent
+                self.meta['compaction'] = history_model.metadata()
+                self.budget.check()
+                history_model.event('compaction_recovery_sent', recovery_id=body['messageID'])
+                pending = self.begin('POST', f'/session/{self.session_id}/message', body,
+                    timeout=self.budget.deadline - self.budget.clock(), budget_source=self.budget.label)
         except ContractError as exc:
             if exc.failure_kind in ('STAGE_TIMEOUT', 'IDLE_TIMEOUT') and 'operation' not in exc.details:
                 raise self.timeout_error(pending, exc) from exc
             raise
         self.meta['output_bytes'] = len(pending.body)
-        self.save(self.artifacts / 'response.json', bytes(pending.body))
-        envelope = self.finish(pending)
         if history_model is None:
             self.meta['metrics'] = usage.observe([envelope])
         info = envelope.get('info') if type(envelope) is dict else None
@@ -511,8 +594,6 @@ class Server:
                 detail = error.get('data')
                 if type(detail) is dict and type(detail.get('retries')) in (int, float):
                     self.meta['native_retries_reported'] = detail['retries']
-        history = self.request('GET', f'/session/{self.session_id}/message')
-        observe(history)
         expected_parent = None
         if history_model is not None:
             try:
@@ -526,6 +607,11 @@ class Server:
             self.meta['metrics'] = usage.observe(history, complete=True)
         else:
             self.meta['metrics'] = usage.validated(history_model, complete=True)
+            if history_model.recovery_requests:
+                history_model.event('compaction_recovery_result', message_id=details['message_id'],
+                                    parent_id=expected_parent)
+                self.meta['compaction'] = history_model.metadata()
+        details['final_parent_id'] = expected_parent or request_id
         self.save(self.artifacts / 'extracted.json', json.dumps(data))
         self.meta.update(details, output_bytes=len(pending.body))
         return data

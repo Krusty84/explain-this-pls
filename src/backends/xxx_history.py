@@ -3,18 +3,41 @@
 
 """OpenCode 1.2.27 / XXX session membership and structured-result acceptance.
 
-Accepts a bounded, format-preserving wire profile, not a claim about unseen
-backend internals. Reference/synthetic tests exercise this production validator.
+Accepts verified automatic compaction and explicitly registered recovery requests.
+Membership never implies that an unformatted continuation is a valid result.
 """
 from __future__ import annotations
 
 import copy
 import math
+from dataclasses import dataclass
 
 from src.contracts.contracts import ContractError, response_error
 from src.backends.opencode import identifier, native_error, object_value, json_equal as equal
 
 CONTINUE_TEXT = 'Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.'
+RECOVERY_TEXT = ('Continue the previous task using the preserved session context. '
+                 'Complete it through StructuredOutput with the supplied schema.')
+
+
+@dataclass(frozen=True)
+class RecoveryRequired:
+    continuation_id: str
+    changed: bool = False
+
+
+@dataclass
+class RecoveryBudget:
+    """Owned by Runner.invoke, shared with all its structured repair attempts."""
+    sent: int = 0
+
+    def reserve(self):
+        if self.sent >= 2:
+            raise response_error('BACKEND_INCOMPATIBLE', 'compatibility',
+                'XXX compaction recovery limit exceeded.',
+                code='COMPACTION_RECOVERY_LIMIT_EXCEEDED', reason='COMPACTION_FORMAT_MISSING')
+        self.sent += 1
+        return self.sent
 
 # ECMAScript WhiteSpace + LineTerminator (trimEnd), explicitly enumerated.
 # Python's default rstrip additionally removes e.g. U+0085, and misses U+FEFF.
@@ -92,6 +115,10 @@ class SessionHistory:
         self.last_assistant = None
         self.diagnostic_role = 'unknown'
         self.diagnostic_part = None
+        self.recovery_required = None
+        self.recovery_requests = {}
+        self.cancelled_parents = set()
+        self.stopped = False
 
     def event(self, name, **details):
         value = {'event': name, 'transitions': self.transitions, **details}
@@ -128,7 +155,56 @@ class SessionHistory:
             self.reject('CONTINUATION_CHAIN_INVALID')
         info = self.messages[mid]['info']
         self._user_settings(info)
-        self._format(info)
+        self._format(info, required=False)
+
+    def expect_cancellation(self):
+        if self.phase != 'recovery' or self.recovery_required is None:
+            self.reject('RECOVERY_NOT_AUTHORIZED')
+        self.cancelled_parents.add(self.current_request)
+
+    def _error(self, info):
+        if 'error' not in info:
+            return
+        error = info['error']
+        if (self.origins.get(info['id']) == 'discarded' and
+                info.get('parentID') in self.cancelled_parents and
+                type(error) is dict and set(error) == {'name', 'data'} and
+                error['name'] == 'MessageAbortedError' and type(error['data']) is dict and
+                set(error['data']) == {'message'} and type(error['data']['message']) is str):
+            return
+        native_error(error)
+
+    def confirm_stopped(self, snapshot, envelope):
+        """Called only after the original HTTP response has fully completed."""
+        if self.failed or self.phase != 'recovery' or self.pending_user is not None:
+            self.reject('RECOVERY_NOT_AUTHORIZED')
+        if not equal(snapshot, [self.messages[key] for key in self.order]):
+            self.reject('FINAL_HISTORY_INCOMPLETE')
+        info = object_value(object_value(envelope, 'stopped envelope').get('info'), 'stopped info')
+        mid = identifier(info.get('id'), 'msg')
+        if self.origins.get(mid) not in ('stage', 'compaction', 'discarded'):
+            self.reject('UNCONFIRMED_ASSISTANT_PARENT')
+        if not equal(self.messages[mid], envelope):
+            self.reject('FINAL_SNAPSHOT_MISMATCH')
+        self.stopped = True
+        self.event('compaction_recovery_stopped', continuation_id=self.current_request, message_id=mid)
+
+    def register_recovery(self, request_id):
+        if self.failed or self.phase != 'recovery' or not self.stopped:
+            self.reject('RECOVERY_NOT_AUTHORIZED')
+        identifier(request_id, 'msg')
+        if request_id in self.messages or request_id in self.recovery_requests:
+            self.reject('RECOVERY_ID_REPLAY')
+        root = self.messages[self.request_id]['info']
+        body = {k: copy.deepcopy(root[k]) for k in ('agent', 'model', 'system', 'tools', 'variant') if k in root}
+        body.update(messageID=request_id, format=copy.deepcopy(self.body['format']),
+                    parts=[{'type': 'text', 'text': RECOVERY_TEXT}])
+        self.recovery_requests[request_id] = copy.deepcopy(body)
+        self.phase = 'recovery_registered'
+        self.recovery_required = None
+        self.stopped = False
+        self.event('compaction_recovery_registered', recovery_id=request_id)
+        return body
 
     def _format(self, info, *, required=True):
         if 'format' not in info:
@@ -402,6 +478,21 @@ class SessionHistory:
         if self.request_id not in self.messages or self.phase == 'root':
             self.reject('ROOT_REQUEST_MISSING')
         self._user_settings(info)
+        if mid in self.recovery_requests:
+            if self.phase != 'recovery_registered' or mid != next(reversed(self.recovery_requests)):
+                self.reject('RECOVERY_ID_REPLAY')
+            self._format(info)
+            if not parts:
+                return False
+            part = parts[0]
+            if (len(parts) != 1 or part.get('type') != 'text' or part.get('text') != RECOVERY_TEXT or
+                    set(part) - {'id', 'messageID', 'sessionID', 'type', 'text', 'time'}):
+                self.reject('RECOVERY_PROMPT_MISMATCH')
+            self.current_request = mid
+            self.last_assistant = None
+            self.phase = 'stage'
+            self.event('compaction_recovery_continued', recovery_id=mid)
+            return True
         if not parts:
             # A user identity alone grants no membership or assistant parent.
             return False
@@ -437,13 +528,17 @@ class SessionHistory:
         if (type(timing.get('start')) not in (int, float) or
                 type(timing.get('end')) not in (int, float) or timing['end'] < timing['start']):
             self.reject('CONTINUATION_TIME_INVALID')
-        self._format(info)
         self.authorize_continuation(mid)
         self.current_request = mid
         self.continuations += 1
         self.last_assistant = None
-        self.phase = 'stage'
-        self.event('session_continued', continuations=self.continuations)
+        if 'format' not in info:
+            self.phase = 'recovery'
+            self.recovery_required = RecoveryRequired(mid)
+            self.event('compaction_recovery_detected', reason='COMPACTION_FORMAT_MISSING', continuation_id=mid)
+        else:
+            self.phase = 'stage'
+            self.event('session_continued', continuations=self.continuations)
         return True
 
     def observe(self, snapshot):
@@ -457,8 +552,7 @@ class SessionHistory:
                 self.diagnostic_role = info['role']
                 self.diagnostic_part = None
                 if mid in self.origins:
-                    if 'error' in info:
-                        native_error(info['error'])
+                    self._error(info)
                     self._complete_summary()
                     continue
                 if self.pending_user is not None and self.pending_user != mid:
@@ -478,16 +572,21 @@ class SessionHistory:
                         self.phase = 'summary'
                         self.origins[mid] = 'compaction'
                         self._complete_summary()
-                    elif (self.phase == 'stage' and info.get('parentID') == self.current_request
+                    elif (self.phase in ('stage', 'recovery') and info.get('parentID') == self.current_request
                           and info.get('agent') == self.agent and not info.get('summary', False)):
-                        self.origins[mid] = 'stage'
+                        model = self.messages[self.request_id]['info']['model']
+                        if (info.get('providerID') != model['providerID'] or info.get('modelID') != model['modelID']
+                                or info.get('mode') != self.agent):
+                            self.reject('ASSISTANT_SETTINGS_CHANGED')
+                        self.origins[mid] = 'discarded' if self.phase == 'recovery' else 'stage'
                         self.last_assistant = mid
                     else:
                         self.reject('UNCONFIRMED_ASSISTANT_PARENT')
-                    if 'error' in info:
-                        native_error(info['error'])
+                    self._error(info)
                 else:
                     self.reject('MESSAGE_ROLE_UNSUPPORTED')
+            if self.recovery_required is not None:
+                return RecoveryRequired(self.recovery_required.continuation_id, changed)
             return changed
         except ContractError as exc:
             self.failed = True
@@ -499,7 +598,7 @@ class SessionHistory:
 
     def usage_messages(self):
         return [(self.messages[mid], origin) for mid, origin in self.origins.items()
-                if origin in ('stage', 'compaction')]
+                if origin in ('stage', 'compaction', 'discarded')]
 
     def validate_final(self, snapshot, envelope):
         if self.failed:
@@ -521,10 +620,11 @@ class SessionHistory:
         return self.current_request
 
     def metadata(self):
-        return {'profile': 'xxx-auto-format-preserving-v1', 'format_retention': 'checked_on_continuation',
+        return {'profile': 'xxx-auto-recovery-v1', 'format_retention': 'checked_on_continuation',
                 'backend_pre_model_retention': 'unverified', 'phase': self.phase,
                 'summary_hook': 'not_applied_unverified', 'transitions': self.transitions,
                 'hook_conflict_check': 'unavailable', 'applied_settings': {},
                 'settings_policy': 'preserve_backend_profile',
                 'completed': self.completed, 'continuations': self.continuations,
+                'recovery_ids': list(self.recovery_requests),
                 'events': copy.deepcopy(self.events)}

@@ -1172,6 +1172,8 @@ class Runner:
         binding_hashes = {}
         attempt_hashes = {}
         native = self.cfg['_agents'][stage]['backend'] == 'xxx'
+        from src.backends.xxx_history import RecoveryBudget
+        recovery_budget = RecoveryBudget() if native else None
         limit = self.execution['structured_output_repair_attempts'] if native else 0
         correction = None
         repair_model = None
@@ -1183,7 +1185,8 @@ class Runner:
                 return self._invoke_once(stage, context, destination, budget=budget,
                                          repair_index=repair_index, correction=correction,
                                          repair_model=repair_model, repair_source=repair_source, evidence_pins=evidence_pins,
-                                         binding=binding, binding_hashes=binding_hashes, attempt_hashes=attempt_hashes)
+                                         binding=binding, binding_hashes=binding_hashes, attempt_hashes=attempt_hashes,
+                                         recovery_budget=recovery_budget)
             except ContractError as exc:
                 self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
                 if not (destination / 'invocation.json').is_file():
@@ -1676,7 +1679,7 @@ class Runner:
 
     def _invoke_once(self, stage, context, destination, *, budget, repair_index=0,
                      correction=None, repair_model=None, repair_source=None, evidence_pins=None,
-                     binding, binding_hashes, attempt_hashes):
+                     binding, binding_hashes, attempt_hashes, recovery_budget=None):
         attempt_started = self.reporter.clock()
         self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
         agent = self.cfg['_agents'][stage]
@@ -1763,6 +1766,7 @@ class Runner:
                         name = opencode.prepare_environment(env, 'repair' if repair_index else stage,
                                                             source_snapshot=bool(getattr(self, 'git_sources', None)))
                         server = xxx.Server(agent['executable'], cwd, env, attempt, budget, atomic, meta, self.execution)
+                        server.recovery_budget = recovery_budget
                         server.emit = lambda event, **fields: self.reporter.emit(
                             event, stage=stage, attempt=attempt.name, **fields)
                         error = None

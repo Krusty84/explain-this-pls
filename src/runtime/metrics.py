@@ -165,7 +165,7 @@ class HTTPUsage:
         """
         self.messages = {m['info']['id']: m for m, _ in history.usage_messages()}
         self.origins = {m['info']['id']: origin for m, origin in history.usage_messages()}
-        return self._measure(complete=complete and not history.failed)
+        return self._measure(complete=complete and not history.failed and history.phase == 'stage')
 
     def observe(self, messages, *, complete=False):
         valid = type(messages) is list
@@ -199,7 +199,7 @@ class HTTPUsage:
                     parts[part['id']] = part
             finished = (type(info.get('time')) is dict and
                         number(info['time'].get('completed')) is not None)
-            if not finished:
+            if not finished or 'error' in info:
                 complete = False
             actual = (info['providerID'] + '/' + info['modelID'] if
                       all(type(info.get(k)) is str and info[k] for k in ('providerID', 'modelID')) else None)

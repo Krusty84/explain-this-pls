@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.backends.opencode import extract_result
-from src.backends.xxx_history import SessionHistory
+from src.backends.xxx_history import SessionHistory, RecoveryRequired
 from src.contracts.contracts import ContractError, validate_schema
 
 
@@ -28,20 +28,20 @@ def verify(directory, *, stock_only=False):
         body = data['body']
         history = SessionHistory(body['sessionID'], body['messageID'], body)
         if data['baseline'] and data['count']:
+            for snapshot in data['snapshots']:
+                state = history.observe(snapshot)
+            assert isinstance(state, RecoveryRequired)
+            assert history.completed == history.continuations == 1
+            assert not history.failed
             try:
-                for snapshot in data['snapshots']:
-                    history.observe(snapshot)
+                history.validate_final(data['snapshots'][-1], data['final'])
             except ContractError as error:
-                assert error.failure_kind == 'BACKEND_INCOMPATIBLE', error
-                for key, value in {'code': 'COMPACTION_FORMAT_MISSING', 'phase': 'continuation',
-                                   'role': 'user', 'field': 'info.format', 'transitions': 1}.items():
-                    assert error.details[key] == value, error.details
-                assert history.completed == 1
-                assert history.continuations == 0
-                rejected += 1
-                print(f'{path.name}: native baseline rejected with exact COMPACTION_FORMAT_MISSING')
-                continue
-            raise AssertionError('Original native continuation was unexpectedly accepted')
+                assert error.details['code'] == 'TRANSITION_NOT_FINISHED'
+            else:
+                raise AssertionError('Formatless native response accepted as a result')
+            rejected += 1
+            print(f'{path.name}: native format loss requires recovery; text cannot be final')
+            continue
         for snapshot in data['snapshots']:
             history.observe(snapshot)
         parent = history.validate_final(data['snapshots'][-1], data['final'])

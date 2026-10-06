@@ -8,6 +8,7 @@ This does NOT simulate enforcement of retryCount, which upstream lacks.
 Malformed responses are explicitly synthetic, controlled by AUDIT_FAKE_CASE.
 """
 import base64
+import copy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -36,6 +37,8 @@ messages = []
 history_script = []
 history_consumed = threading.Event()
 scenario = os.environ.get('AUDIT_FAKE_CASE')
+recovery_state = {'context': None, 'repair': False, 'posts': 0, 'final_history': None}
+recovery_abort = threading.Event()
 
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -105,9 +108,14 @@ class Handler(BaseHTTPRequestHandler):
             response = {'id': session_id, **({'compactionCount': 0} if xxx else {})}
         elif self.path.endswith('/message') and self.command == 'POST':
             prompt = body['parts'][0]['text']
-            repair = prompt.startswith('Correct only the format')
-            raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]
-            context = json.loads(raw.split('\n\n# Required final JSON Schema\n')[0])
+            recovering = prompt.startswith('Continue the previous task using the preserved session context.')
+            if recovering:
+                context, repair = recovery_state['context'], recovery_state['repair']
+            else:
+                repair = prompt.startswith('Correct only the format')
+                raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]
+                context = json.loads(raw.split('\n\n# Required final JSON Schema\n')[0])
+                recovery_state.update(context=context, repair=repair)
             stage = context.get('stage') or ('compare' if 'baseline_branch' in context else
                                             'review' if 'architecture_document' in context else 'study')
             if scenario == 'interrupt' and os.environ.get('AUDIT_FAKE_INTERRUPT_STAGE', stage) == stage:
@@ -126,6 +134,8 @@ class Handler(BaseHTTPRequestHandler):
             if scenario == 'source-change' and stage != 'catalog':
                 (Path.cwd() / 'app.py').write_text('unexpected fixture mutation\n')
             data = result(context)
+            if scenario in ('recovery-repair', 'recovery-repair-limit') and not repair and stage != 'catalog':
+                data['extra_private_key'] = ['invalid schema, triggers existing repair']
             if scenario == 'missing-claims' and stage == 'study':
                 del data['claims']
             if scenario == 'markdown-study' and stage == 'study':
@@ -216,6 +226,51 @@ class Handler(BaseHTTPRequestHandler):
                     'sessionID': session_id, 'type': 'text', 'text': prompt}]})
             # Scripted histories publish one snapshot per poll. Do not expose the
             # final response while the POST handler is still building the script.
+            if scenario and scenario.startswith('recovery-') and stage != 'catalog':
+                from compaction_protocol import chain
+                index = recovery_state['posts']
+                recovery_state['posts'] += 1
+                losses = (3 if scenario == 'recovery-limit' else
+                          2 if scenario in ('recovery-two', 'recovery-repair-limit') else 1)
+                generated = chain(int(index < losses), body, response)
+                mapping = {m['info']['id']: 'msg_recovery' + str(index) + m['info']['id'][4:]
+                           for m in generated[1:]}
+                for message in generated:
+                    item = message['info']
+                    item['id'] = mapping.get(item['id'], item['id'])
+                    if 'parentID' in item:
+                        item['parentID'] = mapping.get(item['parentID'], item['parentID'])
+                    for p in message['parts']:
+                        p['id'] += 'cycle' + str(index)
+                        p['messageID'] = item['id']
+                if index < losses:
+                    del generated[-2]['info']['format']
+                    generated[-1]['info'].pop('structured')
+                    generated[-1]['parts'] = generated[-1]['parts'][:1]
+                previous = copy.deepcopy(messages)
+                messages[:] = previous + generated
+                response = generated[-1]
+                if index < losses:
+                    recovery_abort.clear()
+                    recovery_state['final_history'] = copy.deepcopy(messages)
+                    messages[-1] = copy.deepcopy(messages[-1])
+                    messages[-1]['info']['time'].pop('completed')
+                    messages[-1]['info'].pop('finish')
+                    recovery_abort.wait(10)
+                    if scenario == 'recovery-drop':
+                        self.close_connection = True
+                        return
+                    if scenario == 'recovery-stop-hang':
+                        time.sleep(60)
+                    if scenario == 'recovery-interrupt':
+                        import signal
+                        os.kill(os.getppid(), getattr(signal, os.environ.get('AUDIT_FAKE_SIGNAL', 'SIGINT')))
+                        time.sleep(60)
+                    messages[:] = recovery_state['final_history']
+                raw = json.dumps(response).encode()
+                self.send_response(200); self.send_header('Content-Length', str(len(raw))); self.end_headers()
+                self.wfile.write(raw)
+                return
             scripted = scenario in ('history-text-completion', 'history-metadata',
                                    'history-metadata-idle', 'history-agent-change') or (
                 scenario and scenario.startswith('compact-') and stage != 'catalog')
@@ -235,7 +290,6 @@ class Handler(BaseHTTPRequestHandler):
                     history_script[1][0]['info']['agent'] = 'private-changed-agent'
                 if scenario == 'history-metadata-idle':
                     # Only user metadata changes after the initial root snapshot.
-                    import copy
                     initial = copy.deepcopy(history_script[0])
                     history_script[:] = [initial]
                     for tick in range(200):
@@ -297,6 +351,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not history_script:
                     history_consumed.set()
             response = messages
+        elif self.path.endswith('/abort'):
+            recovery_abort.set()
+            if scenario == 'recovery-abort-hang' and recovery_state['posts']:
+                time.sleep(60)
+            response = True
         else:
             response = True
         raw = json.dumps(response).encode()
