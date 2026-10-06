@@ -1,0 +1,44 @@
+--- a/packages/opencode/src/session/prompt.ts
++++ b/packages/opencode/src/session/prompt.ts
+@@ -552,6 +552,7 @@
+           sessionID,
+           agent: lastUser.agent,
+           model: lastUser.model,
++          format: lastUser.format,
+           auto: true,
+         })
+         continue
+@@ -715,6 +716,7 @@
+           sessionID,
+           agent: lastUser.agent,
+           model: lastUser.model,
++          format: lastUser.format,
+           auto: true,
+           overflow: !processor.message.finish,
+         })
+--- a/packages/opencode/src/session/compaction.ts
++++ b/packages/opencode/src/session/compaction.ts
+@@ -269,6 +269,7 @@
+           time: { created: Date.now() },
+           agent: userMessage.agent,
+           model: userMessage.model,
++          format: userMessage.format,
+         })
+         const text =
+           (input.overflow
+@@ -302,6 +303,7 @@
+         providerID: ProviderID.zod,
+         modelID: ModelID.zod,
+       }),
++      format: MessageV2.Format.optional(),
+       auto: z.boolean(),
+       overflow: z.boolean().optional(),
+     }),
+@@ -310,6 +312,7 @@
+         id: MessageID.ascending(),
+         role: "user",
+         model: input.model,
++        format: input.format,
+         sessionID: input.sessionID,
+         agent: input.agent,
+         time: {

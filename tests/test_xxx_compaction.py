@@ -121,6 +121,7 @@ class CompactionHTTPTests(unittest.TestCase):
     def test_one_and_multiple_compactions_in_folder_and_git(self):
         for scenario in ('compact-one', 'compact-multiple'):
             with self.subTest(scenario=scenario):
+                previous_prompts = len(self.prompts())
                 manifest, code = self.run_case(scenario)
                 self.assertEqual(code, 0, manifest)
                 self.assertTrue(manifest['accepted'])
@@ -134,6 +135,13 @@ class CompactionHTTPTests(unittest.TestCase):
                 self.assertEqual(meta['metrics']['usage']['total_tokens'], 10 + 8 * count)
                 self.assertEqual(meta['metrics']['usage']['coverage']['total_tokens'], 'complete')
                 self.assertEqual(meta['metrics']['attempts'], 1)
+                prompts = self.prompts()[previous_prompts:]
+                self.assertEqual(len(prompts), 3)
+                self.assertEqual(len({c['path'] for c in prompts}), 3)
+                events = [event['event'] for event in meta['compaction']['events']]
+                self.assertEqual(events.count('compaction_started'), count)
+                self.assertEqual(events.count('compaction_completed'), count)
+                self.assertEqual(events.count('session_continued'), count)
                 measurements = meta['input_measurements']
                 self.assertEqual(measurements['prompt']['utf8_bytes'], meta['input_bytes'])
                 self.assertTrue(measurements['text_schema_copy'])
@@ -153,6 +161,17 @@ class CompactionHTTPTests(unittest.TestCase):
             manifest, code = self.run_case(scenario)
             self.assertEqual(code, 1, manifest)
             self.assertEqual(manifest['diagnostics'][0]['details']['code'], reason)
+            if scenario == 'compact-lost-format':
+                diagnostic = manifest['diagnostics'][0]
+                self.assertEqual(diagnostic['failure_kind'], 'BACKEND_INCOMPATIBLE')
+                self.assertEqual(diagnostic['details']['phase'], 'continuation')
+                self.assertEqual(diagnostic['details']['role'], 'user')
+                self.assertEqual(diagnostic['details']['field'], 'info.format')
+                self.assertEqual(diagnostic['details']['transitions'], 1)
+                invocation = json.loads((self.run_dir / 'revisions/001/study.logs/invocation.json').read_text())
+                events = invocation['compaction']['events']
+                self.assertEqual([event['event'] for event in events[-3:]],
+                                 ['compaction_started', 'compaction_completed', 'compaction_rejected'])
             self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
             self.assertEqual(manifest['metrics']['attempts'], 2)
             self.assertEqual(manifest['metrics']['usage']['coverage']['total_tokens'], 'partial')

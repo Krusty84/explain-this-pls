@@ -470,6 +470,87 @@ class HistoryTests(unittest.TestCase):
                     messages[index]['info']['format'] = change
                 self.rejected(messages, code)
 
+    def test_missing_format_after_completed_summary_has_exact_failure(self):
+        # Reproduce the reported failure, including loss on a later compaction.
+        # Stop at the continuation: no fabricated final result is needed.
+        for count in (1, 2):
+            with self.subTest(compactions=count):
+                messages = chain(count)[:-1]
+                del messages[-1]['info']['format']
+                original = copy.deepcopy(messages)
+                history = self.history()
+                for snapshot in snapshots(messages[:-1]):
+                    history.observe(snapshot)
+                self.assertEqual(history.phase, 'continuation')
+                self.assertEqual(history.completed, count)
+                self.assertEqual(history.continuations, count - 1)
+                error = self.rejected(messages, 'COMPACTION_FORMAT_MISSING', history=history)
+                self.assertEqual(error.failure_kind, 'BACKEND_INCOMPATIBLE')
+                self.assertEqual(error.details['phase'], 'continuation')
+                self.assertEqual(error.details['role'], 'user')
+                self.assertEqual(error.details['field'], 'info.format')
+                self.assertEqual(error.details['transitions'], count)
+                self.assertEqual([e['event'] for e in history.events[-3:]],
+                                 ['compaction_started', 'compaction_completed', 'compaction_rejected'])
+                self.assertNotIn(messages[-1]['info']['id'], history.origins)
+                self.assertEqual(messages, original)
+
+    def test_service_format_is_optional_but_never_allowed_to_conflict(self):
+        # Existing supported fields can carry a native repair's contract. This
+        # checks only client acceptance, not native persistence/tool selection.
+        for count in (1, 2):
+            messages = chain(count)
+            services = [m for m in messages if m['parts'][0]['type'] == 'compaction']
+            for message in services:
+                message['info']['format'] = copy.deepcopy(body()['format'])
+            history = self.history()
+            for snapshot in snapshots(messages):
+                history.observe(snapshot)
+            history.validate_final(messages, messages[-1])
+            self.assertEqual(history.continuations, count)
+            for retry in (True, False, None, '0', 1, -1):
+                with self.subTest(compactions=count, retry=retry):
+                    changed = copy.deepcopy(messages)
+                    service = next(m for m in changed if m['info']['id'] == services[-1]['info']['id'])
+                    service['info']['format']['retryCount'] = retry
+                    self.rejected(changed, 'COMPACTION_FORMAT_CHANGED')
+
+    def test_interleaved_sessions_keep_complete_independent_contracts(self):
+        histories, sequences, originals = [], [], []
+        for number in (1, 2):
+            request = body()
+            request['format']['schema'] = {
+                'type': 'object', 'required': ['ok'], 'additionalProperties': False,
+                'properties': {'ok': {'type': 'boolean', 'enum': [True]}},
+                'description': 'Contract ' + str(number),
+                '$defs': {'nested': {'type': 'array', 'items': {'type': 'string', 'enum': ['a', 'b']}}}}
+            final = assistant()
+            session = 'ses_contract' + str(number)
+            final['info']['sessionID'] = session
+            messages = chain(2, request, final)
+            for message in messages:
+                if message['parts'][0]['type'] == 'compaction':
+                    message['info']['format'] = copy.deepcopy(request['format'])
+            histories.append(SessionHistory(session, request['messageID'], request))
+            sequences.append(snapshots(messages))
+            originals.append(copy.deepcopy(request['format']))
+        for pair in zip(*sequences):
+            for history, snapshot, expected in zip(histories, pair, originals):
+                history.observe(snapshot)
+                self.assertEqual(history.body['format'], expected)
+                for message in snapshot:
+                    if message['info']['role'] == 'user':
+                        self.assertEqual(message['info']['format'], expected)
+                        self.assertIs(type(message['info']['format']['retryCount']), int)
+        for history, sequence in zip(histories, sequences):
+            history.validate_final(sequence[-1], sequence[-1][-1])
+            self.assertEqual(history.continuations, 2)
+        # A different session's valid contract must still be rejected here.
+        changed = copy.deepcopy(sequences[0][-1])
+        changed[-2]['info']['format'] = originals[1]
+        history = SessionHistory(histories[0].session_id, 'msg_root', histories[0].body)
+        self.rejected(changed, 'COMPACTION_FORMAT_CHANGED', history=history)
+
     def test_unknown_user_foreign_session_parent_and_part_ownership(self):
         cases = [
             (2, 'info', 'sessionID', 'ses_other', 'FOREIGN_SESSION'),

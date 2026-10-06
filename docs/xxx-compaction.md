@@ -1,11 +1,171 @@
 # XXX history: metadata, streaming and checked compaction continuation
 
+## 2026-10-06: native format-retention patch, verified without XXX
+
+The starting working tree was clean at
+`1cb9d32b0d5114159bc581e4b80244284947a5d1`. The supplied observation from
+`20261006T073018Z-cc08be1b47` reports a completed summary followed by
+`BACKEND_INCOMPATIBLE / COMPACTION_FORMAT_MISSING`, with `phase=continuation`,
+`role=user`, `field=info.format`, `transitions=1`. The raw run artifacts were not
+provided; the regression below reproduces that sequence with synthetic data.
+
+The versioned [native patch](../patches/opencode-v1.2.27-compaction-format.patch)
+fixes the loss in stock **OpenCode 1.2.27**, verified through the real native
+prompt/compaction/tool path with a deterministic fake provider. XXX source and
+build mapping remain unavailable; **installed XXX is unverified and unchanged**.
+The patch does not require XXX, a paid provider, a plugin, or a Python validation
+change. It is independent of the older ignored structured-output-validation patch.
+
+### Cause and repair point
+
+At stock OpenCode v1.2.27, commit
+`4ee426ba549131c4903a71dfb6259200467aca81`,
+[compaction creation and processing](https://github.com/anomalyco/opencode/blob/4ee426ba549131c4903a71dfb6259200467aca81/packages/opencode/src/session/compaction.ts)
+omit the request format on both the service user and ordinary continuation.
+`process()` selects the service user by its parent ID; copying its format only
+at continuation creation would therefore copy an already missing value.
+
+The pinned [native prompt loop](https://github.com/anomalyco/opencode/blob/4ee426ba549131c4903a71dfb6259200467aca81/packages/opencode/src/session/prompt.ts)
+has two automatic creation sites: the threshold check before normal processing
+and the `result === "compact"` branch after processing. Both need the active
+request's contract before `SessionCompaction.create()` replaces the latest user.
+The latter sets `overflow` from the absence of a finish reason; the former omits
+that field. This client still requires explicit `overflow=false`. Do not relabel
+overflow or broaden the profile to make a test pass.
+
+The patch adds five lines across the two native files:
+
+1. `prompt.ts`: both automatic call sites pass the active `lastUser.format`
+   before the service message becomes the latest user.
+2. `compaction.ts`: typed creation input accepts the existing format type and
+   saves it on the service user's existing `format` field. Continuation creation
+   includes that format in its **first save**, with fresh native IDs/timestamps.
+   Subsequent compactions carry the retained contract in the same way.
+
+The complete schema and `retryCount: 0` survive. Existing agent/model/permission
+and other settings are untouched. Summary processing still uses empty tools and
+its normal prompt. Normal stage processing then creates the native tool/callback
+and structured instructions with required tool choice. No extension hook, history
+search, summary parsing, GET rewriting or second competing prompt is used.
+
+### Native regression and client acceptance
+
+`tests/native/compaction-format.test.ts` is loaded into the actual pinned native
+package. Only `Provider.getLanguage()` is replaced by a fake LanguageModelV2;
+observation wrappers around `LLM.stream()` and `Session.updateMessage()` call
+their original implementations unchanged. Native prompt processing, compaction,
+permission filtering, read tools, SDK streaming/schema validation, persistence,
+StructuredOutput execution and result capture all run. No HTTP fixture fabricates
+`info.structured` in this test.
+
+- The unpatched control observes format loss and absent native tool at the
+  provider boundary after automatic, explicitly non-overflow compaction.
+- Patched cases complete zero, one and two processor-triggered compactions with
+  real native read calls before and after continuation, then the real native
+  StructuredOutput callback. They check original format before transformation,
+  effective tool schema (including normal removal of `$schema`), instructions,
+  required tool choice, first-save format, new identities and final integrity.
+- The pre-loop threshold branch is exercised before a second processor-triggered
+  compaction. Its original omitted overflow flag remains omitted; it is tested
+  natively, not promoted into the client's explicit `overflow=false` profile.
+- Two distinct schemas run in separate sessions in one native instance. Explicit
+  text format and omitted format remain text after two compactions. Summaries
+  contain ordinary text, no structured tool, and no accepted stage result.
+
+`tests/native/validate_compaction.py` feeds the resulting **unaltered native
+histories** to production `SessionHistory`, `extract_result()` and local schema
+validation. Both baseline sessions fail with the exact reported diagnostic;
+all six supported structured cases (two schemas times zero/one/two compactions)
+pass, including final-envelope/history equality and tool-input/result equality.
+Text and omitted-overflow histories are explicitly outside this client check.
+
+Production validation, including `_format()` and the previous timestamp fix,
+remains unchanged. Additional existing client regression coverage was strengthened:
+
+- History regression now observes a completed summary before rejecting missing
+  continuation format, after either the first or second compaction. It checks
+  the exact diagnostic, event order, denied membership and unchanged input.
+- Existing service fields can carry the expected format through one or two
+  synthetic transitions; conflicting retry values still fail. Interleaved
+  sessions with distinct nested schemas retain independent client contracts,
+  and a continuation carrying the other session's schema is rejected.
+- The existing HTTP negative case retains its rejection and now checks the exact
+  diagnostic/event sequence. The one/two-compaction HTTP cases also check one
+  prompt POST per stage session and one continuation per completed summary.
+  Existing cases cover native-envelope integrity, local report validation,
+  foreign identities, incomplete results, deadlines, cleanup and accounting.
+
+The Python HTTP fixtures remain synthetic; native evidence comes from the
+separate TypeScript test above. Neither proves which source installed XXX uses.
+
+Verification on 2026-10-06:
+
+| Check | Result |
+| --- | --- |
+| Native unpatched control | 1 test passed, exercising 2 independent sessions with the original defect |
+| Native patched regression | 6 tests passed, including both creation paths, two compactions, two contracts and both text modes |
+| Native histories through Python validation | 2 expected baseline rejections; 6 accepted final results |
+| Existing native compaction/structured-output tests | 47 tests passed |
+| Native package type checking, including the new test | `bun run typecheck` passed |
+| Existing Python XXX suite | 71 tests in 74.912 s: 70 passed, 1 installed-XXX smoke skipped |
+| Installed XXX smoke | Skipped; no XXX executable or paid provider used |
+| Whitespace validation | `git diff --check` passed |
+
+Native tests used Bun 1.3.10, WSL AlmaLinux 9 and Python 3.11.13. Baseline/patched
+mode skips are deliberate: each mode runs only its own assertions. Tests ran with
+external networking disabled and loopback enabled. Root was used only for the
+existing namespace harness and client ownership checks.
+
+### Reproduce and apply
+
+Use a disposable checkout/archive of commit
+`4ee426ba549131c4903a71dfb6259200467aca81` and a local Bun 1.3.10 executable.
+`scripts/test-native-compaction.py` checks the pristine native source hashes and
+version, installs the test temporarily, runs the baseline, applies the patch,
+runs native/client validation and type checking, and restores the source files
+and removes the injected test in `finally`. No global configuration is modified.
+
+Dependency preparation needs network access once. The pinned full-workspace
+frozen install fails and resolves an unreachable unrelated web dependency.
+`--install` narrows only the temporary root workspace manifest to the runtime's
+dependency closure, keeps the native package versions/catalog and upstream lock
+as resolution inputs, disables lifecycle scripts, then restores the root manifest.
+Bun updates the disposable lockfile; no dependency change is part of the patch.
+After that, run verification offline from this repository:
+
+```sh
+python3.11 scripts/test-native-compaction.py /path/to/disposable/opencode \
+  --bun /path/to/bun --install
+bash .github/ci/offline-tests.sh python3.11 scripts/test-native-compaction.py \
+  /path/to/disposable/opencode --bun /path/to/bun
+```
+
+To apply the repair permanently in a matching runtime source checkout, run
+`git apply --check /path/to/opencode-v1.2.27-compaction-format.patch`, then
+`git apply /path/to/opencode-v1.2.27-compaction-format.patch` and build that runtime
+normally. The verifier itself intentionally restores its disposable sources.
+This repository's Python adapter does not automatically patch an installed CLI.
+
+Existing client verification:
+
+```sh
+EXPLAIN_XXX_COMPACTION_SMOKE=0 bash .github/ci/offline-tests.sh \
+  python3.11 -B -m unittest discover -s tests -p 'test_xxx*.py' -v
+```
+
+The reference native repair is verified. Applying it to XXX still requires its
+source/build mapping; installed XXX remains unverified. Manual compaction and
+overflow/replay support are outside this change.
+
+The sections below describe earlier client repairs and their historical results.
+
 The production client accepts ordinary user metadata updates, reference stream
 finalization and the format-preserving automatic continuation profile below.
 These are client guarantees verified offline, **not proof of full compatibility
-with real XXX**. XXX, its proprietary source, account and provider are unavailable
-by task definition. No executable discovery, installation, live CLI/version check,
-real smoke or model request was performed for this fix.
+with real XXX**. For those earlier client repairs, XXX, its proprietary source,
+account and provider were unavailable by task definition. No executable discovery,
+installation, live CLI/version check, real smoke or model request was performed
+for those repairs.
 
 The former unconditional `COMPACTION_FORMAT_RETENTION_UNVERIFIED` rejection has
 been replaced by runtime validation of the received sequence. The production
