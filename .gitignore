@@ -26,3 +26,6 @@ config.jsonc
 docs/*
 !docs/xxx-compaction.md
 config.jsonc_codex
+config.jsonc_opencode
+explain.config
+.venv/

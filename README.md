@@ -46,7 +46,13 @@ Download this package, or clone it outside the source directory you want to insp
 ```sh
 git clone https://github.com/Krusty84/explain-this-pls.git
 cd explain-this-pls
+python3 install-explain.py
+source .venv/bin/activate
 ```
+
+The installer creates or reuses `.venv` beside `explain.py` and installs
+`requirements.txt` into it. Run it again after updating the package. It also prints
+a command to launch the app without activating the environment.
 
 Choose how to provide your source code:
 
@@ -71,7 +77,8 @@ original source, including ignored files, do not change that copy.
 
 ### Configuration
 
-Copy the example for your agent to `config.jsonc`:
+Copy the example for your agent to `config.jsonc`, or use a project-specific name
+such as `config_prj1.jsonc` or `config_superErp.jsonc`:
 
 - [Codex CLI](config.example.jsonc)
 - [Claude Code](config.claude-code.example.jsonc)
@@ -143,7 +150,7 @@ and, when enabled, a review without requiring Git; `git_mode` settings are ignor
 
 | Field              | Purpose                                                                                 |
 | ------------------ | --------------------------------------------------------------------------------------- |
-| `agent.backend`    | Coding agent: `codex`, `claude-code`, `opencode` (V2), or `xxx` (OpenCode 1.2.27).       |
+| `agent.backend`    | Coding agent: `codex`, `claude-code`, `opencode` (V2), or `xxx` (OpenCode 1.2.27).      |
 | `agent.executable` | CLI command or path; defaults to `codex`, `claude`, `opencode`, or `xxx`, respectively. |
 | `agent.model`      | Optional model name; omit it or use `null` for the CLI's configured model.              |
 
@@ -198,7 +205,44 @@ Store custom templates outside the source directory. See the
 
 ### Run explain-this-pls
 
-First, check your configuration, source files, and CLI setup:
+To use the interactive interface, run without arguments:
+
+```sh
+python3 explain.py
+```
+
+On first launch, select the folder containing your configurations. The app saves
+its absolute path in `explain.config` beside `explain.py`; that local settings file
+is excluded from Git. This installation directory must be writable to save the
+preference. Use **Change folder** to select another location later, or **Refresh**
+after editing or adding configs. The picker lists JSON/JSONC files directly inside
+the selected folder and excludes example configs and subfolders.
+
+Select a config to see its source, branches, agents, review setting and report
+destination. **Check setup** checks the local prerequisites; **Run** starts the
+analysis. Selecting a file alone does not call a model. Invalid configs display
+their validation error and cannot start.
+
+The **Steps** table retains completed stages and revisions while showing the
+active step, elapsed time, attempts, tokens and agent-estimated cost. Select a row
+for agent/model details, diagnostics and complete report paths. Scroll horizontally
+to see additional columns on narrow terminals. The **Final result** table stays
+open after completion, with the outcome, totals and paths. Use **Configs** to
+return to configuration selection. Reports remain in their existing Markdown/JSON
+formats; the TUI shows summaries and paths.
+
+Use **Cancel** or Ctrl+C to stop a run and wait for cleanup. **Quit** also waits
+for cleanup when analysis is active. Use Tab, arrow keys and Enter for keyboard
+navigation. No-argument launches and `--tui` require an interactive terminal.
+
+To open a particular config without changing the saved folder:
+
+```sh
+python3 explain.py --tui --config config_prj1.jsonc
+```
+
+Existing command-line usage remains available. First, check your configuration,
+source files, and CLI setup:
 
 ```sh
 python3 explain.py --config config.jsonc --check
@@ -219,6 +263,10 @@ summary shows the outcome and paths to the results.
 
 Use `--no-progress` to hide the spinner and waiting messages, `--output json` for a
 script-friendly summary, or `python3 explain.py --help` to see all options.
+In the TUI, `--no-progress` disables elapsed-time refresh while keeping stage
+updates, and `--verbose` adds diagnostic detail. `--tui --check` limits actions to
+setup checks; `--trust-repository` retains its existing meaning. Explicit
+`--output text` and `--output json` cannot be combined with `--tui`.
 
 ### Read the results
 

@@ -51,6 +51,8 @@ def action(stage):
         # Keep the invocation alive until the parent stops its process group.
         time.sleep(3)
     elif kind in ('wait', 'active', 'closed-pipes'):
+        if spec.get('process_marker'):
+            Path(spec['process_marker']).write_text(json.dumps({'pid': os.getpid(), 'cwd': os.getcwd()}))
         if kind == 'active':
             print('private CLI activity', file=sys.stderr, flush=True)
         if kind == 'closed-pipes':

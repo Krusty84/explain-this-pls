@@ -583,6 +583,24 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         return subprocess.run(command + args, cwd=self.base, env=self.env, stdout=stdout,
                               stderr=subprocess.PIPE, text=True, timeout=30)
 
+    def run_stdout_tty(self, args):
+        master, slave = pty.openpty()
+        chunks, stop = [], threading.Event()
+        def drain():
+            while not stop.is_set() or select.select([master], [], [], 0)[0]:
+                if select.select([master], [], [], .05)[0]:
+                    chunks.append(os.read(master, 65536))
+        reader = threading.Thread(target=drain)
+        reader.start()
+        try:
+            result = self.run_cli(args, stdout=slave)
+        finally:
+            stop.set()
+            reader.join(timeout=2)
+            os.close(master)
+            os.close(slave)
+        return result, b''.join(chunks).decode()
+
     def test_single_branch_git_check_and_analysis(self):
         self.git('branch', '-D', 'test01', 'dev_01_customerA')
         self.assertEqual(self.git('branch', '--format=%(refname:short)').strip(), 'master')
@@ -726,15 +744,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
             for tty in (False, True):
                 with self.subTest(mode=mode, tty=tty):
                     if tty:
-                        master, slave = pty.openpty()
-                        try:
-                            result = self.run_cli(args + ['--output', mode], stdout=slave)
-                            self.assertTrue(select.select([master], [], [], 2)[0])
-                            output = os.read(master, 65536).decode()
-                        finally:
-                            os.close(master)
-                            if slave is not None:
-                                os.close(slave)
+                        result, output = self.run_stdout_tty(args + ['--output', mode])
                     else:
                         result = self.run_cli(args + ['--output', mode])
                         output = result.stdout
@@ -791,14 +801,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.env.pop('NO_COLOR', None)
         for mode in ('text', 'json'):
             with self.subTest(mode=mode):
-                master, slave = pty.openpty()
-                try:
-                    result = self.run_cli(args + ['--output', mode], stdout=slave)
-                    self.assertTrue(select.select([master], [], [], 2)[0])
-                    output = os.read(master, 65536).decode()
-                finally:
-                    os.close(master)
-                    os.close(slave)
+                result, output = self.run_stdout_tty(args + ['--output', mode])
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn('\x1b', result.stderr)
                 if mode == 'text':

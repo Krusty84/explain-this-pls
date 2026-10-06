@@ -6,7 +6,7 @@
 
 macOS or Linux, Python 3.11+, and one or more authenticated coding-agent CLIs.
 Git >= 2.34.1 is required only for git mode; folder mode needs no Git.
-No third-party Python packages or worktree switches. Git inputs use source copies.
+Textual provides the interactive interface. Git inputs use source copies without worktree switches.
 The parent publishes reports. The agent receives stdin and returns structured JSON.
 """
 from __future__ import annotations
@@ -2081,22 +2081,43 @@ class Runner:
         persist()
         return manifest, code
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, epilog=
-        'After argument parsing, stdout contains one result. --help and argument syntax errors '
+        'In command-line mode, stdout contains one result. --help and argument syntax errors '
         'use standard argparse output without a run or manifest. Console messages are in English; '
         'output_language only controls generated reports. Labels and statuses are colored automatically '
         'when their output stream is a terminal, unless NO_COLOR is nonempty or TERM=dumb. '
         'JSON is never colored. Disable color with NO_COLOR=1.')
-    parser.add_argument('--config', required=True, type=Path, help='Path to a JSON or JSONC configuration.')
+    parser.add_argument('--config', type=Path, help='Path to a JSON or JSONC configuration; required outside the TUI.')
+    parser.add_argument('--tui', action='store_true', help='Open the interactive config picker and run dashboard (also the default without arguments).')
     parser.add_argument('--check', action='store_true', help='Check configuration, source state, and CLI capabilities; no branch switch or model calls.')
     parser.add_argument('--trust-repository', action='store_true', help='Trust only the configured Git checkout and verified submodules despite an ownership mismatch (Git >= 2.34.1).')
     parser.add_argument('--output', choices=('auto', 'text', 'json'), default='auto',
                         help='Result format on stdout: text is human-readable; auto selects text for a TTY, JSON otherwise (default: auto). Diagnostics use stderr.')
     parser.add_argument('--verbose', action='store_true', help='Add technical event details to stderr; never print prompts, credentials or raw model output.')
     parser.add_argument('--no-progress', action='store_true', help='Disable the spinner and periodic waiting messages; keep stage boundaries, warnings and errors.')
-    args = parser.parse_args()
+    argv = sys.argv[1:] if argv is None else argv
+    args = parser.parse_args(argv)
+    if not argv or args.tui:
+        if args.output != 'auto':
+            parser.error('--tui cannot be combined with --output text or --output json.')
+        if not sys.stdin.isatty() or not sys.stdout.isatty() or os.environ.get('TERM') == 'dumb':
+            parser.error('The TUI needs an interactive terminal. Use --config FILE for command-line output.')
+        try:
+            from src.tui.app import launch
+        except ModuleNotFoundError as exc:
+            if exc.name not in ('textual', 'rich'):
+                raise
+            parser.error('Install the required TUI dependency with: python3 -m pip install -r ' + str(ROOT / 'requirements.txt'))
+        return launch(args)
+    if args.config is None:
+        parser.error('--config is required unless using --tui.')
     reporter = Reporter(mode=output_mode(args.output, sys.stdout), verbose=args.verbose, progress=not args.no_progress)
+    return run_audit(args, reporter)
+
+
+def run_audit(args, reporter) -> int:
+    """Run one audit with the same lifecycle for CLI and interactive callers."""
     run_id = run_dir = runner = None
     run_created = False
     manifest, code = {}, 1

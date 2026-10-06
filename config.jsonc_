@@ -1,0 +1,91 @@
+{
+  // Default: retain useful text with caveats; use "strict" to reject contract violations. Policy success is not factual proof.
+  "result_policy": "compromise",
+  // Briefly describe the system's purpose and history. Empty/missing means a warning.
+  "project_description": "Some Teamcenter PLM system utility",
+
+  // Choose "git" or "folder". Only the selected section is used.
+  "mode": "folder",
+
+  // A clean standalone checkout and one or more existing local branches.
+  // For one branch, use ["master"] and baseline_branch: "master"; compare is skipped.
+  "git_mode": {
+    "repository": "../TCPulse",
+    "branches": ["master"],
+    "baseline_branch": "master",
+  },
+
+  // An existing directory; Git is not required. Runs study and review only.
+  "folder_mode": {
+    "path": "../TCPulse",
+  },
+
+  // All relative paths are relative to this configuration file; ~ is supported.
+  // Keep reports and this package outside the inspected source directory.
+  "reports_dir": "../architecture-reports/legacy-app",
+  "output_language": "English",
+
+  // One monotonic budget per stage. null disables the optional idle deadline.
+  // Native retries apply only to OpenCode (see docs/structured-output-protocol.md).
+  "execution": {
+    "stage_timeout_seconds": 3600,
+    "idle_timeout_seconds": null,
+    "opencode_format_retries": 2,
+    "http_timeout_seconds": 5,
+    "api_doc_timeout_seconds": 30,
+    // Explicit opt-in: XXX/OpenCode may send one extra format correction request.
+    // Other backends ignore this setting. The default for omitted settings is 0.
+    "structured_output_repair_attempts": 1,
+  },
+
+  // Shared CLI settings. Authenticate/configure the CLI before starting the runner.
+  "agent": {
+    // Supported backends: "codex", "claude-code", "opencode", "xxx".
+    "backend": "codex",
+    // Command on PATH or executable path. Defaults: codex / claude / opencode / xxx.
+    "executable": "codex",
+    // null uses the model selected by the configured CLI.
+    "model": null,
+    // null disables version pinning; otherwise use the exact --version output.
+    "expected_version": null,
+  },
+
+  // Uncomment only the fields you want to override; omitted fields inherit agent.
+  // When changing backend, also override executable and any inherited model/version.
+  // model: null selects the CLI's model; expected_version: null clears version pinning.
+  "stage_agents": {
+    "study": {
+      // "backend": "codex",
+      // "executable": "codex",
+      // "model": null,
+      // "expected_version": null,
+    },
+    "review": {
+      // "backend": "codex",
+      // "executable": "codex",
+      // "model": null,
+      // "expected_version": null,
+    },
+    // Used only in git mode with two or more selected branches.
+    "compare": {
+      // "backend": "codex",
+      // "executable": "codex",
+      // "model": null,
+      // "expected_version": null,
+    },
+  },
+
+  // Business flows or areas to prioritize, e.g. ["Order creation", "Inventory updates"].
+  "priority_scenarios": [],
+  // Git only: continue with other branches after an operational failure.
+  // Source integrity failures always stop; folder mode stops on any stage failure.
+  "continue_on_error": true,
+
+  // Omitted entries use bundled prompts, even if this config is moved elsewhere.
+  // Custom prompts must be outside the source directory and match the output schema.
+  "prompts": {
+    // "study": "./custom-prompts/study.md",
+    // "review": "./custom-prompts/review.md",
+    // "compare": "./custom-prompts/compare.md", // Git mode with two or more branches only.
+  },
+}

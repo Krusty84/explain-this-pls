@@ -210,8 +210,9 @@ class NullReporter:
 
 class Reporter(NullReporter):
     def __init__(self, *, mode='text', verbose=False, progress=True, stdout=None, stderr=None,
-                 clock=time.monotonic, progress_interval=30.0):
+                 clock=time.monotonic, progress_interval=30.0, event_sink=None):
         self.mode, self.verbose, self.progress = mode, verbose, progress
+        self.event_sink = event_sink
         self.stdout = sys.stdout if stdout is None else stdout
         self.stderr = sys.stderr if stderr is None else stderr
         self.colors = {}
@@ -500,6 +501,8 @@ class Reporter(NullReporter):
         item = Event(event, level, dt.datetime.now(dt.timezone.utc).isoformat(), self.run_id,
                      self.clean(context), exception)
         self.log(item)
+        if self.event_sink is not None:
+            self.event_sink(item)
         if ((event == 'run_started' or event == 'stage_started' and context.get('stage') in STAGE_MESSAGES)
                 and self.progress and not self._closed and not self.finished and not self.stopping
                 and id(self.stderr) not in self.failed_streams):
