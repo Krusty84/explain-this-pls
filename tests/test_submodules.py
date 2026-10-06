@@ -88,7 +88,7 @@ class RecursiveFixture:
         self.config_path = self.base / 'config.jsonc'
         self.config = {'mode': 'git', 'git_mode': {'repository': str(self.path), 'branches': ['master', 'topic'],
             'baseline_branch': 'master'}, 'reports_dir': str(self.base / 'reports'),
-            'project_description': 'Recursive fixture',
+            'project_description': 'Recursive fixture', 'execution': {'review_enabled': True},
             'agent': {'backend': 'codex', 'executable': str(self.cli)}, 'continue_on_error': False}
         self.env = {'PATH': os.environ.get('PATH', os.defpath), 'HOME': str(self.home),
             'PYTHONIOENCODING': 'utf-8', 'AUDIT_TEST_CALL_LOG': str(self.calls),

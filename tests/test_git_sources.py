@@ -222,7 +222,7 @@ class GitSourceTests(unittest.TestCase):
         config = {'mode': 'git', 'result_policy': policy,
                   'git_mode': {'repository': str(self.path), 'branches': list(branches), 'baseline_branch': branches[0]},
                   'reports_dir': str(self.base / 'reports'), 'agent': {'backend': backend, 'executable': str(cli)},
-                  'execution': {'stage_timeout_seconds': 1 if action == 'wait' else 30}, 'continue_on_error': False}
+                  'execution': {'review_enabled': True, 'stage_timeout_seconds': 1 if action == 'wait' else 30}, 'continue_on_error': False}
         config_path = self.base / 'config.json'
         config_path.write_text(json.dumps(config))
         env = {'PATH': os.environ['PATH'], 'HOME': str(self.home), 'AUDIT_TEST_CALL_LOG': str(calls),

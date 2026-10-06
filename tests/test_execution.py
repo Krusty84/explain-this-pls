@@ -23,6 +23,7 @@ import test_explain as fixtures
 class ExecutionTests(unittest.TestCase):
     def test_defaults_and_invalid_values(self):
         self.assertEqual(execution_settings(), {'stage_timeout_seconds': 3600,
+            'review_enabled': False,
             'idle_timeout_seconds': None, 'max_revision_rounds': 1, 'opencode_format_retries': 2,
             'structured_output_repair_attempts': 0, 'http_timeout_seconds': 5, 'api_doc_timeout_seconds': 30})
         for key in ('stage_timeout_seconds', 'idle_timeout_seconds', 'http_timeout_seconds', 'api_doc_timeout_seconds'):

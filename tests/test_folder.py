@@ -72,6 +72,8 @@ class FolderFixture(unittest.TestCase):
     def config(self):
         # Existing fixtures exercise the retained strict publication contract.
         self.value.setdefault('result_policy', 'strict')
+        # Existing scenarios exercise the opt-in reviewed workflow.
+        self.value.setdefault('execution', {}).setdefault('review_enabled', True)
         self.config_path.write_text(json.dumps(self.value))
         return load_config(self.config_path)
 
@@ -165,7 +167,7 @@ class ModeConfigTests(FolderFixture):
                 self.value['mode'] = 'folder'
                 self.value['folder_mode']['path'] = str(self.source)
                 with patch('explain.shutil.which', return_value=sys.executable):
-                    self.assertEqual(set(self.config()['_agents']), {'catalog', 'study', 'review'})
+                    self.assertEqual(set(self.config()['_agents']), {'catalog', 'study'})
 
 
 class FolderInventoryTests(FolderFixture):
@@ -342,6 +344,7 @@ class FolderPipelineTests(FolderFixture):
 class FolderCLIIntegrationTests(FolderFixture):
     def setUp(self):
         super().setUp()
+        self.value['execution'] = {'review_enabled': True}
         home = self.base / 'home'; home.mkdir()
         (home / 'audit-profile.json').write_text(json.dumps({'model': 'configured-model'}))
         self.cli = self.base / 'cli'
@@ -364,6 +367,30 @@ class FolderCLIIntegrationTests(FolderFixture):
         if check:
             cmd.append('--check')
         return subprocess.run(cmd, cwd=self.base, env=self.env, capture_output=True, text=True, timeout=30)
+
+    def test_default_without_review_in_cli_json_for_all_backends(self):
+        self.value.pop('execution')
+        self.value['stage_agents']['review'] = {'backend': 'missing', 'executable': '/missing/review-cli'}
+        self.value['prompts'].update(review='/missing/review-prompt', revise='/missing/revise-prompt')
+        for backend in ('codex', 'claude-code', 'opencode'):
+            self.value['agent']['backend'] = backend
+            self.env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
+            for check in (True, False):
+                with self.subTest(backend=backend, check=check):
+                    self.calls.write_text('')
+                    result = self.execute(check)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    output = json.loads(result.stdout)
+                    self.assertFalse(output['review_enabled'])
+                    self.assertEqual(output['workflow_satisfied'], not check)
+                    calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+                    stages = [c['context']['stage'] for c in calls if 'context' in c]
+                    self.assertEqual(stages, [] if check else ['catalog', 'study'])
+                    if not check:
+                        manifest = json.loads(Path(output['manifest']).read_text())
+                        self.assertFalse(manifest['accepted'])
+                        self.assertTrue(manifest['workflow_satisfied'])
+                        self.assertIn('Review disabled by configuration', result.stderr)
 
     def test_all_backends_check_and_run_without_git(self):
         before = Folder(self.source).snapshot()

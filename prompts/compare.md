@@ -15,10 +15,13 @@ context as evidence beyond the supplied comparison bundle.
 
 ## Inputs and authority
 
-Each branch's accepted flag and the bundle's required_unresolved_branches are
-computed by the orchestrator from validated study AND review results. Preserve
+The bundle's review_enabled determines the required stages (absent means true for
+older inputs). Each branch's workflow_satisfied and required_unresolved_branches
+are computed by the orchestrator from validated published studies, plus review
+when enabled. accepted always means a positively reviewed study; it remains false
+when review is disabled. Preserve
 every branch in required_unresolved_branches in your unresolved_branches,
-including an unaccepted baseline. You cannot override acceptance, omit a failed
+including an unresolved baseline. You cannot override processing checks, omit a failed
 review because a study exists, or narrow the requested branch list. You may add
 other unresolved branches and explain additional limitations. Keep Markdown and
 completion_status consistent with these required unresolved inputs.
@@ -26,11 +29,22 @@ completion_status consistent with these required unresolved inputs.
 In compromise mode, study_material/review_material may contain retained text
 that failed its output contract. Treat it as unvalidated source material with
 explicit caveats; validation_issues are orchestrator diagnostics. The original
-study/review fields contain only strictly validated results. A missing review or
-an unaccepted branch does not prevent a useful PARTIAL comparison. For any pair
+study/review fields contain only strictly validated results. When review is enabled,
+a missing review or an unaccepted branch does not prevent a useful PARTIAL comparison. For any pair
 whose baseline or compared branch is not accepted, use only REPORTED_UNVERIFIED
 or INSUFFICIENT_EVIDENCE, never CONFIRMED_DIFFERENCE. Retain every requested
 branch and explain missing inputs. Never repair facts or infer absence from gaps.
+
+When review_enabled is false, absence of review is intentional and does not by
+itself make a branch unresolved or the comparison PARTIAL. Explicitly disclose
+that no separate review was performed. Use REPORTED_UNVERIFIED for reported
+differences, never CONFIRMED_DIFFERENCE. A COMPLETE comparison in this mode still
+requires all requested studies to satisfy workflow checks and every reported
+difference to cite a FACT with resolved source evidence in each side's selected
+study. Reference artifact "study" only. If a side lacks factual support, mark the
+affected branches unresolved and return PARTIAL/BLOCKED. INSUFFICIENT_EVIDENCE
+cannot satisfy processing policy. Hypotheses and missing descriptions cannot
+establish a factual contrast. Successful processing does not verify a difference.
 
 The bundle contains requested branch names, base commit IDs, source_snapshot
 identities, independently created studies/reviews and processing status. Deltas
@@ -104,14 +118,14 @@ missing/failed/inadequate input; include the baseline if its missing evidence af
 all comparisons. COMPLETE means all requested comparisons are adequately supported
 within the reports-only scope. PARTIAL means useful comparisons exist but required
 input/coverage is missing. BLOCKED means no meaningful baseline comparison is possible.
-Do not report COMPLETE when any required branch lacks a complete accepted document
-and review. Review PASS is necessary but not sufficient to confirm an individual
+Do not report COMPLETE when any required branch fails its enabled-stage checks.
+When review is enabled, Review PASS is necessary but not sufficient to confirm an individual
 contrast. Include concrete limitations for PARTIAL/BLOCKED.
 
 Structured evidence_refs must resolve on both sides: branch, artifact ("study"
 or "review"), revision_id, claim_id and review_target_id supplied for that branch's
 selected revision. Two references to one side do not justify a strong contrast.
-Each side needs a referenced FACT assessed as SUPPORTED in its review. An accepted
+For CONFIRMED_DIFFERENCE, each side needs a referenced FACT assessed as SUPPORTED in its review. An accepted
 hypothesis/unknown caveat is not factual support for a strong implementation contrast.
 Recovered and incomplete inputs cannot support CONFIRMED_DIFFERENCE.
 Empty evidence_refs are allowed for explicitly insufficient/unverified material.

@@ -128,7 +128,7 @@ class StartupCLIIntegrationTests(unittest.TestCase):
         value = {'mode': mode, 'git_mode': {'repository': str(self.alias),
                  'branches': ['master', 'test01'], 'baseline_branch': 'master'},
                  'folder_mode': {'path': str(self.folder)}, 'reports_dir': str(self.reports),
-                 'project_description': 'Offline integration fixture',
+                 'project_description': 'Offline integration fixture', 'execution': {'review_enabled': True},
                  'agent': {'backend': 'codex', 'executable': str(self.cli),
                            'expected_version': 'fixture-cli 1.0'}}
         self.config_path.write_text('// Read this configuration through the entry point.\n' + json.dumps(value))

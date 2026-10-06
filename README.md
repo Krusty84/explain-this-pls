@@ -4,8 +4,9 @@
 
 Analyzes legacy code and explains how the damn thing actually works.
 
-explain-this-pls uses your coding agent to document an existing codebase, then
-reviews the documented claims against the code in a separate session. Analyze a
+explain-this-pls uses your coding agent to document an existing codebase, with an
+optional separate review of documented claims against the code. Review is disabled
+by default. Analyze a
 folder, study a Git branch, or compare several branches. Agents are instructed to
 read the code without running the project's builds or tests.
 
@@ -14,9 +15,9 @@ read the code without running the project's builds or tests.
 - **Architecture reports** explaining the system's main parts and workflows,
   with references to the source code.
 - **PlantUML diagrams** of components and data flows, embedded as source in the reports.
-- **Report review** identifying unsupported claims, contradictions and missing information.
+- **Optional report review** identifying unsupported claims, contradictions and missing information.
 - **Subsystem coverage** showing which areas the agent reports inspecting and where gaps remain.
-- **Report revision** allowing one correction round and a new review while retaining earlier versions.
+- **Report revision**, when review is enabled, allowing one correction round and a new review while retaining earlier versions.
 - **Branch comparison** showing differences from a branch you choose as a baseline.
 - **Folder analysis** for source code that does not need to be in Git.
 - **Shareable results** in Markdown and JSON, in your preferred language.
@@ -124,7 +125,7 @@ For folder analysis, replace the source settings with:
 ```
 
 Keep the report and agent settings. Folder mode creates the architecture report
-and review without requiring Git; `git_mode` settings are ignored.
+and, when enabled, a review without requiring Git; `git_mode` settings are ignored.
 
 #### Main settings
 
@@ -151,10 +152,30 @@ in this configuration.
 
 #### Optional settings
 
+**Review is opt-in.** In any existing JSON or JSONC configuration, enable it with:
+
+```json
+{
+  "execution": {
+    "review_enabled": true,
+    "max_revision_rounds": 1
+  }
+}
+```
+
+Set `execution.review_enabled` to `false` or omit it to run `catalog → study`,
+followed by comparison when several Git branches are selected. Without review,
+no revision round runs and review-agent settings and review/revision prompts are
+inactive. A successful run can be `COMPLETE`, with an explicit notice that no
+separate review was performed. Comparison remains available; differences are
+reported as unverified and need factual references from both selected studies.
+Existing configurations without this setting now skip review; add `true` to
+retain the previous workflow. No CLI flag is needed.
+
 The [commented configuration](config.example.jsonc) describes additional options:
 
-- **Execution limits:** each stage has a one-hour limit by default. One correction
-  round and repeat review are allowed after substantive review findings. Adjust
+- **Execution limits:** each stage has a one-hour limit by default. With review
+  enabled, one correction round and repeat review are allowed after substantive review findings. Adjust
   `execution.stage_timeout_seconds` or `execution.max_revision_rounds` as needed.
   Revisions and optional response-format retries can increase model usage.
 - **Different agents per stage:** use `stage_agents` to customize cataloging,
@@ -287,7 +308,7 @@ By default, useful partial results are kept even if a stage fails
 in the final report. If a revision is produced, the results identify the selected
 version and retain earlier material.
 
-- **COMPLETE:** processing and review checks passed.
+- **COMPLETE:** checks for all enabled stages passed, review is required only when enabled.
 - **PARTIAL:** useful material is available, with unresolved issues or missing coverage.
 - **FAILED:** no usable study was produced, or a critical error prevented completion.
 

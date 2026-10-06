@@ -134,6 +134,7 @@ class RepoFixture(unittest.TestCase):
         agent={'backend':'codex','executable':str(Path(sys.executable).resolve()),
                'model':None}
         return {'result_policy':'strict', 'mode':'git', 'reports_dir':str(reports),
+            'execution': {'review_enabled': True},
             'git_mode':{'repository':str(self.repo_path),
                 'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master'},
             'output_language':'Russian','project_description':'ERP-система 1995 года.',
@@ -356,7 +357,7 @@ class ConfigTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.base=Path(self.tmp.name).resolve()
         self.path=self.base/'config.json'
-        self.value={'mode':'git','reports_dir':'reports',
+        self.value={'mode':'git','reports_dir':'reports', 'execution': {'review_enabled': True},
             'git_mode':{'repository':'repo','branches':['master','test01'],'baseline_branch':'master'},
             'agent':{'backend':'codex','executable':sys.executable}}
     def load(self):
@@ -435,7 +436,7 @@ class ConfigTests(unittest.TestCase):
                  patch('explain.shutil.which',return_value=sys.executable):
                 cfg=load_config(path)
                 self.assertTrue(cfg['project_description'])
-                self.assertIsNone(cfg['_agents']['study']['model'])
+                self.assertEqual(cfg['_agents']['study']['model'], cfg['agent'].get('model'))
 
 class AdapterCommandTests(unittest.TestCase):
     setUp=RepoFixture.setUp
@@ -539,7 +540,7 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
             for check_only in (True,False):
                 with self.subTest(backend=backend,check_only=check_only):
                     calls_path.write_text('')
-                    cfg={'mode':'git','reports_dir':str(self.base/'reports'),
+                    cfg={'mode':'git','reports_dir':str(self.base/'reports'), 'execution': {'review_enabled': True},
                          'git_mode':{'repository':str(self.repo_path),
                              'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master'},
                          'agent':{'backend':backend,'executable':str(cli),'expected_version':version}}

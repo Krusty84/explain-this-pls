@@ -87,7 +87,7 @@ class InstalledOpenCodeSmoke(unittest.TestCase):
                     'project_description': 'Synthetic local provider smoke.',
                     'folder_mode': {'path': str(source)}, 'reports_dir': str(root / 'reports'),
                     'agent': {'backend': 'opencode', 'executable': executable},
-                    'execution': {'stage_timeout_seconds': 60, 'max_revision_rounds': 0}}))
+                    'execution': {'review_enabled': True, 'stage_timeout_seconds': 60, 'max_revision_rounds': 0}}))
                 with patch.dict(os.environ, env, clear=True):
                     checked, code = Runner(load_config(config), root / 'check').run(check_only=True)
                     self.assertEqual(code, 0, checked.get('diagnostics'))

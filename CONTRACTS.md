@@ -1,5 +1,43 @@
 # Evidence ledger contract
 
+## Optional review and processing success
+
+`execution.review_enabled` is a strict boolean and defaults to `false` in JSON
+and JSONC configurations. It applies to every source and backend in the run.
+With review disabled, the source pipeline is catalog → study; comparison remains
+available for multiple selected Git branches. Review/revision agents and prompts
+are inactive, and `max_revision_rounds` has no effect. Set `review_enabled: true`
+explicitly to retain the reviewed workflow, including its bounded revision loop.
+
+New manifests, source results and revisions record `review_enabled`. Disabled
+reviews have `review: null` and `review_skipped: "disabled_by_config"`; progress
+and metrics record SKIPPED with no model attempts or usage. No review result or
+invocation artifacts are fabricated. The study's frozen registry and
+`review.plan.json` remain necessary for integrity and comparison identities.
+
+`accepted` retains its study-AND-review meaning. `workflow_satisfied` is computed
+separately by Python: a complete, valid, published study satisfying evidence,
+coverage and identity checks is sufficient when review is disabled; with review
+enabled the existing accepted-pair policy applies. Run success additionally
+requires successful applicable comparison and no blocking run errors.
+Both strict and compromise modes can finish COMPLETE / exit 0 without review.
+Recovery material, coverage gaps and integrity failures do not gain acceptance.
+Old saved results and library contexts without `review_enabled` retain the prior
+review-required interpretation; this differs intentionally from the new config default.
+
+Comparison contexts include review mode and computed workflow results. Disabled
+review alone does not make an input unresolved. Without review, differences use
+REPORTED_UNVERIFIED; successful processing requires selected, valid FACT references
+with resolved source evidence on both sides of each difference. Insufficient
+support or INSUFFICIENT_EVIDENCE prevents positive processing policy. The existing
+CONFIRMED_DIFFERENCE requirement for supported facts in reviewed, accepted pairs
+is unchanged and that classification is forbidden in review-disabled runs.
+An empty difference list still requires complete eligible input studies on all
+requested branches. Success is not factual verification. Agent response schemas
+and artifact formats are unchanged.
+
+The review and revision sections below describe the opt-in reviewed workflow.
+
 The orchestrator selects the required response schema for each stage and validates
 its structure locally.
 `schemas/{catalog,study,review,compare}.schema.json` and their `folder-` variants
@@ -74,8 +112,8 @@ coverage plan, with subsystem tables, exclusions, limitations and unclassified
 paths. It is included in the catalog's `artifact_hashes`; the catalog's
 `report_sha256` continues to identify `catalog.json`.
 The final report places limitations and assessments before narrative,
-and keeps contradictory assessments visible. It is a study and automated review
-summary of the selected architecture revision and its corresponding review.
+and keeps contradictory assessments visible. It summarizes the selected architecture
+revision and its corresponding review when that optional stage is enabled.
 Generated Markdown evidence tables include ID, source, path and lines, resolution
 status and encoding, without service hash columns or values. JSON keeps the full
 hashes. Prompts prohibit service fingerprints, hashes and binding IDs in narrative;
@@ -567,7 +605,7 @@ null, never 100%. Document linkage counts only registered claims. Omission searc
 tracks every required area and reported inspected/partial/uninspected state;
 these are agent reports, not measured completeness of source exploration.
 
-Positive policy requires valid identities/contracts, passed source guards,
+Positive reviewed acceptance requires valid identities/contracts, passed source guards,
 complete published study/review, nonempty linked registry, all evidence resolved,
 one assessed response per required claim, no unfinished/missing mandatory omission
 area, COMPLETE self-assessments, no blocking findings, and only SUPPORTED facts or
@@ -586,8 +624,10 @@ on both sides. Each side needs a referenced FACT assessed as SUPPORTED; acceptan
 of a hypothesis's caveat is not factual support for a strong contrast.
 Recovered/incomplete inputs stay unverified. Missing reports
 do not prove absent components, and missing comparison does not mean no differences.
-An unresolved or unverified difference prevents positive comparison policy even
-when the agent reports COMPLETE. A response with no listed differences is still
+With review enabled, an unresolved or unverified difference prevents positive
+comparison policy even when the agent reports COMPLETE. With review disabled,
+REPORTED_UNVERIFIED can satisfy processing checks under the requirements above.
+A response with no listed differences is still
 an agent assessment of the supplied reports, not proof of identical behavior.
 
 `strict` rejects wire contract violations. `compromise` may retain completed text
@@ -602,8 +642,9 @@ cannot enter recovery, review or format repair. No partial registry is presented
 as accepted, and empty-registry review is explicitly limited/ineligible.
 An existing manifest with missing or unsupported `contract_id` / `artifact_format`
 causes `UNSUPPORTED_ARTIFACT_FORMAT` before any artifact writes. Use a new run directory.
-Ordinary successful execution uses catalog → study → review, optionally one
-revised study → full review, then selection → compare (comparison only for
+Default execution uses catalog → study → selection → compare. With review enabled,
+execution uses catalog → study → review, optionally one revised study → full review,
+then selection → compare (comparison only for
 multiple Git branches). XXX and OpenCode V2 use final JSON with local validation;
 no orchestrator format-repair prompt is sent.
 
@@ -692,7 +733,8 @@ artifacts. Selection prefers an accepted pair; otherwise it uses the latest
 published pair whose review has completion_status COMPLETE; PARTIAL does not count
 as completed. An incomplete new review keeps the previous
 completed pair selected and exposes the newer study separately as unverified.
-Without any completed review, the latest usable study is selected with a warning.
+Without any completed review, the latest usable study is selected. A missing-review
+warning applies only when review was enabled; an intentional skip is labeled as such.
 The manifest records selected_revision and revision history. Comparison uses only
 selected pairs. Top-level ARCHITECTURE.md, study.json and companion files are exact
 copies of the selected artifacts, published after selection. Frozen-document checks

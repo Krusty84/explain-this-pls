@@ -28,6 +28,7 @@ class XXXOutputTests(unittest.TestCase):
 
     def config(self):
         path = self.root / 'config.json'
+        self.value.setdefault('execution', {}).setdefault('review_enabled', True)
         path.write_text(json.dumps(self.value))
         return load_config(path)
 

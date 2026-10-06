@@ -579,6 +579,8 @@ class Reporter(NullReporter):
                     *self.metric_lines(c.get('metrics'), compact=True)]
         if name == 'stage_skipped':
             title = 'Review' if c.get('stage') == 'review' else title
+            if c.get('reason') == 'disabled_by_config':
+                return ['[SKIP] ' + self.stage_message(c, 'Review disabled by configuration; no separate review performed.')]
             return ['[SKIP] ' + self.stage_message(c, title + ' skipped: no architecture report available.')]
         if name == 'stop_requested':
             return ['[WARN] Stopping analysis…']
@@ -654,6 +656,8 @@ class Reporter(NullReporter):
                    '[WARN] Analysis may be incomplete. See available results and limitations below.' if result['status'] == 'PARTIAL' else
                    '[FAIL] Analysis failed.')
         lines = [meaning, 'Elapsed: ' + duration(elapsed)]
+        if not check_only and manifest.get('review_enabled', True) is False:
+            lines += ['Review is disabled by configuration; the report has not undergone a separate review.']
         if metrics:
             if not metrics['attempts']:
                 lines += ['No model calls were made.']
@@ -678,7 +682,7 @@ class Reporter(NullReporter):
             for branch in manifest.get('branches', []):
                 partial_material = manifest.get('result_policy') == 'compromise' and branch.get('study_usable')
                 lines += ['Branch ' + s(branch['branch']) + ': ' +
-                          status('Complete' if branch.get('accepted') else 'May be incomplete' if partial_material
+                          status('Complete' if branch.get('workflow_satisfied', branch.get('accepted')) else 'May be incomplete' if partial_material
                                  else 'Failed' if branch['errors'] else 'May be incomplete')]
             analyzed = {branch['branch'] for branch in manifest.get('branches', [])}
             for branch in manifest.get('pins', {}):

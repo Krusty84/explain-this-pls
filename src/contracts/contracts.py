@@ -343,6 +343,37 @@ def accepted(item):
     return accepted_pair(item)
 
 
+def workflow_satisfied(item, *, review_enabled=None):
+    """Processing success is separate from reviewed acceptance; old artifacts require review."""
+    if review_enabled is None:
+        review_enabled = item.get('review_enabled', True)
+    if review_enabled is not False:
+        return accepted(item)
+    from src.analysis.ledger import completed_study
+    return completed_study(item)
+
+
+def comparison_factual_sides(diff, context):
+    """Author-reported FACTs with resolved source evidence, without implying review."""
+    entries = {b['branch']: b for b in context['branches']}
+    sides = set()
+    for ref in diff['evidence_refs']:
+        entry = entries.get(ref['branch'], {})
+        if ref['artifact'] != 'study' or not workflow_satisfied(entry, review_enabled=False):
+            continue
+        doc = entry['study']
+        plan = doc['review_plan']
+        claim = next((c for c in doc['claims'] if c['id'] == ref['claim_id']), None)
+        resolved = {e['id'] for e in doc['program_checks']['evidence'] if e['status'] == 'RESOLVED'}
+        if (ref['revision_id'] == doc['revision_id'] == entry.get('selected_revision', doc['revision_id'])
+                and ref['document_sha256'] == plan['document_sha256']
+                and ref['registry_sha256'] == plan['registry_sha256']
+                and claim and claim['epistemic_kind'] == 'FACT' and claim['evidence_ids']
+                and set(claim['evidence_ids']) <= resolved):
+            sides.add(ref['branch'])
+    return sides
+
+
 def nonblank(value, key=''):
     if type(value) is str and not value.strip() and key not in ('quote', 'limitation', 'uncertainty'):
         raise ContractError('Required strings must not be empty or whitespace')
@@ -488,9 +519,11 @@ def validate_result(stage, value, context, mode='git'):
             raise ContractError('Comparison must cover each non-baseline branch exactly once')
         references(value['unresolved_branches'], set(context['requested_branches']), '$.unresolved_branches')
         entries = {b['branch']: b for b in context['branches']}
-        missing = {b for b in context['requested_branches'] if not accepted(entries.get(b, {}))}
+        review_enabled = context.get('review_enabled', True)
+        missing = {b for b in context['requested_branches']
+                   if not workflow_satisfied(entries.get(b, {}), review_enabled=review_enabled)}
         if not missing <= set(value['unresolved_branches']):
-            raise ContractError('Comparison conceals unaccepted inputs')
+            raise ContractError('Comparison conceals inputs failing enabled-stage checks')
         if value['completion_status'] == 'COMPLETE' and value['unresolved_branches']:
             raise ContractError('COMPLETE comparison contains unresolved inputs')
         unique_ids(value['differences'], r'D-[0-9]{3,}', '$.differences')
@@ -519,7 +552,8 @@ def validate_result(stage, value, context, mode='git'):
                         assessed.get(ref['claim_id'], {}).get('outcome') == 'SUPPORTED'):
                     fact_sides.add(ref['branch'])
             if diff['classification'] == 'CONFIRMED_DIFFERENCE':
-                if sides != {context['baseline_branch'], diff['branch']} or sides & missing or fact_sides != sides:
+                if (not review_enabled or sides != {context['baseline_branch'], diff['branch']}
+                        or sides & missing or fact_sides != sides):
                     raise ContractError('Strong contrast requires supported factual references and accepted inputs on both sides')
 
 

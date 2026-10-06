@@ -32,12 +32,14 @@ class XXXTests(unittest.TestCase):
         self.calls = self.root / 'calls.jsonl'
         self.env = {'AUDIT_FAKE_BACKEND': 'xxx', 'AUDIT_FAKE_CALLS': str(self.calls)}
         self.value = {'result_policy': 'strict', 'mode': 'folder', 'folder_mode': {'path': str(self.source)},
+            'execution': {'review_enabled': True},
             'reports_dir': str(self.root / 'reports'), 'project_description': 'Synthetic fixture',
             'agent': {'backend': 'xxx', 'executable': str(self.cli), 'model': None}}
         self.number = 0
 
     def run_case(self, scenario='', *, check=False, reporter=None):
         self.number += 1
+        self.value.setdefault('execution', {}).setdefault('review_enabled', True)
         path = self.root / 'config.json'
         path.write_text(json.dumps(self.value))
         config = load_config(path)
@@ -47,6 +49,17 @@ class XXXTests(unittest.TestCase):
 
     def recorded(self):
         return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+
+    def test_review_disabled_skips_review_and_revision_in_xxx(self):
+        self.value['execution'] = {'review_enabled': False, 'max_revision_rounds': 1}
+        self.value['stage_agents'] = {'review': {'backend': 'missing', 'executable': '/missing/review-cli'}}
+        manifest, code = self.run_case()
+        self.assertEqual((manifest['status'], code), ('COMPLETE', 0), manifest.get('diagnostics'))
+        self.assertTrue(manifest['workflow_satisfied'])
+        self.assertFalse(manifest['accepted'])
+        self.assertEqual(len(self.prompts()), 2)
+        self.assertIsNone(manifest['review'])
+        self.assertFalse((self.run_dir / 'revisions/001/review.logs').exists())
 
     def prompts(self):
         return [c for c in self.recorded() if c['args'][0] == 'run' and '--help' not in c['args']]

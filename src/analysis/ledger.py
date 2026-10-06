@@ -5,7 +5,7 @@
 from __future__ import annotations
 import copy
 from collections import Counter
-from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, ContractError, contract_violation, has_ledger_structure, has_program_checks, is_recovered_material, review_verdict
+from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, ContractError, contract_violation, has_ledger_structure, has_program_checks, is_recovered_material, review_verdict, workflow_satisfied, comparison_factual_sides
 from src.analysis.evidence import canonical, sha, source_catalog, resolve_evidence
 from src.analysis.coverage_plan import build_coverage_plan, verify_coverage_plan, coverage_checks
 from src.analysis.source_decoding import normalize_source_decoding
@@ -112,9 +112,19 @@ def prepare_result(stage, data, context, expected_files=None):
         checks['policy_satisfied'] = plan['policy_satisfied']
         return result
     if stage == 'compare':
+        review_enabled = context.get('review_enabled', True)
+        entries = {b['branch']: b for b in context['branches']}
+        differences_ok = all(d['classification'] == 'CONFIRMED_DIFFERENCE' for d in data['differences'])
+        if not review_enabled:
+            differences_ok = all(d['classification'] == 'REPORTED_UNVERIFIED' and
+                comparison_factual_sides(d, context) == {context['baseline_branch'], d['branch']}
+                for d in data['differences'])
+            checks['meaning'] = ('Configured processing checks only; review was disabled. '
+                                 'Differences are author-reported and unverified.')
         checks.update(evidence_scope='SUPPLIED_REPORTS_ONLY', source='NOT_INSPECTED_IN_COMPARISON',
                       policy_satisfied=data['completion_status'] == 'COMPLETE' and not data['unresolved_branches']
-                      and all(d['classification'] == 'CONFIRMED_DIFFERENCE' for d in data['differences']))
+                      and differences_ok and all(workflow_satisfied(entries.get(b, {}), review_enabled=review_enabled)
+                                                 for b in context['requested_branches']))
         if context.get('generated_by') == 'orchestrator':
             checks['completion_self_assessment'] = None
         return result
@@ -181,9 +191,10 @@ def prepare_result(stage, data, context, expected_files=None):
     return result
 
 
-def accepted_pair(item):
-    doc, rev = item.get('study'), item.get('review')
-    if not doc or not rev:
+def completed_study(item):
+    """A published, intact study meeting processing policy, independently of review."""
+    doc = item.get('study')
+    if not doc or item.get('critical_failure'):
         return False
     try:
         from src.reports.document_rendering import validate_materialized
@@ -192,18 +203,15 @@ def accepted_pair(item):
         validate_materialized(doc)
         schemas = SAVED_FOLDER_SCHEMAS if 'source_directory' in doc else SAVED_SCHEMAS
         validate_schema(doc, schemas['study'])
-        validate_schema(rev, schemas['review'])
     except (ContractError, KeyError, TypeError):
         return False
     if any(k in item and item[k] != doc.get(k) for k in ('branch', 'source_commit', 'source_directory', 'source_fingerprint', 'revision_id')):
         return False
-    for stage, data in (('study', doc), ('review', rev)):
-        meta = item.get(stage + '_invocation') or {}
-        if (meta.get('contract_id') != CONTRACT_ID or meta.get('artifact_format') != ARTIFACT_FORMAT or
-                not has_program_checks(data) or
-                not data.get('program_checks', {}).get('policy_satisfied') or data.get('completion_status') != 'COMPLETE' or
-                not meta.get('publication_complete')):
-            return False
+    meta = item.get('study_invocation') or {}
+    if (meta.get('contract_id') != CONTRACT_ID or meta.get('artifact_format') != ARTIFACT_FORMAT or
+            not has_program_checks(doc) or not doc['program_checks']['policy_satisfied'] or
+            doc.get('completion_status') != 'COMPLETE' or not meta.get('publication_complete')):
+        return False
     plan = doc.get('review_plan', {})
     try:
         if plan.get('coverage_plan'):
@@ -220,14 +228,33 @@ def accepted_pair(item):
                 and root_identity.get('source_type') in ('commit', 'working_tree')
                 and bool(root_identity.get('fingerprint'))
                 and ('source_snapshot' not in item or root_identity == dict(mode='git', **item['source_snapshot'])))
-        return (rev.get('target') == target(plan) and rev.get('review_plan') == plan and
-            plan['document_sha256'] == sha(doc['report_markdown'].encode('utf-8')) and
+        return (plan['document_sha256'] == sha(doc['report_markdown'].encode('utf-8')) and
             plan['registry_sha256'] == sha(canonical(doc['claims'])) and
             plan['source_sha256'] == sha(canonical(plan['sources'])) and
             plan['plan_sha256'] == sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'})) and
-            source_matches and rev['claim_registry'] == doc['claims'] and rev['verdict'] == 'PASS' and
-            rev.get('revision_id') == doc.get('revision_id') == plan.get('revision_id') and
-            (not plan.get('coverage_plan') or plan['coverage_plan']['policy_satisfied']) and
-            all(doc.get(k) == rev.get(k) for k in ('branch', 'source_commit', 'source_directory', 'source_fingerprint')))
+            source_matches and doc.get('revision_id') == plan.get('revision_id') and
+            (not plan.get('coverage_plan') or plan['coverage_plan']['policy_satisfied']))
+    except (ContractError, KeyError, TypeError, IndexError):
+        return False
+
+
+def accepted_pair(item):
+    doc, rev = item.get('study'), item.get('review')
+    if not rev or not completed_study(item):
+        return False
+    try:
+        from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
+        from src.contracts.contracts import validate_schema
+        schemas = SAVED_FOLDER_SCHEMAS if 'source_directory' in doc else SAVED_SCHEMAS
+        validate_schema(rev, schemas['review'])
+        meta = item.get('review_invocation') or {}
+        plan = doc['review_plan']
+        return bool(meta.get('contract_id') == CONTRACT_ID and meta.get('artifact_format') == ARTIFACT_FORMAT
+            and has_program_checks(rev) and rev['program_checks']['policy_satisfied']
+            and rev.get('completion_status') == 'COMPLETE' and meta.get('publication_complete')
+            and rev.get('target') == target(plan) and rev.get('review_plan') == plan
+            and rev['claim_registry'] == doc['claims'] and rev['verdict'] == 'PASS'
+            and rev.get('revision_id') == doc.get('revision_id')
+            and all(doc.get(k) == rev.get(k) for k in ('branch', 'source_commit', 'source_directory', 'source_fingerprint')))
     except (ContractError, KeyError, TypeError, IndexError):
         return False

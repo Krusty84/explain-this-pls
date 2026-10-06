@@ -46,7 +46,7 @@ class InstalledXXXCompactionSmoke(unittest.TestCase):
                 'project_description': 'Small synthetic XXX compatibility smoke, no user source.',
                 'agent': {'backend': 'xxx', 'executable': executable,
                           'model': os.environ.get('EXPLAIN_XXX_MODEL')},
-                'execution': {'stage_timeout_seconds': 180, 'max_revision_rounds': 0,
+                'execution': {'review_enabled': True, 'stage_timeout_seconds': 180, 'max_revision_rounds': 0,
                               'structured_output_repair_attempts': 0},
                 'prompts': {'study': str(template)}}))
             runner = Runner(load_config(config), root / 'run')

@@ -17,7 +17,7 @@
     "baseline_branch": "master",
   },
 
-  // An existing directory; Git is not required. Runs catalog, study and review, with at most one revision.
+  // An existing directory; Git is not required. Review and revision are opt-in.
   "folder_mode": {
     "path": "../legacy-app",
   },
@@ -36,7 +36,9 @@
   },
 
   "execution": {
-    // One substantive revision and full review after material findings; use 0 to disable.
+    // Optional separate review. Omitted means false; set true for the reviewed workflow.
+    "review_enabled": false,
+    // Used only with review enabled: one revision and full review after material findings.
     "max_revision_rounds": 1,
     "stage_timeout_seconds": 3600,
     "idle_timeout_seconds": null,

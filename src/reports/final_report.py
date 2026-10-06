@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import html
-from src.contracts.contracts import SCHEMAS, accepted, has_program_checks, schema_diagnostics
+from src.contracts.contracts import SCHEMAS, accepted, workflow_satisfied, has_program_checks, schema_diagnostics
 
 
 def recoverable_material(stage, data, context, mode, diagnostics):
@@ -99,12 +99,17 @@ def render_final_report(manifest, source, mode, language='Russian'):
     def t(r, e): return r if ru else e
     entries = report_entries(manifest, source, mode)
     useful = any(usable_study(b) for b in entries)
-    out = ['# ' + t('Сводка исследования и автоматизированного ревью', 'Study and automated review summary'), '',
+    review_enabled = manifest.get('review_enabled', True)
+    out = ['# ' + (t('Сводка исследования и автоматизированного ревью', 'Study and automated review summary')
+                  if review_enabled else t('Сводка исследования', 'Study summary')), '',
         t('Статус обработки: ', 'Processing status: ') + manifest['status'], '',
         t('Сводка содержит выбранную версию исследования и оценки агентов. '
           'Условия политики не устанавливают достоверность документа. Качество содержательного ревью не измерено.',
           'Contains the selected study revision and agent assessments. '
           'Policy checks do not establish factual correctness. Semantic review quality is not measured.'), '']
+    if not review_enabled:
+        out += ['> ' + t('Ревью отключено конфигурацией; отчёт не проходил отдельную проверку.',
+                          'Review is disabled by configuration; the report has not undergone a separate review.'), '']
     if not useful:
         out += ['> ' + t('Диагностическая сводка: пригодное исследование отсутствует.',
                           'Diagnostic summary: no usable study is available.'), '']
@@ -114,6 +119,8 @@ def render_final_report(manifest, source, mode, language='Russian'):
     for b in entries:
         out += ['## ' + cell(b.get('branch', manifest.get('source_directory', source.get('path', '')))), '',
             t('Условия политики обработки и ревью выполнены.', 'Processing and review policy checks satisfied.') if accepted(b) else
+            t('Условия включённых этапов выполнены; отдельное ревью не проводилось.',
+              'Enabled-stage checks satisfied; no separate review was performed.') if workflow_satisfied(b, review_enabled=review_enabled) else
             t('Условия политики не выполнены; причины указаны в диагностике.',
               'Policy checks not satisfied; see diagnostics for the reasons.'), '']
         snapshot = b.get('source_snapshot')
@@ -126,16 +133,17 @@ def render_final_report(manifest, source, mode, language='Russian'):
                           'Базовый коммит не идентифицирует эти байты.',
                           'Inspected working-tree bytes, including local changes and non-ignored untracked files. '
                           'The base commit does not identify these bytes.'), '']
-        if not b.get('review') or not accepted(b):
+        if review_enabled and (not b.get('review') or not accepted(b)):
             out += ['> ' + t('Проверка реестра не завершена с положительным результатом политики.',
                               'Registry review has not completed with a positive policy result.'), '']
         if b.get('revision_history'):
             out += ['### ' + t('Версии документа', 'Document revisions'), '',
                     t('Выбранная версия: ', 'Selected revision: ') + cell(b.get('selected_revision') or '—'), '',
-                    '| Revision | Study | Review | Complete review | Accepted |', '| --- | --- | --- | --- | --- |']
+                    '| Revision | Study | Review | Complete review | Accepted | Workflow satisfied |',
+                    '| --- | --- | --- | --- | --- | --- |']
             for revision in b['revision_history']:
                 out += ['| ' + ' | '.join(cell(revision.get(k)) for k in
-                          ('revision_id', 'study_status', 'review_status', 'review_complete', 'accepted')) + ' |']
+                          ('revision_id', 'study_status', 'review_status', 'review_complete', 'accepted', 'workflow_satisfied')) + ' |']
             out += ['']
         if b.get('coverage_plan') and not b.get('study'):
             out += [render_coverage(b['coverage_plan']), '']
@@ -145,6 +153,8 @@ def render_final_report(manifest, source, mode, language='Russian'):
         elif b.get('review_material', {}).get('review_observations'):
             out += retained_review_observations(b['review_material'], b.get('study'), language)
         for stage in ('study', 'review'):
+            if stage == 'review' and not review_enabled:
+                continue
             doc = stage_document(b, stage)
             if not doc:
                 out += [stage + ': ' + t('Результат отсутствует.', 'Result unavailable.'), '']
@@ -186,7 +196,7 @@ def render_final_report(manifest, source, mode, language='Russian'):
                 continue
             out += ['### ' + t('Дополнительные материалы версии ', 'Additional material for revision ') +
                     cell(revision['revision_id']), '']
-            if not (revision.get('review') and revision['review'].get('completion_status') == 'COMPLETE'
+            if review_enabled and not (revision.get('review') and revision['review'].get('completion_status') == 'COMPLETE'
                     and (revision.get('review_invocation') or {}).get('publication_complete')):
                 out += ['> ' + t('Полное строго валидное ревью этой версии отсутствует. Материал не принят.',
                                   'This revision has no complete strictly valid review. Material is not accepted.'), '']

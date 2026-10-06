@@ -31,7 +31,7 @@ import time
 import uuid
 from typing import Any
 from urllib.parse import urlsplit
-from src.contracts.contracts import MODEL_FOLDER_SCHEMAS, MODEL_SCHEMAS, ContractError, accepted, jsonc, strict_json, validate_result, schema_diagnostics, result_diagnostics
+from src.contracts.contracts import MODEL_FOLDER_SCHEMAS, MODEL_SCHEMAS, ContractError, accepted, workflow_satisfied, jsonc, strict_json, validate_result, schema_diagnostics, result_diagnostics
 from src.runtime.reporting import Diagnostic, NullReporter, Reporter, diagnostic, existing_file, output_mode
 from src.runtime.execution import Budget, execution_settings
 from src.runtime.metrics import RunMetrics, measurement, usage, FIELDS
@@ -903,6 +903,8 @@ def load_config(path: Path) -> dict:
     if not isinstance(value['priority_scenarios'], list) or any(not isinstance(s, str) for s in value['priority_scenarios']):
         raise AuditError('priority_scenarios must be an array of strings.')
     stages = STAGES if mode == 'git' and len(source['branches']) > 1 else SOURCE_STAGES
+    if not value['execution']['review_enabled']:
+        stages = tuple(stage for stage in stages if stage != 'review')
     for stage in value['stage_agents']:
         if stage not in STAGES:
             raise AuditError(f'Unknown stage override: {stage}')
@@ -934,7 +936,7 @@ def load_config(path: Path) -> dict:
     value['_prompt_paths'] = {}
     if set(value['prompts']) - (set(STAGES) | {'revise'}):
         raise AuditError('Unknown prompt stage.')
-    for stage in (*stages, *(('revise',) if value['execution']['max_revision_rounds'] else ())):
+    for stage in (*stages, *(('revise',) if value['execution']['review_enabled'] and value['execution']['max_revision_rounds'] else ())):
         prompt_path = value['prompts'].get(stage, str(ROOT / 'prompts' / (stage + '.md')))
         if not isinstance(prompt_path, str) or not prompt_path.strip():
             raise AuditError(f'prompts.{stage} must be a nonempty path string.')
@@ -1010,7 +1012,7 @@ class Runner:
                 'commit': context.get('source_commit'),
                 'stage': 'revise' if stage == 'study' and context.get('prompt_variant') == 'revise' else stage,
                 'revision_id': context.get('revision_id'),
-                'backend': self.cfg['_agents'][stage]['backend']}
+                'backend': self.cfg['_agents'].get(stage, {}).get('backend')}
 
     def stage_started(self, stage, context):
         started = self.reporter.clock()
@@ -1332,7 +1334,11 @@ class Runner:
         item['revision_history'] = [{
             'revision_id': revision['revision_id'], 'directory': revision['directory'],
             'study_status': (stage_document(revision, 'study') or {}).get('completion_status'),
-            'review_status': (revision.get('review') or {}).get('completion_status'),
+            'review_status': 'SKIPPED' if revision.get('review_skipped') == 'disabled_by_config'
+                             else (revision.get('review') or {}).get('completion_status'),
+            'review_enabled': revision.get('review_enabled', True),
+            'review_skipped': revision.get('review_skipped'),
+            'workflow_satisfied': workflow_satisfied(revision),
             'review_complete': completed_pair(revision), 'accepted': accepted(revision),
             'errors': list(revision['errors'])} for revision in item.get('revisions', [])]
         for stage in ('study', 'review'):
@@ -1369,6 +1375,7 @@ class Runner:
                         atomic(directory / name, blob)
                 item['selection_publication_complete'] = True
         item['accepted'] = accepted(item)
+        item['workflow_satisfied'] = workflow_satisfied(item)
 
     def assert_revision_files(self, item):
         states = list(item.get('revisions', []))
@@ -1401,7 +1408,12 @@ class Runner:
 
     def run_source(self, item, context, directory, persist):
         """One pinned source, one catalog, and at most two independent document pairs."""
-        context = dict(context, source_decoding=self.cfg.get('source_decoding', {'rules': []}),
+        review_enabled = self.execution['review_enabled']
+        item['review_enabled'] = review_enabled
+        item['workflow_satisfied'] = False
+        if not review_enabled:
+            item['review_skipped'] = 'disabled_by_config'
+        context = dict(context, review_enabled=review_enabled, source_decoding=self.cfg.get('source_decoding', {'rules': []}),
                        source_decoding_access='Decoding rules apply to program evidence checks only; agent reading depends on its CLI.')
         item['revisions'] = []
 
@@ -1473,19 +1485,26 @@ class Runner:
             context.update(coverage_plan=plan, _coverage_plan_path=str(directory / 'coverage.plan.json'))
             context.pop('inventory_summary', None)
             previous = None
-            for number in range(1, self.execution['max_revision_rounds'] + 2):
+            revision_rounds = self.execution['max_revision_rounds'] if review_enabled else 0
+            for number in range(1, revision_rounds + 2):
                 revision_id = f'{number:03d}'
                 revision_dir = directory / 'revisions' / revision_id
                 revision = {key: item[key] for key in ('branch', 'source_commit', 'source_directory', 'source_fingerprint', 'source_snapshot') if key in item}
                 revision.update(revision_id=revision_id, directory=str(revision_dir.relative_to(self.run_dir)),
-                                study=None, review=None, errors=[])
+                                study=None, review=None, errors=[], review_enabled=review_enabled, workflow_satisfied=False)
+                if not review_enabled:
+                    revision['review_skipped'] = 'disabled_by_config'
                 item['revisions'].append(revision)
                 current = context | {'revision_id': revision_id}
                 if previous:
                     current.update(revision_inputs(previous))
                     current['prompt_variant'] = 'revise'
                 run_stage('study', revision, current, revision_dir)
-                if usable_study(revision) and (previous is None or revision.get('study') is not None):
+                if not review_enabled:
+                    skip_context = self.stage_context('review', current)
+                    self.reporter.emit('stage_skipped', **skip_context, reason='disabled_by_config',
+                                       metrics=self.metrics.finish_stage(skip_context, 'SKIPPED'))
+                elif usable_study(revision) and (previous is None or revision.get('study') is not None):
                     current.pop('prompt_variant', None)
                     if previous and revision.get('study'):
                         current['registry_diff'] = revision['study']['registry_diff']
@@ -1505,8 +1524,9 @@ class Runner:
                     if self.repo and not usable_study(revision):
                         item['errors'].append('Review skipped: no usable architecture document.')
                 revision['accepted'] = accepted(revision)
+                revision['workflow_satisfied'] = workflow_satisfied(revision)
                 persist()
-                if not (completed_pair(revision) and revision.get('study') and
+                if not (review_enabled and completed_pair(revision) and revision.get('study') and
                         any(f['severity'] in ('HIGH', 'MEDIUM') for f in revision['review']['findings'])):
                     break
                 previous = revision
@@ -1827,7 +1847,7 @@ class Runner:
                     self.record_error(self.manifest, exc, phase='cleanup')
         manifest['result_policy'] = 'compromise' if self.compromise else 'strict'
         manifest.update(contract_id=CONTRACT_ID, artifact_format=ARTIFACT_FORMAT,
-            acceptance_meaning='accepted=true means policy checks satisfied; factual correctness is not established.',
+            acceptance_meaning='accepted=true means study and review policy checks satisfied; factual correctness is not established.',
             review_quality='NOT_MEASURED', source_check_meaning='MATCHED_AT_BOUNDARIES means source state matched at performed checks only.')
         manifest['critical_failure'] = self.critical_failure
         if not check_only:
@@ -1835,7 +1855,7 @@ class Runner:
             if self.compromise and code != 130:
                 if self.critical_failure or not any(usable_study(b) for b in entries):
                     manifest['status'], code = 'FAILED', 1
-                elif (all(accepted(b) for b in entries) and not manifest.get('diagnostics')
+                elif (all(workflow_satisfied(b) for b in entries) and not manifest.get('diagnostics')
                       and (self.mode == 'folder' or len(self.source['branches']) == 1
                            or (manifest.get('comparison', {}).get('program_checks', {}).get('policy_satisfied')
                                and manifest.get('comparison_invocation', {}).get('publication_complete')))):
@@ -1854,6 +1874,7 @@ class Runner:
                 self.record_error(manifest, exc, phase='publication')
                 manifest.update(status='FAILED', critical_failure=True)
                 code = 130 if code == 130 else 1
+        manifest['workflow_satisfied'] = not check_only and manifest['status'] == 'COMPLETE' and code == 0
         manifest['exit_code'] = code
         # This last manifest write commits the run's publication record. Individual
         # file replacements above are atomic; the group is not a transaction.
@@ -1866,6 +1887,7 @@ class Runner:
 
     def run_git(self, check_only: bool = False) -> tuple[dict, int]:
         manifest = {'run_id': self.run_dir.name, 'started_at': now(), 'repository': str(self.repo.path),
+            'review_enabled': self.execution['review_enabled'],
             'git': self.repo.runtime.manifest(), 'baseline_branch': self.source['baseline_branch'],
             'status': 'RUNNING', 'isolation': 'independent-source-copies; cli-native-permissions',
             'platform': sys.platform, 'branches': [], 'errors': [], 'switch_journal': [],
@@ -1938,18 +1960,20 @@ class Runner:
                     item['accepted'] = accepted(item)
                     persist()
                 entries = manifest['branches']
-                quality_ok = all(accepted(b) for b in entries)
+                quality_ok = all(workflow_satisfied(b) for b in entries)
                 if len(self.source['branches']) > 1:
                     baseline = self.source['baseline_branch']
                     selected_entries = [b for b in entries if b['branch'] in self.source['branches']]
                     bundle = {'baseline_branch': baseline, 'baseline_commit': pins[baseline],
+                        'review_enabled': self.execution['review_enabled'],
                         'result_policy': 'compromise' if self.compromise else 'strict',
                         'requested_branches': self.source['branches'], 'output_language': self.cfg['output_language'],
                         'project_description': self.cfg['project_description'],
                         'scope': 'reports-only comparison; source inspection is outside task scope',
                         'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'source_snapshot', 'submodules', 'study', 'review',
                                                            'study_material', 'review_material', 'errors', 'selected_revision', 'coverage_plan')} |
-                                     {'accepted': accepted(b)} |
+                                      {'accepted': accepted(b), 'workflow_satisfied': workflow_satisfied(b),
+                                       'review_enabled': self.execution['review_enabled']} |
                                      {stage + '_invocation': {k: (b.get(stage + '_invocation') or {}).get(k) for k in
                                         ('publication_complete', 'contract_id', 'artifact_format', 'status', 'model_requested', 'model_actual',
                                          'model_actual_source', 'source_check_status', 'review_quality')}
@@ -1964,7 +1988,7 @@ class Runner:
                         for entry in entries:
                             self.assert_revision_files(entry)
                         can_compare = (comparison_possible(selected_entries, baseline) if self.compromise
-                                       else any(accepted(b) for b in selected_entries))
+                                       else any(workflow_satisfied(b) for b in selected_entries))
                         if can_compare:
                             comparison, meta = self.invoke('compare', bundle, comp_dir / 'compare.logs')
                         else:
@@ -2009,6 +2033,7 @@ class Runner:
 
     def run_folder(self, check_only: bool = False) -> tuple[dict, int]:
         manifest = {'mode': 'folder', 'run_id': self.run_dir.name,
+            'review_enabled': self.execution['review_enabled'],
             'started_at': now(), 'source_directory': str(self.source_path), 'status': 'RUNNING',
             'isolation': 'cli-native-permissions', 'platform': sys.platform,
             'integrity': 'Fingerprints at stage boundaries; not a backup or continuous immutability guarantee.',
@@ -2044,8 +2069,9 @@ class Runner:
                                      'Native CLI permissions; fingerprints verify stage boundaries only.'}
                 self.run_source(manifest, context, self.run_dir, persist)
                 manifest['accepted'] = accepted(manifest)
-                manifest['status'] = 'FAILED' if manifest['errors'] else 'COMPLETE' if manifest['accepted'] else 'PARTIAL'
-                code = 1 if manifest['errors'] else 0 if manifest['accepted'] else 2
+                manifest['workflow_satisfied'] = workflow_satisfied(manifest)
+                manifest['status'] = 'FAILED' if manifest['errors'] else 'COMPLETE' if manifest['workflow_satisfied'] else 'PARTIAL'
+                code = 1 if manifest['errors'] else 0 if manifest['workflow_satisfied'] else 2
         except BaseException as exc:
             manifest['errors'].append(str(exc) or type(exc).__name__)
             manifest['status'] = 'FAILED'
@@ -2170,9 +2196,11 @@ def main() -> int:
                   'exit_code': code}
         result['status_meaning'] = ('Local launch prerequisites checked. Source analysis was not performed; '
             'model availability and provider authorization were not tested.' if result['status'] == 'PREFLIGHT_OK' else
-            'Policy checks satisfied; factual correctness is not established.' if result['status'] == 'COMPLETE' else
+            'Enabled-stage policy checks satisfied; factual correctness is not established.' if result['status'] == 'COMPLETE' else
             'Processing may be incomplete or evidence may be insufficient; consult limitations and diagnostics.')
         result['review_quality'] = 'NOT_MEASURED'
+        result['review_enabled'] = manifest.get('review_enabled', (config or {}).get('execution', {}).get('review_enabled', False))
+        result['workflow_satisfied'] = manifest.get('workflow_satisfied', False)
         if 'metrics' in manifest:
             result['metrics'] = manifest['metrics']
         else:
