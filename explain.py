@@ -37,16 +37,15 @@ from src.runtime.execution import Budget, execution_settings
 from src.runtime.metrics import RunMetrics, measurement, usage, FIELDS
 from src.backends import codex
 from src.backends import claude_code
-from src.backends import opencode
 from src.backends import opencode_cli
 from src.backends import xxx
-from src.model.structured_output import blocked_comparison, repair_prompt, required_unresolved, retry_policy, validate_repair
+from src.model.structured_output import blocked_comparison, required_unresolved, retry_policy
 from src.reports.final_report import recoverable_material, stage_document, usable_study, report_entries, comparison_possible, render_final_report
 from src.analysis.ledger import prepare_result, review_context
 from src.analysis.study_normalization import normalize_evidence, normalization_provenance
 from src.reports.document_rendering import materialize_study, validate_materialized
 from src.analysis.evidence import source_catalog, SourceChanged, open_source_directory, read_confined
-from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, has_ledger_structure, validate_schema, response_error
+from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, validate_schema, response_error
 from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
 from src.reports.presentation import render_stage
 from src.model.model_context import CONTEXT_FORMAT
@@ -62,7 +61,7 @@ SOURCE_STAGES = ('catalog', 'study', 'review')
 ARTIFACTS = {'catalog': 'SUBSYSTEM_CATALOG.md', 'study': 'ARCHITECTURE.md', 'review': 'ARCHITECTURE_REVIEW.md',
              'compare': 'BRANCH_COMPARISON.md'}
 BACKENDS = {'codex': 'codex', 'claude-code': 'claude', 'opencode': 'opencode', 'xxx': 'xxx'}
-CLI_ADAPTERS = {'codex': codex, 'claude-code': claude_code, 'opencode': opencode_cli}
+CLI_ADAPTERS = {'codex': codex, 'claude-code': claude_code, 'opencode': opencode_cli, 'xxx': xxx}
 MIN_GIT_VERSION = (2, 34, 1)
 
 class AuditError(RuntimeError):
@@ -179,7 +178,7 @@ def _process(command, cwd, env, input_data, reporter, context,
     start = clock()
     last_output = None
     next_progress = start + progress_interval
-    # A stage-owned Reporter also covers silent HTTP waits and retries.
+    # A stage-owned Reporter also covers silent subprocess waits.
     # Standalone process callers retain their own waiting events.
     managed_progress = reporter.cli_started()
     out, err = bytearray(), bytearray()
@@ -1061,10 +1060,9 @@ class Runner:
             with tempfile.TemporaryDirectory(prefix='archaudit-cli-check-', dir=neutral_temporary_base(self.source_path)) as raw:
                 state = Path(raw).resolve()
                 env = cli_env(state)
-                adapter = CLI_ADAPTERS.get(backend)
+                adapter = CLI_ADAPTERS[backend]
                 cmds = [[agent['executable'], '--version'],
-                        adapter.help_command(agent['executable']) if adapter else
-                        [agent['executable'], 'serve', '--help']]
+                        adapter.help_command(agent['executable'])]
                 texts = []
                 for cmd in cmds:
                     r = process(cmd, state, env, reporter=self.reporter,
@@ -1080,7 +1078,7 @@ class Runner:
                     elif not output.strip():
                         output = r['stderr']
                     texts.append(output.decode(errors='replace'))
-                required = adapter.required_flags(self.mode) if adapter else ['--port', '--hostname', '--mdns']
+                required = adapter.required_flags(self.mode)
                 if any(flag not in texts[1] for flag in required):
                     raise AuditError(f'{backend} lacks required CLI options: {required}',
                                      code='BACKEND_INCOMPATIBLE', failure_kind='BACKEND_INCOMPATIBLE',
@@ -1092,47 +1090,17 @@ class Runner:
                     opencode_cli.verify_version(version)
                 result[key] = {'version': version, 'required_flags': required}
                 if backend == 'xxx':
-                    result[key]['http'] = self.check_xxx(agent, state, env, version)
+                    for arguments, marker in ((['export', '--help'], 'sessionID'),
+                                              (['session', 'delete', '--help'], 'sessionID')):
+                        checked = process([agent['executable'], *arguments], state, env,
+                                          reporter=self.reporter, budget=Budget(30))
+                        if checked['returncode'] or marker not in (checked['stdout'] + checked['stderr']).decode(errors='replace'):
+                            raise response_error('BACKEND_INCOMPATIBLE', 'compatibility',
+                                                 'XXX requires export and session delete commands.')
+                    result[key]['compatibility_profile'] = xxx.PROFILE
                 self.reporter.emit('preflight_completed', check='cli', backend=backend, required_flags=required)
         self.versions = {k: v['version'] for k, v in result.items()}
         return result
-
-    def check_xxx(self, agent, cwd, env, version):
-        """Local readiness only: no session or model prompt is created."""
-        parent = self.run_dir / 'cli-checks' / slug(agent['executable'])
-        private_directory(parent)
-        artifacts = Path(tempfile.mkdtemp(prefix='attempt-', dir=parent))
-        meta = {'backend': 'xxx', 'cli_version': version, 'artifact_directory': str(artifacts),
-                'compatibility_profile': xxx.PROFILE,
-                'retry_policy': xxx.retry_policy(self.execution['structured_output_repair_attempts']), 'status': 'RUNNING'}
-        opencode.prepare_environment(env, 'compare')
-        server = xxx.Server(agent['executable'], cwd, env, artifacts,
-            Budget(xxx.Server.preflight_seconds(self.execution), label='http_preflight'),
-            atomic, meta, self.execution)
-        error = None
-        try:
-            server.start()
-            server.verify_api()
-        except BaseException as exc:
-            error = exc
-            meta.update(status='FAILED', error=asdict(diagnostic(exc)))
-            raise
-        finally:
-            try:
-                server.close()
-            except BaseException as exc:
-                if error is None:
-                    error = exc
-                    meta.update(status='FAILED', error=asdict(diagnostic(exc)))
-                    raise
-            finally:
-                if error is None:
-                    meta['status'] = 'SUCCEEDED'
-                    save_json(artifacts / 'invocation.json', meta)
-                else:
-                    with contextlib.suppress(OSError):
-                        save_json(artifacts / 'invocation.json', meta)
-        return meta
 
     def command(self, stage: str, state: Path, agent: dict, schema_path: Path, env: dict) -> list[str]:
         adapter = CLI_ADAPTERS.get(agent['backend'])
@@ -1140,8 +1108,11 @@ class Runner:
             kwargs = {'excluded_root': self.repo.path} if adapter is claude_code and getattr(self, 'git_sources', None) else {}
             if adapter is opencode_cli:
                 kwargs['agent_name'] = opencode_cli.prepare_environment(env, stage)
+            elif adapter is xxx:
+                kwargs['agent_name'] = xxx.prepare_environment(
+                    env, stage, source_snapshot=bool(getattr(self, 'git_sources', None)))
             return adapter.build_command(agent, stage, self.mode, self.schemas[stage], schema_path, **kwargs)
-        raise AuditError('XXX uses the managed HTTP adapter, not the CLI event stream.',
+        raise AuditError('No CLI adapter for this backend.',
                          code='BACKEND_INCOMPATIBLE')
 
     def invoke(self, stage: str, context: dict, destination: Path) -> tuple[dict | None, dict]:
@@ -1171,87 +1142,61 @@ class Runner:
         binding = self.bindings.bind(stage, context, self.mode)
         binding_hashes = {}
         attempt_hashes = {}
-        native = self.cfg['_agents'][stage]['backend'] == 'xxx'
-        from src.backends.xxx_history import RecoveryBudget
-        recovery_budget = RecoveryBudget() if native else None
-        limit = self.execution['structured_output_repair_attempts'] if native else 0
-        correction = None
-        repair_model = None
-        repair_source = None
         candidate = None
         candidate_attempt = None
-        for repair_index in range(limit + 1):
-            try:
-                return self._invoke_once(stage, context, destination, budget=budget,
-                                         repair_index=repair_index, correction=correction,
-                                         repair_model=repair_model, repair_source=repair_source, evidence_pins=evidence_pins,
-                                         binding=binding, binding_hashes=binding_hashes, attempt_hashes=attempt_hashes,
-                                         recovery_budget=recovery_budget)
-            except ContractError as exc:
-                self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
-                if not (destination / 'invocation.json').is_file():
-                    raise
-                meta = strict_json((destination / 'invocation.json').read_text())
-                if meta.get('cleanup_errors'):
-                    self.critical_failure = True
-                    raise
-                attempt = Path(meta['artifact_directory'])
-                # Recover only the original response, never facts rewritten by a format repair.
-                if (self.compromise and repair_index == 0 and meta.get('source_integrity_verified')
-                        and meta.get('validation_failed') and meta.get('backend_result_valid')
-                        and meta.get('model_identity_verified')
-                        and exc.failure_kind in ('SCHEMA_ERROR', 'SEMANTIC_ERROR')):
-                    invalid = self.read_attempt_value(attempt, 'expanded.json', attempt_hashes)
-                    validation = self.read_attempt_value(attempt, 'validation.json', attempt_hashes)
-                    checked = (self.read_attempt_value(attempt, 'normalized.json', attempt_hashes)
-                               if validation.get('validated_object') == 'normalized.json' else invalid)
-                    candidate = recoverable_material(stage, invalid, context, self.mode,
-                        result_diagnostics(stage, checked, context, self.mode))
-                    if candidate is not None:
-                        candidate['contract_failure'] = asdict(diagnostic(exc))
-                        if meta.get('normalization_provenance'):
-                            candidate['normalization_provenance'] = meta['normalization_provenance']
-                    candidate_attempt = str(attempt)
-                can_repair = (exc.failure_kind == 'SCHEMA_ERROR' and repair_index < limit
-                              and meta.get('native_envelope_valid') and meta.get('model_identity_verified'))
-                if can_repair:
-                    expanded = self.read_attempt_value(attempt, 'expanded.json', attempt_hashes)
-                    can_repair = (expanded.get('task') == self.schemas[stage]['properties']['task']['enum'][0]
-                                  and has_ledger_structure(stage, expanded, representation='wire'))
-                if not can_repair:
-                    if candidate is None:
-                        raise
-                    # A failed repair cannot erase the original completed document.
-                    # Recheck the source even if the later attempt expired before starting.
-                    if self.folder:
-                        self.folder.assert_snapshot(context['source_fingerprint'])
-                    else:
-                        self.assert_source()
-                    candidate['artifact_directory'] = candidate_attempt
-                    save_json(destination.parent / (stage + '.material.json'), candidate)
-                    material_bytes = (json.dumps(candidate, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
-                    meta = meta | {'status': 'PARTIAL', 'usable_material': candidate,
-                                   'local_validation': False, 'recovery_source_attempt': candidate_attempt,
-                                   'material_retained': True, 'material_hashes': {
-                                       stage + '.material.json': {'sha256': digest(material_bytes), 'bytes': len(material_bytes)}}}
-                    # Per-attempt files remain the original failed validation record.
-                    save_json(destination / 'invocation.json', meta)
-                    return None, meta
-                # A neutral repair cwd must not silently select another profile model.
-                if repair_model is None:
-                    repair_model = meta['model_actual']
-                invalid = self.read_attempt_value(attempt, 'extracted.json', attempt_hashes)
-                if repair_source is None:
-                    repair_source = invalid
-                details = self.read_attempt_value(attempt, 'validation.json', attempt_hashes)['schema_diagnostics']
-                correction = repair_prompt(binding.project(context), self.schemas[stage], invalid, details, original=repair_source)
+        try:
+            return self._invoke_once(stage, context, destination, budget=budget,
+                                     evidence_pins=evidence_pins, binding=binding,
+                                     binding_hashes=binding_hashes, attempt_hashes=attempt_hashes)
+        except ContractError as exc:
+            self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
+            if not (destination / 'invocation.json').is_file():
+                raise
+            meta = strict_json((destination / 'invocation.json').read_text())
+            if meta.get('cleanup_errors'):
+                self.critical_failure = True
+                raise
+            attempt = Path(meta['artifact_directory'])
+            # Retain only the verified original response under the compromise policy.
+            if (self.compromise and meta.get('source_integrity_verified')
+                    and meta.get('validation_failed') and meta.get('backend_result_valid')
+                    and meta.get('model_identity_verified')
+                    and exc.failure_kind in ('SCHEMA_ERROR', 'SEMANTIC_ERROR')):
+                invalid = self.read_attempt_value(attempt, 'expanded.json', attempt_hashes)
+                validation = self.read_attempt_value(attempt, 'validation.json', attempt_hashes)
+                checked = (self.read_attempt_value(attempt, 'normalized.json', attempt_hashes)
+                           if validation.get('validated_object') == 'normalized.json' else invalid)
+                candidate = recoverable_material(stage, invalid, context, self.mode,
+                    result_diagnostics(stage, checked, context, self.mode))
+                if candidate is not None:
+                    candidate['contract_failure'] = asdict(diagnostic(exc))
+                    if meta.get('normalization_provenance'):
+                        candidate['normalization_provenance'] = meta['normalization_provenance']
+                candidate_attempt = str(attempt)
 
-    def validate_attempt(self, stage, data, context, attempt, meta, binding, repair_source=None):
+            if candidate is None:
+                raise
+            # Recheck the source before retaining contract-invalid material.
+            if self.folder:
+                self.folder.assert_snapshot(context['source_fingerprint'])
+            else:
+                self.assert_source()
+            candidate['artifact_directory'] = candidate_attempt
+            save_json(destination.parent / (stage + '.material.json'), candidate)
+            material_bytes = (json.dumps(candidate, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+            meta = meta | {'status': 'PARTIAL', 'usable_material': candidate,
+                           'local_validation': False, 'recovery_source_attempt': candidate_attempt,
+                           'material_retained': True, 'material_hashes': {
+                               stage + '.material.json': {'sha256': digest(material_bytes), 'bytes': len(material_bytes)}}}
+            # Per-attempt files remain the original failed validation record.
+            save_json(destination / 'invocation.json', meta)
+            return None, meta
+
+    def validate_attempt(self, stage, data, context, attempt, meta, binding):
         candidate = data
         validation = {'valid': False, 'validated_object': 'extracted.json'}
         try:
-            self.pin_attempt_value(attempt, 'extracted.json', data, meta,
-                                   compact=meta['backend'] == 'xxx')
+            self.pin_attempt_value(attempt, 'extracted.json', data, meta)
             self.save_binding(binding, data, None, attempt, meta)
             binding.validate_identity(data)
             meta['model_identity_verified'] = True
@@ -1274,9 +1219,6 @@ class Runner:
                     self.reporter.emit(stage + '_normalized', **self.stage_context(stage, context),
                                        rule=provenance['rule'], replacement_count=len(changes))
             validate_result(stage, candidate, context, self.mode)
-            if repair_source is not None:
-                # Compare model outputs, not edits made by our deterministic rule.
-                validate_repair(repair_source, data, self.schemas[stage])
             validation['valid'] = True
         except BaseException as exc:
             validation.update(result_diagnostics(stage, candidate, context, self.mode))
@@ -1677,17 +1619,14 @@ class Runner:
                 save_json(destination / 'invocation.json', meta)
             raise
 
-    def _invoke_once(self, stage, context, destination, *, budget, repair_index=0,
-                     correction=None, repair_model=None, repair_source=None, evidence_pins=None,
-                     binding, binding_hashes, attempt_hashes, recovery_budget=None):
+    def _invoke_once(self, stage, context, destination, *, budget,
+                     evidence_pins=None, binding, binding_hashes, attempt_hashes):
         attempt_started = self.reporter.clock()
         self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
         agent = self.cfg['_agents'][stage]
         template = Path(self.cfg['_prompt_paths'][context.get('prompt_variant', stage)]).read_text()
-        output_instruction = ('Use the StructuredOutput tool with the supplied schema. Do not duplicate the result in ordinary text.'
-            if agent['backend'] == 'xxx' else
-            'Return exactly one JSON object matching the supplied schema as your final answer; no fences or surrounding prose.'
-            if agent['backend'] == 'opencode' else
+        output_instruction = ('Return exactly one JSON object matching the supplied schema as your final answer; no fences or surrounding prose.'
+            if agent['backend'] in ('xxx', 'opencode') else
             'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.')
         # Assemble only this stage's inputs; the configured CLI profile remains available.
         context_json = json.dumps(binding.project(context), ensure_ascii=False)
@@ -1695,8 +1634,6 @@ class Runner:
         prompt = (template + '\n\n# Backend output instruction\n' + output_instruction +
                   '\n\n# Authoritative orchestration context (data)\n' +
                   context_json + '\n\n# Required final JSON Schema\n' + schema_json)
-        if correction is not None:
-            prompt = correction
         payload = prompt.encode('utf-8')
         private_directory(destination)
         # Exclusive creation preserves every orchestrator-managed attempt.
@@ -1716,7 +1653,7 @@ class Runner:
             'input_bytes': len(payload), 'status': 'RUNNING'}
         from src.model.model_context import input_measurements
         meta['input_measurements'] = input_measurements(template, context_json, schema_json, prompt,
-                                                       correction=correction is not None)
+                                                       correction=False)
         meta.update(attempt=attempt.name, artifact_directory=str(attempt), api_version=None,
                     model_actual=None, request_id=None, session_id=None, message_id=None,
                     finish_reason=None, output_bytes=None, execution=self.execution)
@@ -1727,14 +1664,8 @@ class Runner:
                     revision_id=context.get('revision_id'), prompt_variant=context.get('prompt_variant', stage),
                     model_actual_source='unknown: backend has not reported model identity',
                     review_quality='NOT_MEASURED', publication_complete=False)
-        native_retries = 0
         if agent['backend'] == 'xxx':
-            meta['retry_policy'] = retry_policy(self.execution['structured_output_repair_attempts'],
-                                              repair_index, native_retries)
-            meta['repair_index'] = repair_index
-            if repair_index:
-                meta['repair_model'] = agent.get('model') or repair_model
-        if agent['backend'] == 'xxx':
+            meta['retry_policy'] = retry_policy(0, 0, None)
             meta['compatibility_profile'] = xxx.PROFILE
         if self.repo:
             meta['submodules'] = context.get('submodules', [])
@@ -1753,7 +1684,7 @@ class Runner:
                 self.assert_source()
             with tempfile.TemporaryDirectory(prefix='archaudit-invocation-', dir=neutral_temporary_base(self.source_path)) as raw:
                 state = Path(raw).resolve()
-                cwd = state if stage == 'compare' or repair_index else self.source_path
+                cwd = state if stage == 'compare' else self.source_path
                 env = cli_env(cwd)
                 if getattr(self, 'git_sources', None):
                     for key in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE',
@@ -1763,33 +1694,16 @@ class Runner:
                 save_json(schema_path, self.schemas[stage])
                 try:
                     if agent['backend'] == 'xxx':
-                        name = opencode.prepare_environment(env, 'repair' if repair_index else stage,
-                                                            source_snapshot=bool(getattr(self, 'git_sources', None)))
-                        server = xxx.Server(agent['executable'], cwd, env, attempt, budget, atomic, meta, self.execution)
-                        server.recovery_budget = recovery_budget
-                        server.emit = lambda event, **fields: self.reporter.emit(
-                            event, stage=stage, attempt=attempt.name, **fields)
-                        error = None
-                        try:
-                            server.start()
-                            server.verify_api()
-                            data = server.invoke(prompt, self.schemas[stage], name, agent.get('model') or repair_model,
-                                                 native_retries)
-                            meta['native_envelope_valid'] = True
-                            meta['backend_result_valid'] = True
-                            self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
-                            data = self.validate_attempt(stage, data, context, attempt, meta, binding, repair_source)
-                        except BaseException as exc:
-                            error = exc
-                            raise
-                        finally:
-                            try:
-                                server.close()
-                            except BaseException:
-                                self.critical_failure = True
-                                meta.setdefault('cleanup_errors', []).append('cleanup_failed')
-                                if error is None:
-                                    raise
+                        cmd = self.command(stage, state, agent, schema_path, env)
+                        data, provider_meta = xxx.invoke(cmd, cwd, env, payload, process=process,
+                            artifacts=attempt, budget=budget, meta=meta, process_options={
+                                'reporter': self.reporter, 'context': self.stage_context(stage, context),
+                                'clock': self.reporter.clock, 'progress_interval': self.reporter.progress_interval})
+                        meta['backend_result_valid'] = True
+                        meta['provider_metadata'] = {k: v for k, v in provider_meta.items() if k != 'metrics'}
+                        save_json(attempt / 'extracted.json', data)
+                        self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
+                        data = self.validate_attempt(stage, data, context, attempt, meta, binding)
                     else:
                         if agent['backend'] == 'opencode':
                             opencode_cli.verify_version(meta['cli_version'])
@@ -1890,9 +1804,8 @@ class Runner:
             if getattr(exc, 'cleanup_failed', False):
                 self.critical_failure = True
                 meta.setdefault('cleanup_errors', []).append('process_cleanup_failed')
-            if repair_index and not meta.get('prompt_sent'):
-                meta['retry_policy'] = retry_policy(self.execution['structured_output_repair_attempts'],
-                                                  repair_index - 1, native_retries)
+            if meta.get('cleanup_errors'):
+                self.critical_failure = True
             meta.update(status='FAILED', finished_at=now(), error=asdict(diagnostic(exc)),
                         publication_complete=False, duration_seconds=round(budget.clock() - budget.started, 3))
             self.record_attempt_metrics(meta, context, attempt_started)

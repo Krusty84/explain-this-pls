@@ -112,31 +112,21 @@ class HashlessPipelineTests(FolderFixture):
         self.assertFalse((runner.run_dir / 'revisions/001/study.material.json').exists())
 
 
-class HashlessNativeTests(unittest.TestCase):
-    setUp = native_fixtures.NativeStructuredOutputTests.setUp
-    close = native_fixtures.NativeStructuredOutputTests.close
-    config = native_fixtures.NativeStructuredOutputTests.config
-    stage = native_fixtures.NativeStructuredOutputTests.stage
-    prompts = native_fixtures.NativeStructuredOutputTests.prompts
+class HashlessXXXTests(unittest.TestCase):
+    setUp = native_fixtures.XXXOutputTests.setUp
+    config = native_fixtures.XXXOutputTests.config
+    stage = native_fixtures.XXXOutputTests.stage
+    recorded = native_fixtures.XXXOutputTests.recorded
+    prompts = native_fixtures.XXXOutputTests.prompts
 
-    def test_actual_format_repair_omits_hash_metadata_and_reuses_bindings(self):
-        for backend in ('xxx',):
-            with self.subTest(backend=backend):
-                saved, metadata = self.stage(backend, 'repair-hash-metadata', repairs=1)
-                self.assertTrue(metadata['publication_complete'])
-                original = self.destination / 'attempt-001'
-                corrected = self.destination / 'attempt-002'
-                raw = json.loads((original / 'extracted.json').read_text())
-                self.assertEqual(raw['file_sha256'], 'a1b2c3d4' * 8)
-                prompt = (corrected / 'input.prompt.txt').read_text()
-                self.assertNotIn('a1b2c3d4' * 8, prompt)
-                self.assertNotIn('b2c3d4e5' * 8, prompt)
-                self.assertNotIn('"file_sha256"', prompt)
-                self.assertNotIn('"fragment_sha256"', prompt)
-                self.assertEqual(json.loads((original / 'extracted.json').read_text()), raw)
-                first_binding = json.loads((original / 'binding.json').read_text())
-                second_binding = json.loads((corrected / 'binding.json').read_text())
-                self.assertEqual(first_binding['mappings'], second_binding['mappings'])
-                self.assertEqual(first_binding['wire_sha256'], sha(canonical(raw)))
-                self.assertNotIn('file_sha256', saved)
-                self.assertTrue(saved['program_checks']['evidence'][0]['file_sha256'])
+    def test_invalid_service_hashes_are_saved_but_never_sent_for_repair(self):
+        from src.contracts.contracts import ContractError
+        with self.assertRaises(ContractError):
+            self.stage('xxx', 'schema-extra', repairs=2)
+        attempt = self.destination / 'attempt-001'
+        raw = json.loads((attempt / 'extracted.json').read_text())
+        binding = json.loads((attempt / 'binding.json').read_text())
+        self.assertIn('extra_private_key', raw)
+        self.assertEqual(binding['wire_sha256'], sha(canonical(raw)))
+        self.assertEqual(len(self.prompts()), 1)
+        self.assertFalse((self.destination / 'attempt-002').exists())

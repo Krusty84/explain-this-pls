@@ -14,7 +14,7 @@ from unittest.mock import patch
 from explain import Runner
 from src.backends import codex, claude_code
 from src.contracts.contracts import response_error
-from src.runtime.metrics import HTTPUsage, RunMetrics, measurement, number, sum_usage, usage
+from src.runtime.metrics import RunMetrics, measurement, number, sum_usage, usage
 from src.runtime.reporting import Reporter
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
@@ -28,18 +28,6 @@ def claude_envelope(**extra):
     return {'is_error': False, 'usage': {'input_tokens': 10, 'output_tokens': 4,
                 'cache_read_input_tokens': 20, 'cache_creation_input_tokens': 3},
             'total_cost_usd': 0.1, **extra}
-
-
-def native_message(mid='msg_one', *, total=None, steps=False):
-    tokens = {'input': 10, 'output': 4, 'reasoning': 2, 'cache': {'read': 20, 'write': 3}}
-    if total is not None:
-        tokens['total'] = total
-    info = {'id': mid, 'sessionID': 'ses_test', 'parentID': 'msg_request', 'agent': 'audit',
-            'role': 'assistant', 'providerID': 'provider', 'modelID': 'model',
-            'time': {'completed': 100}, 'tokens': tokens, 'cost': 0.1}
-    parts = [{'id': 'prt_' + str(i), 'sessionID': 'ses_test', 'messageID': mid, 'type': 'step-finish',
-              'tokens': copy.deepcopy(tokens), 'cost': 0.1} for i in range(2)] if steps else []
-    return {'info': info, 'parts': parts}
 
 
 class NormalizerTests(unittest.TestCase):
@@ -88,52 +76,6 @@ class NormalizerTests(unittest.TestCase):
         self.assertEqual(mixed['coverage']['total_tokens'], 'partial')
         self.assertEqual(mixed['coverage']['cost_usd'], 'partial')
 
-    def test_http_whole_history_prefers_steps_and_replaces_polled_snapshots(self):
-        collector = HTTPUsage('xxx', None, 'ses_test', 'msg_request', 'audit')
-        one, two = native_message(steps=True), native_message('msg_two', total=40)
-        two['info']['modelID'] = 'second-model'
-        one['parts'].append(copy.deepcopy(one['parts'][0]))
-        collector.observe([one])
-        collector.observe([one])
-        result = collector.observe([one, two], complete=True)
-        self.assertEqual(result['usage']['total_tokens'], 37 * 2 + 40)
-        self.assertAlmostEqual(result['usage']['cost_usd'], 0.3)
-        self.assertEqual(result['usage']['reasoning_tokens'], 6)
-        self.assertTrue(result['usage']['total_tokens_estimated'])
-        self.assertEqual(result['usage']['coverage']['total_tokens'], 'complete')
-        self.assertEqual({entry['model_actual'] for entry in result['by_model']},
-                         {'provider/model', 'provider/second-model'})
-        self.assertEqual(collector.observe([one, two], complete=True), result)
-        updated = copy.deepcopy(one)
-        updated['parts'][1]['tokens']['output'] = 8
-        self.assertEqual(collector.observe([updated, two], complete=True)['usage']['total_tokens'],
-                         result['usage']['total_tokens'] + 4)
-
-    def test_http_foreign_data_and_unfinished_placeholder_are_not_counted(self):
-        for field, wrong in (('sessionID', 'ses_foreign'), ('parentID', 'msg_foreign'), ('agent', 'other')):
-            collector = HTTPUsage('xxx', None, 'ses_test', 'msg_request', 'audit')
-            foreign = native_message('msg_foreign')
-            foreign['info'][field] = wrong
-            result = collector.observe([native_message(), foreign], complete=True)['usage']
-            self.assertEqual(result['total_tokens'], 37)
-            self.assertEqual(result['coverage']['total_tokens'], 'partial')
-        collector = HTTPUsage('xxx', None, 'ses_test', 'msg_request', 'audit')
-        unfinished = native_message()
-        unfinished['info']['time'] = {}
-        waiting = collector.observe([unfinished])
-        self.assertIsNone(waiting['usage']['total_tokens'])
-        self.assertEqual(waiting['by_model'][0]['model_actual'], 'provider/model')
-
-    def test_http_reported_total_and_zero_cost_are_preserved(self):
-        item = native_message(total=50)
-        item['info']['cost'] = 0
-        collector = HTTPUsage('xxx', None, 'ses_test', 'msg_request', 'audit')
-        result = collector.observe([item], complete=True)['usage']
-        self.assertEqual(result['total_tokens'], 50)
-        self.assertFalse(result['total_tokens_estimated'])
-        self.assertEqual(result['cost_usd'], 0)
-        del item['info']['cost']
-        self.assertIsNone(collector.observe([item], complete=True)['usage']['cost_usd'])
 
     def test_registry_deduplicates_attempts_and_measures_wall_time(self):
         clock = [0]
@@ -266,11 +208,11 @@ class XXXMetricsTests(unittest.TestCase):
     setUp = native.XXXTests.setUp
     run_case = native.XXXTests.run_case
 
-    def test_native_normal_error_and_format_repair_totals(self):
-        for scenario in ('', 'backend-error', 'repair-ok'):
+    def test_cli_normal_error_and_no_format_repair_totals(self):
+        for scenario in ('', 'backend-error', 'schema-extra'):
             self.value['execution'] = {'structured_output_repair_attempts': 1}
             manifest, code = self.run_case(scenario)
-            attempts = 3 if not scenario else 2 if scenario == 'backend-error' else 5
+            attempts = 3 if not scenario else 2 if scenario == 'backend-error' else 2
             metrics = manifest['metrics']
             self.assertEqual(metrics['attempts'], attempts)
             self.assertEqual(metrics['usage']['total_tokens'], 10 * attempts)

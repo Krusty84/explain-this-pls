@@ -99,21 +99,21 @@ advertised as a report.
 
 Metrics are backend metadata and runner measurements, never model-authored report
 fields. They do not change report acceptance, prompts, saved report schemas, or
-the contents of `FINAL_REPORT.md`. OpenCode V2 uses CLI events; XXX uses the shared
-HTTP collector with its own checked profile.
+the contents of `FINAL_REPORT.md`. OpenCode V2 uses CLI events; XXX uses verified
+CLI session exports, with partial pipe-event accounting after a failure.
 
 Each attempt's `invocation.json` adds `metrics` with `usage`, `by_model`,
 `attempts: 1` and `duration_seconds`. Its enclosing invocation still identifies
 the backend, requested/actual model and `invocation_id`. The new duration measures
 only that attempt. The older top-level `duration_seconds` retains its existing
-meaning: elapsed time against the shared stage budget, including earlier repairs.
+meaning: elapsed time against the stage budget.
 Do not sum that older field across attempts.
 
 The run manifest and final stdout JSON contain the same `metrics` snapshot:
 
 - `duration_seconds`: monotonic wall time of this run, including local preparation,
   processing, temporary-source cleanup and report publication up to final metrics capture.
-- `attempts`: orchestrator attempts, including failed attempts and format repairs;
+- `attempts`: orchestrator attempts, including failed attempts;
   it is not a count of the backend's internal model requests or tool calls.
 - `usage`: aggregate counters and their availability, described below.
 - `by_backend` and `by_model`: usage breakdowns. Model entries distinguish
@@ -123,11 +123,11 @@ The run manifest and final stdout JSON contain the same `metrics` snapshot:
   Skipped reviews and locally generated blocked comparisons consume no model tokens.
 
 Attempts are registered once by `invocation_id`. All revisions, all branches,
-format repairs and failed calls count, regardless of which report revision is
+and failed calls count, regardless of which report revision is
 selected. Manifest aliases of the selected revision are never additional usage.
 Attempt, stage and run durations are independently measured, not summed.
 Preflight probes are excluded from model attempts. A `--check` run has zero attempts
-and zero usage, even though XXX readiness checks start a local server.
+and zero usage. XXX readiness checks invoke only version/help commands.
 
 `usage` contains `input_tokens`, `output_tokens`, `cache_read_tokens`,
 `cache_write_tokens`, `reasoning_tokens`, `total_tokens` and `cost_usd`.
@@ -152,51 +152,70 @@ never added to the per-model cost breakdown. Success and error envelopes can car
 usage. A crash result (`error_during_execution`) is partial; reported zeros are
 preserved but do not establish zero spend because remaining usage is unknown.
 
-XXX (OpenCode 1.2.27) collects assistant messages admitted by its stateful transport membership
-model for the owned session and unchanged root request. Internal compaction and
-continuation IDs are separate; they never replace that root. Per-model entries
-retain `origin=stage`, `origin=compaction`, or `origin=discarded` through run aggregation; compaction's
-actual model may differ and its requested model is not inferred from the stage.
-For each message it sums unique `step-finish` parts, or uses completed
-assistant-message metadata when steps are absent. Repeated snapshots replace
-earlier snapshots; message totals and step totals are never added together.
-A reported `tokens.total` wins. Otherwise total is computed as
-`input + cache.read + cache.write + output`, using OpenCode 1.2.27's
-convention that reasoning is included in output; that total is marked estimated.
-The final validated history establishes complete reported usage. Discarded
-unformatted continuation messages are counted once by message/part ID. Earlier
-snapshots, unfinished messages, cancellation/error envelopes and usage retained
-after a backend failure or interruption are partial.
+XXX (OpenCode 1.2.27) accounts for the assistant messages in its verified final
+session export. It sums unique step-finish counters for each message, using
+assistant totals only when no steps exist. Export and stdout counters are never
+added together. Actual models come from assistant metadata; summary-model usage
+has origin=compaction, separate from origin=stage. The stage's actual model is the
+final non-summary assistant model. Missing counters remain unavailable. Pipe-only
+usage after a failure, timeout or interruption remains partial.
 
-CLI pipe logs and already observed HTTP snapshots can preserve usage after errors,
-timeouts and signals. Missing final counters leave unknown remaining spend; no
-extra model calls, session recovery, or extended cleanup budgets are used to obtain
-it. Complete means the available backend accounting is complete, not that it has
-been reconciled against an invoice or includes unreported backend activity.
+Complete accounting means the available backend accounting is complete, not that
+it has been reconciled against an invoice or includes unreported activity.
 
-`backend: "xxx"` selects OpenCode 1.2.27 over HTTP, including XXX-branded
-executables. Its `compatibility_profile` is `opencode-v1.2.27-http`; CLI and health
-versions are recorded verbatim. Optional `expected_version` still compares the
-exact CLI output. Executable names and version branding do not select another
-protocol or model. The production declaration baseline is generated from the
-pinned upstream OpenAPI (commit `4ee426ba549131c4903a71dfb6259200467aca81`).
-The six selected paths and their referenced declarations are compared at preflight
-and every stage server startup. `compactionCount: number` on Session (with or
-without its required-list entry), and the recorded `queued` / `unattended_retry`
-SessionStatus variants are independently optional. Only their exact known shapes
-are admitted; modified/duplicate variants and unrelated contract changes fail.
-Documentation/order and unused endpoints retain the comparator's existing rules.
-Private `api-delta.json` retains the original comparison. `api-compatibility.json`
-records `accepted_extensions` and `residual_delta`; metadata records raw
-`api_changes` and `api_allowed_extensions`. An incompatible API or failed
-authentication check prevents a model request. `--check` creates no session.
+### XXX CLI profile
 
-XXX sends the schema in `format: {type: "json_schema", schema, retryCount: 0}`
-and extracts only `info.structured`, followed by local validation. A zero value
-requests no native format retries but is not proof of internal retry enforcement.
-`structured_output_repair_attempts` retains its default zero and explicit bounded
-repair behavior; `opencode_format_retries` remains a compatibility setting without
-effect. A compaction compatibility failure cannot trigger a format repair.
+backend: "xxx" selects opencode-v1.2.27-cli, including branded executables.
+expected_version retains exact comparison with the executable's version output;
+branding does not switch backend or model. Preflight checks --version, run --help,
+export --help and session delete --help. It creates no session or model request
+and does not prove provider readiness.
+
+Each substantive stage runs:
+    xxx run --format json --agent <private-agent> --title <invocation-title>
+An explicit model adds --model provider/model; otherwise the configured default
+is preserved. The prompt and schema arrive through stdin. No standalone, attach,
+continue or session option is sent. The transient V1 config uses agent/permission,
+allows read/glob/grep/list for source stages, and denies tools for compare.
+Git snapshots retain external_directory denial. User authentication, configuration,
+compaction and hooks stay intact; automatic sharing is disabled for this child.
+No installed binary, global configuration or other backend adapter is modified.
+
+The CLI emits NDJSON events, not a native schema response. Its final answer must
+be one JSON object without surrounding prose/fences. After one successful run,
+one local export <sessionID> confirms session/title/directory, original prompt,
+agent, model, message/part identities and exact final text. The V1 export shape is
+messages[].info/parts. The final assistant must be completed, finish with stop,
+have no error or unfinished tools, and not be a compaction summary. A missing
+CLI step_finish can be confirmed by this export; a contradictory terminal event
+cannot. Conflicting duplicate events, foreign identities and invalid JSON fail.
+
+Automatic compaction runs inside the same CLI process and stage budget.
+The exporter verifies the service/summary/continuation chain; summaries never
+become report results. No HTTP recovery or extra format-correction prompt exists.
+Local schema, binding, normalization, semantic and source checks stay authoritative.
+strict rejects invalid results; compromise may retain eligible material with
+warnings, without treating it as accepted or requesting another model answer.
+Substantive review/revise remains a separate, unchanged pipeline operation.
+
+Legacy http_timeout_seconds, api_doc_timeout_seconds, opencode_format_retries
+and structured_output_repair_attempts remain accepted config keys but have no
+effect on XXX execution. retry_policy reports zero orchestrator retries and null
+format_retries_requested; no native retry-enforcement guarantee is claimed.
+
+Private attempt directories retain input.prompt.txt, schema.json, stdout.log,
+stderr.log, session-export logs, extracted/expanded/validation records and metadata.
+Stage/idle budgets cover run and export; stdout/stderr count as CLI activity.
+Owned process groups are stopped on timeout or interruption. A separate five-second
+cleanup budget exports an interrupted session once if needed, then calls
+session delete only after ownership is proven. Unknown sessions are never guessed,
+listed or deleted. Cleanup errors are recorded, block acceptance, and never mask
+the original failure. Reports are published after cleanup and integrity checks.
+
+The pinned CLI source is OpenCode v1.2.27 commit
+4ee426ba549131c4903a71dfb6259200467aca81, cli/cmd/run.ts, export.ts and session.ts.
+Protocol fixtures are synthetic and use no model. Installed-XXX compaction smoke
+remains explicit opt-in and may incur provider cost; it is never part of --check.
 
 OpenCode V2 runs `run --standalone --format json`, with prompts on stdin and a
 private agent allowing only read/glob/grep (no tools for comparison). Its final
@@ -209,14 +228,13 @@ requires the same session, agent, latest assistant message and exact answer text
 plus successful session/idle outcomes, a completion timestamp and `finish: stop`.
 The private export logs are retained. Failed, mismatched or incomplete exports
 remain failures; no model prompt is repeated or session resumed.
-Schema, binding, evidence and source checks still run locally. V1's HTTP/native
-StructuredOutput contract applies only to XXX. OpenCode V2 makes one model call per
+Schema, binding, evidence and source checks still run locally. OpenCode V2 makes one model call per
 attempt and ignores the retained `opencode_format_retries` and
 `structured_output_repair_attempts` settings. Substantive revision rounds still
 apply. Session history uses OpenCode's standard local storage.
 
 OpenCode CLI usage comes from distinct `step_finish` parts, deduplicated by session,
-message and part ID, with the same token normalization as the HTTP collector.
+message and part ID, with the existing native token normalization.
 A verified export supplies the missing final message's usage once, separately
 labelled `opencode.session_export`; it is not added when that step was reported.
 Incomplete/error streams retain partial counters. The CLI does not report the
@@ -378,10 +396,10 @@ and does not normalize or ignore unknown references.
 
 Live processing preserves the existing source/cleanup guards:
 
-1. Check backend completion, transport/session/request identity, and native
-   StructuredOutput equality with the original completed tool input. Native
-   failures retain the raw envelope privately in `response.json`; they cannot
-   normalize it or admit it to local validation.
+1. Check backend completion and transport identity using that adapter's contract.
+   XXX additionally verifies the original request and final answer against the
+   local export. Failed transports remain private evidence and cannot enter
+   normalization or local result validation.
 2. Retain the original object in private `extracted.json`. Verify model identity
    bindings and write `expanded.json` and `binding.json`. An unknown, foreign or
    stale binding is an identity failure and cannot be repaired or recovered.
@@ -586,17 +604,16 @@ An existing manifest with missing or unsupported `contract_id` / `artifact_forma
 causes `UNSUPPORTED_ARTIFACT_FORMAT` before any artifact writes. Use a new run directory.
 Ordinary successful execution uses catalog → study → review, optionally one
 revised study → full review, then selection → compare (comparison only for
-multiple Git branches). Format repairs stay bounded and may
-not change already valid facts/evidence/assessments. Orchestrator format repairs apply
-only to XXX; OpenCode V2 uses final JSON with local validation.
+multiple Git branches). XXX and OpenCode V2 use final JSON with local validation;
+no orchestrator format-repair prompt is sent.
 
 ## Compact model context
 
 A pure projection builds the model request without mutating internal context.
 Review receives the whole document Markdown once and claim_registry once. Claim
 coordinates retain start/end lines without duplicate quotes; block_map, duplicated
-registries and private provenance are omitted. Comparison, substantive revision
-and format-repair contexts use the same principle. Findings, evidence, limitations,
+registries and private provenance are omitted. Comparison and substantive revision
+contexts use the same principle. Findings, evidence, limitations,
 identifiers and diagnostics remain available; narrative is neither truncated nor
 summarized. Full saved locators, registry hashes and document hashes remain intact.
 Projection removes service hash fields by structure throughout nested documents,
@@ -607,17 +624,13 @@ including commits from repositories using SHA-256, remain unchanged.
 Model folder identities use `source_snapshot_id`; model reviews and comparison
 references use `review_target_id`. The orchestrator generates opaque random IDs
 with `S-` / `T-` prefixes and 16 following characters outside the pure projection.
-Bindings are stable within a run and across format attempts for the same snapshot
+Bindings are stable within a run for the same snapshot
 or frozen revision. New runs receive new IDs. Private mappings retain full source
 and target identities. An ID must match its purpose, source, revision and reference
 role; unknown, foreign or stale IDs fail identity checks without repair or recovery.
 
-Format repair compares original model responses before binding expansion and cannot
-change facts. Full original and invalid responses remain private; the repair prompt
-removes known service hash fields even from malformed response objects, preserving
-prose, quotes and diagnostics. Equal original/invalid objects are sent once with
-both roles identified. Recovery uses only the first original response after its
-identity has been verified; it never promotes contract-invalid text to acceptance.
+Compromise recovery uses only the original response after its identity has
+been verified; it never promotes contract-invalid text to acceptance.
 
 Invocation metadata records `context_format: "compact-context"`.
 `input.prompt.txt` contains the exact request actually sent, with its hash recorded
@@ -661,8 +674,7 @@ COMPLETE and there are HIGH/MEDIUM findings. LOW-only findings, incomplete revie
 transport failures and recovered contract-invalid material do not trigger it.
 prompts.revise supplies a separate prompt to the existing study agent; no revision
 backend profile is introduced. stage_agents.catalog inherits study settings.
-prompts.catalog controls catalog. Each substantive stage has its own budget,
-shared with its format-repair attempts, for at most five stages per snapshot.
+prompts.catalog controls catalog. Each substantive stage has its own budget, for at most five stages per snapshot.
 
 The program compares registries for added, removed and changed claims. Coordinate
 changes alone are not semantic edits; unchanged assertions retain their IDs.
@@ -685,87 +697,3 @@ The manifest records selected_revision and revision history. Comparison uses onl
 selected pairs. Top-level ARCHITECTURE.md, study.json and companion files are exact
 copies of the selected artifacts, published after selection. Frozen-document checks
 run within each revision; a new study can never inherit an older review.
-
-XXX uses the shared inspected OpenCode envelope checks: successful `stop` and
-`tool-calls` were already supported. Closed diagnostics distinguish FINISH_MISSING,
-FINISH_INVALID_TYPE, FINISH_UNKNOWN, FINISH_TRUNCATED (`length`), FINISH_ERROR
-(`error`) and UNFINISHED_TOOL_CALL. No other success reason is enabled. Raw finish
-and envelope remain private; classification is separate. Session/request/agent,
-completion timestamp, errors, pending tools, native structured result, completed
-StructuredOutput/input equality and exact final history snapshot equality remain mandatory.
-The XXX transition model compares a role-specific projection of protected fields:
-IDs/session/role/parent/agent, task settings and creation time remain immutable.
-`user.summary` is mutable metadata with required FileDiff array `diffs` and optional
-string `title`/`body`; `assistant.summary` is a protected boolean. Unknown message
-fields require an explicit profile update. JSON booleans and numbers remain distinct.
-Raw HTTP objects are preserved; the final envelope must match the full final history.
-Text/reasoning may append while open and trim only trailing ECMAScript whitespace
-when part time acquires `end`, including a final chunk coalesced with completion.
-Content replacement, non-whitespace truncation and changes after completion fail.
-Empty/incomplete compaction summaries can remain pending within the original budget.
-Production continuation accepts only the auto/non-overflow service request
-(`auto: true`, `overflow` absent or exactly `false`), its
-linked completed summary and exact reference continuation shape with unchanged
-settings. Retained `format` must equal the original contract exactly. Only a
-missing format after this verified chain returns internal `RecoveryRequired`;
-it does not poison history or bypass an arbitrary ContractError. Changed format
-still fails with `COMPACTION_FORMAT_CHANGED`; unrelated missing formats, incomplete
-summaries, foreign IDs/settings, manual compaction and overflow/replay remain errors.
-
-Only XXX may recover. If the synchronous message POST is pending, the client
-requests abort and waits for that original HTTP response to complete normally.
-Abort acknowledgement, idle status, connection loss or local socket closure do
-not prove completion. A naturally finished POST needs no recovery abort. Stopping
-is bounded by `http_timeout_seconds` and the original stage/idle budgets. Without
-proof the client sends no further message and fails with `TRANSPORT_ERROR` /
-`COMPACTION_RECOVERY_STOP_UNCONFIRMED`, unless a more specific failure or timeout
-already applies. Ordinary resource cleanup still runs.
-
-After stopping, a fresh full history and the returned envelope must agree. The
-unformatted continuation's streaming/text/error messages retain checked session,
-parent, agent and model membership and contribute usage, but cannot be results.
-Only `MessageAbortedError` on the particular continuation cancelled by this
-mechanism is exempted; unrelated errors remain failures. Before sending, the
-validator registers a fresh recovery message ID. The separate user message carries
-the original schema and `retryCount: 0`, verified original agent/selected model,
-applicable original `system`, `tools`, `variant`, and a fixed short instruction to
-continue using saved context and finish with StructuredOutput. History, summary,
-synthetic continuation and research prompt are never rewritten or replayed.
-
-The internal cap is two recovery messages per `Runner.invoke`, shared by its
-structured-output repair attempts. Recovery does not consume those attempts.
-The next loss fails with `BACKEND_INCOMPATIBLE` /
-`COMPACTION_RECOVERY_LIMIT_EXCEEDED`, reason `COMPACTION_FORMAT_MISSING`. Recovery
-POSTs with uncertain outcomes are not retried. The root `request_id` stays fixed;
-`recovery_ids` and `final_parent_id` are separate. Original request/response,
-numbered HTTP snapshots and `recovery-NNN-request/response.json` preserve each
-cycle; private compaction events record detection, stopping, sending and result.
-
-The result must belong to the registered recovery or a subsequent verified
-compaction chain. Native completion, StructuredOutput/input equality,
-`info.structured`, schema, evidence and source-binding validation still apply.
-No native patch, global configuration change, new backend or option is needed.
-OpenCode V2 and session-free `--check` keep their behavior. Only verified membership
-contributes to usage; metadata/repeats do not extend idle time or create attempts,
-and recovery never restarts the stage budget.
-See [XXX history and compaction](docs/xxx-compaction.md).
-A complete-looking JSON never overrides these checks. Compare failure preserves
-prior study/review and the diagnostic summary with a nonzero exit and no assertion
-that differences are absent.
-
-The small local schema subset implements exact object/array/string/boolean/integer
-types, enum, required/properties/additionalProperties, items, minLength, minimum,
-minItems. Artifact-only schemas also use number/null type unions and typed maps
-through additionalProperties. Booleans never satisfy integer/number types. Wire schemas avoid dialect-specific
-extensions; explicit local rules enforce whitespace, IDs, typed links, locators,
-identity, kind/outcome combinations and policy. Empty findings/evidence lists and
-empty optional limitation/quote/uncertainty strings remain legal where specified.
-
-Exit codes remain operational: 0 means processing/review policy satisfied (or
-successful `--check`), 2 means partial material under the chosen policy, 1 means
-failure, 130 means interruption. `--check` checks local prerequisites only, makes
-no model call, tests no provider authorization/model availability and creates no
-fictional review. English CLI and configurable report language use equivalent
-attribution: “supported according to the agent”, “agent reported a contradiction”,
-“policy checks satisfied; factual correctness is not established”. Prompts cannot
-programmatically guarantee honest wording throughout arbitrary model prose.

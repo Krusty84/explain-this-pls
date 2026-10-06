@@ -214,7 +214,7 @@ class GitSourceTests(unittest.TestCase):
 
     def run_cli(self, backend, branches=('main', 'alias'), check=False, action=None, partial_branches=(), policy='compromise'):
         cli = self.base / ('fake-' + backend)
-        fixture = 'fake_opencode.py' if backend == 'xxx' else 'fake_cli.py'
+        fixture = 'fake_xxx.py' if backend == 'xxx' else 'fake_cli.py'
         cli.write_text('#!' + sys.executable + '\nimport runpy\nrunpy.run_path(' + repr(str(ROOT / 'tests/fixtures' / fixture)) + ', run_name="__main__")\n')
         cli.chmod(0o700)
         calls = self.base / ('calls-' + backend + '.jsonl')

@@ -20,7 +20,7 @@
     ]
   },
   "agent": {
-    // XXX is OpenCode 1.2.27 over HTTP; opencode selects the separate V2 CLI.
+    // XXX is OpenCode 1.2.27 over CLI; opencode selects the separate V2 CLI.
     "backend": "xxx",
     // Set to your OpenCode 1.2.27 or XXX command/path. No installation is done.
     "executable": "xxx",
@@ -30,21 +30,12 @@
     "expected_version": null
   },
   "execution": {
-    // Compaction is native backend configuration, not an execution setting.
-    // Its transitions share these budgets and do not create orchestrator attempts.
-    // Stock 1.2.27 loses structured format on automatic compaction; that stage fails
-    // with COMPACTION_FORMAT_MISSING. See docs/xxx-compaction.md. No patch is applied.
+    // Automatic compaction stays inside the single CLI run for each stage.
+    // Final JSON is checked locally against the schema; no format retry is sent.
     // One substantive revision and full review after material findings; use 0 to disable.
     "max_revision_rounds": 1,
     "stage_timeout_seconds": 3600,
-    "idle_timeout_seconds": null,
-    "http_timeout_seconds": 5,
-    "api_doc_timeout_seconds": 30,
-    // Explicit opt-in: at most one extra model request to correct native output format.
-    // Default is 0. All requests share the original stage budget.
-    "structured_output_repair_attempts": 1
-    // XXX always requests format.retryCount=0 for each request.
-    // opencode_format_retries is a legacy compatibility key with no effect.
+    "idle_timeout_seconds": null
   },
   "stage_agents": {},
   "priority_scenarios": [],

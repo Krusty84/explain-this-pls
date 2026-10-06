@@ -269,19 +269,6 @@ class EvidenceIDTests(unittest.TestCase):
                 ctx['claim_registry'][0]['statement'] = 'changed'
                 with self.assertRaises(ContractError): normalize_evidence(stage, wire, ctx)
 
-    def test_repair_compares_only_original_wire_content(self):
-        from src.model.structured_output import validate_repair
-        original = response(self.context) | {'extra': True}
-        corrected = {k: v for k, v in original.items() if k != 'extra'}
-        validate_repair(original, corrected, SCHEMAS['study'])
-        for mutation in ('blocks', 'claims', 'status', 'count'):
-            changed = copy.deepcopy(corrected)
-            if mutation == 'blocks': changed['report_sections'][0]['blocks'][0]['markdown'] = 'new facts'
-            if mutation == 'claims': changed['claims'][0]['statement'] = 'new facts'
-            if mutation == 'status': changed['completion_status'] = 'PARTIAL'
-            if mutation == 'count': changed['claims'] = []
-            with self.assertRaises(ContractError): validate_repair(original, changed, SCHEMAS['study'])
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""XXX integration: real owned subprocesses, synthetic HTTP, no installed agent/model."""
+"""XXX integration: real owned subprocesses, synthetic CLI, no installed agent/model."""
 import json
 import os
 from pathlib import Path
@@ -27,7 +27,7 @@ class XXXTests(unittest.TestCase):
         (self.source / 'app.py').write_text('print(1)\n')
         self.cli = self.root / 'xxx'
         self.cli.write_text('#!' + sys.executable + '\nimport runpy\nrunpy.run_path(' +
-            repr(str(ROOT / 'tests/fixtures/fake_opencode.py')) + ', run_name="__main__")\n')
+            repr(str(ROOT / 'tests/fixtures/fake_xxx.py')) + ', run_name="__main__")\n')
         self.cli.chmod(0o700)
         self.calls = self.root / 'calls.jsonl'
         self.env = {'AUDIT_FAKE_BACKEND': 'xxx', 'AUDIT_FAKE_CALLS': str(self.calls)}
@@ -49,111 +49,8 @@ class XXXTests(unittest.TestCase):
         return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
 
     def prompts(self):
-        return [c for c in self.recorded() if c['method'] == 'POST' and c['path'].endswith('/message')]
+        return [c for c in self.recorded() if c['args'][0] == 'run' and '--help' not in c['args']]
 
-    def test_check_starts_owned_server_checks_api_but_never_prompts(self):
-        manifest, code = self.run_case(check=True)
-        self.assertEqual(code, 0, manifest)
-        self.assertEqual(manifest['status'], 'PREFLIGHT_OK')
-        self.assertFalse(self.prompts())
-        self.assertFalse(any(c['method'] == 'POST' for c in self.recorded()))
-        check = next(iter(manifest['cli_checks'].values()))
-        self.assertEqual(check['version'], 'XXX fixture-unknown')
-        self.assertEqual(check['http']['api_version'], 'XXX fixture-unknown')
-        self.assertEqual(check['http']['compatibility_profile'], 'opencode-v1.2.27-http')
-        self.assertEqual(check['http']['api_allowed_extensions'],
-                         ['compactionCount', 'queued', 'unattended_retry'])
-        for pid in {c['server_pid'] for c in self.recorded()}:
-            with self.assertRaises(ProcessLookupError):
-                os.kill(pid, 0)
-
-    def test_folder_native_schema_single_request_per_stage_and_independent_review(self):
-        # The OpenCode-only retry setting must never enable XXX corrections.
-        self.value['execution'] = {'opencode_format_retries': 2}
-        manifest, code = self.run_case()
-        self.assertEqual(code, 0, manifest)
-        self.assertTrue(manifest['accepted'])
-        prompts = self.prompts()
-        self.assertEqual(len(prompts), 3)
-        self.assertNotEqual(prompts[0]['path'], prompts[1]['path'])
-        self.assertNotEqual(prompts[0]['body']['agent'], prompts[1]['body']['agent'])
-        for call in prompts:
-            self.assertEqual(call['body']['format']['retryCount'], 0)
-            self.assertEqual(call['body']['format']['type'], 'json_schema')
-            self.assertNotIn('model', call['body'])
-            self.assertEqual(call['permissions'], {'*': 'deny', 'read': 'allow', 'glob': 'allow',
-                'grep': 'allow', 'list': 'allow', 'StructuredOutput': 'allow'})
-        context = lambda p: json.loads(p['body']['parts'][0]['text'].split(
-            '# Authoritative orchestration context (data)\n')[1].split('\n\n# Required final JSON Schema')[0])
-        self.assertNotIn('architecture_document', context(prompts[0]))
-        self.assertEqual(context(prompts[2])['architecture_document']['report_markdown'], manifest['study']['report_markdown'])
-        self.assertEqual(manifest['study_invocation']['retry_policy']['orchestrator_retries'], 0)
-        self.assertFalse(manifest['study_invocation']['retry_policy']['native_enforcement_verified'])
-
-    def test_stock_api_preflight_preserves_versions_and_creates_no_session(self):
-        self.env['AUDIT_FAKE_API_EXTENSIONS'] = ''
-        for cli_version, api_version in (('1.2.27', '1.2.27'), ('XXX custom', 'XXX runtime')):
-            with self.subTest(cli=cli_version):
-                self.env.update(AUDIT_FAKE_VERSION=cli_version, AUDIT_FAKE_API_VERSION=api_version)
-                self.value['agent']['expected_version'] = cli_version
-                manifest, code = self.run_case(check=True)
-                self.assertEqual(code, 0, manifest)
-                check = next(iter(manifest['cli_checks'].values()))
-                self.assertEqual(check['version'], cli_version)
-                self.assertEqual(check['http']['api_version'], api_version)
-                self.assertEqual(check['http']['api_changes'], 0)
-                self.assertEqual(check['http']['api_allowed_extensions'], [])
-                self.assertFalse(any(c['method'] == 'POST' for c in self.recorded()))
-
-    def test_stock_api_folder_and_multi_branch_pipeline(self):
-        self.env.update(AUDIT_FAKE_API_EXTENSIONS='', AUDIT_FAKE_VERSION='1.2.27')
-        manifest, code = self.run_case()
-        self.assertEqual(code, 0, manifest)
-        self.assertTrue(manifest['accepted'])
-        self.assertEqual(manifest['study_invocation']['compatibility_profile'], 'opencode-v1.2.27-http')
-        self.assertNotEqual(manifest['study_invocation']['session_id'], manifest['review_invocation']['session_id'])
-        self.init_git(['main', 'other'])
-        manifest, code = self.run_case()
-        self.assertEqual(code, 0, manifest)
-        self.assertTrue(all(branch['accepted'] for branch in manifest['branches']))
-        self.assertTrue(manifest['comparison_invocation']['publication_complete'])
-        for call in self.prompts():
-            self.assertEqual(call['body']['format']['retryCount'], 0)
-        comparisons = [call for call in self.prompts()
-                       if call['permissions'] == {'*': 'deny', 'StructuredOutput': 'allow'}]
-        self.assertEqual(len(comparisons), 1)
-
-    def test_explicit_model_and_expected_version_are_preserved(self):
-        self.value['agent'].update(model='chosen/custom', expected_version='XXX fixture-unknown')
-        manifest, code = self.run_case()
-        self.assertEqual(code, 0, manifest)
-        self.assertEqual(self.prompts()[0]['body']['model'], {'providerID': 'chosen', 'modelID': 'custom'})
-        self.value['agent']['expected_version'] = 'different'
-        manifest, code = self.run_case(check=True)
-        self.assertEqual(code, 1)
-        self.assertEqual(manifest['diagnostics'][0]['code'], 'CLI_VERSION_MISMATCH')
-
-    def test_interface_and_authentication_fail_before_prompt(self):
-        for scenario in ('bad-api', 'bad-api-extension', 'null-doc', 'no-auth', 'bad-health'):
-            with self.subTest(scenario=scenario):
-                manifest, code = self.run_case(scenario, check=True)
-                self.assertEqual(code, 1, manifest)
-                self.assertFalse(self.prompts())
-                self.assertIn(manifest['diagnostics'][0]['failure_kind'], ('BACKEND_INCOMPATIBLE', 'TRANSPORT_ERROR'))
-
-    def test_invalid_results_are_never_repaired_or_published(self):
-        for scenario, kind in (('schema-error', 'SCHEMA_ERROR'), ('wrong-identity', 'IDENTITY_MISMATCH'),
-                ('backend-error', 'BACKEND_ERROR'), ('no-final', 'INCOMPLETE_OUTPUT'),
-                ('foreign-request', 'TRANSPORT_ERROR'), ('prose-only', 'INCOMPLETE_OUTPUT')):
-            with self.subTest(scenario=scenario):
-                previous = len(self.prompts())
-                manifest, code = self.run_case(scenario)
-                self.assertEqual(code, 1, manifest)
-                self.assertFalse(manifest['accepted'])
-                self.assertEqual(manifest['diagnostics'][0]['failure_kind'], kind)
-                self.assertEqual(len(self.prompts()) - previous, 2)
-                self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
-                self.assertTrue((self.run_dir / 'revisions/001/study.logs/attempt-001/response.json').exists())
 
     def git(self, *args):
         return subprocess.check_output(['git', '-C', str(self.source), *args], stderr=subprocess.STDOUT).decode().strip()
@@ -182,7 +79,7 @@ class XXXTests(unittest.TestCase):
             self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
         compare = self.prompts()[-1]
         self.assertNotEqual(compare['cwd'], str(self.source))
-        self.assertEqual(compare['permissions'], {'*': 'deny', 'StructuredOutput': 'allow'})
+        self.assertEqual(compare['permissions'], {'*': 'deny'})
 
     def test_continue_on_error_preserves_unresolved_comparison(self):
         self.init_git(['main', 'other'])
@@ -210,9 +107,9 @@ class XXXTests(unittest.TestCase):
             self.assertEqual(code, 1, manifest)
             self.assertEqual(manifest['diagnostics'][0]['failure_kind'], 'STAGE_TIMEOUT')
             self.assertEqual(manifest['metrics']['attempts'], 2)
-            self.assertEqual(manifest['metrics']['usage']['total_tokens'], 20)
+            self.assertEqual(manifest['metrics']['usage']['total_tokens'], 10)
             self.assertEqual(manifest['metrics']['usage']['coverage']['total_tokens'], 'partial')
-            for pid in {c['server_pid'] for c in self.recorded()}:
+            for pid in {c['pid'] for c in self.recorded()}:
                 with self.assertRaises(ProcessLookupError):
                     os.kill(pid, 0)
             self.assertIsNone(bystander.poll())
@@ -229,12 +126,6 @@ class XXXTests(unittest.TestCase):
             self.assertEqual(code, 1, manifest)
             self.assertEqual(manifest['diagnostics'][0]['failure_kind'], expected)
 
-    def test_unready_server_fails_check_without_model_request(self):
-        with patch('src.backends.opencode.STARTUP_SECONDS', .2):
-            manifest, code = self.run_case('not-ready', check=True)
-        self.assertEqual(code, 1)
-        self.assertEqual(manifest['diagnostics'][0]['failure_kind'], 'STAGE_TIMEOUT')
-        self.assertFalse(self.prompts())
 
     def test_profile_files_and_artifacts_are_private_and_user_config_is_unchanged(self):
         user_config = self.root / 'user-config.json'
@@ -291,13 +182,134 @@ class XXXTests(unittest.TestCase):
                 self.assertEqual(manifest['metrics']['attempts'], 2)
                 self.assertEqual(manifest['metrics']['usage']['total_tokens'], 10)
                 self.assertEqual(manifest['metrics']['usage']['coverage']['total_tokens'], 'partial')
-                for pid in {c['server_pid'] for c in self.recorded()}:
+                for pid in {c['pid'] for c in self.recorded()}:
                     with self.assertRaises(ProcessLookupError):
                         os.kill(pid, 0)
                 self.assertIsNone(bystander.poll())
         finally:
             bystander.terminate()
             bystander.wait(timeout=3)
+
+
+    def test_preflight_checks_cli_only_and_preserves_branded_version(self):
+        self.value['agent']['expected_version'] = 'XXX fixture-unknown'
+        manifest, code = self.run_case(check=True)
+        self.assertEqual(code, 0, manifest)
+        self.assertFalse(self.prompts())
+        self.assertEqual([c['args'] for c in self.recorded()], [
+            ['--version'], ['run', '--help'], ['export', '--help'], ['session', 'delete', '--help']])
+        check = next(iter(manifest['cli_checks'].values()))
+        self.assertEqual(check['compatibility_profile'], 'opencode-v1.2.27-cli')
+        self.assertNotIn('http', check)
+        self.value['agent']['expected_version'] = 'different'
+        manifest, code = self.run_case(check=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(manifest['diagnostics'][0]['code'], 'CLI_VERSION_MISMATCH')
+
+    def test_folder_one_run_per_stage_export_delete_and_separate_review(self):
+        self.value['execution'] = {'structured_output_repair_attempts': 2, 'opencode_format_retries': 2}
+        manifest, code = self.run_case()
+        self.assertEqual(code, 0, manifest)
+        self.assertTrue(manifest['accepted'])
+        calls = self.prompts()
+        self.assertEqual([c['context']['stage'] for c in calls], ['catalog', 'study', 'review'])
+        self.assertEqual(len({c['agent'] for c in calls}), 3)
+        self.assertEqual(len({c['session_id'] for c in calls}), 3)
+        self.assertEqual(len([c for c in self.recorded() if c['args'][0] == 'export' and '--help' not in c['args']]), 3)
+        self.assertEqual(len([c for c in self.recorded() if c['args'][:2] == ['session', 'delete'] and '--help' not in c['args']]), 3)
+        for call in calls:
+            self.assertEqual(call['permissions'], {'*': 'deny', 'read': 'allow', 'glob': 'allow', 'grep': 'allow', 'list': 'allow'})
+            self.assertNotIn('--model', call['args'])
+            self.assertEqual(call['config']['share'], 'disabled')
+        self.assertEqual(manifest['study_invocation']['retry_policy']['orchestrator_retries'], 0)
+        self.assertEqual(manifest['study_invocation']['model_actual'], 'fixture/configured-model')
+        self.assertEqual(calls[-1]['context']['architecture_document']['report_markdown'], manifest['study']['report_markdown'])
+        self.assertFalse(list((self.root / 'calls-sessions').glob('*.json')))
+
+    def test_explicit_model_and_automatic_compaction(self):
+        self.value['agent']['model'] = 'chosen/custom'
+        self.env['AUDIT_FAKE_COMPACTIONS'] = '2'
+        manifest, code = self.run_case()
+        self.assertEqual(code, 0, manifest)
+        self.assertEqual(manifest['study_invocation']['model_actual'], 'chosen/custom')
+        self.assertEqual(manifest['study_invocation']['compaction']['completed'], 2)
+        self.assertEqual(manifest['metrics']['usage']['total_tokens'], 90)
+        self.assertEqual(len(self.prompts()), 3)
+
+    def test_mixed_stage_agents_keep_other_cli_commands_and_results(self):
+        import explain
+        from fixtures.cli_response import cli_result
+        from fixtures.ledger_response import prompt_context, response
+        original = explain.process
+        mock_cli = self.root / 'mock-review'
+        mock_cli.write_text('#!' + sys.executable + '\n')
+        mock_cli.chmod(0o700)
+        for backend in ('codex', 'claude-code', 'opencode'):
+            calls = []
+            self.value['stage_agents'] = {'review': {'backend': backend, 'executable': str(mock_cli)}}
+            def process(command, cwd, env, payload=b'', **kwargs):
+                if command[0] != str(mock_cli):
+                    return original(command, cwd, env, payload, **kwargs)
+                if '--version' in command:
+                    return {'returncode': 0, 'stdout': b'2.0.23', 'stderr': b''}
+                if '--help' in command:
+                    flags = explain.CLI_ADAPTERS[backend].required_flags('folder')
+                    return {'returncode': 0, 'stdout': ' '.join(flags).encode(), 'stderr': b''}
+                calls.append(command)
+                data = response(prompt_context(payload))
+                if backend == 'claude-code': data = {'is_error': False, 'structured_output': data}
+                return cli_result(command, data)
+            before = len(self.prompts())
+            with patch('explain.process', side_effect=process):
+                manifest, code = self.run_case()
+            with self.subTest(backend=backend):
+                self.assertEqual(code, 0, manifest)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(len(self.prompts()) - before, 2)
+                self.assertEqual(manifest['review_invocation']['backend'], backend)
+                self.assertNotIn('--title', calls[0])
+                self.assertEqual('--standalone' in calls[0], backend == 'opencode')
+
+    def test_invalid_results_do_not_retry_or_publish(self):
+        self.value['execution'] = {'structured_output_repair_attempts': 2}
+        for scenario, kind in (
+                ('schema-error', 'SCHEMA_ERROR'), ('schema-extra', 'SCHEMA_ERROR'),
+                ('wrong-identity', 'IDENTITY_MISMATCH'), ('backend-error', 'BACKEND_ERROR'),
+                ('no-final', 'INCOMPLETE_OUTPUT'), ('foreign-request', 'TRANSPORT_ERROR'),
+                ('invalid-json', 'INVALID_JSON'), ('prose-only', 'INVALID_JSON'), ('fences', 'INVALID_JSON'),
+                ('truncated', 'INCOMPLETE_OUTPUT'), ('export-text', 'TRANSPORT_ERROR'),
+                ('summary-only', 'TRANSPORT_ERROR'), ('exit-error', 'BACKEND_ERROR'),
+                ('unfinished-tool', 'INCOMPLETE_OUTPUT')):
+            with self.subTest(scenario=scenario):
+                previous = len(self.prompts())
+                manifest, code = self.run_case(scenario)
+                self.assertEqual(code, 1, manifest)
+                self.assertEqual(manifest['diagnostics'][0]['failure_kind'], kind)
+                self.assertEqual(len(self.prompts()) - previous, 2)
+                self.assertFalse(manifest['accepted'])
+                self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
+                self.assertFalse(list(self.run_dir.rglob('attempt-002')))
+                self.assertTrue((self.run_dir / 'revisions/001/study.logs/attempt-001/stdout.log').exists())
+
+    def test_missing_finish_is_verified_without_repeating_run(self):
+        manifest, code = self.run_case('missing-finish')
+        self.assertEqual(code, 0, manifest)
+        self.assertEqual(len(self.prompts()), 3)
+        self.assertEqual(manifest['study_invocation']['completion_source'], 'session_export')
+
+    def test_foreign_export_is_never_deleted_and_failed_cleanup_blocks_publication(self):
+        for scenario in ('export-foreign', 'export-prompt', 'delete-failed', 'export-failed'):
+            previous = len(self.recorded())
+            manifest, code = self.run_case(scenario)
+            with self.subTest(scenario=scenario):
+                self.assertEqual(code, 1, manifest)
+                self.assertTrue(manifest['critical_failure'])
+                self.assertFalse(manifest['accepted'])
+                calls = self.recorded()[previous:]
+                if scenario in ('export-foreign', 'export-prompt', 'export-failed'):
+                    # Catalog is healthy except when the export command itself fails.
+                    study = [c['session_id'] for c in calls if c.get('context', {}).get('stage') == 'study']
+                    self.assertFalse(any(c['args'][:2] == ['session', 'delete'] and c['args'][-1] in study for c in calls))
 
 
 if __name__ == '__main__':

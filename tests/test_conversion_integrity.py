@@ -39,9 +39,9 @@ class PrivateChainRecoveryTests(FolderFixture):
                     # semantically invalid, so compromise would retain the prose.
                     wire['claims'][0]['evidence_ids'] = ['study:E-999']
                     return cli_result(command, wire)
-                def validate(stage, data, current, attempt, meta, binding, repair_source=None):
+                def validate(stage, data, current, attempt, meta, binding):
                     try:
-                        return original(stage, data, current, attempt, meta, binding, repair_source)
+                        return original(stage, data, current, attempt, meta, binding)
                     except ContractError:
                         target = attempt / filename
                         corrupt_json(target)
@@ -57,80 +57,25 @@ class PrivateChainRecoveryTests(FolderFixture):
                 self.assertFalse((runner.run_dir / 'study.material.json').exists())
                 self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
 
-    def test_changed_raw_response_cannot_be_used_for_format_repair(self):
-        for filename in ('extracted.json', 'expanded.json'):
-            with self.subTest(filename=filename):
-                config = self.config() | {'result_policy': 'compromise',
-                                         'execution': {'structured_output_repair_attempts': 1}}
-                config['_agents']['study']['backend'] = 'xxx'
-                runner = Runner(config, self.base / ('repair-' + filename))
-                runner.versions['xxx:' + config['_agents']['study']['executable']] = '1.2.27'
-                context = {'source_directory': str(self.source),
-                           'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
-                calls = []
-                class SyntheticServer:
-                    def __init__(self, executable, cwd, env, artifacts, budget, writer, meta, execution):
-                        self.artifacts, self.meta = artifacts, meta
-                    def start(self):
-                        pass
-                    def verify_api(self):
-                        pass
-                    def invoke(self, prompt, schema, name, model, retries):
-                        calls.append(prompt)
-                        wire = response(prompt_context(prompt.encode()))
-                        wire['unexpected'] = True
-                        self.meta.update(model_actual='synthetic/model', prompt_sent=True)
-                        (self.artifacts / 'extracted.json').write_text(json.dumps(wire))
-                        return wire
-                    def close(self):
-                        corrupt_json(self.artifacts / filename)
-                with patch('src.backends.xxx.Server', SyntheticServer), \
-                        self.assertRaises(AuditError) as caught:
-                    runner.invoke('study', context, runner.run_dir / 'study.logs')
-                self.assertEqual(caught.exception.failure_layer, 'integrity')
-                self.assertTrue(runner.critical_failure)
-                self.assertEqual(len(calls), 1)
-                self.assertFalse((runner.run_dir / 'study.logs/attempt-002').exists())
-                self.assertFalse((runner.run_dir / 'study.material.json').exists())
-
-    def test_wrong_native_task_never_starts_repair_or_recovery(self):
+    def test_wrong_xxx_task_never_retries_or_retains_material(self):
         for policy in ('strict', 'compromise'):
-            with self.subTest(policy=policy):
-                config = self.config() | {'result_policy': policy,
-                                         'execution': {'structured_output_repair_attempts': 1}}
-                config['_agents']['study']['backend'] = 'xxx'
-                runner = Runner(config, self.base / ('wrong-task-' + policy))
-                runner.versions['xxx:' + config['_agents']['study']['executable']] = '1.2.27'
-                context = {'source_directory': str(self.source),
-                           'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
-                calls = []
-                class SyntheticServer:
-                    def __init__(self, executable, cwd, env, artifacts, budget, writer, meta, execution):
-                        self.artifacts, self.meta = artifacts, meta
-                    def start(self):
-                        pass
-                    def verify_api(self):
-                        pass
-                    def close(self):
-                        pass
-                    def invoke(self, prompt, schema, name, model, retries):
-                        calls.append(prompt)
-                        wire = response(prompt_context(prompt.encode()))
-                        if len(calls) == 1:
-                            wire['task'] = 'architecture_comparison'
-                        self.meta.update(model_actual='synthetic/model', prompt_sent=True)
-                        (self.artifacts / 'extracted.json').write_text(json.dumps(wire))
-                        return wire
-                with patch('src.backends.xxx.Server', SyntheticServer), \
-                        self.assertRaises(ContractError) as caught:
-                    runner.invoke('study', context, runner.run_dir / 'study.logs')
-                self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')
-                self.assertEqual(caught.exception.details.get('code'), 'TASK_IDENTITY_MISMATCH')
-                self.assertEqual(len(calls), 1)
-                self.assertFalse((runner.run_dir / 'study.logs/attempt-002').exists())
-                self.assertFalse((runner.run_dir / 'study.material.json').exists())
-                self.assertFalse((runner.run_dir / 'study.json').exists())
-                self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
+            config = self.config() | {'result_policy': policy, 'execution': {'structured_output_repair_attempts': 2}}
+            config['_agents']['study']['backend'] = 'xxx'
+            runner = Runner(config, self.base / ('xxx-' + policy))
+            context = {'source_directory': str(self.source),
+                       'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
+            calls = []
+            def invoke(command, cwd, env, payload, **kwargs):
+                calls.append(payload)
+                wire = response(prompt_context(payload))
+                wire['task'] = 'architecture_comparison'
+                return wire, {}
+            with patch('src.backends.xxx.invoke', side_effect=invoke), self.assertRaises(ContractError) as caught:
+                runner.invoke('study', context, runner.run_dir / 'study.logs')
+            self.assertEqual(caught.exception.details.get('code'), 'TASK_IDENTITY_MISMATCH')
+            self.assertEqual(len(calls), 1)
+            self.assertFalse((runner.run_dir / 'study.material.json').exists())
+            self.assertFalse((runner.run_dir / 'study.logs/attempt-002').exists())
 
     def test_review_cannot_change_published_study_conversion_chain(self):
         for filename in ('extracted.json', 'expanded.json', 'normalized.json', 'normalization.json',

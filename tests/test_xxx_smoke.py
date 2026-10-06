@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 @unittest.skipUnless(os.environ.get('EXPLAIN_XXX_COMPACTION_SMOKE') == '1',
                      'not run: installed XXX compaction smoke requires explicit opt-in (may incur cost)')
 class InstalledXXXCompactionSmoke(unittest.TestCase):
-    def test_auto_compaction_continuation_native_output_and_local_validation(self):
+    def test_auto_compaction_cli_export_and_local_validation(self):
         if sys.platform not in ('linux', 'darwin'):
             self.skipTest('not run: runtime requires Linux or macOS')
         executable = os.environ.get('EXPLAIN_XXX_EXECUTABLE', 'xxx')
@@ -39,7 +39,7 @@ class InstalledXXXCompactionSmoke(unittest.TestCase):
             template.write_text((ROOT / 'prompts/study.md').read_text() +
                 '\nThis is a synthetic compatibility smoke. Read every module in ranges and compare '
                 'the independent transformations before reporting; do not execute them. '
-                'If automatic compaction occurs, continue to the native StructuredOutput result.\n')
+                'If automatic compaction occurs, continue to the final JSON answer.\n')
             config = root / 'config.json'
             config.write_text(json.dumps({'result_policy': 'strict', 'mode': 'folder',
                 'folder_mode': {'path': str(source)}, 'reports_dir': str(root / 'reports'),
@@ -51,14 +51,14 @@ class InstalledXXXCompactionSmoke(unittest.TestCase):
                 'prompts': {'study': str(template)}}))
             runner = Runner(load_config(config), root / 'run')
             manifest, code = runner.run()
-            # Missing compaction, format loss and local schema/identity/semantic
+            # Missing compaction, CLI/export and local schema/identity/semantic
             # errors all FAIL; a normal small successful run is not proof.
             self.assertEqual(code, 0, manifest.get('diagnostics'))
             self.assertTrue(manifest['accepted'])
             attempts = [json.loads(p.read_text()) for p in (root / 'run').rglob('attempt-*/invocation.json')]
-            self.assertTrue(any(a.get('compaction', {}).get('continuations', 0) > 0 for a in attempts),
+            self.assertTrue(any(a.get('compaction', {}).get('completed', 0) > 0 for a in attempts),
                             'No automatic compaction/continuation observed; smoke criterion not met')
-            self.assertTrue(all(a.get('native_envelope_valid') and a.get('backend_result_valid') for a in attempts))
+            self.assertTrue(all(a.get('completion_source') == 'session_export' and a.get('backend_result_valid') for a in attempts))
 
 
 if __name__ == '__main__':

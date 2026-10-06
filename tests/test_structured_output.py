@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""XXX native output and shared transport with synthetic local HTTP runtimes."""
+"""XXX CLI output and shared result acceptance."""
 import copy
 import json
 import os
@@ -13,25 +13,26 @@ from unittest.mock import patch
 
 from src.contracts.contracts import ContractError, SCHEMAS, schema_diagnostics, validate_result
 from src.runtime.execution import Budget, execution_settings
-from explain import AuditError, Folder, Runner, atomic
-from src.backends import opencode
+from explain import AuditError, Folder, Runner, atomic, load_config
 from src.backends import xxx
 from src.model.structured_output import blocked_comparison, required_unresolved
-import test_opencode_http as http_fixtures
 from test_explain import doc, review
 from fixtures.ledger_response import response
 import test_xxx as xxx_fixtures
 
 
-class NativeStructuredOutputTests(unittest.TestCase):
-    setUp = http_fixtures.HTTPFixture.setUp
-    close = http_fixtures.HTTPFixture.close
-    config = http_fixtures.HTTPFixture.config
+class XXXOutputTests(unittest.TestCase):
+    setUp = xxx_fixtures.XXXTests.setUp
+    recorded = xxx_fixtures.XXXTests.recorded
+    prompts = xxx_fixtures.XXXTests.prompts
+
+    def config(self):
+        path = self.root / 'config.json'
+        path.write_text(json.dumps(self.value))
+        return load_config(path)
 
     def stage(self, backend, scenario, repairs=0, stage='study', settings=None):
         config = self.config()
-        for agent in config['_agents'].values():
-            agent['backend'] = backend
         config['execution'] = {'structured_output_repair_attempts': repairs, **(settings or {})}
         destination = self.root / f'case-{len(list(self.root.glob("case-*")))}' / (stage + '.logs')
         runner = Runner(config, destination.parent)
@@ -40,343 +41,39 @@ class NativeStructuredOutputTests(unittest.TestCase):
                    'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
         if stage == 'review':
             context = runner.freeze_review(materialize_study(response(context)), context, destination.parent)
-        self.destination = destination
-        self.last_runner = runner
-        env = self.env | {'AUDIT_FAKE_BACKEND': backend, 'AUDIT_FAKE_CASE': scenario}
-        # A real fixture subprocess, not an installed binary or paid provider.
-        with patch.dict(os.environ, env):
+        self.destination, self.last_runner = destination, runner
+        with patch.dict(os.environ, self.env | {'AUDIT_FAKE_CASE': scenario}):
             return runner.invoke(stage, context, destination)
 
-    def prompts(self):
-        calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
-        return [c for c in calls if c['method'] == 'POST' and c['path'].endswith('/message')]
+    def test_normalization_retains_original_cli_json(self):
+        with patch.dict(os.environ, {'AUDIT_FAKE_LOCAL_REFS': '1'}):
+            data, meta = self.stage('xxx', '', repairs=2)
+        attempt = self.destination / 'attempt-001'
+        original = json.loads((attempt / 'extracted.json').read_text())
+        normalized = json.loads((attempt / 'normalized.json').read_text())
+        self.assertEqual(original['claims'][0]['evidence_ids'], ['E-001'])
+        self.assertEqual(normalized['claims'][0]['evidence_ids'], ['study:E-001'])
+        self.assertTrue(meta['publication_complete'])
+        self.assertEqual(len(self.prompts()), 1)
 
-    def test_native_study_normalization_after_transport_before_frozen_plan(self):
-        from src.analysis.evidence import canonical, sha
-        for backend in ('xxx',):
-            start = len(self.prompts())
-            with patch.dict(os.environ, {'AUDIT_FAKE_LOCAL_REFS': '1'}):
-                saved, meta = self.stage(backend, 'valid', repairs=2)
-            attempt = self.destination / 'attempt-001'
-            extracted = json.loads((attempt / 'extracted.json').read_text())
-            candidate = json.loads((attempt / 'normalized.json').read_text())
-            envelope = json.loads((attempt / 'response.json').read_text())
-            self.assertEqual(extracted['claims'][0]['evidence_ids'], ['E-001'])
-            self.assertEqual(envelope['info']['structured'], extracted)
-            self.assertEqual(envelope['parts'][1]['state']['input'], extracted)
-            self.assertEqual(candidate['claims'][0]['evidence_ids'], ['study:E-001'])
-            self.assertEqual(saved['claims'], materialize_study(candidate)['claims'])
-            self.assertEqual(saved['normalization_provenance']['replacement_count'], 1)
-            self.assertEqual(saved['review_plan']['registry_sha256'], sha(canonical(saved['claims'])))
-            self.assertTrue(meta['publication_complete'])
-            self.assertEqual(len(self.prompts()) - start, 1)
-            self.assertEqual(meta['retry_policy']['orchestrator_repair_attempts_performed'], 0)
-
-    def test_native_transport_and_cleanup_failures_cannot_be_normalized_into_success(self):
-        original_close = opencode.Server.close
-        def fail_close(server):
-            original_close(server)
-            raise OSError('synthetic cleanup failure')
-        for backend in ('xxx',):
-            for scenario in ('no-final', 'foreign-session', 'foreign-request', 'tool-input-mismatch',
-                             'wrong-identity', 'source-change', 'cleanup'):
-                (self.source / 'app.py').write_text('print(1)')
-                before = len(self.prompts())
-                config = self.config() | {'result_policy': 'compromise'}
-                with self.subTest(backend=backend, scenario=scenario), \
-                        patch.object(self, 'config', return_value=config), \
-                        patch.dict(os.environ, {'AUDIT_FAKE_LOCAL_REFS': '1'}), \
-                        patch.object(opencode.Server, 'close', fail_close if scenario == 'cleanup' else original_close), \
-                        self.assertRaises((ContractError, AuditError, OSError)):
-                    self.stage(backend, scenario, repairs=2)
-                self.assertEqual(len(self.prompts()) - before, 1)
-                self.assertFalse((self.destination.parent / 'study.json').exists())
-                meta = json.loads((self.destination / 'invocation.json').read_text())
-                self.assertFalse(meta['publication_complete'])
-                if scenario not in ('cleanup', 'source-change'):
-                    self.assertFalse((self.destination / 'attempt-001/normalized.json').exists())
-
-    def test_native_review_definition_normalization_keeps_target_and_raw_envelope(self):
-        for backend in ('xxx',):
+    def test_schema_errors_never_consume_legacy_repair_setting(self):
+        for repairs in (0, 1, 2):
             before = len(self.prompts())
-            with patch.dict(os.environ, {'AUDIT_FAKE_SHORT_IDS': '1'}):
-                saved, meta = self.stage(backend, 'valid', repairs=2, stage='review')
-            attempt = self.destination / 'attempt-001'
-            extracted = json.loads((attempt / 'extracted.json').read_text())
-            normalized = json.loads((attempt / 'normalized.json').read_text())
-            envelope = json.loads((attempt / 'response.json').read_text())
-            self.assertEqual(extracted, envelope['info']['structured'])
-            self.assertEqual(extracted, envelope['parts'][1]['state']['input'])
-            self.assertEqual(extracted['evidence'][0]['id'], 'review:E-1')
-            self.assertEqual(normalized['evidence'][0]['id'], 'E-001')
-            self.assertEqual(saved['claims'][0]['evidence_ids'], ['review:E-001'])
-            expanded = json.loads((attempt / 'expanded.json').read_text())
-            self.assertEqual(saved['target'], expanded['target'])
-            self.assertNotIn('target', extracted)
-            self.assertIn('review_target_id', extracted)
-            self.assertEqual(meta['normalization_provenance']['replacement_count'], 2)
-            self.assertEqual(len(self.prompts()) - before, 1)
-            self.assertTrue(meta['publication_complete'])
-
-    def test_native_string_claims_are_retained_and_never_model_repaired(self):
-        for backend in ('xxx',):
-            for policy in ('strict', 'compromise'):
-                before = len(self.prompts())
-                config = self.config() | {'result_policy': policy}
-                with patch.object(self, 'config', return_value=config):
-                    if policy == 'strict':
-                        with self.assertRaises(ContractError) as caught:
-                            self.stage(backend, 'claims-string', repairs=2)
-                        self.assertEqual(caught.exception.details['code'], 'CLAIMS_TYPE_MISMATCH')
-                    else:
-                        saved, meta = self.stage(backend, 'claims-string', repairs=2)
-                        self.assertIsNone(saved)
-                        self.assertIn('CLAIMS_TYPE_MISMATCH', meta['usable_material']['contract_failure']['message'])
-                self.assertEqual(len(self.prompts()) - before, 1)
-                self.assertFalse((self.destination.parent / 'study.json').exists())
-                self.assertFalse((self.destination / 'attempt-001/normalized.json').exists())
-
-    def test_native_review_unique_bare_references_are_normalized_after_envelope_validation(self):
-        for policy in ('strict', 'compromise'):
-            config = self.config() | {'result_policy': policy}
-            before = len(self.prompts())
-            with self.subTest(policy=policy), patch.object(self, 'config', return_value=config):
-                saved, meta = self.stage('xxx', 'review-bare-unique', repairs=2, stage='review')
-            attempt = self.destination / 'attempt-001'
-            extracted = json.loads((attempt / 'extracted.json').read_text())
-            envelope = json.loads((attempt / 'response.json').read_text())
-            self.assertEqual(extracted, envelope['info']['structured'])
-            self.assertEqual(extracted, envelope['parts'][1]['state']['input'])
-            self.assertEqual(extracted['findings'][0]['evidence_ids'], ['E-002'])
-            self.assertEqual(saved['claims'][0]['evidence_ids'], ['review:E-002', 'study:E-001'])
-            self.assertEqual(saved['findings'][0]['evidence_ids'], ['review:E-002'])
-            self.assertEqual(meta['normalization_provenance']['replacement_count'], 3)
-            self.assertTrue(meta['publication_complete'])
-            self.assertTrue(meta['local_validation'])
-            self.assertEqual(len(self.prompts()) - before, 1)
-            self.assertEqual(meta['retry_policy']['orchestrator_repair_attempts_performed'], 0)
-
-    def test_native_review_ambiguous_bare_references_are_not_normalized(self):
-        for backend in ('xxx',):
-            with patch.dict(os.environ, {'AUDIT_FAKE_LOCAL_REFS': '1'}), self.assertRaises(ContractError) as caught:
-                self.stage(backend, 'valid', stage='review')
-            self.assertEqual(caught.exception.details['code'], 'UNKNOWN_EVIDENCE_REFERENCE')
-            attempt = self.destination / 'attempt-001'
-            self.assertEqual(json.loads((attempt / 'normalized.json').read_text()),
-                             json.loads((attempt / 'expanded.json').read_text()))
-            self.assertEqual(json.loads((attempt / 'normalization.json').read_text())['replacement_count'], 0)
-
-    def test_missing_claims_never_triggers_invented_registry_repair(self):
-        for backend in ('xxx',):
-            for policy in ('strict', 'compromise'):
-                config = self.config() | {'result_policy': policy}
-                before = len(self.prompts())
-                with self.subTest(backend=backend, policy=policy), patch.object(self, 'config', return_value=config):
-                    if policy == 'strict':
-                        with self.assertRaises(ContractError) as caught:
-                            self.stage(backend, 'missing-claims', repairs=2)
-                        self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')
-                        self.assertIn('claims', caught.exception.details['missing_keys'])
-                    else:
-                        data, meta = self.stage(backend, 'missing-claims', repairs=2)
-                        self.assertIsNone(data)
-                        self.assertNotIn('claims', meta['usable_material'])
-                        self.assertFalse(meta['local_validation'])
-                self.assertEqual(len(self.prompts()) - before, 1)
-
-    def test_markdown_study_is_not_recovered_repaired_or_published(self):
-        for backend in ('xxx',):
-            for policy in ('strict', 'compromise'):
-                config = self.config() | {'result_policy': policy}
-                before = len(self.prompts())
-                with self.subTest(backend=backend, policy=policy), patch.object(self, 'config', return_value=config):
-                    with self.assertRaises(ContractError) as caught:
-                        self.stage(backend, 'markdown-study', repairs=2)
-                    self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')
-                    self.assertIn('report_sections', caught.exception.details['missing_keys'])
-                self.assertEqual(len(self.prompts()) - before, 1)
-                for name in ('study.json', 'study.material.json', 'ARCHITECTURE.md', 'review.plan.json'):
-                    self.assertFalse((self.destination.parent / name).exists())
-                metadata = json.loads((self.destination / 'invocation.json').read_text())
-                self.assertFalse(metadata['publication_complete'])
-                self.assertNotIn('usable_material', metadata)
-
-    def test_claim_counts_and_no_normalization_even_empty(self):
-        for backend in ('xxx',):
-            for scenario, count in (('claims-44', 44), ('claims-40', 40), ('claims-empty', 44)):
-                with self.subTest(backend=backend, scenario=scenario), self.assertRaises(ContractError) as caught:
-                    self.stage(backend, scenario, stage='review')
-                exc = caught.exception
-                self.assertEqual(exc.failure_kind, 'SCHEMA_ERROR')
-                self.assertEqual(exc.details['total_violations'], count)
-                self.assertEqual([v['path'] for v in exc.details['violations']], [f'$.claims[{i}]' for i in range(count)])
-                self.assertTrue(all(v['missing_keys'] == [] and v['extra_key_count'] == 1 for v in exc.details['violations']))
-                self.assertNotIn('claim_ids', json.dumps(exc.details))
-                artifact = self.destination / 'attempt-001'
-                extracted = json.loads((artifact / 'extracted.json').read_text())
-                self.assertEqual(extracted['claims'][0]['claim_ids'], [] if scenario == 'claims-empty' else ['C-PRIVATE'])
-                self.assertEqual(json.loads((artifact / 'response.json').read_text())['info']['structured'], extracted)
-                self.assertEqual(json.loads((artifact / 'validation.json').read_text())['schema_diagnostics']['violations'][0]['extra_keys'], ['claim_ids'])
-                self.assertFalse((self.destination.parent / 'review.json').exists())
-
-    def test_explicit_repair_bounds_and_complete_validation(self):
-        for extensions in ('compactionCount,queued,unattended_retry', ''):
-            backend = 'xxx'
-            self.env.update(AUDIT_FAKE_API_EXTENSIONS=extensions, AUDIT_FAKE_VERSION='1.2.27')
-            for scenario, repairs, expected, count in (
-                    ('repair-ok', 0, 'SCHEMA_ERROR', 1),
-                    ('repair-ok', 1, None, 2),
-                    ('repair-invalid', 1, 'SCHEMA_ERROR', 2),
-                    ('repair-invalid', 2, 'SCHEMA_ERROR', 3),
-                    ('repair-semantic', 1, 'IDENTITY_MISMATCH', 2),
-                    ('wrong-identity', 2, 'IDENTITY_MISMATCH', 1),
-                    ('foreign-request', 2, 'TRANSPORT_ERROR', 1),
-                    ('backend-error', 2, 'BACKEND_ERROR', 1),
-                    ('prose-only', 2, 'INCOMPLETE_OUTPUT', 1)):
-                with self.subTest(extensions=extensions, scenario=scenario, repairs=repairs):
-                    start = len(self.prompts())
-                    if expected:
-                        with self.assertRaises(ContractError) as caught:
-                            self.stage(backend, scenario, repairs)
-                        self.assertEqual(caught.exception.failure_kind, expected)
-                    else:
-                        data, meta = self.stage(backend, scenario, repairs)
-                        self.assertTrue(meta['local_validation'])
-                        self.assertEqual(data['completion_status'], 'COMPLETE')
-                    prompts = self.prompts()[start:]
-                    self.assertEqual(len(prompts), count)
-                    self.assertEqual((self.destination.parent / 'study.json').exists(), expected is None)
-                    meta = json.loads((self.destination / 'invocation.json').read_text())
-                    policy = meta['retry_policy']
-                    self.assertEqual(policy['orchestrator_repair_attempts_configured'], repairs)
-                    self.assertEqual(policy['orchestrator_repair_attempts_performed'], count - 1)
-                    self.assertEqual(policy['format_retries_requested'], 0 if backend == 'xxx' else 2)
-                    self.assertEqual(len(list(self.destination.glob('attempt-*'))), count)
-                    if count == 2:
-                        self.assertNotEqual(prompts[0]['path'], prompts[1]['path'])
-                        self.assertNotEqual(prompts[0]['body']['agent'], prompts[1]['body']['agent'])
-                        self.assertNotEqual(prompts[1]['cwd'], str(self.source))
-                        self.assertEqual(prompts[1]['permissions'], {'*': 'deny', 'StructuredOutput': 'allow'})
-                        self.assertEqual(prompts[0]['body']['format'], prompts[1]['body']['format'])
-                        self.assertEqual(prompts[1]['body']['model'],
-                                         {'providerID': 'fixture', 'modelID': 'configured-model'})
-                        self.assertIn('extra_private_key', prompts[1]['body']['parts'][0]['text'])
-                        self.assertNotIn('single_prompt', policy['mode'])
-                        first = json.loads((self.destination / 'attempt-001/invocation.json').read_text())
-                        self.assertEqual(first['error']['failure_kind'], 'SCHEMA_ERROR')
-                        self.assertFalse(first['local_validation'])
-
-    def test_stage_budget_is_shared_with_repair(self):
-        original = opencode.Server.start
-        for backend in ('xxx',):
-            deadlines = []
-            def record(server):
-                deadlines.append(server.budget.deadline)
-                return original(server)
-            start = time.monotonic()
-            with patch.object(opencode.Server, 'start', record), self.assertRaises(ContractError) as caught:
-                self.stage(backend, 'repair-timeout', 1, settings={'stage_timeout_seconds': 1.5})
-            self.assertEqual(caught.exception.failure_kind, 'STAGE_TIMEOUT')
-            self.assertEqual(len(deadlines), 2)
-            self.assertEqual(deadlines[0], deadlines[1])
-            self.assertLess(time.monotonic() - start, 2.5)
-            self.assertFalse((self.destination.parent / 'study.json').exists())
-
-    def test_source_change_is_not_repaired_or_published(self):
-        for backend in ('xxx',):
-            (self.source / 'app.py').write_text('print(1)')
-            start = len(self.prompts())
-            with self.assertRaises(AuditError):
-                self.stage(backend, 'source-change', 2)
-            self.assertEqual(len(self.prompts()) - start, 1)
-            self.assertEqual((self.source / 'app.py').read_text(), 'unexpected fixture mutation\n')
-            self.assertFalse((self.destination.parent / 'study.json').exists())
-
-    def test_repair_cannot_improve_verdict_or_replace_evidence(self):
-        for backend in ('xxx',):
-            for scenario in ('repair-verdict', 'repair-evidence'):
-                start = len(self.prompts())
-                with self.assertRaises(ContractError) as caught:
-                    self.stage(backend, scenario, 2, stage='review')
-                self.assertEqual(caught.exception.failure_kind, 'SEMANTIC_ERROR')
-                self.assertEqual(len(self.prompts()) - start, 2)
-                self.assertFalse((self.destination.parent / 'review.json').exists())
-
-    def test_cleanup_failure_keeps_schema_error_and_prevents_repair(self):
-        original = opencode.Server.close
-        def fail(server):
-            original(server)
-            raise OSError('synthetic cleanup failure')
-        for backend in ('xxx',):
-            start = len(self.prompts())
-            with patch.object(opencode.Server, 'close', fail), self.assertRaises(ContractError) as caught:
-                self.stage(backend, 'repair-ok', 1)
-            self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')
-            self.assertEqual(len(self.prompts()) - start, 1)
-            self.assertFalse((self.destination.parent / 'study.json').exists())
-
-    def test_doc_slower_than_old_five_seconds_then_exactly_one_model_request(self):
-        self.env['AUDIT_FAKE_DOC_DELAY'] = '5.1'
-        for backend in ('xxx',):
-            start = len(self.prompts())
-            data, meta = self.stage(backend, 'doc-delay')
-            self.assertEqual(data['completion_status'], 'COMPLETE')
-            self.assertEqual(len(self.prompts()) - start, 1)
-            responses = [r for r in meta['http_responses'] if r['operation'] == 'GET /doc']
-            self.assertEqual(len(responses), 3 if backend == 'xxx' else 1)
-            self.assertTrue(all(r['limit_seconds'] == 30 and r['elapsed_seconds'] > 5 for r in responses))
-
-    def test_socket_timeout_has_same_category_and_context_as_watchdog(self):
-        from types import SimpleNamespace
-        for backend, cls in (('xxx', xxx.Server), ('opencode', opencode.Server)):
-            meta = {}
-            server = cls(str(self.cli), self.source, self.env, self.artifacts, Budget(5), atomic, meta)
-            request = SimpleNamespace(number=1, body=b'{"partial":', status=200,
-                operation='GET /doc', limit=30, started=time.monotonic(),
-                budget_source='http_operation', error=TimeoutError('synthetic socket timeout'))
             with self.assertRaises(ContractError) as caught:
-                server.finish(request)
-            self.assertEqual(caught.exception.failure_kind, 'STAGE_TIMEOUT')
-            self.assertEqual(caught.exception.details['operation'], 'GET /doc')
-            self.assertEqual(caught.exception.details['limit_seconds'], 30)
-            self.assertEqual(caught.exception.details['budget_source'], 'http_operation')
-            self.assertEqual((self.artifacts / 'response-001.json').read_bytes(), request.body)
+                self.stage('xxx', 'schema-extra', repairs)
+            self.assertEqual(caught.exception.failure_kind, 'SCHEMA_ERROR')
+            self.assertEqual(len(self.prompts()) - before, 1)
+            self.assertFalse((self.destination / 'attempt-002').exists())
 
-    def test_doc_limits_and_absolute_watchdog_for_both_backends(self):
-        for backend, cls in (('xxx', xxx.Server), ('opencode', opencode.Server)):
-            for scenario in ('doc-delay', 'doc-hang', 'doc-drip-body', 'doc-drip-headers'):
-                with self.subTest(backend=backend, scenario=scenario):
-                    artifacts = self.root / (backend + scenario); artifacts.mkdir()
-                    env = self.env | {'AUDIT_FAKE_BACKEND': backend, 'AUDIT_FAKE_CASE': scenario,
-                                      'AUDIT_FAKE_DOC_DELAY': '.15' if scenario == 'doc-delay' else '2'}
-                    settings = execution_settings({'http_timeout_seconds': .1, 'api_doc_timeout_seconds': .4})
-                    meta = {}
-                    server = cls(str(self.cli), self.source, env, artifacts, Budget(5), atomic, meta, settings)
-                    start = time.monotonic()
-                    try:
-                        server.start()
-                        if scenario == 'doc-delay':
-                            server.verify_api()
-                        else:
-                            with self.assertRaises(ContractError) as caught:
-                                server.verify_api()
-                            self.assertEqual(caught.exception.failure_kind, 'STAGE_TIMEOUT')
-                            detail = caught.exception.details
-                            self.assertEqual(detail['operation'], 'GET /doc')
-                            self.assertEqual(detail['limit_seconds'], .4)
-                            self.assertEqual(detail['budget_source'], 'http_operation')
-                            self.assertGreaterEqual(detail['elapsed_seconds'], .38)
-                            partial = list(artifacts.glob('*.partial'))
-                            if scenario == 'doc-drip-body':
-                                self.assertTrue(any(p.stat().st_size for p in partial))
-                    finally:
-                        server.close()
-                    self.assertLess(time.monotonic() - start, 2)
-                    self.assertEqual(meta['cleanup_errors'], [])
-                    with self.assertRaises(ProcessLookupError):
-                        os.kill(server.process.pid, 0)
-            self.assertGreaterEqual(cls.preflight_seconds(settings),
-                                    opencode.STARTUP_SECONDS + cls.api_doc_checks * settings['api_doc_timeout_seconds'])
+    def test_local_schema_and_semantic_checks_are_still_authoritative(self):
+        for scenario, stage, kind in (('claims-string', 'study', 'SCHEMA_ERROR'),
+                                     ('missing-claims', 'study', 'SCHEMA_ERROR'),
+                                     ('claims-44', 'review', 'SCHEMA_ERROR'),
+                                     ('material-review', 'review', 'SEMANTIC_ERROR')):
+            with self.subTest(scenario=scenario), self.assertRaises(ContractError) as caught:
+                self.stage('xxx', scenario, 2, stage=stage)
+            self.assertEqual(caught.exception.failure_kind, kind)
+            self.assertFalse((self.destination.parent / (stage + '.json')).exists())
 
 
 class ComparisonAcceptanceTests(unittest.TestCase):
@@ -442,14 +139,12 @@ class NativeGitComparisonTests(unittest.TestCase):
                 self.assertTrue(all(b['accepted'] for b in manifest['branches']))
                 self.assertNotIn('comparison', manifest)
                 final = Path(manifest['final_report']).read_text()
-                self.assertIn('FINISH_UNKNOWN', final)
+                self.assertIn('INCOMPLETE_OUTPUT', final)
                 self.assertNotIn('SYNTHETIC_PRIVATE_UNKNOWN_FINISH', final)
                 self.assertIn('не означает отсутствия различий', final)
                 attempt = self.run_dir / 'comparison/compare.logs/attempt-001'
                 meta = json.loads((attempt / 'invocation.json').read_text())
                 self.assertFalse(meta['publication_complete'])
-                self.assertEqual(meta['finish_reason_raw'], 'SYNTHETIC_PRIVATE_UNKNOWN_FINISH')
-                self.assertEqual(meta['finish_classification'], 'FINISH_UNKNOWN')
                 self.assertFalse((attempt / 'extracted.json').exists())
                 self.assertFalse((self.run_dir / 'comparison/compare.json').exists())
                 for branch in manifest['branches']:

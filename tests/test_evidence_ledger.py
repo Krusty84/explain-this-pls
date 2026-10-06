@@ -345,13 +345,3 @@ class LedgerTests(unittest.TestCase):
         for field in ('start_line', 'end_line'):
             data = study(self.context); data['evidence'][0][field] = True
             with self.assertRaises(ContractError): validate_result('study', data, self.context)
-
-    def test_format_repair_cannot_invent_registry_or_locators(self):
-        from src.model.structured_output import validate_repair
-        original = study(self.context)
-        corrected = copy.deepcopy(original)
-        del original['claims']
-        with self.assertRaises(ContractError): validate_repair(original, corrected, SCHEMAS['study'])
-        original = copy.deepcopy(corrected)
-        original['evidence'][0]['start_line'] = 'unknown'
-        with self.assertRaises(ContractError): validate_repair(original, corrected, SCHEMAS['study'])

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Preparation and stage presentation: deterministic ticks and offline PTY/HTTP I/O."""
+"""Preparation and stage presentation: deterministic ticks and offline PTY/XXX CLI I/O."""
 import io
 import json
 import os
@@ -482,7 +482,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
     git = xxx_fixtures.XXXTests.git
     init_git = xxx_fixtures.XXXTests.init_git
 
-    def test_silent_http_study_and_review_update_before_response_in_real_pty(self):
+    def test_silent_xxx_cli_study_and_review_update_before_response_in_real_pty(self):
         self.init_git(['main'])
         self.git('branch', '-m', 'master')
         self.value['git_mode'].update(branches=['master'], baseline_branch='master')
@@ -514,7 +514,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
                         break
                     self.assertIsNone(child.poll(), text)
                 else:
-                    self.fail('No moving spinner/timer during pending HTTP: ' + raw.decode())
+                    self.fail('No moving spinner/timer during pending XXX CLI: ' + raw.decode())
                 self.assertNotIn('[OK] master / ' + completed, text)
                 self.assertFalse((gate / (stage + '.release')).exists())
                 # Frames never scroll; there is no newline between their writes.
@@ -552,7 +552,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
             self.assertFalse(any(c in content for c in SPINNER), str(artifact))
         self.assertEqual(len(self.prompts()), 3)
 
-    def test_http_plain_fallback_is_live_without_duplicate_waits(self):
+    def test_xxx_cli_plain_fallback_is_live_without_duplicate_waits(self):
         for term, tty in (('xterm', False), ('dumb', True)):
             with self.subTest(term=term, tty=tty):
                 gate = self.root / term
@@ -583,7 +583,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
                     self.assertTrue(all(b - a >= .049 for a, b in zip(times, times[1:])))
                 r.close()
 
-    def test_http_timeout_with_live_spinner_preserves_deadline_and_cleanup(self):
+    def test_xxx_cli_timeout_with_live_spinner_preserves_deadline_and_cleanup(self):
         self.value['execution'] = {'stage_timeout_seconds': 5, 'idle_timeout_seconds': .6}
         class SizedReporter(Reporter):
             def _terminal_columns(self):
@@ -597,11 +597,11 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         self.assertIsNone(r._progress)
         self.assertFalse(any(t.name == 'audit-progress' for t in threading.enumerate()))
         self.assertIn('[FAIL] source / Project analysis failed.', r.stderr.getvalue())
-        for pid in {c['server_pid'] for c in self.recorded()}:
+        for pid in {c['pid'] for c in self.recorded()}:
             with self.assertRaises(ProcessLookupError):
                 os.kill(pid, 0)
 
-    def test_real_format_repairs_keep_one_stage_clock(self):
+    def test_legacy_repair_setting_does_not_repeat_stage(self):
         self.value['execution'] = {'structured_output_repair_attempts': 1}
         now, attempts = [100.0], []
         with patch.dict(os.environ, {'TERM': 'xterm', 'NO_COLOR': '1'}):
@@ -609,19 +609,15 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         self.addCleanup(r.close)
         original = Runner._invoke_once
         def invoke(runner, stage, *args, **kwargs):
-            attempts.append((stage, r._progress.started, kwargs['repair_index']))
+            attempts.append((stage, r._progress.started, 0))
             now[0] += 1.25
             r._tick_progress(r._progress)
             return original(runner, stage, *args, **kwargs)
         with patch.object(Runner, '_invoke_once', invoke):
-            manifest, code = self.run_case('repair-ok', reporter=r)
-        self.assertEqual(code, 0, manifest)
-        self.assertEqual(attempts, [('catalog', 100, 0), ('study', 101.25, 0), ('study', 101.25, 1),
-                                    ('review', 103.75, 0), ('review', 103.75, 1)])
-        for label in ('Analyzing project…', 'Reviewing report…'):
-            frames = re.findall(r'/ ' + re.escape(label) + r'  . (\d\d:\d\d)', r.stderr.getvalue())
-            self.assertEqual(frames, ['00:00', '00:01', '00:02'])
-        self.assertEqual(len(self.prompts()), 5)
+            manifest, code = self.run_case('schema-extra', reporter=r)
+        self.assertEqual(code, 1, manifest)
+        self.assertEqual(attempts, [('catalog', 100, 0), ('study', 101.25, 0)])
+        self.assertEqual(len(self.prompts()), 2)
         self.assertIsNone(r._progress)
 
     def test_real_stage_error_then_next_branch_and_comparison_stop_cleanly(self):
@@ -638,7 +634,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         self.assertTrue(manifest['temporary_sources_removed'])
         self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
 
-    def test_ctrl_c_clears_live_http_spinner_and_no_progress_remains_plain(self):
+    def test_ctrl_c_clears_live_xxx_cli_spinner_and_no_progress_remains_plain(self):
         path = self.root / 'config.json'
         path.write_text(json.dumps(self.value))
         for quiet in (False, True):
@@ -682,7 +678,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
                 self.assertIn('⠋', text)
                 self.assertIn('\r\x1b[2K[WARN] Stopping analysis…', text)
             self.assertFalse(any(c in text.split('Stopping analysis…', 1)[1] for c in SPINNER))
-            for pid in {c['server_pid'] for c in self.recorded()}:
+            for pid in {c['pid'] for c in self.recorded()}:
                 with self.assertRaises(ProcessLookupError):
                     os.kill(pid, 0)
 

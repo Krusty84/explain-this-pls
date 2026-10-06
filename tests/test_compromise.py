@@ -390,29 +390,29 @@ class CompromiseGit(unittest.TestCase):
 
 
 class CompromiseNative(unittest.TestCase):
-    setUp = native_fixtures.NativeStructuredOutputTests.setUp
-    close = native_fixtures.NativeStructuredOutputTests.close
-    stage = native_fixtures.NativeStructuredOutputTests.stage
-    prompts = native_fixtures.NativeStructuredOutputTests.prompts
+    setUp = native_fixtures.XXXOutputTests.setUp
+    stage = native_fixtures.XXXOutputTests.stage
+    prompts = native_fixtures.XXXOutputTests.prompts
+    recorded = xxx_fixtures.XXXTests.recorded
 
     def config(self):
-        config = native_fixtures.NativeStructuredOutputTests.config(self)
+        config = native_fixtures.XXXOutputTests.config(self)
         config.pop('result_policy')
         return config
 
-    def test_native_adapter_recovers_format_only_after_bounded_attempts(self):
+    def test_cli_retains_material_without_format_retries(self):
         for backend in ('xxx',):
             for repairs in (0, 1, 2):
                 before = len(self.prompts())
-                data, meta = self.stage(backend, 'repair-invalid', repairs)
+                data, meta = self.stage(backend, 'schema-extra', repairs)
                 self.assertIsNone(data)
                 self.assertIn('usable_material', meta)
-                self.assertEqual(len(self.prompts()) - before, repairs + 1)
+                self.assertEqual(len(self.prompts()) - before, 1)
                 self.assertFalse((self.destination.parent / 'study.json').exists())
 
-    def test_invalid_repair_does_not_replace_original_facts(self):
+    def test_single_response_retains_original_facts(self):
         for backend in ('xxx',):
-            for scenario in ('repair-evidence', 'repair-verdict'):
+            for scenario in ('schema-extra', 'material-review'):
                 data, meta = self.stage(backend, scenario, 2, stage='review')
                 self.assertIsNone(data)
                 original = json.loads((self.destination / 'attempt-001/extracted.json').read_text())
@@ -420,27 +420,11 @@ class CompromiseNative(unittest.TestCase):
                 self.assertEqual(meta['recovery_source_attempt'], str(self.destination / 'attempt-001'))
 
     def test_foreign_session_and_cleanup_failure_cannot_be_recovered(self):
-        from src.backends import opencode
-        original_close = opencode.Server.close
-        def fail(server):
-            original_close(server)
-            raise OSError('cleanup failed')
-        for backend in ('xxx',):
+        for scenario in ('foreign-session', 'delete-failed'):
             with self.assertRaises(ContractError):
-                self.stage(backend, 'foreign-session')
-            with patch.object(opencode.Server, 'close', fail), self.assertRaises(ContractError):
-                self.stage(backend, 'repair-invalid', 1)
+                self.stage('xxx', scenario)
             self.assertTrue(self.last_runner.critical_failure)
             self.assertFalse((self.destination.parent / 'study.material.json').exists())
-
-    def test_timed_out_repair_keeps_original_completed_material(self):
-        for backend in ('xxx',):
-            before = len(self.prompts())
-            data, meta = self.stage(backend, 'repair-timeout', 1, settings={'stage_timeout_seconds': 1.5})
-            self.assertIsNone(data)
-            self.assertEqual(meta['error']['failure_kind'], 'STAGE_TIMEOUT')
-            self.assertIn('usable_material', meta)
-            self.assertEqual(len(self.prompts()) - before, 2)
 
 
 class NativeFinalPipeline(unittest.TestCase):
@@ -469,13 +453,13 @@ class NativeFinalPipeline(unittest.TestCase):
                     self.assertIn('review_material', manifest['revisions'][0])
 
     def test_cleanup_failure_remains_fatal_even_with_a_study(self):
-        from src.backends import opencode
-        original_close = opencode.Server.close
-        def close(server):
-            original_close(server)
-            if server.meta.get('stage') == 'review':
-                raise OSError('fixture review cleanup failure')
-        with patch.object(opencode.Server, 'close', close):
+        import explain
+        original_process = explain.process
+        def failed_delete(command, *args, **kwargs):
+            if command[1:3] == ['session', 'delete'] and kwargs.get('context', {}).get('stage') == 'review':
+                return {'returncode': 1, 'stdout': b'', 'stderr': b'cleanup failed'}
+            return original_process(command, *args, **kwargs)
+        with patch('explain.process', side_effect=failed_delete):
             manifest, code = self.run_case('material-review')
         self.assertEqual((manifest['status'], code), ('FAILED', 1))
         self.assertTrue(manifest['critical_failure'])

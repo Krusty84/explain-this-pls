@@ -10,7 +10,6 @@ from src.reports.document_rendering import materialize_study
 from fixtures.ledger_response import response
 from src.analysis.ledger import review_context, verify_review_context
 from src.model.model_context import project_model_context, input_measurements
-from src.model.structured_output import repair_prompt
 
 
 class ModelContextTests(unittest.TestCase):
@@ -65,14 +64,6 @@ class ModelContextTests(unittest.TestCase):
             self.assertEqual(item['review']['findings'], pair['review']['findings'])
         self.assertEqual(context, original)
 
-    def test_format_repair_identical_native_objects_sent_once(self):
-        native = {'unique_native_text': 'preserve me'}
-        prompt = repair_prompt({}, {}, native, {}, original=copy.deepcopy(native))
-        self.assertEqual(prompt.count('preserve me'), 1)
-        self.assertIn('also the original immutable', prompt)
-        prompt = repair_prompt({}, {}, native, {}, original={'original': 'other'})
-        self.assertIn('Original immutable native result', prompt)
-        self.assertIn('other', prompt)
 
     def test_coverage_projection_uses_selectors_without_expanded_inventory(self):
         plan = {'areas': [{'id': 'S-001', 'paths': ['src'], 'entry_paths': ['src/app.py', 'src/link'],
