@@ -203,16 +203,17 @@ class FolderInventoryTests(FolderFixture):
         (self.source / 'link').symlink_to(outside, target_is_directory=True)
         (self.source / 'cycle').symlink_to(self.source, target_is_directory=True)
         (self.source / 'broken').symlink_to(self.base / 'missing')
-        initial = Folder(self.source).snapshot()
+        folder = Folder(self.source)
+        initial = folder.snapshot()
         link = next(e for e in initial['entries'] if e['path'] == 'link')
         self.assertEqual(link['target'], str(outside))
         self.assertEqual(len(initial['entries']), 5)
         (outside / 'data').write_text('changed outside scope')
-        Folder(self.source).assert_snapshot(initial['source_fingerprint'])
+        folder.assert_snapshot(initial['source_fingerprint'])
         (self.source / 'link').unlink()
         (self.source / 'link').symlink_to(self.base / 'another')
         with self.assertRaises(AuditError):
-            Folder(self.source).assert_snapshot(initial['source_fingerprint'])
+            folder.assert_snapshot(initial['source_fingerprint'])
 
     def test_special_files_are_rejected_without_opening(self):
         os.mkfifo(self.source / 'pipe')

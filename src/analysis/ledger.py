@@ -84,7 +84,7 @@ def verify_review_context(context):
         raise ContractError('Required frozen review plan is missing') from None
 
 
-def prepare_result(stage, data, context, expected_files=None):
+def prepare_result(stage, data, context, expected_files=None, *, expected_metadata=None):
     """Caller must pass source/cleanup guards and validate its input first.
 
     Runner supplies materialized study (wire review/compare). Library callers may
@@ -128,7 +128,8 @@ def prepare_result(stage, data, context, expected_files=None):
         if context.get('generated_by') == 'orchestrator':
             checks['completion_self_assessment'] = None
         return result
-    checks['evidence'] = resolve_evidence(stage, data['evidence'], context, expected_files)
+    checks['evidence'] = resolve_evidence(stage, data['evidence'], context, expected_files,
+                                         expected_metadata=expected_metadata)
     checks['evidence_counts'] = dict(sorted(Counter(e['status'] for e in checks['evidence']).items()))
     evidence_ok = all(e['status'] == 'RESOLVED' for e in checks['evidence'])
     if stage == 'study':

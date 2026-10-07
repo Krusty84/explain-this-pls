@@ -115,8 +115,8 @@ The final report places limitations and assessments before narrative,
 and keeps contradictory assessments visible. It summarizes the selected architecture
 revision and its corresponding review when that optional stage is enabled.
 Generated Markdown evidence tables include ID, source, path and lines, resolution
-status and encoding, without service hash columns or values. JSON keeps the full
-hashes. Prompts prohibit service fingerprints, hashes and binding IDs in narrative;
+status and encoding, without service hash columns or values. JSON keeps the pinned
+file hashes. Prompts prohibit service fingerprints, hashes and binding IDs in narrative;
 source-system hash semantics and Git commit IDs remain meaningful content.
 No regular-expression cleanup or other postprocessing rewrites authored prose.
 
@@ -311,13 +311,16 @@ each pinned commit. Required objects must exist locally. Changed submodule paths
 or logical names, uninitialized nodes, conflicts, unfinished operations, sparse
 checkout, unsafe metadata and configured filters remain rejected.
 
-Preparation scans the allowed paths and ignore rules before, during and after
-copying, with descriptor-relative no-follow reads and index/HEAD guards. A mismatch
-fails with SOURCE_CHANGED rather than publishing mixed states. Ignored contents
-are never fingerprinted. Every later stage—including substantive revisions,
-review and evidence checks—reads the same independent copy. Its fingerprint is
-checked at stage boundaries. These checks do not guarantee continuous OS-level
-immutability or sandbox arbitrary native CLI code. Claude denies reads of the
+Preparation hashes each source file once per snapshot. Later preparation scans,
+copying and destination inventories reuse those hashes, including files also read
+as ignore rules or `.gitmodules`. Descriptor-relative no-follow reads, pinned path
+metadata, ignore-rule metadata and index/HEAD guards detect preparation changes.
+A mismatch fails with SOURCE_CHANGED rather than publishing mixed states. Ignored
+contents are never fingerprinted. Every later stage—including substantive revisions,
+review and evidence checks—reads the same independent copy. Its initial inventory
+is reused and its filesystem metadata is checked at stage boundaries. These checks
+do not guarantee continuous OS-level immutability or sandbox arbitrary native CLI
+code. Claude denies reads of the
 original checkout through its native Read rules; OpenCode/XXX deny external
 directory access; Codex retains its native read-only sandbox. Git environment
 variables that redirect repository paths are removed from source invocations. `--check` prepares and discards the same sources, with no model calls.
@@ -347,10 +350,19 @@ opened directory descriptor with `O_NOFOLLOW`; directory/file identities are
 checked before/after access. No symlink target or special file is read, including
 during component replacement races. Detected source changes are fatal integrity
 failures, not recoverable model format failures.
-Before an agent call the runner inventories source-file hashes under the source
-guards. In Git mode this is the prepared copy, not the original checkout. Evidence
-paths must belong to the allowed inventory before any content read. Resolved bytes
-must match that inventory, including nested sources. Working copies preserve the
+The runner pins one inventory per source snapshot for the entire run, including
+preflight-only runs. Folder mode hashes the initial tree; Git mode reuses hashes
+from source preparation. Later guards check path membership, device/inode, type,
+permissions, size, modification/change timestamps and symlink targets without
+reading or hashing file contents. Access times are excluded. Metadata-only changes,
+including timestamp touches, invalidate the snapshot; guards never refresh the
+baseline or retry hashing. Private filesystem metadata does not enter serialized
+fingerprints or model prompts.
+
+Evidence paths must belong to the allowed inventory before any content read.
+Confined reads check the pinned file and directory metadata before and after
+access, including nested sources, then reuse the initial file hash. In Git mode
+these checks cover the independent copy. Working copies preserve the
 actual disk bytes; commit copies use raw Git blobs without checkout transforms.
 Inventories do not enter prompts and do not count as agent source inspection.
 
@@ -358,8 +370,8 @@ Lines are positive integers (booleans are not integers), inclusive and ordered.
 Source decoding is strict; there is no replacement of invalid bytes. Lines split
 on LF only; CRLF becomes LF; a lone CR stays data. A final nonterminated line
 counts, and an empty file has zero lines. Document locators use the same rules.
-File SHA-256 covers the original bytes. Fragment SHA-256 covers normalized UTF-8
-bytes for the complete range, including its terminating LF when present. `quote`
+File SHA-256 covers the original bytes and is calculated only during initial
+pinning. Evidence snippets are not hashed. `quote`
 may be `""`; otherwise it must equal that complete normalized range exactly.
 There is no fuzzy correction. Document quotes must be nonblank and exact.
 
@@ -369,8 +381,10 @@ per resolver call (successful cache hits do not count again). Reaching/exceeding
 `LIMIT_EXCEEDED`, never successful resolution of truncated data. No source fragment
 is copied into generated tables. Model-supplied quotes remain in private wire data.
 
-Each resolution stores namespaced ID, source identity, path, range, raw file hash,
-fragment hash, used encoding and status. Hashes not obtained remain null. `RESOLVED` means only
+Each resolution stores namespaced ID, source identity, path, range, pinned raw file
+hash, used encoding and status. Unavailable file hashes remain null. New resolutions
+omit `fragment_sha256`; saved schemas accept it as optional legacy data so older
+reports remain readable. `RESOLVED` means only
 that the locator resolved. Other statuses distinguish `INVALID_POINTER`,
 `UNKNOWN_SOURCE`, `SOURCE_SCOPE_MISMATCH`, `UNSAFE_PATH`, `NOT_FOUND`,
 `ACCESS_DENIED`, `READ_ERROR`, `OUT_OF_RANGE`, `DECODE_ERROR`, `ENCODING_MISMATCH`, `QUOTE_MISMATCH`,
@@ -385,8 +399,8 @@ specific path wins. Duplicate/unsafe paths and unknown encodings fail configurat
 before model calls. Rules support UTF-8, UTF-16/32 with BOM or explicit LE/BE,
 CP1251, CP1252, CP866 and Latin-1. Without a rule, a recognized Unicode BOM is used,
 otherwise strict UTF-8. A compatible BOM is removed before line splitting; a
-conflicting BOM is ENCODING_MISMATCH. Raw file hashes include BOM bytes; fragment
-hashes follow decoding and existing LF/CRLF normalization. Normalized rules enter
+conflicting BOM is ENCODING_MISMATCH. Pinned raw file hashes include BOM bytes;
+quote checks follow decoding and existing LF/CRLF normalization. Normalized rules enter
 the frozen review plan and change its identity. Agents receive them as context,
 but CLI reading capabilities are independent; no UTF-8 copies are generated.
 
@@ -395,7 +409,10 @@ budget also includes files read before a decoding failure. Every repeated
 reference still walks the path with O_NOFOLLOW and checks component identity and
 file state. Replacement, mutation or disappearance raises SourceChanged rather
 than silently reading a newer version. Cache data never crosses stages, attempts
-or branches. Pinned raw hashes and stage-boundary source guards remain mandatory.
+or branches. The initial inventory hashes and metadata pins do span all stages and
+revisions of that snapshot. Standalone resolver calls without metadata pins hash
+each distinct file once within the call, including files that fail decoding.
+Generated reports, prompts, registries and plans retain their artifact hashes.
 
 ## Evidence ID normalization and diagnostics
 

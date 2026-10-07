@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import uuid
 
-from src.analysis.evidence import canonical, sha, open_source_directory, read_confined, SourceChanged, stamp
+from src.analysis.evidence import canonical, sha, open_source_directory, _read_confined, SourceChanged, stamp
 
 
 def ignore_path(node):
@@ -57,6 +57,7 @@ class GitSources:
         self.temporary = tempfile.TemporaryDirectory(prefix='archaudit-sources-', dir=temporary_base)
         self.root = Path(self.temporary.name).resolve()
         self.snapshots = {}
+        self.guards = {}
 
     def close(self):
         self.temporary.cleanup()
@@ -124,33 +125,59 @@ class GitSources:
                 stream.flush()
                 check(node.git(*arguments, '--file', stream.name, *query, allowed=(0, 1)))
 
-    def read_working(self, node, path, *, replaced_file=False):
+    def read_working(self, node, path, *, replaced_file=False, read=True):
         """Missing files are deletions. Symlinks are metadata, never copied links."""
+        key = node.path / path
+        cached = self._working_files.get(key)
+        if self._working_pinned and cached is None:
+            self.fail('Source paths changed during source preparation.', path)
         fd = open_source_directory(node.path)
         fds = [fd]
         try:
+            metadata = {'.': stamp(os.fstat(fd))[:3]}
             parts = path.split('/')
-            for name in parts[:-1]:
+            for index, name in enumerate(parts[:-1], 1):
                 fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
                 fds.append(fd)
+                metadata['/'.join(parts[:index])] = stamp(os.fstat(fd))[:3]
             info = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+            metadata[path] = stamp(info)[:3] if stat.S_ISDIR(info.st_mode) else stamp(info)
+            if cached is not None and metadata != cached[0]:
+                self.fail('Source changed during source preparation.', path)
             if replaced_file and stat.S_ISDIR(info.st_mode):
                 # A former file can become a directory. Git enumerates its new
                 # children separately; the old file is a deletion.
+                self._working_files[key] = (metadata, None)
                 return None, None
             if stat.S_ISLNK(info.st_mode):
                 target = os.readlink(parts[-1], dir_fd=fd)
                 if stamp(info) != stamp(os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)):
                     self.fail('Symbolic link changed during source preparation.', path)
-                return {'type': 'symlink', 'target': target, 'mode': '120000'}, None
+                entry = {'type': 'symlink', 'target': target, 'mode': '120000'}
+                if cached is not None and entry != cached[1]:
+                    self.fail('Symbolic link changed during source preparation.', path)
+                self._working_files[key] = (metadata, entry)
+                return entry, None
             if not stat.S_ISREG(info.st_mode):
                 raise self.error('Unsupported source file type.', node_path=path)
-            data = read_confined(node.path, path, info.st_size)
+            data, _ = _read_confined(node.path, path, info.st_size, pinned=metadata,
+                                     read=read or cached is None)
             if stamp(info) != stamp(os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)):
                 self.fail('Source changed during source preparation.', path)
-            return {'type': 'file', 'mode': '100755' if info.st_mode & 0o111 else '100644',
-                    'size': len(data), 'sha256': sha(data)}, data
+            if cached is None:
+                file_stamp = stamp(info)
+                if file_stamp not in self._hashes:
+                    self._hashes[file_stamp] = sha(data)
+                entry = {'type': 'file', 'mode': '100755' if info.st_mode & 0o111 else '100644',
+                         'size': len(data), 'sha256': self._hashes[file_stamp]}
+                self._working_files[key] = (metadata, entry)
+            else:
+                entry = cached[1]
+            return entry, data if read else None
         except FileNotFoundError:
+            if cached is not None and cached != (None, None):
+                self.fail('Source disappeared during source preparation.', path)
+            self._working_files[key] = (None, None)
             return None, None
         except (OSError, ValueError, SourceChanged) as exc:
             raise self.error('Cannot safely read source during preparation.', node_path=path,
@@ -167,14 +194,32 @@ class GitSources:
         for path in paths:
             candidates.update(str(parent / '.gitignore') for parent in Path(path).parents if str(parent) != '.')
         for path in sorted(candidates):
-            entry, _ = self.read_working(node, path)
+            entry, _ = self.read_working(node, path, read=False)
             rules[path] = entry
         for path in (node.git_dir / 'info/exclude', excludes):
-            # Git itself resolves user exclusion paths; hash the same rule bytes.
+            # Git resolves exclusion paths; pin their bytes once and guard metadata.
             try:
-                rules[str(path)] = sha(path.read_bytes())
+                info = path.stat()
+                token = (stamp(path.lstat()), stamp(info))
             except FileNotFoundError:
-                rules[str(path)] = None
+                token = None
+            if path in self._rule_files:
+                before, value = self._rule_files[path]
+                if before != token:
+                    self.fail('Ignore rules changed during source preparation.', str(path))
+            else:
+                if self._working_pinned:
+                    self.fail('Ignore rule paths changed during source preparation.', str(path))
+                value = None
+                if token is not None:
+                    data = path.read_bytes()
+                    if token != (stamp(path.lstat()), stamp(path.stat())):
+                        self.fail('Ignore rules changed during source preparation.', str(path))
+                    if stamp(info) not in self._hashes:
+                        self._hashes[stamp(info)] = sha(data)
+                    value = self._hashes[stamp(info)]
+                self._rule_files[path] = (token, value)
+            rules[str(path)] = value
         return rules
 
     def working_scan(self, destination=None):
@@ -214,7 +259,7 @@ class GitSources:
             local = {}
             for path in sorted(paths - set(child_links)):
                 node.safe_relative(path)
-                entry, data = self.read_working(node, path, replaced_file=path in index)
+                entry, data = self.read_working(node, path, replaced_file=path in index, read=destination is not None)
                 if entry is None:
                     modified |= path in tree
                     continue
@@ -227,6 +272,7 @@ class GitSources:
                     with target.open('xb') as stream:
                         stream.write(data)
                     target.chmod(0o700 if entry['mode'] == '100755' else 0o600)
+                    self._copied_metadata[full] = stamp(target.stat())
             modified |= bool(set(tree) - set(child_links) - set(local))
             if prefix != '.':
                 parent_path = self.repo.descriptions[prefix]['parent'] or '.'
@@ -242,20 +288,27 @@ class GitSources:
         return {'entries': entries, 'git_state': states, 'submodules': submodules,
                 'has_local_changes': bool(modified), 'untracked_files': untracked_count}
 
-    def finish(self, label, kind, commit, path, state, branch):
-        inventory = self.folder_type(path, canonical=True).snapshot()
+    def finish(self, label, kind, commit, path, state, branch, metadata):
+        folder = self.folder_type(path, canonical=True)
+        files = {name: entry | {'_stamp': metadata[name]} for name, entry in state['entries'].items()
+                 if entry['type'] == 'file'}
+        inventory = folder.snapshot(files=files)
         provenance = {'repository': str(self.repo.path), 'branch': branch, 'base_commit': commit,
                       'source_type': kind, 'snapshot_id': path.name,
                       'fingerprint': sha(canonical(state))}
         result = {'path': path, 'inventory': inventory, 'source_snapshot': provenance, **state}
         self.snapshots[label] = result
+        self.guards[path] = folder
         return result
 
     def working(self, label):
         path = self.root / uuid.uuid4().hex
         path.mkdir(mode=0o700)
+        self._working_files, self._rule_files, self._hashes, self._copied_metadata = {}, {}, {}, {}
+        self._working_pinned = False
         try:
             before = self.working_scan()
+            self._working_pinned = True
             copied = self.working_scan(path)
             after = self.working_scan()
             if before != copied or copied != after:
@@ -264,14 +317,14 @@ class GitSources:
                                 if left['entries'].get(p) != right['entries'].get(p)), str(self.repo.path))
                 self.fail('Source, index or ignore rules changed during source preparation; retry the run.', changed)
             return self.finish(label, 'working_tree', self.repo.original['.']['commit'], path, copied,
-                               self.repo.symbolic())
+                               self.repo.symbolic(), self._copied_metadata)
         except (OSError, ValueError, SourceChanged) as exc:
             self.fail('Source changed or became unreadable during source preparation; retry the run.')
 
     def commit(self, label, commit):
         path = self.root / uuid.uuid4().hex
         path.mkdir(mode=0o700)
-        entries = {}
+        entries, metadata = {}, {}
         for prefix, pinned in self.repo.plans[commit].items():
             node = self.repo.nodes[prefix]
             for relative, (mode, kind, oid) in self.entries(node, pinned).items():
@@ -286,24 +339,20 @@ class GitSources:
                     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                     target.write_bytes(data)
                     target.chmod(0o700 if mode == '100755' else 0o600)
+                    metadata[full] = stamp(target.stat())
                     entries[full] = {'type': 'file', 'mode': mode, 'size': len(data), 'sha256': sha(data)}
                 else:
                     raise self.error('Unsupported committed source type.', node_path=full)
         subs = [dict(self.repo.descriptions[p], expected_commit=c, actual_head=c, snapshot_verified=True)
                 for p, c in self.repo.plans[commit].items() if p != '.']
-        return self.finish(label, 'commit', commit, path, {'entries': entries, 'submodules': subs}, label)
+        return self.finish(label, 'commit', commit, path, {'entries': entries, 'submodules': subs}, label, metadata)
 
     def assert_intact(self, snapshot=None):
         for item in ([snapshot] if snapshot else self.snapshots.values()):
             try:
-                actual = self.folder_type(item['path'], canonical=True).snapshot()
-                if actual['source_fingerprint'] != item['inventory']['source_fingerprint']:
-                    before = {e['path']: e for e in item['inventory']['entries']}
-                    after = {e['path']: e for e in actual['entries']}
-                    changed = next(p for p in sorted(before.keys() | after.keys()) if before.get(p) != after.get(p))
-                    self.fail('Prepared source snapshot changed during analysis.', changed)
-            except OSError as exc:
-                self.fail('Prepared source snapshot became unreadable.', str(item['path']))
+                self.guards[item['path']].assert_snapshot(item['inventory']['source_fingerprint'])
+            except RuntimeError as exc:
+                self.fail('Prepared source snapshot changed during analysis.', getattr(exc, 'node_path', None) or str(item['path']))
 
     def delta(self, baseline, other):
         a, b = self.snapshots[baseline], self.snapshots[other]

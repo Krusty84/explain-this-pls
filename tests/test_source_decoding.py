@@ -79,7 +79,7 @@ class SourceDecodingTests(unittest.TestCase):
                 self.assertEqual(result['status'], 'RESOLVED')
                 self.assertEqual(result['encoding'], codec)
                 self.assertEqual(result['file_sha256'], hashlib.sha256(blob).hexdigest())
-                self.assertEqual(result['fragment_sha256'], hashlib.sha256(normalized.encode()).hexdigest())
+                self.assertNotIn('fragment_sha256', result)
                 self.assertNotIn('fragment', result)
 
     def test_bom_conflicts_are_distinct_from_damaged_bytes(self):

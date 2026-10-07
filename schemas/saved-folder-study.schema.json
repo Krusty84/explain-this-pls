@@ -403,7 +403,6 @@
               "end_line",
               "source_identity",
               "file_sha256",
-              "fragment_sha256",
               "status"
             ],
             "additionalProperties": false

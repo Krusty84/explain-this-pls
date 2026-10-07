@@ -5,7 +5,7 @@
 
 Explicit rules or a Unicode BOM select strict decoding; UTF-8 is the default.
 Lines split on LF only, CRLF normalized to LF, final unterminated line retained.
-File hashes cover original bytes; fragment hashes cover normalized UTF-8.
+File hashes cover original bytes and are reused from the pinned inventory.
 No source text is retained in the resolution result.
 """
 from __future__ import annotations
@@ -93,7 +93,7 @@ def read_confined(root, relative, limit):
     return _read_confined(root, relative, limit)[0]
 
 
-def _read_confined(root, relative, limit, *, expected=None, read=True):
+def _read_confined(root, relative, limit, *, expected=None, pinned=None, read=True):
     """Walk absolute root and relative components with openat + O_NOFOLLOW.
 
     Directory handles stay open until final validation. Component replacement
@@ -104,11 +104,19 @@ def _read_confined(root, relative, limit, *, expected=None, read=True):
     try:
         fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         fds.append(fd)
+        current_path, source_root = Path('/'), Path(root)
         components = Path(root).parts[1:] + tuple(relative.split('/'))
         for index, name in enumerate(components):
+            current_path = current_path / name
             before = os.stat(name, dir_fd=fd, follow_symlinks=False)
             is_file = index == len(components) - 1
-            component_identity = stamp(before) if is_file else stamp(before)[:3]
+            source_pin = None
+            if pinned is not None and (current_path == source_root or source_root in current_path.parents):
+                source_pin = pinned.get(str(current_path.relative_to(source_root)))
+                if source_pin is None or stamp(before)[:len(source_pin)] != source_pin:
+                    raise SourceChanged('Source path differs from the pinned snapshot metadata.')
+            full_stamp = is_file or (source_pin is not None and len(source_pin) == 6)
+            component_identity = stamp(before) if full_stamp else stamp(before)[:3]
             if expected is not None and component_identity != expected[index]:
                 raise SourceChanged('Previously read source path changed during evidence resolution.')
             identity.append(component_identity)
@@ -120,9 +128,9 @@ def _read_confined(root, relative, limit, *, expected=None, read=True):
             child = os.open(name, flags, dir_fd=fd)
             fds.append(child)
             opened = os.fstat(child)
-            if (stamp(before) if is_file else stamp(before)[:3]) != (stamp(opened) if is_file else stamp(opened)[:3]):
+            if component_identity != (stamp(opened) if full_stamp else stamp(opened)[:3]):
                 raise SourceChanged('Source component changed during evidence resolution.')
-            chain.append((fd, name, child, before, is_file))
+            chain.append((fd, name, child, before, full_stamp))
             fd = child
         if stamp(before) != stamp(os.fstat(fd)):
             raise SourceChanged('Source changed before evidence read.')
@@ -134,19 +142,20 @@ def _read_confined(root, relative, limit, *, expected=None, read=True):
                 data.extend(chunk)
                 if len(data) > limit:
                     raise SourceChanged('Source grew beyond the pinned evidence read size.')
-        for parent, name, child, before, is_file in chain:
-            # Ancestor mtimes may change due to unrelated /tmp peers; identity
-            # checks are sufficient for directories, full stamps for the file.
+        for parent, name, child, before, full_stamp in chain:
+            # Unpinned ancestors can change due to unrelated /tmp peers. Source
+            # directories use the full pinned stamp; Git preparation pins identity.
             try:
                 current = os.stat(name, dir_fd=parent, follow_symlinks=False)
             except OSError:
                 raise SourceChanged('Source component disappeared during evidence resolution.') from None
             for after in (os.fstat(child), current):
-                if (stamp(before) if is_file else stamp(before)[:3]) != (stamp(after) if is_file else stamp(after)[:3]):
+                if (stamp(before) if full_stamp else stamp(before)[:3]) != (stamp(after) if full_stamp else stamp(after)[:3]):
                     raise SourceChanged('Source changed during evidence resolution.')
         return bytes(data), tuple(identity)
-    except (OSError, PointerError):
-        if expected is not None:
+    except (OSError, PointerError) as exc:
+        if (expected is not None or pinned is not None) and not (
+                isinstance(exc, PointerError) and str(exc) == 'LIMIT_EXCEEDED'):
             raise SourceChanged('Previously read source path became unavailable or unsafe.') from None
         raise
     finally:
@@ -154,18 +163,20 @@ def _read_confined(root, relative, limit, *, expected=None, read=True):
             os.close(fd)
 
 
-def resolve_evidence(stage, pointers, context, expected_files=None):
+def resolve_evidence(stage, pointers, context, expected_files=None, *, expected_metadata=None):
     catalog = {s['id']: s for s in source_catalog(context)}
     if context.get('source_snapshot') and expected_files is None:
         expected_files = {e['path']: e['sha256'] for e in context.get('_inventory', {}).get('entries', [])
                           if e['type'] == 'file'}
     root = context.get('source_directory', context.get('repository'))
     decoding = normalize_source_decoding(context.get('source_decoding'))
-    results, total, cache, read_paths = [], 0, {}, {}
+    results, total, cache, read_paths, file_hashes = [], 0, {}, {}, {}
+    if expected_metadata is not None and expected_files is None:
+        raise ValueError('Pinned evidence requires source-file hashes.')
     for index, pointer in enumerate(pointers):
         result = {k: pointer.get(k) for k in ('source_id', 'path', 'start_line', 'end_line')}
         result.update(id=stage + ':' + str(pointer.get('id', '')), source_identity=None,
-                      file_sha256=None, fragment_sha256=None, encoding=None, status='INVALID_POINTER')
+                      file_sha256=None, encoding=None, status='INVALID_POINTER')
         results.append(result)
         try:
             if index >= MAX_EVIDENCE or len(canonical(pointer)) > MAX_RECORD_BYTES:
@@ -189,19 +200,24 @@ def resolve_evidence(stage, pointers, context, expected_files=None):
             # Repository control files are not architectural source evidence.
             if '.git' in relative.split('/'):
                 raise PointerError('INVALID_POINTER')
-            if (context.get('source_snapshot') and expected_files is not None and relative not in expected_files):
+            if ((context.get('source_snapshot') or expected_metadata is not None)
+                    and expected_files is not None and relative not in expected_files):
                 raise PointerError('NOT_FOUND')
             if relative in cache:
                 cached = cache[relative]
-                _read_confined(root, relative, MAX_FILE_BYTES, expected=read_paths[relative], read=False)
+                _read_confined(root, relative, MAX_FILE_BYTES, expected=read_paths[relative],
+                               pinned=expected_metadata, read=False)
                 source_lines, result['file_sha256'], result['encoding'] = cached
             else:
                 limit = MAX_FILE_BYTES if relative in read_paths else min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total)
-                blob, identity = _read_confined(root, relative, limit, expected=read_paths.get(relative))
+                blob, identity = _read_confined(root, relative, limit, expected=read_paths.get(relative),
+                                               pinned=expected_metadata)
                 if relative not in read_paths:
                     total += len(blob)
                     read_paths[relative] = identity
-                result['file_sha256'] = sha(blob)
+                if relative not in file_hashes:
+                    file_hashes[relative] = (expected_files[relative] if expected_metadata is not None else sha(blob))
+                result['file_sha256'] = file_hashes[relative]
                 if expected_files is not None and result['file_sha256'] != expected_files.get(relative):
                     raise SourceChanged('Evidence bytes differ from the pinned source inventory.')
                 try:
@@ -219,7 +235,6 @@ def resolve_evidence(stage, pointers, context, expected_files=None):
             encoded = fragment.encode('utf-8')
             if len(encoded) > MAX_FRAGMENT_BYTES:
                 raise PointerError('LIMIT_EXCEEDED')
-            result['fragment_sha256'] = sha(encoded)
             quote = pointer.get('quote', '')
             if quote and quote != fragment:
                 raise PointerError('QUOTE_MISMATCH')

@@ -48,6 +48,8 @@ RESOLUTION = obj(id=string(), source_id=string(), path=string(), start_line={'ty
         'OUT_OF_RANGE', 'DECODE_ERROR', 'ENCODING_MISMATCH', 'QUOTE_MISMATCH', 'LIMIT_EXCEEDED'))
 RESOLUTION['required'].remove('fragment_bytes')
 RESOLUTION['required'].remove('encoding')
+# Older saved reports may carry this field; new resolutions do not hash snippets.
+RESOLUTION['required'].remove('fragment_sha256')
 DOCUMENT_LINKS = obj(registered=INTEGER, matched=INTEGER, scope=string('REGISTERED_CLAIMS_ONLY'))
 BASE_CHECKS = dict(execution=string('COMPLETED'), contract=string('VALID'), source=string('MATCHED_AT_BOUNDARIES',
     'NOT_INSPECTED_IN_COMPARISON'), evidence=array(RESOLUTION), policy_satisfied={'type': 'boolean'},

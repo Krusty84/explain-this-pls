@@ -47,7 +47,7 @@ class HashlessMarkdownTests(unittest.TestCase):
         for document in (self.study, self.review):
             for evidence in document['program_checks']['evidence']:
                 self.assertNotIn(evidence['file_sha256'], markdown)
-                self.assertNotIn(evidence['fragment_sha256'], markdown)
+                self.assertNotIn('fragment_sha256', evidence)
 
     def test_stage_tables_hide_hashes_keep_resolution_details_and_json_unchanged(self):
         for stage, document in (('study', self.study), ('review', self.review)):

@@ -464,8 +464,8 @@ class RevisionGitPipelineTests(unittest.TestCase):
                             if key.endswith('_sha256') and value:
                                 self.assertNotIn(value, prompt)
                         for evidence in document['program_checks']['evidence']:
-                            for key in ('file_sha256', 'fragment_sha256'):
-                                self.assertNotIn(evidence[key], prompt)
+                            self.assertNotIn(evidence['file_sha256'], prompt)
+                            self.assertNotIn('fragment_sha256', evidence)
                 refs = []
                 for branch in context['branches']:
                     plan = branch['study']['review_plan']

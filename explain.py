@@ -44,7 +44,7 @@ from src.reports.final_report import recoverable_material, stage_document, usabl
 from src.analysis.ledger import prepare_result, review_context
 from src.analysis.study_normalization import normalize_evidence, normalization_provenance
 from src.reports.document_rendering import materialize_study, validate_materialized
-from src.analysis.evidence import source_catalog, SourceChanged, open_source_directory, read_confined
+from src.analysis.evidence import source_catalog, SourceChanged, open_source_directory, read_confined, stamp
 from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, validate_schema, response_error
 from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
 from src.reports.presentation import render_stage
@@ -750,21 +750,32 @@ class Repository:
 class Folder:
     def __init__(self, path: Path, *, canonical=False):
         self.path = path if canonical else path.resolve()
+        self.inventory = None
+        self.metadata = {}
+        self.files = {}
+        self.exclude_git = False
 
-    def snapshot(self, *, exclude_git=False) -> dict:
-        """Inventory without following links; stream file contents through SHA-256."""
-        entries = []
+    def _scan(self, *, exclude_git=False, files=None, expected=None):
+        entries, metadata = [], {}
 
-        def identity(info):
-            return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
-                    info.st_mtime_ns, info.st_ctime_ns)
+        def changed(name):
+            raise AuditError('Source folder changed during the run; files will not be restored.',
+                             code='SOURCE_CHANGED', failure_layer='integrity', node_path=name)
+
+        def record(info, name):
+            metadata[name] = stamp(info)
+            if expected is not None and metadata[name] != expected.get(name):
+                changed(name)
 
         def unchanged(before, after, name):
-            if identity(before) != identity(after):
+            if stamp(before) != stamp(after):
+                if expected is not None:
+                    changed(name)
                 raise AuditError(f'Source changed while fingerprinting: {name}')
 
         def directory(fd, relative):
             before = os.fstat(fd)
+            record(before, relative)
             entries.append({'path': relative, 'type': 'directory',
                             'mode': format(stat.S_IMODE(before.st_mode), '04o')})
             for name in sorted(os.listdir(fd)):
@@ -772,6 +783,7 @@ class Folder:
                     continue
                 child = name if relative == '.' else relative + '/' + name
                 info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                record(info, child)
                 entry = {'path': child, 'mode': format(stat.S_IMODE(info.st_mode), '04o')}
                 if stat.S_ISLNK(info.st_mode):
                     entry.update(type='symlink', target=os.readlink(name, dir_fd=fd))
@@ -786,10 +798,18 @@ class Folder:
                         if stat.S_ISDIR(info.st_mode):
                             directory(child_fd, child)
                         else:
-                            sha = hashlib.sha256()
-                            while block := os.read(child_fd, 1024 * 1024):
-                                sha.update(block)
-                            entry.update(type='file', size=info.st_size, sha256=sha.hexdigest())
+                            if files is None:
+                                sha = hashlib.sha256()
+                                while block := os.read(child_fd, 1024 * 1024):
+                                    sha.update(block)
+                                file_hash = sha.hexdigest()
+                            else:
+                                if child not in files or info.st_size != files[child]['size']:
+                                    changed(child)
+                                if '_stamp' in files[child] and stamp(info) != files[child]['_stamp']:
+                                    changed(child)
+                                file_hash = files[child]['sha256']
+                            entry.update(type='file', size=info.st_size, sha256=file_hash)
                             entries.append(entry)
                         unchanged(info, os.fstat(child_fd), child)
                     finally:
@@ -808,14 +828,36 @@ class Folder:
             finally:
                 os.close(fd)
         except OSError as exc:
+            if expected is not None:
+                changed(str(self.path))
             raise AuditError(f'Cannot read source folder {self.path}: {exc}') from exc
+        if expected is not None and metadata.keys() != expected.keys():
+            changed(next(iter(metadata.keys() ^ expected.keys())))
+        if files is not None:
+            actual_files = {e['path'] for e in entries if e['type'] == 'file'}
+            if actual_files != files.keys():
+                changed(next(iter(actual_files ^ files.keys())))
+        return entries, metadata
+
+    def snapshot(self, *, exclude_git=False, files=None) -> dict:
+        """Pin one inventory; prepared copies reuse hashes from their initial reads."""
+        entries, metadata = self._scan(exclude_git=exclude_git, files=files)
         fingerprint = digest(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode())
-        return {'source_directory': str(self.path), 'source_fingerprint': fingerprint,
-                'algorithm': 'sha256', 'entries': entries}
+        self.inventory = {'source_directory': str(self.path), 'source_fingerprint': fingerprint,
+                          'algorithm': 'sha256', 'entries': entries}
+        self.metadata, self.exclude_git = metadata, exclude_git
+        self.files = {e['path']: e for e in entries if e['type'] == 'file'}
+        return self.inventory
 
     def assert_snapshot(self, fingerprint: str) -> None:
-        if self.snapshot()['source_fingerprint'] != fingerprint:
-            raise AuditError('Source folder changed during the run; files will not be restored.')
+        if self.inventory is None:
+            raise AuditError('Source folder has no pinned snapshot.', failure_layer='integrity')
+        if self.inventory['source_fingerprint'] != fingerprint:
+            raise AuditError('Source folder changed from the pinned snapshot.', failure_layer='integrity')
+        entries, _ = self._scan(exclude_git=self.exclude_git, files=self.files, expected=self.metadata)
+        if entries != self.inventory['entries']:
+            raise AuditError('Source folder changed during the run; files will not be restored.',
+                             code='SOURCE_CHANGED', failure_layer='integrity')
 
 @contextlib.contextmanager
 def repository_lock(repo: Path):
@@ -985,6 +1027,22 @@ class Runner:
             self.git_sources.assert_intact(getattr(self, 'active_snapshot', None))
         elif self.repo:
             self.repo.assert_expected()
+            if getattr(self, '_source_folder', None) is not None:
+                self._source_folder.assert_snapshot(self._source_folder.inventory['source_fingerprint'])
+
+    def source_inventory(self):
+        if getattr(self, 'active_snapshot', None) is not None:
+            folder = self.git_sources.guards[self.active_snapshot['path']]
+        elif self.folder:
+            folder = self.folder
+        else:
+            if getattr(self, '_source_folder', None) is None:
+                self._source_folder = Folder(self.source_path, canonical=True)
+            folder = self._source_folder
+        if folder.inventory is None:
+            folder.snapshot(exclude_git=self.repo is not None)
+        folder.assert_snapshot(folder.inventory['source_fingerprint'])
+        return folder.inventory, folder.metadata
 
     def record_error(self, manifest, exc, *, phase='run', **context):
         self.reporter.stop_progress()
@@ -1125,12 +1183,12 @@ class Runner:
             context['sources'] = source_catalog(context)
         budget = Budget(self.execution['stage_timeout_seconds'], self.execution['idle_timeout_seconds'])
         evidence_pins = None
+        evidence_metadata = None
         if stage != 'compare':
-            # Pin actual checkout bytes (including Git's legitimate EOL transforms),
-            # not blob bytes. No Git control/history files enter this inventory.
+            # Every stage uses the initial inventory and verifies its metadata.
             if self.repo:
                 self.assert_source()
-            inventory = (self.folder or Folder(self.source_path, canonical=True)).snapshot(exclude_git=self.repo is not None)
+            inventory, evidence_metadata = self.source_inventory()
             if context.get('_inventory') and inventory['source_fingerprint'] != context['_inventory']['source_fingerprint']:
                 raise UnsafeRepository('Source changed from the inventory used for the coverage plan.', failure_layer='integrity')
             if stage == 'catalog':
@@ -1148,7 +1206,7 @@ class Runner:
         candidate_attempt = None
         try:
             return self._invoke_once(stage, context, destination, budget=budget,
-                                     evidence_pins=evidence_pins, binding=binding,
+                                     evidence_pins=evidence_pins, evidence_metadata=evidence_metadata, binding=binding,
                                      binding_hashes=binding_hashes, attempt_hashes=attempt_hashes)
         except ContractError as exc:
             self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
@@ -1468,7 +1526,7 @@ class Runner:
 
         try:
             guard(context)
-            inventory = (self.folder or Folder(self.source_path, canonical=True)).snapshot(exclude_git=self.repo is not None)
+            inventory, _ = self.source_inventory()
             guard(context)
             save_json(directory / 'source.inventory.json', inventory)
             context['_inventory'] = inventory
@@ -1640,7 +1698,7 @@ class Runner:
             raise
 
     def _invoke_once(self, stage, context, destination, *, budget,
-                     evidence_pins=None, binding, binding_hashes, attempt_hashes):
+                     evidence_pins=None, evidence_metadata=None, binding, binding_hashes, attempt_hashes):
         attempt_started = self.reporter.clock()
         self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
         agent = self.cfg['_agents'][stage]
@@ -1790,7 +1848,7 @@ class Runner:
                 budget.check()
             # Publish after the CLI exits and temporary invocation files are removed.
             try:
-                data = prepare_result(stage, data, context, evidence_pins)
+                data = prepare_result(stage, data, context, evidence_pins, expected_metadata=evidence_metadata)
                 if stage in ('study', 'review'):
                     data['normalization_provenance'] = meta['normalization_provenance']
             except SourceChanged as exc:
@@ -1848,7 +1906,7 @@ class Runner:
         manifest['result_policy'] = 'compromise' if self.compromise else 'strict'
         manifest.update(contract_id=CONTRACT_ID, artifact_format=ARTIFACT_FORMAT,
             acceptance_meaning='accepted=true means study and review policy checks satisfied; factual correctness is not established.',
-            review_quality='NOT_MEASURED', source_check_meaning='MATCHED_AT_BOUNDARIES means source state matched at performed checks only.')
+            review_quality='NOT_MEASURED', source_check_meaning='MATCHED_AT_BOUNDARIES means pinned source metadata matched at performed checks only.')
         manifest['critical_failure'] = self.critical_failure
         if not check_only:
             entries = report_entries(manifest, self.source, self.mode)
@@ -2036,7 +2094,8 @@ class Runner:
             'review_enabled': self.execution['review_enabled'],
             'started_at': now(), 'source_directory': str(self.source_path), 'status': 'RUNNING',
             'isolation': 'cli-native-permissions', 'platform': sys.platform,
-            'integrity': 'Fingerprints at stage boundaries; not a backup or continuous immutability guarantee.',
+            'integrity': 'One initial content fingerprint; metadata checked at stage boundaries. '
+                         'Not a backup or continuous immutability guarantee.',
             'study': None, 'review': None, 'accepted': False, 'errors': []}
         manifest['publication_complete'] = False
         self.manifest = manifest
@@ -2066,7 +2125,7 @@ class Runner:
                     'project_description': self.cfg['project_description'],
                     'priority_scenarios': self.cfg['priority_scenarios'], 'execution_mode': 'static-only',
                     'source_access': 'Current directory tree, including hidden files; do not follow symlinks or use Git. '
-                                     'Native CLI permissions; fingerprints verify stage boundaries only.'}
+                                     'Native CLI permissions; pinned metadata is verified at stage boundaries only.'}
                 self.run_source(manifest, context, self.run_dir, persist)
                 manifest['accepted'] = accepted(manifest)
                 manifest['workflow_satisfied'] = workflow_satisfied(manifest)
