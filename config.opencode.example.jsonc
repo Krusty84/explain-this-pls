@@ -1,4 +1,8 @@
 {
+  // Default true. Set false to force the legacy single-study session.
+  // Multiple study sessions run sequentially, not concurrently.
+  "multi_session": true,
+
   // Default: retain useful text with caveats; use "strict" to reject contract violations. Policy success is not factual proof.
   "result_policy": "compromise",
   // OpenCode V2 (checked with 2.0.23): standalone CLI, final JSON validated locally.

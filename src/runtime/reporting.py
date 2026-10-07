@@ -29,6 +29,8 @@ STATUS_COLORS = {'Complete': '\x1b[32m', 'Failed': '\x1b[31m',
 STAGE_MESSAGES = {
     'catalog': ('Cataloging subsystems…', 'Subsystem catalog', 'Subsystem catalog created.'),
     'study': ('Analyzing project…', 'Project analysis', 'Architecture report created.'),
+    'study-shard': ('Analyzing assigned subsystems…', 'Study shard', 'Study shard validated.'),
+    'synthesis': ('Combining study shards…', 'Study synthesis', 'Architecture report created.'),
     'revise': ('Revising architecture report…', 'Architecture revision', 'Revised architecture report created.'),
     'review': ('Reviewing report…', 'Report review', 'Review complete. No significant issues reported.'),
     'compare': ('Comparing branch reports…', 'Branch report comparison', 'Branch report comparison ready.'),
@@ -281,7 +283,8 @@ class Reporter(NullReporter):
 
     def stage_message(self, context, message):
         source = self.stage_source(context)
-        return (self.display(source) + ' / ' if source else '') + self.display(message)
+        shard = context.get('shard_id')
+        return (self.display(source) + ' / ' if source else '') + (self.display(shard) + ' / ' if shard else '') + self.display(message)
 
     def progress_message(self, context):
         if 'check_only' in context:
@@ -671,6 +674,8 @@ class Reporter(NullReporter):
                     title = (title + ' / ' if title else '') + row['stage']
                     if row.get('revision_id'):
                         title += ' #' + row['revision_id']
+                    if row.get('shard_id'):
+                        title += ' ' + row['shard_id']
                     lines += [s(title) + ' | ' + s(row['status']) + ' | ' + duration(row['duration_seconds']) +
                               ' | ' + str(row['attempts']) + ' | ' + metric_value(row['usage'], 'total_tokens') +
                               ' | ' + metric_value(row['usage'], 'cost_usd') + ' | ' + self.metric_models(row)]

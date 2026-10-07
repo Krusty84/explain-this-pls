@@ -128,10 +128,19 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
         if context.get('generated_by') == 'orchestrator':
             checks['completion_self_assessment'] = None
         return result
-    checks['evidence'] = resolve_evidence(stage, data['evidence'], context, expected_files,
-                                         expected_metadata=expected_metadata)
+    if stage == 'study' and context.get('prompt_variant') == 'synthesis':
+        # Exact evidence/claim equality was validated before materialization.
+        # Reuse the pinned resolutions: synthesis has no new source evidence.
+        checks['evidence'] = copy.deepcopy(context['_synthesis_resolutions'])
+    else:
+        checks['evidence'] = resolve_evidence('study' if stage == 'study-shard' else stage, data['evidence'], context, expected_files,
+                                             expected_metadata=expected_metadata)
     checks['evidence_counts'] = dict(sorted(Counter(e['status'] for e in checks['evidence']).items()))
     evidence_ok = all(e['status'] == 'RESOLVED' for e in checks['evidence'])
+    if stage == 'study-shard':
+        from src.analysis.study_shards import shard_checks
+        shard_checks(data, context, checks)
+        return result
     if stage == 'study':
         result['revision_id'] = context.get('revision_id', '001')
         result['registry_diff'] = None

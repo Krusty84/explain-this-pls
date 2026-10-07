@@ -359,7 +359,8 @@ class ExplainApp(App[int]):
             metrics = row['metrics']
             usage = metrics.get('usage', {})
             values = [row.get('source_name') or row.get('branch') or 'Run',
-                      row['stage'] + (' #' + row['revision_id'] if row.get('revision_id') else ''),
+                      row['stage'] + (' #' + row['revision_id'] if row.get('revision_id') else '')
+                      + (' ' + row['shard_id'] if row.get('shard_id') else ''),
                       row['status'], duration(self.state.elapsed(row)), metrics.get('attempts', '—'),
                       metric_value(usage, 'total_tokens'), metric_value(usage, 'cost_usd'), row['result']]
             cells = [self.literal(value) for value in values]
@@ -391,7 +392,8 @@ class ExplainApp(App[int]):
         row, s = rows[index], self.presenter.display
         metrics = row['metrics']
         lines = ['Source: ' + s(row.get('source_name') or row.get('branch') or 'Run'),
-                 'Step: ' + s(row['stage'] + (' #' + row['revision_id'] if row.get('revision_id') else '')),
+                 'Step: ' + s(row['stage'] + (' #' + row['revision_id'] if row.get('revision_id') else '')
+                              + (' ' + row['shard_id'] if row.get('shard_id') else '')),
                  'Result: ' + s(row['result']),
                  'Agent / model: ' + (self.presenter.metric_models(metrics) if metrics else s(row.get('backend') or 'Not reported yet')),
                  'Report: ' + s(row.get('report_path') or 'No report available')]

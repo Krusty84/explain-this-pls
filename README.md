@@ -100,6 +100,7 @@ This example analyzes two branches and writes reports in English:
 ```json
 {
   "project_description": "An ERP system originally developed in 1995",
+  "multi_session": true,
   "mode": "git",
   "git_mode": {
     "repository": "../legacy-erp",
@@ -145,6 +146,7 @@ and, when enabled, a review without requiring Git; `git_mode` settings are ignor
 | `project_description` | Optional introduction to the system's purpose and history.   |
 | `output_language`     | Report language; defaults to `"Russian"`.                    |
 | `priority_scenarios`  | Optional workflows or areas to focus on.                     |
+| `multi_session`       | Defaults to `true`; set `false` to force one study session. Multiple sessions run sequentially. |
 
 #### Agent settings
 
@@ -159,6 +161,18 @@ in this configuration.
 
 #### Optional settings
 
+**Multi-session study is enabled by default.** Catalog remains one model call.
+The planner uses the maximum of subsystem count / 4, analyzed regular files / 300,
+and physical lines / 50,000, rounded up. When this gives one session, the ordinary
+study runs. Larger sources use sequential whole-subsystem studies, then one
+synthesis call with source tools disabled. Set `"multi_session": false` to keep
+the legacy single-study path, regardless of source size.
+
+`analysis.plan.json` records metrics, assignments and capacity overruns. An
+oversized subsystem stays intact. Each shard has separate artifacts and attempt
+metrics under `study-shards/R-001/`, etc. All shards must pass local checks before
+synthesis. Review and revision, if enabled, use the resulting global study.
+
 **Review is opt-in.** In any existing JSON or JSONC configuration, enable it with:
 
 ```json
@@ -170,7 +184,7 @@ in this configuration.
 }
 ```
 
-Set `execution.review_enabled` to `false` or omit it to run `catalog → study`,
+Set `execution.review_enabled` to `false` or omit it to run catalog and study,
 followed by comparison when several Git branches are selected. Without review,
 no revision round runs and review-agent settings and review/revision prompts are
 inactive. A successful run can be `COMPLETE`, with an explicit notice that no

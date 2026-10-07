@@ -1,0 +1,289 @@
+{
+  "type": "object",
+  "properties": {
+    "task": {
+      "type": "string",
+      "enum": [
+        "architecture_study_shard"
+      ]
+    },
+    "shard_id": {
+      "type": "string"
+    },
+    "assigned_subsystem_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "completion_status": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "PARTIAL",
+        "BLOCKED"
+      ]
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "description",
+          "claim_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "significant_flows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "description",
+          "claim_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "data_and_state": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "description",
+          "claim_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "description",
+          "claim_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "subsystem_id": {
+            "type": "string"
+          },
+          "related_path": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "subsystem_id",
+          "related_path",
+          "description",
+          "claim_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "start_line": {
+            "type": "integer"
+          },
+          "end_line": {
+            "type": "integer"
+          },
+          "quote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source_id",
+          "path",
+          "start_line",
+          "end_line",
+          "quote"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "statement": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "epistemic_kind": {
+            "type": "string",
+            "enum": [
+              "FACT",
+              "HYPOTHESIS",
+              "UNKNOWN"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "uncertainty": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "statement",
+          "scope",
+          "epistemic_kind",
+          "evidence_ids",
+          "uncertainty"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "area_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "INSPECTED",
+              "PARTIALLY_INSPECTED",
+              "NOT_INSPECTED"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limitation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "area_id",
+          "status",
+          "evidence_ids",
+          "limitation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "source_directory": {
+      "type": "string"
+    },
+    "source_snapshot_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "task",
+    "shard_id",
+    "assigned_subsystem_ids",
+    "completion_status",
+    "limitations",
+    "components",
+    "significant_flows",
+    "data_and_state",
+    "constraints",
+    "relationships",
+    "evidence",
+    "claims",
+    "coverage",
+    "source_directory",
+    "source_snapshot_id"
+  ],
+  "additionalProperties": false
+}

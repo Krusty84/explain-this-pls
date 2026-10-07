@@ -70,6 +70,8 @@ CHECKS = {
         prior_finding_coverage=obj(expected=array(PRIOR_FINDING), missing=array(PRIOR_FINDING), unresolved=array(PRIOR_FINDING))),
     'compare': obj(**BASE_CHECKS, evidence_scope=string('SUPPLIED_REPORTS_ONLY')),
 }
+CHECKS['study-shard'] = obj(**BASE_CHECKS, evidence_counts=mapping(INTEGER),
+                             coverage=CHECKS['study']['properties']['coverage'])
 
 
 def artifact_schemas(wire):

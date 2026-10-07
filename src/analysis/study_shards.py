@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
+# SPDX-License-Identifier: MIT
+
+"""Shard contracts and deterministic synthesis inputs; no provider scheduling."""
+import copy
+
+from src.analysis.coverage_plan import coverage_checks
+from src.contracts.contracts import ContractError, contract_violation, references, unique_ids
+
+OBSERVATION_FIELDS = ('components', 'significant_flows', 'data_and_state', 'constraints', 'relationships')
+
+
+def validate_shard(data, context):
+    shard = context['analysis_shard']
+    assigned = shard['subsystem_ids']
+    if data['shard_id'] != shard['id'] or data['assigned_subsystem_ids'] != assigned:
+        raise contract_violation('SHARD_IDENTITY_MISMATCH', '$.shard_id', kind='IDENTITY_MISMATCH', layer='identity')
+    unique_ids(data['evidence'], r'E-[0-9]{3,}', '$.evidence')
+    unique_ids(data['claims'], r'C-[0-9]{3,}', '$.claims')
+    for e in data['evidence']:
+        if e['start_line'] < 1 or e['end_line'] < e['start_line']:
+            raise contract_violation('INVALID_EVIDENCE_LINE_RANGE', '$.evidence')
+    evidence_ids = {'study:' + e['id'] for e in data['evidence']}
+    for claim in data['claims']:
+        references(claim['evidence_ids'], evidence_ids, '$.claims[].evidence_ids', namespaces={'study'})
+        if claim['epistemic_kind'] == 'FACT' and not claim['evidence_ids']:
+            raise ContractError('Shard factual claims require source evidence.')
+        if claim['epistemic_kind'] != 'FACT' and not claim['uncertainty'].strip():
+            raise ContractError('Hypothesis/unknown requires a concrete missing check or limitation')
+    claims = {c['id'] for c in data['claims']}
+    paths = {e['path'] for e in context['_inventory']['entries']}
+    for field in OBSERVATION_FIELDS:
+        for record in data[field]:
+            references(record['claim_ids'], claims, '$.' + field + '[].claim_ids')
+            if not record['claim_ids']:
+                raise ContractError('Shard observations must link registered claims.')
+            if field == 'relationships':
+                if record['subsystem_id'] not in assigned or record['related_path'] not in paths:
+                    raise ContractError('Relationships must link a primary subsystem to an inventoried path.')
+    reported = [a['area_id'] for a in data['coverage']]
+    if len(reported) != len(set(reported)) or set(reported) != set(assigned):
+        raise ContractError('Shard coverage must match exactly its primary assignment.')
+    for area in data['coverage']:
+        references(area['evidence_ids'], evidence_ids, '$.coverage[].evidence_ids', namespaces={'study'})
+        if area['status'] != 'INSPECTED' and not area['limitation'].strip():
+            raise ContractError('Unfinished coverage requires a limitation')
+    if not assigned and any(data[key] for key in (*OBSERVATION_FIELDS, 'evidence', 'claims', 'coverage')):
+        raise ContractError('An empty shard has no source-audit responsibility.')
+
+
+def shard_checks(data, context, checks):
+    checks['coverage'] = coverage_checks(data, context, checks['evidence'], area_ids=data['assigned_subsystem_ids'])
+    checks['policy_satisfied'] = bool(data['completion_status'] == 'COMPLETE'
+        and (data['claims'] or not data['assigned_subsystem_ids'])
+        and all(e['status'] == 'RESOLVED' for e in checks['evidence'])
+        and checks['coverage']['policy_satisfied'])
+
+
+def synthesis_inputs(plan, states):
+    """Remap local IDs to the existing global E-/C- ID space, in shard/ID order.
+
+    A synthesis may arrange prose and blocks, but cannot mint or modify claims,
+    evidence or coverage. Exact registry equality is checked before publication.
+    """
+    expected = [s['id'] for s in plan['shards']]
+    if [s['id'] for s in states] != expected or any(s['status'] != 'SUCCEEDED' for s in states):
+        raise ContractError('Every planned shard must succeed before synthesis.')
+    evidence, claims, coverage, shards, mappings, resolutions = [], [], [], [], [], []
+    artifact_hashes = {}
+    for state in states:
+        original = state['study-shard']
+        meta = state['study-shard_invocation']
+        if (not meta.get('backend_result_valid') or not meta.get('local_validation')
+                or not meta.get('publication_complete') or not original['program_checks']['policy_satisfied']):
+            raise ContractError('Synthesis requires published, locally validated shard results.')
+        for field in ('artifact_hashes', 'attempt_hashes', 'binding_hashes'):
+            artifact_hashes.update({state['directory'] + '/' + name: pin for name, pin in meta[field].items()})
+        shard = copy.deepcopy(original)
+        shard.pop('program_checks')
+        eid_map = {e['id']: f'E-{len(evidence) + i + 1:03d}'
+                   for i, e in enumerate(sorted(shard['evidence'], key=lambda e: e['id']))}
+        cid_map = {c['id']: f'C-{len(claims) + i + 1:03d}'
+                   for i, c in enumerate(sorted(shard['claims'], key=lambda c: c['id']))}
+        for resolved in original['program_checks']['evidence']:
+            resolutions.append(copy.deepcopy(resolved) | {'id': 'study:' + eid_map[resolved['id'].removeprefix('study:')]})
+        for e in shard['evidence']:
+            e['id'] = eid_map[e['id']]
+        for c in shard['claims']:
+            c['id'] = cid_map[c['id']]
+        for record in shard['claims'] + shard['coverage']:
+            record['evidence_ids'] = ['study:' + eid_map[e.removeprefix('study:')] for e in record['evidence_ids']]
+        for field in OBSERVATION_FIELDS:
+            for record in shard[field]:
+                record['claim_ids'] = [cid_map[c] for c in record['claim_ids']]
+        evidence.extend(sorted(shard['evidence'], key=lambda e: e['id']))
+        claims.extend(sorted(shard['claims'], key=lambda c: c['id']))
+        coverage.extend(shard['coverage'])
+        shards.append(shard)
+        mappings.append({'shard_id': state['id'], 'evidence_ids': eid_map, 'claim_ids': cid_map})
+    return {'validated_shards': shards, 'synthesis_evidence': evidence, 'synthesis_claims': claims,
+            'synthesis_coverage': sorted(coverage, key=lambda a: a['area_id']), 'shard_id_mappings': mappings,
+            '_synthesis_resolutions': resolutions, '_shard_artifact_hashes': artifact_hashes}
+
+
+def validate_synthesis(data, context):
+    for field in ('evidence', 'claims', 'coverage'):
+        key = 'area_id' if field == 'coverage' else 'id'
+        if sorted(data[field], key=lambda r: r[key]) != sorted(context['synthesis_' + field], key=lambda r: r[key]):
+            raise contract_violation('SYNTHESIS_INPUT_CHANGED', '$.' + field)

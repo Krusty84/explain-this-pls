@@ -54,6 +54,9 @@ from src.analysis.source_decoding import normalize_source_decoding
 from src.analysis.coverage_plan import build_coverage_plan, inventory_summary, verify_coverage_plan
 from src.analysis.revisions import revision_inputs, choose_revision, completed_pair
 from src.analysis.git_sources import GitSources
+from src.analysis.source_metrics import PhysicalLines
+from src.analysis.analysis_plan import build_analysis_plan, verify_analysis_plan
+from src.analysis.study_shards import synthesis_inputs
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ('catalog', 'study', 'review', 'compare')
@@ -800,16 +803,20 @@ class Folder:
                         else:
                             if files is None:
                                 sha = hashlib.sha256()
+                                lines = PhysicalLines()
                                 while block := os.read(child_fd, 1024 * 1024):
                                     sha.update(block)
+                                    lines.update(block)
                                 file_hash = sha.hexdigest()
+                                source_lines = lines.count
                             else:
                                 if child not in files or info.st_size != files[child]['size']:
                                     changed(child)
                                 if '_stamp' in files[child] and stamp(info) != files[child]['_stamp']:
                                     changed(child)
                                 file_hash = files[child]['sha256']
-                            entry.update(type='file', size=info.st_size, sha256=file_hash)
+                                source_lines = files[child]['source_lines']
+                            entry.update(type='file', size=info.st_size, sha256=file_hash, source_lines=source_lines)
                             entries.append(entry)
                         unchanged(info, os.fstat(child_fd), child)
                     finally:
@@ -884,7 +891,7 @@ def load_config(path: Path) -> dict:
         raise AuditError('Configuration must be a JSON object.')
     allowed = {'reports_dir', 'agent', 'stage_agents',
         'output_language', 'priority_scenarios', 'continue_on_error', 'project_description', 'prompts',
-        'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy', 'source_decoding'}
+        'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy', 'source_decoding', 'multi_session'}
     if set(value) - allowed:
         raise AuditError(f'Unknown configuration keys: {set(value) - allowed}')
     try:
@@ -929,7 +936,7 @@ def load_config(path: Path) -> dict:
         if len(set(branches)) != len(branches) or source['baseline_branch'] not in branches:
             raise AuditError('Branches must be unique and include baseline_branch.')
     defaults = {'output_language': 'Russian', 'project_description': '', 'priority_scenarios': [],
-        'continue_on_error': True, 'stage_agents': {}, 'prompts': {}, 'result_policy': 'compromise'}
+        'continue_on_error': True, 'stage_agents': {}, 'prompts': {}, 'result_policy': 'compromise', 'multi_session': True}
     for key, default in defaults.items():
         value.setdefault(key, default)
     if not isinstance(value['project_description'], str):
@@ -940,6 +947,8 @@ def load_config(path: Path) -> dict:
             raise AuditError(f'{key} must be a JSON object.')
     if type(value['continue_on_error']) is not bool:
         raise AuditError('continue_on_error must be boolean.')
+    if type(value['multi_session']) is not bool:
+        raise AuditError('multi_session must be boolean.')
     if value['result_policy'] not in ('compromise', 'strict'):
         raise AuditError('result_policy must be compromise or strict.')
     if not isinstance(value['priority_scenarios'], list) or any(not isinstance(s, str) for s in value['priority_scenarios']):
@@ -1020,6 +1029,7 @@ class Runner:
                                reporter=self.reporter) if self.mode == 'git' else None
         self.schemas = MODEL_FOLDER_SCHEMAS if self.mode == 'folder' else MODEL_SCHEMAS
         self.bindings = BindingRegistry()
+        self.analysis_inventories = {}
         self.versions: dict[str, str] = {}
 
     def assert_source(self):
@@ -1068,9 +1078,10 @@ class Runner:
         return {'branch': context.get('branch', 'all branches' if stage == 'compare' else 'folder'),
                 **({'source_name': self.source_path.name or str(self.source_path)} if self.mode == 'folder' else {}),
                 'commit': context.get('source_commit'),
-                'stage': 'revise' if stage == 'study' and context.get('prompt_variant') == 'revise' else stage,
+                'stage': context.get('prompt_variant', stage) if stage == 'study' else stage,
                 'revision_id': context.get('revision_id'),
-                'backend': self.cfg['_agents'].get(stage, {}).get('backend')}
+                **({'shard_id': context['analysis_shard']['id']} if 'analysis_shard' in context else {}),
+                'backend': self.cfg['_agents'].get('study' if stage == 'study-shard' else stage, {}).get('backend')}
 
     def stage_started(self, stage, context):
         started = self.reporter.clock()
@@ -1162,16 +1173,17 @@ class Runner:
         self.versions = {k: v['version'] for k, v in result.items()}
         return result
 
-    def command(self, stage: str, state: Path, agent: dict, schema_path: Path, env: dict) -> list[str]:
+    def command(self, stage: str, state: Path, agent: dict, schema_path: Path, env: dict, *, reports_only=False) -> list[str]:
         adapter = CLI_ADAPTERS.get(agent['backend'])
         if adapter:
+            access_stage = 'compare' if reports_only else stage
             kwargs = {'excluded_root': self.repo.path} if adapter is claude_code and getattr(self, 'git_sources', None) else {}
             if adapter is opencode_cli:
-                kwargs['agent_name'] = opencode_cli.prepare_environment(env, stage)
+                kwargs['agent_name'] = opencode_cli.prepare_environment(env, access_stage)
             elif adapter is xxx:
                 kwargs['agent_name'] = xxx.prepare_environment(
-                    env, stage, source_snapshot=bool(getattr(self, 'git_sources', None)))
-            return adapter.build_command(agent, stage, self.mode, self.schemas[stage], schema_path, **kwargs)
+                    env, access_stage, source_snapshot=bool(getattr(self, 'git_sources', None)))
+            return adapter.build_command(agent, access_stage, self.mode, self.schemas[stage], schema_path, **kwargs)
         raise AuditError('No CLI adapter for this backend.',
                          code='BACKEND_INCOMPATIBLE')
 
@@ -1179,6 +1191,7 @@ class Runner:
         context = dict(context)
         context['stage'] = stage
         self.assert_coverage_file(context)
+        self.assert_analysis_file(context)
         if stage != 'compare':
             context['sources'] = source_catalog(context)
         budget = Budget(self.execution['stage_timeout_seconds'], self.execution['idle_timeout_seconds'])
@@ -1218,7 +1231,8 @@ class Runner:
                 raise
             attempt = Path(meta['artifact_directory'])
             # Retain only the verified original response under the compromise policy.
-            if (self.compromise and meta.get('source_integrity_verified')
+            if (self.compromise and stage != 'study-shard' and context.get('prompt_variant') != 'synthesis'
+                    and meta.get('source_integrity_verified')
                     and meta.get('validation_failed') and meta.get('backend_result_valid')
                     and meta.get('model_identity_verified')
                     and exc.failure_kind in ('SCHEMA_ERROR', 'SEMANTIC_ERROR')):
@@ -1385,6 +1399,62 @@ class Runner:
         except (OSError, ValueError, SourceChanged) as exc:
             raise AuditError('Frozen coverage plan changed.', code='COVERAGE_PLAN_CHANGED', failure_layer='integrity') from exc
 
+    def assert_analysis_file(self, context):
+        if not context.get('_analysis_plan_path'):
+            return
+        try:
+            inventory = context.get('_inventory') or self.analysis_inventories[context['analysis_plan']['inventory_sha256']]
+            plan = verify_analysis_plan(context['analysis_plan'], inventory, context['coverage_plan'])
+            expected = (json.dumps(plan, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+            relative = str(Path(context['_analysis_plan_path']).relative_to(self.run_dir))
+            if read_confined(self.run_dir, relative, len(expected)) != expected:
+                raise ValueError('changed')
+        except (OSError, ValueError, SourceChanged) as exc:
+            self.critical_failure = True
+            raise AuditError('Frozen analysis plan changed.', code='ANALYSIS_PLAN_CHANGED', failure_layer='integrity') from exc
+        for relative, pin in context.get('_shard_artifact_hashes', {}).items():
+            try:
+                content = read_confined(self.run_dir, relative, pin['bytes'])
+                if len(content) != pin['bytes'] or digest(content) != pin['sha256']:
+                    raise ValueError('changed')
+            except (OSError, ValueError, SourceChanged) as exc:
+                self.critical_failure = True
+                raise AuditError('Validated shard artifact changed.', code='STUDY_SHARD_CHANGED', failure_layer='integrity') from exc
+
+    def run_study_shards(self, item, context, directory, run_stage, persist):
+        plan = item['analysis_plan']
+        item['study_shards'] = [dict(id=s['id'], status='PLANNED', errors=[],
+            directory=str((directory / 'study-shards' / s['id']).relative_to(self.run_dir))) for s in plan['shards']]
+        persist()
+        if context['coverage_plan']['origin'] != 'AGENT':
+            item['synthesis_status'] = 'SKIPPED'
+            item['errors'].append('Multi-session study requires a validated catalog; directory fallback cannot supply synthesis.')
+            return None
+        for shard, state in zip(plan['shards'], item['study_shards']):
+            state['status'] = 'RUNNING'
+            persist()
+            try:
+                data = run_stage('study-shard', state, context | {'analysis_shard': shard},
+                                 self.run_dir / state['directory'])
+                state['status'] = 'SUCCEEDED' if data is not None and data['program_checks']['policy_satisfied'] else 'FAILED'
+            finally:
+                if state['status'] == 'RUNNING':
+                    state['status'] = 'FAILED'
+                persist()
+        if any(s['status'] != 'SUCCEEDED' for s in item['study_shards']):
+            item['errors'].append('Study synthesis skipped: not all planned shards succeeded.')
+            item['synthesis_status'] = 'SKIPPED'
+            return None
+        self.assert_revision_files(item)
+        inputs = synthesis_inputs(plan, item['study_shards'])
+        # UNCLASSIFIED has no catalog subsystem and cannot acquire coverage from
+        # a shard. Preserve the existing global coverage failure explicitly.
+        for area in context['coverage_plan']['areas']:
+            if area['id'] == 'UNCLASSIFIED':
+                inputs['synthesis_coverage'].append(dict(area_id='UNCLASSIFIED', status='NOT_INSPECTED',
+                    evidence_ids=[], limitation='Catalog left entries unclassified; no primary shard owns them.'))
+        return inputs
+
     def select_source_revision(self, item, directory, *, publish):
         self.assert_revision_files(item)
         selected = choose_revision(item.get('revisions', []))
@@ -1437,15 +1507,19 @@ class Runner:
 
     def assert_revision_files(self, item):
         states = list(item.get('revisions', []))
+        states.extend(item.get('study_shards', []))
         directory = item.get('directory', '.')
         if item.get('coverage_plan'):
             self.assert_coverage_file({'coverage_plan': item['coverage_plan'],
                                        '_coverage_plan_path': str(self.run_dir / directory / 'coverage.plan.json')})
+        if item.get('analysis_plan'):
+            self.assert_analysis_file({'analysis_plan': item['analysis_plan'], 'coverage_plan': item['coverage_plan'],
+                '_analysis_plan_path': str(self.run_dir / directory / 'analysis.plan.json')})
         states.append({'directory': directory, 'catalog_invocation': item.get('catalog_invocation')})
         if item.get('selection_publication_complete'):
             states.append(item | {'directory': directory, 'selected_aliases': True})
         for revision in states:
-            for stage in ('catalog', 'study', 'review'):
+            for stage in ('catalog', 'study', 'study-shard', 'review'):
                 meta = revision.get(stage + '_invocation') or {}
                 hashes = dict(meta.get('artifact_hashes', {})) if meta.get('publication_complete') else {}
                 if meta.get('material_retained'):
@@ -1481,6 +1555,7 @@ class Runner:
             else:
                 self.assert_source()
             self.assert_coverage_file(stage_context)
+            self.assert_analysis_file(stage_context)
             self.assert_revision_files(item)
 
         def run_stage(stage, state, stage_context, stage_dir):
@@ -1492,7 +1567,7 @@ class Runner:
                 self.store_stage(state, stage, data, meta, stage_context)
                 if data is not None:
                     self.stage_finished(stage, stage_context, data, started,
-                        report_path=stage_dir / ARTIFACTS[stage] if meta.get('publication_complete') else None)
+                        report_path=stage_dir / ARTIFACTS[stage] if meta.get('publication_complete') and stage in ARTIFACTS else None)
                 else:
                     self.reporter.emit('stage_completed', **self.stage_context(stage, stage_context),
                                        status='PARTIAL', elapsed_seconds=self.reporter.clock() - started,
@@ -1542,6 +1617,24 @@ class Runner:
             item['coverage_plan'] = plan
             context.update(coverage_plan=plan, _coverage_plan_path=str(directory / 'coverage.plan.json'))
             context.pop('inventory_summary', None)
+            analysis = build_analysis_plan(inventory, plan, self.cfg.get('multi_session', True))
+            verify_analysis_plan(analysis, inventory, plan)
+            self.analysis_inventories[analysis['inventory_sha256']] = inventory
+            context.update(analysis_plan=analysis, _analysis_plan_path=str(directory / 'analysis.plan.json'))
+            path = Path(context['_analysis_plan_path'])
+            if path.exists() or path.is_symlink():
+                self.assert_analysis_file(context)
+            else:
+                save_json(path, analysis)
+            item.update(analysis_plan=analysis, analysis_plan_path=str(path.relative_to(self.run_dir)),
+                        multi_session=analysis['multi_session'], required_sessions=analysis['required_sessions'],
+                        source_metrics=analysis['totals'], study_shards=[],
+                        study_origin='multi_session_synthesis' if analysis['required_sessions'] > 1 else 'direct_single_session')
+            synthesis = None
+            if analysis['required_sessions'] > 1:
+                synthesis = self.run_study_shards(item, context, directory, run_stage, persist)
+                if synthesis is None:
+                    return
             previous = None
             revision_rounds = self.execution['max_revision_rounds'] if review_enabled else 0
             for number in range(1, revision_rounds + 2):
@@ -1557,7 +1650,19 @@ class Runner:
                 if previous:
                     current.update(revision_inputs(previous))
                     current['prompt_variant'] = 'revise'
-                run_stage('study', revision, current, revision_dir)
+                elif synthesis is not None:
+                    current.update(synthesis, catalog=catalog, prompt_variant='synthesis',
+                                   source_access='Validated structured inputs only; all source-inspection tools are disabled.')
+                try:
+                    if current.get('prompt_variant') == 'synthesis':
+                        item['synthesis_status'] = 'RUNNING'
+                        persist()
+                    run_stage('study', revision, current, revision_dir)
+                finally:
+                    if current.get('prompt_variant') == 'synthesis':
+                        item['synthesis_invocation'] = revision.get('study_invocation')
+                        item['synthesis_status'] = 'SUCCEEDED' if revision.get('study') is not None else 'FAILED'
+                        current = context | {'revision_id': revision_id}
                 if not review_enabled:
                     skip_context = self.stage_context('review', current)
                     self.reporter.emit('stage_skipped', **skip_context, reason='disabled_by_config',
@@ -1620,11 +1725,13 @@ class Runner:
             path = destination.parent / name
             if not path.exists():
                 atomic(path, content)
-        return digest(contents['catalog.json' if stage == 'catalog' else ARTIFACTS[stage]])
+        return digest(contents[stage + '.json' if stage in ('catalog', 'study-shard') else ARTIFACTS[stage]])
 
     def artifact_contents(self, stage, data):
         def encoded(value):
             return (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        if stage == 'study-shard':
+            return {'study-shard.json': encoded(data)}
         if stage == 'catalog':
             verify_coverage_plan(data['coverage_plan'])
             return {'coverage.plan.json': encoded(data['coverage_plan']), 'catalog.json': encoded(data),
@@ -1701,8 +1808,11 @@ class Runner:
                      evidence_pins=None, evidence_metadata=None, binding, binding_hashes, attempt_hashes):
         attempt_started = self.reporter.clock()
         self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
-        agent = self.cfg['_agents'][stage]
-        template = Path(self.cfg['_prompt_paths'][context.get('prompt_variant', stage)]).read_text()
+        agent = self.cfg['_agents']['study' if stage == 'study-shard' else stage]
+        variant = context.get('prompt_variant', stage)
+        template = Path(ROOT / 'prompts' / (variant + '.md') if variant in ('study-shard', 'synthesis')
+                        else self.cfg['_prompt_paths'][variant]).read_text()
+        reports_only = stage == 'compare' or variant == 'synthesis'
         output_instruction = ('Return exactly one JSON object matching the supplied schema as your final answer; no fences or surrounding prose.'
             if agent['backend'] in ('xxx', 'opencode') else
             'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.')
@@ -1742,6 +1852,7 @@ class Runner:
                     revision_id=context.get('revision_id'), prompt_variant=context.get('prompt_variant', stage),
                     model_actual_source='unknown: backend has not reported model identity',
                     review_quality='NOT_MEASURED', publication_complete=False)
+        meta.update(source_tools_enabled=not reports_only, shard_id=context.get('analysis_shard', {}).get('id'))
         if agent['backend'] == 'xxx':
             meta['retry_policy'] = retry_policy(0, 0, None)
             meta['compatibility_profile'] = xxx.PROFILE
@@ -1762,7 +1873,7 @@ class Runner:
                 self.assert_source()
             with tempfile.TemporaryDirectory(prefix='archaudit-invocation-', dir=neutral_temporary_base(self.source_path)) as raw:
                 state = Path(raw).resolve()
-                cwd = state if stage == 'compare' else self.source_path
+                cwd = state if reports_only else self.source_path
                 env = cli_env(cwd)
                 if getattr(self, 'git_sources', None):
                     for key in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE',
@@ -1772,7 +1883,7 @@ class Runner:
                 save_json(schema_path, self.schemas[stage])
                 try:
                     if agent['backend'] == 'xxx':
-                        cmd = self.command(stage, state, agent, schema_path, env)
+                        cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only)
                         data, provider_meta = xxx.invoke(cmd, cwd, env, payload, process=process,
                             artifacts=attempt, budget=budget, meta=meta, process_options={
                                 'reporter': self.reporter, 'context': self.stage_context(stage, context),
@@ -1785,7 +1896,7 @@ class Runner:
                     else:
                         if agent['backend'] == 'opencode':
                             opencode_cli.verify_version(meta['cli_version'])
-                        cmd = self.command(stage, state, agent, schema_path, env)
+                        cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only)
                         r = None
                         meta['prompt_sent'] = True
                         try:
@@ -1840,6 +1951,7 @@ class Runner:
                 finally:
                     self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
                     self.assert_coverage_file(context)
+                    self.assert_analysis_file(context)
                     if self.folder:
                         self.folder.assert_snapshot(context['source_fingerprint'])
                     else:
@@ -1849,6 +1961,10 @@ class Runner:
             # Publish after the CLI exits and temporary invocation files are removed.
             try:
                 data = prepare_result(stage, data, context, evidence_pins, expected_metadata=evidence_metadata)
+                if stage == 'study-shard':
+                    self.save_attempt_value(attempt, 'prepared.json', data, meta)
+                    if not data['program_checks']['policy_satisfied']:
+                        raise ContractError('Shard completion, resolved evidence and primary coverage are required.')
                 if stage in ('study', 'review'):
                     data['normalization_provenance'] = meta['normalization_provenance']
             except SourceChanged as exc:
@@ -1867,6 +1983,7 @@ class Runner:
             if stage == 'review':
                 self.assert_review_files(context, destination.parent)
             self.assert_coverage_file(context)
+            self.assert_analysis_file(context)
             self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
             report_hash = self.publish_result(stage, data, destination)
             artifact_hashes = {name: {'sha256': digest(blob), 'bytes': len(blob)}

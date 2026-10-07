@@ -1,0 +1,544 @@
+{
+  "type": "object",
+  "properties": {
+    "task": {
+      "type": "string",
+      "enum": [
+        "architecture_study_shard"
+      ]
+    },
+    "shard_id": {
+      "type": "string"
+    },
+    "assigned_subsystem_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "completion_status": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "PARTIAL",
+        "BLOCKED"
+      ]
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "description",
+          "claim_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "significant_flows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "description",
+          "claim_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "data_and_state": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "description",
+          "claim_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "description",
+          "claim_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "subsystem_id": {
+            "type": "string"
+          },
+          "related_path": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "subsystem_id",
+          "related_path",
+          "description",
+          "claim_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "start_line": {
+            "type": "integer"
+          },
+          "end_line": {
+            "type": "integer"
+          },
+          "quote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source_id",
+          "path",
+          "start_line",
+          "end_line",
+          "quote"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "statement": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "epistemic_kind": {
+            "type": "string",
+            "enum": [
+              "FACT",
+              "HYPOTHESIS",
+              "UNKNOWN"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "uncertainty": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "statement",
+          "scope",
+          "epistemic_kind",
+          "evidence_ids",
+          "uncertainty"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "area_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "INSPECTED",
+              "PARTIALLY_INSPECTED",
+              "NOT_INSPECTED"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limitation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "area_id",
+          "status",
+          "evidence_ids",
+          "limitation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "source_directory": {
+      "type": "string"
+    },
+    "source_fingerprint": {
+      "type": "string"
+    },
+    "program_checks": {
+      "type": "object",
+      "properties": {
+        "execution": {
+          "type": "string",
+          "enum": [
+            "COMPLETED"
+          ]
+        },
+        "contract": {
+          "type": "string",
+          "enum": [
+            "VALID"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "MATCHED_AT_BOUNDARIES",
+            "NOT_INSPECTED_IN_COMPARISON"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "source_id": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "start_line": {
+                "type": "integer"
+              },
+              "end_line": {
+                "type": "integer"
+              },
+              "source_identity": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "git",
+                      "folder"
+                    ]
+                  },
+                  "branch": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "commit": {
+                    "type": "string"
+                  },
+                  "directory": {
+                    "type": "string"
+                  },
+                  "fingerprint": {
+                    "type": "string"
+                  },
+                  "parent_commit": {
+                    "type": "string"
+                  },
+                  "submodule_path": {
+                    "type": "string"
+                  },
+                  "repository": {
+                    "type": "string"
+                  },
+                  "base_commit": {
+                    "type": "string"
+                  },
+                  "source_type": {
+                    "type": "string",
+                    "enum": [
+                      "commit",
+                      "working_tree"
+                    ]
+                  },
+                  "snapshot_id": {
+                    "type": "string"
+                  },
+                  "submodule_head": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "additionalProperties": false
+              },
+              "file_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fragment_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fragment_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "encoding": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "RESOLVED",
+                  "INVALID_POINTER",
+                  "UNKNOWN_SOURCE",
+                  "SOURCE_SCOPE_MISMATCH",
+                  "UNSAFE_PATH",
+                  "NOT_FOUND",
+                  "ACCESS_DENIED",
+                  "READ_ERROR",
+                  "OUT_OF_RANGE",
+                  "DECODE_ERROR",
+                  "ENCODING_MISMATCH",
+                  "QUOTE_MISMATCH",
+                  "LIMIT_EXCEEDED"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "source_id",
+              "path",
+              "start_line",
+              "end_line",
+              "source_identity",
+              "file_sha256",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "policy_satisfied": {
+          "type": "boolean"
+        },
+        "semantic_quality": {
+          "type": "string",
+          "enum": [
+            "NOT_MEASURED"
+          ]
+        },
+        "completion_self_assessment": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "COMPLETE",
+            "PARTIAL",
+            "BLOCKED",
+            null
+          ]
+        },
+        "meaning": {
+          "type": "string"
+        },
+        "evidence_counts": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "coverage": {
+          "type": "object",
+          "properties": {
+            "expected_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "missing_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "unfinished_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "unsupported_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reported_by": {
+              "type": "string",
+              "enum": [
+                "AGENT"
+              ]
+            },
+            "completeness_measured": {
+              "type": "boolean"
+            },
+            "policy_satisfied": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "expected_ids",
+            "missing_ids",
+            "unfinished_ids",
+            "unsupported_ids",
+            "reported_by",
+            "completeness_measured",
+            "policy_satisfied"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "execution",
+        "contract",
+        "source",
+        "evidence",
+        "policy_satisfied",
+        "semantic_quality",
+        "completion_self_assessment",
+        "meaning",
+        "evidence_counts",
+        "coverage"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "task",
+    "shard_id",
+    "assigned_subsystem_ids",
+    "completion_status",
+    "limitations",
+    "components",
+    "significant_flows",
+    "data_and_state",
+    "constraints",
+    "relationships",
+    "evidence",
+    "claims",
+    "coverage",
+    "source_directory",
+    "source_fingerprint",
+    "program_checks"
+  ],
+  "additionalProperties": false
+}

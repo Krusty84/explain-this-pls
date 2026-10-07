@@ -173,7 +173,8 @@ class RunMetrics:
 
     @staticmethod
     def key(context):
-        return (context.get('branch'), context['stage'], context.get('revision_id'))
+        key = (context.get('branch'), context['stage'], context.get('revision_id'))
+        return key + (context['shard_id'],) if context.get('shard_id') else key
 
     def start(self, context):
         key = self.key(context)

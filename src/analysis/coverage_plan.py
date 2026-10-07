@@ -154,12 +154,13 @@ def verify_coverage_plan(plan):
     return plan
 
 
-def coverage_checks(data, context, resolutions):
+def coverage_checks(data, context, resolutions, *, area_ids=None):
     plan = context.get('coverage_plan')
     if plan is None:  # Direct library callers can validate a study without orchestration.
         return {'expected_ids': [], 'missing_ids': [], 'unfinished_ids': [], 'unsupported_ids': [],
                 'reported_by': 'AGENT', 'completeness_measured': False, 'policy_satisfied': True}
     verify_coverage_plan(plan)
+    areas = [a for a in plan['areas'] if area_ids is None or a['id'] in area_ids]
     reports = {r['area_id']: r for r in data['coverage']}
     resolved = {e['id']: e for e in resolutions if e['status'] == 'RESOLVED'}
     sources = {s['id']: s for s in source_catalog(context)}
@@ -170,9 +171,9 @@ def coverage_checks(data, context, resolutions):
         path = prefix + '/' + evidence['path'] if prefix else evidence['path']
         return path in area['file_paths']
 
-    expected = [a['id'] for a in plan['areas']]
-    required = {a['id'] for a in plan['areas'] if a['required']}
-    unsupported = [a['id'] for a in plan['areas'] if a['id'] in reports
+    expected = [a['id'] for a in areas]
+    required = {a['id'] for a in areas if a['required']}
+    unsupported = [a['id'] for a in areas if a['id'] in reports
                    and reports[a['id']]['status'] == 'INSPECTED'
                    and not any(ref in resolved and within(resolved[ref], a)
                                for ref in reports[a['id']]['evidence_ids'])]
@@ -180,4 +181,5 @@ def coverage_checks(data, context, resolutions):
     unfinished = [area for area in expected if area in required and area in reports and reports[area]['status'] != 'INSPECTED']
     return {'expected_ids': expected, 'missing_ids': missing, 'unfinished_ids': unfinished,
             'unsupported_ids': unsupported, 'reported_by': 'AGENT', 'completeness_measured': False,
-            'policy_satisfied': plan['policy_satisfied'] and not missing and not unfinished and not unsupported}
+            'policy_satisfied': (area_ids is not None or plan['policy_satisfied'])
+                                and not missing and not unfinished and not unsupported}

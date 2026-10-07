@@ -69,6 +69,20 @@ def project_model_context(stage, context):
     result = copy.deepcopy(context)
     result.pop('_inventory', None)
     result.pop('_coverage_plan_path', None)
+    result.pop('_analysis_plan_path', None)
+    result.pop('_synthesis_resolutions', None)
+    result.pop('_shard_artifact_hashes', None)
+    if isinstance(result.get('catalog'), dict):
+        result['catalog'].pop('coverage_plan', None)
+        result['catalog'].pop('program_checks', None)
+    if stage == 'study-shard':
+        # Scope is assigned locally. Do not expose other primary assignments,
+        # expanded inventory membership, or the global analysis plan to a shard.
+        assigned = set(result['analysis_shard']['subsystem_ids'])
+        result.pop('analysis_plan', None)
+        result['coverage_plan']['areas'] = [a for a in result['coverage_plan']['areas'] if a['id'] in assigned]
+        result['coverage_plan'].pop('unclassified_paths', None)
+        result['coverage_plan'].pop('counts', None)
     if 'architecture_document' in result:
         _document(result['architecture_document'], registry=False, plan=False)
         _registry(result.get('claim_registry', []))

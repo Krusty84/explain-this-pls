@@ -4,7 +4,7 @@
 
 `execution.review_enabled` is a strict boolean and defaults to `false` in JSON
 and JSONC configurations. It applies to every source and backend in the run.
-With review disabled, the source pipeline is catalog → study; comparison remains
+With review disabled, the source pipeline is catalog → planned study; comparison remains
 available for multiple selected Git branches. Review/revision agents and prompts
 are inactive, and `max_revision_rounds` has no effect. Set `review_enabled: true`
 explicitly to retain the reviewed workflow, including its bounded revision loop.
@@ -659,7 +659,7 @@ cannot enter recovery, review or format repair. No partial registry is presented
 as accepted, and empty-registry review is explicitly limited/ineligible.
 An existing manifest with missing or unsupported `contract_id` / `artifact_format`
 causes `UNSUPPORTED_ARTIFACT_FORMAT` before any artifact writes. Use a new run directory.
-Default execution uses catalog → study → selection → compare. With review enabled,
+Default execution uses catalog → planned study → selection → compare. With review enabled,
 execution uses catalog → study → review, optionally one revised study → full review,
 then selection → compare (comparison only for
 multiple Git branches). XXX and OpenCode V2 use final JSON with local validation;
@@ -704,7 +704,8 @@ The agent receives source information and a compact directory summary; Python
 checks selectors against the full file inventory. Explicit exclusions and symlinks
 remain represented, and links are never followed. Unallocated entries become
 UNCLASSIFIED. The resulting coverage.plan.json is immutable for the snapshot and
-shared by all document revisions; there is still only one study per version.
+shared by all document revisions. Large sources can use multiple study sessions
+before the first global document is assembled.
 
 In compromise mode an invalid catalog produces DIRECTORY_FALLBACK areas from
 top-level directories and root files, retaining explicit limitations. In strict
@@ -724,6 +725,91 @@ acceptance. Final output separately reports file allocation and agent assessment
 Neither is called completeness of system understanding; semantic_quality stays
 NOT_MEASURED.
 
+## Multi-session study
+
+The top-level `multi_session` setting is a strict boolean, default `true` when
+omitted. `false` forces the ordinary single-study path. Catalog always uses one
+invocation. The backend-independent planner computes:
+
+```
+N = max(1, ceil(subsystems / 4), ceil(source_files / 300), ceil(source_lines / 50000))
+```
+
+The thresholds are code constants, not user settings. `N == 1` uses the existing
+study call, with no shard or synthesis calls. `N > 1` uses study shards in stable
+R-001, R-002, ... order, then one synthesis call. There is no concurrency. Shards
+and synthesis inherit the effective `stage_agents.study` selection. Their fixed
+internal prompts are `study-shard.md` and `synthesis.md`; direct study and revision
+keep the existing configurable prompts.
+
+Size metrics describe **analyzed regular files**, not semantic source lines.
+Inventory has no authoritative language classification. Directories and symlinks
+do not count; no new extension/vendor/generated heuristics are applied. Git source
+preparation retains its existing ignored-untracked exclusions. Catalog exclusions
+affect subsystem membership but do not subtract from global inventory totals.
+`source_lines` counts LF bytes plus one for a nonempty unterminated final line.
+Blank lines count; CRLF counts once; standalone CR is not a separator. Binary
+bytes use the same rule. Empty files have zero lines. Counts are collected during
+the existing hash read (or reused from Git source preparation), without another
+source-content scan. Metadata guards reuse the frozen counts.
+
+`analysis.plan.json` is saved beside `coverage.plan.json` and `source.inventory.json`.
+It contains the enable flag, exact session count, thresholds, metric definition,
+global totals, subsystem sizes and shard assignments/loads. It binds the inventory
+and coverage-plan hashes. Local validation rebuilds the plan and compares canonical
+JSON, checking every assignment, count, ID, capacity flag and hash. Once study
+starts, every boundary checks the frozen plan bytes; changes are integrity failures.
+
+Subsystem cost is max(1/4, files/300, lines/50000). Descending cost, then subsystem
+ID, determines placement order. Each whole subsystem goes to the least-loaded
+shard, with shard ID breaking ties. Shard load uses the same maximum with its
+subsystem count. Rational arithmetic determines placement; normalized_load is a
+JSON number. Each inventory path counts once per shard despite overlapping areas.
+Global totals also count paths once; sums across shards can exceed global totals.
+An indivisible oversized subsystem remains intact and sets `over_capacity: true`.
+The exact formula can produce empty shards when N exceeds subsystem count. These
+have explicit empty assignments, make no source observations, and require formal
+COMPLETE responses. They do not split the oversized subsystem.
+
+The shard schema carries task/source/shard identity, assigned subsystem IDs,
+components, flows, state, constraints, cross-area relationships, evidence, claims,
+coverage, limitations and completion. Observation records link claims; relationships
+link a primary subsystem to an inventoried common-root-relative path. The model
+receives only its primary coverage areas and assignment, with source identity and
+normal study context. Other locations may be read only to understand interfaces.
+Model scope changes are identity failures. No shard produces a global report.
+
+Each shard must pass backend completion, binding, schema, semantics, source
+integrity, evidence resolution and primary coverage checks. There is no shard
+revision or compromise promotion. Validated results, logs and per-attempt metrics
+are preserved in `study-shards/R-NNN/`. Manifest `study_shards` records PLANNED,
+RUNNING, SUCCEEDED or FAILED, each with its own invocation metadata. With
+continue_on_error=true, recoverable failure permits later planned shards to run;
+false stops them, leaving their state PLANNED. Any failed shard blocks synthesis
+under both result policies. Integrity failures always stop the run. Directory
+fallback cannot supply a validated catalog for multi-session synthesis.
+
+Synthesis runs as a study invocation with prompt_variant=synthesis, a neutral
+working directory and the adapters' existing reports-only tool restrictions.
+Inputs include validated catalog/shards, frozen plan, description, priority
+scenarios and source identity. Evidence and claims receive deterministic global
+E-/C- IDs in shard/ID order. `shard_id_mappings` records the remapping in the saved
+input prompt. Local checks require exact evidence, claim and coverage equality
+with the remapped inputs; the model assembles the existing global report sections.
+It cannot mint source evidence or change a claim's scope/certainty. Source evidence
+resolutions are reused from validated shards, under the same boundary guards.
+The shard artifacts are pinned and checked before synthesis publication.
+
+The global study uses existing materialization, saved schemas, review plans,
+optional review/revision, selection and publication. Unclassified/incomplete
+catalog policy still prevents global success. A failed synthesis retains shards
+and diagnostics but publishes no successful or recovered global study. Manifest
+`study_origin` distinguishes direct_single_session from multi_session_synthesis;
+it also records source_metrics, required_sessions, analysis_plan_path,
+synthesis_status and synthesis_invocation. Metrics retain one row per shard and
+one for synthesis. Later ordinary revisions use the same frozen coverage and
+analysis plans; they do not rerun or revise shards.
+
 ## Bounded revision and selected artifacts
 
 execution.max_revision_rounds is 0 or 1, default 1. Revision starts only after a
@@ -732,7 +818,9 @@ COMPLETE and there are HIGH/MEDIUM findings. LOW-only findings, incomplete revie
 transport failures and recovered contract-invalid material do not trigger it.
 prompts.revise supplies a separate prompt to the existing study agent; no revision
 backend profile is introduced. stage_agents.catalog inherits study settings.
-prompts.catalog controls catalog. Each substantive stage has its own budget, for at most five stages per snapshot.
+prompts.catalog controls catalog. Each substantive invocation has its own budget.
+Single-session analysis has at most five invocations per snapshot; multi-session
+analysis adds the planned shards and uses synthesis for the first global study.
 
 The program compares registries for added, removed and changed claims. Coordinate
 changes alone are not semantic edits; unchanged assertions retain their IDs.

@@ -82,6 +82,7 @@ SECTIONS = array(obj(key=string(*SECTION_KEYS), title=string(),
 STUDY_BASE = dict(completion_status=STATUS, report_sections=SECTIONS, limitations=STRINGS)
 INSPECTION_STATUS = string('INSPECTED', 'PARTIALLY_INSPECTED', 'NOT_INSPECTED')
 COVERAGE = array(obj(area_id=string(), status=INSPECTION_STATUS, evidence_ids=STRINGS, limitation=string()))
+OBSERVATIONS = array(obj(description=string(), claim_ids=STRINGS))
 PRIOR_FINDING = obj(revision_id=string(), finding_id=string())
 TARGET = obj(source_sha256=string(), document_sha256=string(), registry_sha256=string(), plan_sha256=string())
 SCHEMAS = {
@@ -91,6 +92,12 @@ SCHEMAS = {
         exclusions=array(obj(path=string(), reason=string()))),
     'study': obj(**STUDY_BASE, task=string('architecture_documentation'), branch=string(), source_commit=string(),
                  evidence=EVIDENCE, claims=array(CLAIM), coverage=COVERAGE),
+    'study-shard': obj(task=string('architecture_study_shard'), branch=string(), source_commit=string(),
+        shard_id=string(), assigned_subsystem_ids=STRINGS, completion_status=STATUS, limitations=STRINGS,
+        components=OBSERVATIONS, significant_flows=OBSERVATIONS, data_and_state=OBSERVATIONS,
+        constraints=OBSERVATIONS,
+        relationships=array(obj(subsystem_id=string(), related_path=string(), description=string(), claim_ids=STRINGS)),
+        evidence=EVIDENCE, claims=array(CLAIM), coverage=COVERAGE),
     'review': obj(**BASE, task=string('architecture_review'), branch=string(), source_commit=string(),
         target=TARGET, evidence=EVIDENCE,
         claims=array(obj(id=string(), outcome=string('SUPPORTED', 'CONTRADICTED', 'UNVERIFIABLE',
@@ -115,7 +122,7 @@ FOLDER_SCHEMAS = {
     stage: obj(**({key: spec for key, spec in SCHEMAS[stage]['properties'].items()
                   if key not in ('branch', 'source_commit')} |
                  {'source_directory': string(), 'source_fingerprint': string()}))
-    for stage in ('catalog', 'study', 'review')
+    for stage in ('catalog', 'study', 'study-shard', 'review')
 }
 
 def model_schemas(internal):
@@ -405,7 +412,7 @@ def references(refs, allowed, path, *, namespaces=None):
 def validate_wire_identity(stage, value, context, mode='git'):
     """Structural and pinned-identity prerequisites; performs no repair."""
     validate_schema(value, (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage])
-    if stage in ('catalog', 'study', 'review'):
+    if stage in ('catalog', 'study', 'study-shard', 'review'):
         identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
         for key in identity:
             if value[key] != context.get(key):
@@ -425,6 +432,10 @@ def validate_result(stage, value, context, mode='git'):
     nonblank(value)
     if value['completion_status'] != 'COMPLETE' and not value['limitations']:
         raise ContractError('PARTIAL/BLOCKED requires explicit limitations')
+    if stage == 'study-shard':
+        from src.analysis.study_shards import validate_shard
+        validate_shard(value, context)
+        return
     if stage == 'catalog':
         from src.analysis.coverage_plan import checked_path, build_coverage_plan
         unique_ids(value['subsystems'], r'S-[0-9]{3,}', '$.subsystems')
@@ -448,6 +459,9 @@ def validate_result(stage, value, context, mode='git'):
         evidence_ids = {stage + ':' + e['id'] for e in value['evidence']}
         unique_ids(value['claims'], r'C-[0-9]{3,}', '$.claims')
     if stage == 'study':
+        if context.get('prompt_variant') == 'synthesis':
+            from src.analysis.study_shards import validate_synthesis
+            validate_synthesis(value, context)
         from src.reports.document_rendering import validate_sections
         validate_sections(value['report_sections'], value['claims'])
         for i, claim in enumerate(value['claims']):

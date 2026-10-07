@@ -15,6 +15,7 @@ import tempfile
 import uuid
 
 from src.analysis.evidence import canonical, sha, open_source_directory, _read_confined, SourceChanged, stamp
+from src.analysis.source_metrics import physical_lines
 
 
 def ignore_path(node):
@@ -169,7 +170,7 @@ class GitSources:
                 if file_stamp not in self._hashes:
                     self._hashes[file_stamp] = sha(data)
                 entry = {'type': 'file', 'mode': '100755' if info.st_mode & 0o111 else '100644',
-                         'size': len(data), 'sha256': self._hashes[file_stamp]}
+                         'size': len(data), 'sha256': self._hashes[file_stamp], 'source_lines': physical_lines(data)}
                 self._working_files[key] = (metadata, entry)
             else:
                 entry = cached[1]
@@ -340,7 +341,8 @@ class GitSources:
                     target.write_bytes(data)
                     target.chmod(0o700 if mode == '100755' else 0o600)
                     metadata[full] = stamp(target.stat())
-                    entries[full] = {'type': 'file', 'mode': mode, 'size': len(data), 'sha256': sha(data)}
+                    entries[full] = {'type': 'file', 'mode': mode, 'size': len(data), 'sha256': sha(data),
+                                     'source_lines': physical_lines(data)}
                 else:
                     raise self.error('Unsupported committed source type.', node_path=full)
         subs = [dict(self.repo.descriptions[p], expected_commit=c, actual_head=c, snapshot_verified=True)
