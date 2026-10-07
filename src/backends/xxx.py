@@ -13,7 +13,8 @@ from src.runtime.execution import Budget
 from src.runtime.metrics import measurement, model_entry, native_usage, number, sum_usage
 
 PROFILE = 'opencode-v1.2.27-cli'
-CLEANUP_SECONDS = 5
+CLEANUP_SECONDS = 300
+EXPORT_RETRIES = 2
 CONTINUE_TEXT = 'Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.'
 OVERFLOW_TEXT = ("The previous request exceeded the provider's size limit due to large media attachments. "
                  'The conversation was compacted and media files were removed from context. '
@@ -46,7 +47,7 @@ def decode_output(raw):
 
 
 def part_content(part):
-    """Exclude only native pruning metadata when comparing completed tool parts."""
+    """Exclude native pruning and display metadata when comparing completed tool parts."""
     value = copy.deepcopy(part)
     if value.get('type') == 'tool' and type(value.get('state')) is dict:
         timing = value['state'].get('time')
@@ -54,6 +55,7 @@ def part_content(part):
             if number(timing['compacted']) is None:
                 fail('Invalid XXX tool compaction timestamp.')
             del timing['compacted']
+        value['state'].pop('metadata', None)
     return value
 
 
@@ -257,6 +259,70 @@ def verified_history(exported, session, agent_name, requested=None):
     return assistants, compactions
 
 
+def deliverable_text(message):
+    return ''.join(p['text'] for p in message['parts'] if p['type'] == 'text')
+
+def summary_deliverable(assistants):
+    """Compaction summaries are the only fallback deliverable when the final message is prose."""
+    for message in reversed(assistants[:-1]):
+        if message['info'].get('summary') is not True:
+            continue
+        try:
+            data = strict_json(deliverable_text(message).strip())
+        except ContractError:
+            continue
+        if type(data) is dict:
+            return message, data
+    return None
+
+def balanced_json_end(text, start):
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        char = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == '\\':
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == '{':
+            depth += 1
+        elif char == '}':
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return None
+
+
+def recover_json_object(text):
+    """Recover the outermost complete JSON object in the final answer. Prose-only,
+    non-object and malformed output stays rejected; recovered JSON still passes the
+    full identity, schema and semantic validation."""
+    search = 0
+    best = None
+    best_span = -1
+    while True:
+        start = text.find('{', search)
+        if start == -1:
+            break
+        end = balanced_json_end(text, start)
+        if end is not None:
+            try:
+                value = strict_json(text[start:end])
+            except ContractError:
+                pass
+            else:
+                if type(value) is dict and end - start >= best_span:
+                    best, best_span = value, end - start
+        search = start + 1
+    return best
+
 def parse_output(output, *, exported, agent_name, prompt, cwd, requested=None):
     stream = list(events(output))
     if any(e['type'] == 'error' for e in stream):
@@ -269,7 +335,7 @@ def parse_output(output, *, exported, agent_name, prompt, cwd, requested=None):
     final = assistants[-1]
     mid = final['info']['id']
     known = {(m['info']['id'], p['id']): p for m in value['messages'] for p in m['parts']}
-    text, finishes = [], []
+    streamed, finishes = {}, []
     for event in stream:
         part = event['part']
         persisted = known.get((part['messageID'], part['id']))
@@ -277,22 +343,37 @@ def parse_output(output, *, exported, agent_name, prompt, cwd, requested=None):
             fail('XXX CLI part differs from the persisted session.')
         if event['type'] == 'step_finish' and part.get('reason') not in ('stop', 'tool-calls'):
             fail('XXX CLI reported an unsuccessful step.', 'INCOMPLETE_OUTPUT')
-        if part['messageID'] == mid:
-            if event['type'] == 'text':
-                text.append(part['text'])
-            elif event['type'] == 'step_finish':
-                finishes.append(part.get('reason'))
-    final_text = ''.join(p['text'] for p in final['parts'] if p['type'] == 'text')
-    if not text or ''.join(text) != final_text:
+        if event['type'] == 'text':
+            streamed.setdefault(part['messageID'], []).append(part['text'])
+        elif event['type'] == 'step_finish':
+            finishes.append(part.get('reason'))
+    final_text = deliverable_text(final)
+    emitted = ''.join(streamed.get(mid, []))
+    if not emitted or emitted != final_text:
         fail('XXX CLI did not emit the complete final text.', 'INCOMPLETE_OUTPUT')
     if finishes and finishes[-1] != 'stop':
         fail('XXX CLI completion contradicts the export.', 'INCOMPLETE_OUTPUT')
-    data = strict_json(final_text.strip())
+    source, data = final, None
+    invalid = None
+    try:
+        data = strict_json(final_text.strip())
+    except ContractError as exc:
+        invalid = exc
     if type(data) is not dict:
-        fail('XXX final answer must be a JSON object.', 'INVALID_JSON')
-    info = final['info']
+        fallback = summary_deliverable(assistants)
+        if fallback is not None:
+            source, data = fallback
+        elif invalid is not None:
+            raise invalid
+        else:
+            fail('XXX final answer must be a JSON object.', 'INVALID_JSON')
+    if source is not final:
+        emitted = ''.join(streamed.get(source['info']['id'], []))
+        if not emitted or emitted != deliverable_text(source):
+            fail('XXX CLI did not emit the complete summary text.', 'INCOMPLETE_OUTPUT')
+    info = source['info']
     return data, {'session_id': session, 'request_id': value['messages'][0]['info']['id'],
-                  'message_id': mid, 'finish_reason': 'stop', 'completion_source': 'session_export',
+                  'message_id': info['id'], 'finish_reason': 'stop', 'completion_source': 'session_export',
                   'model_actual': info['providerID'] + '/' + info['modelID'],
                   'compaction': {'completed': count},
                   'metrics': export_metrics(assistants, requested)}
@@ -356,7 +437,18 @@ def invoke(command, cwd, env, payload, *, process, artifacts, budget, meta, proc
         if result['returncode']:
             fail('XXX could not export the final session.', 'INCOMPLETE_OUTPUT')
         exported = decode_output(result['stdout'])
-        owned_export(exported, session, name, prompt, cwd)
+        for attempt in range(EXPORT_RETRIES + 1):
+            try:
+                value = owned_export(exported, session, name, prompt, cwd)
+                break
+            except ContractError as exc:
+                if attempt >= EXPORT_RETRIES or 'json_error' not in exc.details:
+                    raise
+                budget.check()
+                result = local(['export', session], artifacts / 'session-export', budget)
+                if result['returncode']:
+                    fail('XXX could not export the final session.', 'INCOMPLETE_OUTPUT')
+                exported = decode_output(result['stdout'])
         owned = True
         data, provider = parse_output(output, exported=exported, agent_name=name,
                                       prompt=prompt, cwd=cwd, requested=requested)

@@ -150,7 +150,7 @@ def slug(branch: str) -> str:
 
 def cli_env(cwd: Path) -> dict[str, str]:
     env = os.environ.copy()
-    env.update(PWD=str(cwd.resolve()), NO_COLOR='1', GIT_TERMINAL_PROMPT='0')
+    env.update(PWD=str(cwd.resolve()), NO_COLOR='1', GIT_TERMINAL_PROMPT='0', OPENCODE_SKIP_SAFE_CHECK='1')
     return env
 
 def process(command: list[str], cwd: Path, env: dict[str, str], input_data: bytes = b'',

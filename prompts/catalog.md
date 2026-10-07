@@ -6,12 +6,23 @@ contains source identity, a compact directory summary and source_decoding rules;
 the orchestrator separately checks your paths against its complete inventory.
 Directory names alone do not establish architectural responsibilities.
 
+The compact directory summary is the authoritative structural map: it lists every
+top-level group with file, symlink and directory counts, and it is complete for
+this snapshot. Treat it as your primary navigation aid. Do not re-walk the whole
+tree: only list a directory when the summary is ambiguous about what it contains,
+and stop listing once you can name the relevant files or registrations. Use glob
+and grep to locate defining symbols instead of expanding every directory branch.
+
 Keep source reading focused: find a symbol or registration in relevant directories,
 read the relevant range (initially about 100–200 lines, expanding when needed),
 verify the relationship and activation conditions, then retain a brief conclusion
 with exact source_id, path, symbols and line ranges. Widen searches when evidence
 requires it. Do not reread a range without a specific unresolved question, copy
 large code/search outputs into notes, or repeatedly draft the full catalog.
+
+Budget your inspection: a small number of targeted reads per subsystem is expected;
+never read a file you can classify from a symbol, registration or build rule alone.
+
 This reading guide does not reduce coverage: tests, SQL, configuration, generators
 and third-party code remain relevant when they determine behavior. Mark missing
 checks as gaps; never promote an unverified grouping to an established fact.
