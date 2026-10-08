@@ -9,6 +9,7 @@ import secrets
 import sys
 
 from src.contracts.contracts import ContractError, response_error, strict_json, transport_json
+from src.backends.json_response import json_object_response
 from src.runtime.execution import Budget
 from src.runtime.metrics import measurement, model_entry, native_usage, number, sum_usage
 
@@ -354,11 +355,16 @@ def parse_output(output, *, exported, agent_name, prompt, cwd, requested=None):
     if finishes and finishes[-1] != 'stop':
         fail('XXX CLI completion contradicts the export.', 'INCOMPLETE_OUTPUT')
     source, data = final, None
+    response_meta = {}
     invalid = None
     try:
-        data = strict_json(final_text.strip())
+        data, response_meta = json_object_response(final_text)
     except ContractError as exc:
         invalid = exc
+        if 'response_normalization' in exc.details:
+            response_meta['response_normalization'] = exc.details['response_normalization']
+    if response_meta:
+        response_meta['response_normalization']['message_id'] = mid
     if type(data) is not dict:
         fallback = summary_deliverable(assistants)
         if fallback is not None:
@@ -376,6 +382,7 @@ def parse_output(output, *, exported, agent_name, prompt, cwd, requested=None):
                   'message_id': info['id'], 'finish_reason': 'stop', 'completion_source': 'session_export',
                   'model_actual': info['providerID'] + '/' + info['modelID'],
                   'compaction': {'completed': count},
+                  **response_meta,
                   'metrics': export_metrics(assistants, requested)}
 
 

@@ -52,6 +52,41 @@ class XXXCLITests(unittest.TestCase):
             self.assertEqual(meta['model_actual'], 'fixture/configured-model')
             self.assertEqual(meta['metrics']['usage']['total_tokens'], 10)
             self.assertEqual(meta['metrics']['usage']['coverage']['total_tokens'], 'complete')
+            self.assertNotIn('response_normalization', meta)
+
+    def test_fenced_final_is_normalized_after_transport_verification(self):
+        for scenario in ('', 'duplicate', 'missing-finish'):
+            text = ' \r\n```JSON\r\n {"ok": true} \r\n```\r\n'
+            output, exported = transcript(text, rounds=2, scenario=scenario)
+            data, meta = self.parse(output, exported)
+            self.assertEqual(data, {'ok': True})
+            self.assertEqual(meta['message_id'], 'msg_final')
+            self.assertEqual(meta['compaction']['completed'], 2)
+            provenance = meta['response_normalization']
+            self.assertEqual(provenance['kind'], 'markdown_json_fence')
+            self.assertEqual(text[provenance['payload_start']:provenance['payload_end']], ' {"ok": true} ')
+            exported['messages'][-1]['parts'][1]['text'] = '{"ok": true}'
+            with self.assertRaises(ContractError) as caught:
+                self.parse(output, exported)
+            self.assertEqual(caught.exception.failure_kind, 'TRANSPORT_ERROR')
+
+    def test_fenced_final_precedes_unchanged_summary_fallback(self):
+        for final, expected in (('```json\n{"final": true}\n```', {'final': True}),
+                                ('Final prose', {'summary': True}),
+                                ('```json\n{broken\n```', {'summary': True})):
+            output, exported = transcript(final, rounds=1)
+            summary = exported['messages'][2]['parts'][1]
+            summary['text'] = '{"summary": true}'
+            events = [json.loads(line) for line in output.splitlines()]
+            for event in events:
+                if event['part']['id'] == summary['id']:
+                    event['part'] = copy.deepcopy(summary)
+            data, meta = self.parse('\n'.join(json.dumps(e) for e in events), exported)
+            self.assertEqual(data, expected)
+            self.assertEqual('response_normalization' in meta, final.startswith('```'))
+            if 'response_normalization' in meta:
+                self.assertEqual(meta['response_normalization']['message_id'], 'msg_final')
+            self.assertEqual(meta['message_id'], 'msg_final' if 'final' in expected else 'msg_summary0')
 
     def test_compaction_uses_final_stage_answer_and_distinct_model_usage(self):
         for rounds in (1, 2, 3):
@@ -119,8 +154,9 @@ class XXXCLITests(unittest.TestCase):
         for scenario in ('no-final', 'foreign-request', 'summary-only', 'truncated', 'unknown-finish',
                          'backend-error', 'unfinished-tool', 'conflicting-duplicate', 'foreign-session',
                          'malformed-event', 'export-foreign', 'export-prompt', 'export-text'):
-            with self.subTest(scenario=scenario), self.assertRaises(ContractError):
-                self.parse(*transcript({'ok': True}, scenario=scenario))
+            for text in ('{"ok": true}', '```json\n{"ok": true}\n```'):
+                with self.subTest(scenario=scenario, text=text), self.assertRaises(ContractError):
+                    self.parse(*transcript(text, scenario=scenario))
 
     def test_export_alone_cannot_supply_a_different_final_answer(self):
         output, exported = transcript({'ok': True})
@@ -136,9 +172,11 @@ class XXXCLITests(unittest.TestCase):
         with self.assertRaises(ContractError):
             self.parse(output, exported, requested='other/model')
 
-    def test_invalid_json_cannot_use_fences_duplicates_or_nonfinite_numbers(self):
+    def test_invalid_json_duplicates_and_nonfinite_numbers_are_rejected(self):
         for value in ('{broken', '[]', '{"ok":1,"ok":2}', '{"ok":NaN}', 'text\n{}',
-                      chr(96)*3 + 'json\n{}\n' + chr(96)*3):
+                      '```json\n{broken\n```', '```json\n{"ok":1,"ok":2}\n```',
+                      '```json\n{"ok":NaN}\n```', '```json\n[]\n```',
+                      '```json\n{}\n```\n```json\n{}\n```'):
             with self.subTest(value=value), self.assertRaises(ContractError):
                 self.parse(*transcript(value))
 

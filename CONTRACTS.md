@@ -227,7 +227,7 @@ compaction and hooks stay intact; automatic sharing is disabled for this child.
 No installed binary, global configuration or other backend adapter is modified.
 
 The CLI emits NDJSON events, not a native schema response. Its final answer must
-be one JSON object without surrounding prose/fences. After one successful run,
+be one JSON object, optionally inside the single JSON fence described below. After one successful run,
 one local export <sessionID> confirms session/title/directory, original prompt,
 agent, model, message/part identities and exact final text. The V1 export shape is
 messages[].info/parts. The final assistant must be completed, finish with stop,
@@ -236,8 +236,9 @@ CLI step_finish can be confirmed by this export; a contradictory terminal event
 cannot. Conflicting duplicate events, foreign identities and invalid JSON fail.
 
 Automatic compaction runs inside the same CLI process and stage budget.
-The exporter verifies the service/summary/continuation chain; summaries never
-become report results. No HTTP recovery or extra format-correction prompt exists.
+The exporter verifies the service/summary/continuation chain. Fence normalization
+applies only to the verified final response, before the existing compaction-summary
+fallback selection. Summary parsing is unchanged. No HTTP recovery or extra format-correction prompt exists.
 Local schema, binding, normalization, semantic and source checks stay authoritative.
 strict rejects invalid results; compromise may retain eligible material with
 warnings, without treating it as accepted or requesting another model answer.
@@ -265,7 +266,8 @@ remains explicit opt-in and may incur provider cost; it is never part of --check
 OpenCode V2 runs `run --standalone --format json`, with prompts on stdin and a
 private agent allowing only read/glob/grep (no tools for comparison). Its final
 JSON comes from the last completed assistant step with finish reason `stop`;
-errors, incomplete output and fenced or otherwise invalid JSON are rejected.
+errors, incomplete output and invalid JSON are rejected. The same single JSON
+fence normalization applies after transport verification.
 OpenCode 2.0.23 can omit the terminal event even after emitting the full answer.
 After a successful CLI exit with final text but no finish event, the runner makes
 one local `session export --standalone` call within the same stage budget. It
@@ -277,6 +279,31 @@ Schema, binding, evidence and source checks still run locally. OpenCode V2 makes
 attempt and ignores the retained `opencode_format_retries` and
 `structured_output_repair_attempts` settings. Substantive revision rounds still
 apply. Session history uses OpenCode's standard local storage.
+
+XXX and OpenCode V2 first parse the complete final response with `strict_json()`.
+If parsing fails, they accept exactly one triple-backtick code block labelled
+`json` (case-insensitive), with opening and closing fences on separate lines.
+Surrounding spaces, tabs and blank lines, and LF, CRLF or CR line endings are allowed.
+The payload is sliced without content changes and parsed with `strict_json()`;
+the result must be an object. Prose outside the block, multiple or nested blocks,
+missing fences, other labels, arrays, scalars, malformed JSON, duplicate keys and
+non-finite numbers remain invalid. There is no substring search or JSON repair.
+
+This is transport compatibility, not relaxed contract validation. Schema, source
+identity, semantics, evidence and security checks remain authoritative. It does
+not change claims, acceptance policy or self-assessments, and adds no model call.
+Codex and Claude Code parsing is unchanged.
+
+Private `stdout.log` and session-export logs retain the original transport bytes,
+including the exact response text. `extracted.json` separately retains the parsed
+wire object. Invocation `provider_metadata.response_normalization` records
+`kind: "markdown_json_fence"` and zero-based, end-exclusive character offsets
+`payload_start` / `payload_end` into the joined final response. These offsets
+recover the exact payload, including its whitespace, from the logged response.
+XXX also records the final `message_id` in this provenance, including when invalid
+final JSON uses the unchanged summary fallback. If payload parsing fails without
+a fallback, the same record is in the error details. Successful
+normalization is not a validation failure or compromise recovery.
 
 OpenCode CLI usage comes from distinct `step_finish` parts, deduplicated by session,
 message and part ID, with the existing native token normalization.

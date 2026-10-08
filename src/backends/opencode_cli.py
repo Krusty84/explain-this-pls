@@ -8,6 +8,7 @@ import re
 import secrets
 
 from src.contracts.contracts import ContractError, response_error, strict_json, transport_json
+from src.backends.json_response import json_object_response
 from src.runtime.metrics import measurement, native_usage, number, sum_usage
 
 
@@ -149,10 +150,8 @@ def parse_output(output: str, *, exported=None, agent_name=None) -> tuple[dict, 
         finishes[latest] = 'stop'
     if latest is None or finishes.get(latest) != 'stop' or latest not in texts:
         raise response_error('INCOMPLETE_OUTPUT', 'result', 'OpenCode did not return a completed final answer.')
-    data = strict_json(''.join(texts[latest]).strip())
-    if type(data) is not dict:
-        raise response_error('INVALID_JSON', 'result', 'OpenCode final answer must be a JSON object.')
-    meta = {'session_id': session, 'message_id': latest, 'finish_reason': finishes[latest]}
+    data, response_meta = json_object_response(''.join(texts[latest]))
+    meta = {'session_id': session, 'message_id': latest, 'finish_reason': finishes[latest], **response_meta}
     if recovered is not None:
         meta.update(completion_source='session_export', exported_finish=recovered)
     return data, meta

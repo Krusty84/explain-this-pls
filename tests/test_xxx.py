@@ -271,6 +271,48 @@ class XXXTests(unittest.TestCase):
         self.assertEqual(manifest['metrics']['usage']['total_tokens'], 90)
         self.assertEqual(len(self.prompts()), 3)
 
+    def test_fenced_json_completes_publication_with_original_logs(self):
+        import explain
+        process = explain.process
+        captured = {}
+        def capture(*args, **kwargs):
+            result = process(*args, **kwargs)
+            if 'log_dir' in kwargs:
+                captured[kwargs['log_dir'] / 'stdout.log'] = result['stdout']
+            return result
+        self.env['AUDIT_FAKE_COMPACTIONS'] = '1'
+        with patch('explain.process', side_effect=capture):
+            manifest, code = self.run_case('fences')
+        self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
+        self.assertEqual([c['context']['stage'] for c in self.prompts()], ['catalog', 'study', 'review'])
+        self.assertTrue((self.run_dir / 'ARCHITECTURE.md').exists())
+        self.assertTrue(Path(manifest['final_report']).exists())
+        paths = list(self.run_dir.rglob('attempt-001/invocation.json'))
+        self.assertEqual(len(paths), 3)
+        for path in paths:
+            meta = json.loads(path.read_text())
+            self.assertTrue(meta['publication_complete'])
+            self.assertEqual(meta['retry_policy']['orchestrator_retries'], 0)
+            self.assertEqual(meta['compaction']['completed'], 1)
+            provenance = meta['provider_metadata']['response_normalization']
+            self.assertEqual(provenance['kind'], 'markdown_json_fence')
+            raw = (path.parent / 'stdout.log').read_bytes()
+            self.assertEqual(raw, captured[path.parent / 'stdout.log'])
+            events = [json.loads(line) for line in raw.splitlines()]
+            original = ''.join(e['part']['text'] for e in events if e['type'] == 'text'
+                               and e['part']['messageID'] == meta['message_id'])
+            self.assertTrue(original.startswith(' \t\r\n```JSON \t\r\n'))
+            self.assertTrue(original.endswith('\r\n``` \r\n\t'))
+            exported_bytes = (path.parent / 'session-export/stdout.log').read_bytes()
+            self.assertEqual(exported_bytes, captured[path.parent / 'session-export/stdout.log'])
+            exported = json.loads(exported_bytes)
+            self.assertEqual(original, ''.join(p['text'] for p in exported['messages'][-1]['parts']
+                                              if p['type'] == 'text'))
+            payload = original[provenance['payload_start']:provenance['payload_end']]
+            self.assertEqual(json.loads(payload), json.loads((path.parent / 'extracted.json').read_bytes()))
+            self.assertIn(b'\\r\\n', raw)
+            self.assertTrue(json.loads((path.parent / 'validation.json').read_bytes())['valid'])
+
     def test_mixed_stage_agents_keep_other_cli_commands_and_results(self):
         import explain
         from fixtures.cli_response import cli_result
@@ -311,7 +353,7 @@ class XXXTests(unittest.TestCase):
                 ('schema-error', 'SCHEMA_ERROR'), ('schema-extra', 'SCHEMA_ERROR'),
                 ('wrong-identity', 'IDENTITY_MISMATCH'), ('backend-error', 'BACKEND_ERROR'),
                 ('no-final', 'INCOMPLETE_OUTPUT'), ('foreign-request', 'TRANSPORT_ERROR'),
-                ('invalid-json', 'INVALID_JSON'), ('prose-only', 'INVALID_JSON'), ('fences', 'INVALID_JSON'),
+                ('invalid-json', 'INVALID_JSON'), ('prose-only', 'INVALID_JSON'),
                 ('truncated', 'INCOMPLETE_OUTPUT'), ('export-text', 'TRANSPORT_ERROR'),
                 ('summary-only', 'TRANSPORT_ERROR'), ('exit-error', 'BACKEND_ERROR'),
                 ('unfinished-tool', 'INCOMPLETE_OUTPUT')):

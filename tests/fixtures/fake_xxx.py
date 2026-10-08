@@ -98,9 +98,11 @@ else:
             location='C-001', evidence_ids=['E-002'], impact='Synthetic', proposed_correction='Synthetic')]
     chosen = scenario if stage != 'catalog' else ''
     if scenario == 'unknown-compare-finish' and stage != 'compare': chosen = ''
-    if chosen in ('invalid-json', 'prose-only', 'fences'):
-        data = {'invalid-json': '{broken', 'prose-only': 'Ordinary prose',
-                'fences': chr(96)*3 + 'json\n{}\n' + chr(96)*3}[chosen]
+    if chosen in ('invalid-json', 'prose-only'):
+        data = {'invalid-json': '{broken', 'prose-only': 'Ordinary prose'}[chosen]
+    if scenario == 'fences' or os.environ.get('AUDIT_FAKE_FENCES'):
+        data = (' \t\r\n```JSON \t\r\n' + json.dumps(data, ensure_ascii=False, indent=2).replace('\n', '\r\n')
+                + '\r\n``` \r\n\t')
     rounds = int(os.environ.get('AUDIT_FAKE_COMPACTIONS', '0'))
     output, exported = transcript(data, session=session, agent=agent, prompt=prompt,
                                   cwd=str(Path.cwd()), model=model, rounds=rounds, scenario=chosen)

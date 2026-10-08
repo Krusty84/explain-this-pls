@@ -11,14 +11,60 @@ import unittest
 from src.reports.document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 
-from src.contracts.contracts import ContractError, SCHEMAS, schema_diagnostics, validate_result
+from src.contracts.contracts import ContractError, SCHEMAS, schema_diagnostics, strict_json, validate_result
 from src.runtime.execution import Budget, execution_settings
 from explain import AuditError, Folder, Runner, atomic, load_config
 from src.backends import xxx
+from src.backends.json_response import json_object_response
 from src.model.structured_output import blocked_comparison, required_unresolved
 from test_explain import doc, review
 from fixtures.ledger_response import response
 import test_xxx as xxx_fixtures
+
+
+class JSONResponseTests(unittest.TestCase):
+    def test_plain_json_is_parsed_first_without_normalization(self):
+        text = ' \r\n{"text": "```json\\n{}\\n```", "unicode": "é"}\t'
+        with patch('src.backends.json_response.strict_json', wraps=strict_json) as parse:
+            data, meta = json_object_response(text)
+        self.assertEqual(data, json.loads(text))
+        self.assertEqual(meta, {})
+        parse.assert_called_once_with(text)
+
+    def test_single_fence_preserves_payload_and_line_endings(self):
+        for ending in ('\n', '\r\n', '\r'):
+            for label in ('json', 'JSON', 'JsOn'):
+                payload = '  {' + ending + ' "text": "é ```", "value": 1' + ending + '} \t'
+                text = ' \t' + ending + '```' + label + ' \t' + ending + payload + ending + '\t``` \t' + ending
+                with self.subTest(ending=ending, label=label):
+                    data, meta = json_object_response(text)
+                    self.assertEqual(data, json.loads(payload))
+                    provenance = meta['response_normalization']
+                    self.assertEqual(provenance['kind'], 'markdown_json_fence')
+                    self.assertEqual(text[provenance['payload_start']:provenance['payload_end']], payload)
+
+    def test_ambiguous_and_unsupported_wrappers_are_rejected(self):
+        valid = '```json\n{}\n```'
+        for text in (valid + '\n' + valid, 'Prose\n' + valid, valid + '\nProse',
+                     '```json\n{}', '```json\n{}\n``', '```json\n{}\n````',
+                     '```\n{}\n```', '```python\n{}\n```', '~~~json\n{}\n~~~',
+                     '````json\n{}\n````', '```json {} ```', '```json extra\n{}\n```',
+                     'Text {"ok": true} end', '```json\n{}\n{}\n```',
+                     '```json\n' + valid + '\n```'):
+            with self.subTest(text=text), self.assertRaises(ContractError) as caught:
+                json_object_response(text)
+            self.assertEqual(caught.exception.failure_kind, 'INVALID_JSON')
+
+    def test_strict_json_rules_apply_to_plain_and_fenced_payloads(self):
+        for payload in ('{broken', '{} trailing', '[]', 'null', '1', '"string"', 'true',
+                        '{"x":1,"x":2}', '{"x":{"y":1,"y":2}}', '{"x":NaN}',
+                        '{"x":Infinity}', '{"x":-Infinity}', '{"x":1e999}'):
+            for fenced in (False, True):
+                text = '```json\n' + payload + '\n```' if fenced else payload
+                with self.subTest(text=text), self.assertRaises(ContractError) as caught:
+                    json_object_response(text)
+                self.assertEqual(caught.exception.failure_kind, 'INVALID_JSON')
+                self.assertEqual('response_normalization' in caught.exception.details, fenced)
 
 
 class XXXOutputTests(unittest.TestCase):
@@ -75,6 +121,23 @@ class XXXOutputTests(unittest.TestCase):
                 self.stage('xxx', scenario, 2, stage=stage)
             self.assertEqual(caught.exception.failure_kind, kind)
             self.assertFalse((self.destination.parent / (stage + '.json')).exists())
+
+    def test_fenced_objects_keep_schema_identity_and_semantic_checks(self):
+        for scenario, stage, kind in (('schema-extra', 'study', 'SCHEMA_ERROR'),
+                                     ('wrong-identity', 'study', 'IDENTITY_MISMATCH'),
+                                     ('material-review', 'review', 'SEMANTIC_ERROR')):
+            before = len(self.prompts())
+            with self.subTest(scenario=scenario), patch.dict(os.environ, {'AUDIT_FAKE_FENCES': '1'}):
+                with self.assertRaises(ContractError) as caught:
+                    self.stage('xxx', scenario, 2, stage=stage)
+                self.assertEqual(caught.exception.failure_kind, kind)
+                self.assertEqual(len(self.prompts()) - before, 1)
+                self.assertFalse((self.destination.parent / (stage + '.json')).exists())
+                attempt = self.destination / 'attempt-001'
+                meta = json.loads((attempt / 'invocation.json').read_text())
+                self.assertEqual(meta['provider_metadata']['response_normalization']['kind'], 'markdown_json_fence')
+                self.assertTrue((attempt / 'extracted.json').exists())
+                self.assertFalse(meta['publication_complete'])
 
 
 class ComparisonAcceptanceTests(unittest.TestCase):
