@@ -75,6 +75,12 @@ def project_model_context(stage, context):
     if isinstance(result.get('catalog'), dict):
         result['catalog'].pop('coverage_plan', None)
         result['catalog'].pop('program_checks', None)
+    if stage == 'study' and result.get('prompt_variant') == 'synthesis':
+        # All references already use global IDs; the combined registries are authoritative.
+        result.pop('shard_id_mappings', None)
+        for shard in result.get('validated_shards', []):
+            for field in ('evidence', 'claims', 'coverage'):
+                shard.pop(field, None)
     if stage == 'study-shard':
         # Scope is assigned locally. Do not expose other primary assignments,
         # expanded inventory membership, or the global analysis plan to a shard.

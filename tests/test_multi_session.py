@@ -113,6 +113,7 @@ class MultiSessionTests(FolderFixture):
                 self.assertEqual(len(synthesis['context']['validated_shards']), 3)
                 self.assertEqual(len(synthesis['context']['synthesis_claims']), 9)
                 self.assertNotIn('_synthesis_resolutions', synthesis['context'])
+                self.assertNotIn('shard_id_mappings', synthesis['context'])
                 attempt = Path(manifest['synthesis_invocation']['artifact_directory'])
                 raw = json.loads((attempt / 'extracted.json').read_text())
                 expanded = json.loads((attempt / 'expanded.json').read_text())
@@ -126,11 +127,21 @@ class MultiSessionTests(FolderFixture):
                     command = synthesis['command']
                     self.assertEqual(schema, json.loads(command[command.index('--json-schema') + 1]))
                 inputs = synthesis_inputs(plan, manifest['study_shards'])
+                before = copy.deepcopy(synthesis['context'])
+                before['shard_id_mappings'] = inputs['shard_id_mappings']
+                for shard, full in zip(before['validated_shards'], inputs['validated_shards']):
+                    for field in ('evidence', 'claims', 'coverage'):
+                        self.assertNotIn(field, shard)
+                        shard[field] = full[field]
+                context_json = json.dumps(synthesis['context'], ensure_ascii=False)
+                before_prompt = synthesis['prompt'].replace(context_json, json.dumps(before, ensure_ascii=False))
+                self.assertLess(len(synthesis['prompt'].encode('utf-8')), len(before_prompt.encode('utf-8')))
                 saved = copy.deepcopy(manifest['study'])
                 for claim in saved['claims']:
                     claim.pop('document_locators')
                 for field in ('evidence', 'claims', 'coverage'):
                     expected = inputs['synthesis_' + field]
+                    self.assertEqual(synthesis['context']['synthesis_' + field], expected)
                     self.assertEqual(expanded[field], expected)
                     self.assertEqual(normalized[field], expected)
                     self.assertEqual(saved[field], expected)
@@ -164,6 +175,10 @@ class MultiSessionTests(FolderFixture):
                     self.assertNotIn('_inventory', context)
                     self.assertNotIn('catalog', context)
                     self.assertIn('Do not select your own scope', call['prompt'])
+                    path = state['directory'] + '/study-shard.json'
+                    blob = (self.runner.run_dir / path).read_bytes()
+                    self.assertEqual(json.loads(blob), state['study-shard'])
+                    self.assertEqual(inputs['_shard_artifact_hashes'][path], {'sha256': sha(blob), 'bytes': len(blob)})
                 self.assertEqual(manifest['metrics']['attempts'], 5)
                 rows = [s for s in manifest['metrics']['stages'] if s['stage'] == 'study-shard']
                 self.assertEqual([s['shard_id'] for s in rows], ['R-001', 'R-002', 'R-003'])
@@ -172,8 +187,35 @@ class MultiSessionTests(FolderFixture):
                 self.assertFalse(manifest['synthesis_invocation']['source_tools_enabled'])
         self.assertEqual(len(set(assignments)), 1)
 
+    def test_overlapping_subsystems_keep_shared_evidence_and_distinct_claims(self):
+        def change(runner, context, data):
+            if context['stage'] != 'study-shard': return
+            for claim in list(data['claims']):
+                cid = f'C-{len(data["claims"]) + 1:03d}'
+                data['claims'].append(claim | {'id': cid, 'statement': 'Uses the shared entry point.'})
+                data['relationships'].append(dict(subsystem_id=claim['scope'], related_path='part2.py',
+                    description='Shares the entry point with other subsystems.', claim_ids=[claim['id'], cid]))
+            data['limitations'] = ['Runtime behavior was not checked.']
+        manifest, code = self.run_case(catalog_paths=['.'] * 9, change=change)
+        self.assertEqual(code, 0, manifest.get('diagnostics'))
+        context = self.calls[-1]['context']
+        inputs = synthesis_inputs(manifest['analysis_plan'], manifest['study_shards'])
+        self.assertEqual(len(self.calls), 5)
+        self.assertEqual(len(context['synthesis_evidence']), 9)
+        self.assertEqual(len(context['synthesis_claims']), 18)
+        self.assertEqual({e['path'] for e in context['synthesis_evidence']}, {'app.py'})
+        claims = {c['id']: c for c in context['synthesis_claims']}
+        for shard, full in zip(context['validated_shards'], inputs['validated_shards']):
+            self.assertEqual(shard['relationships'], full['relationships'])
+            self.assertEqual(shard['limitations'], full['limitations'])
+            for relation in shard['relationships']:
+                self.assertTrue(all(claims[c]['scope'] == relation['subsystem_id'] for c in relation['claim_ids']))
+        for field in ('evidence', 'claims', 'coverage'):
+            self.assertEqual(context['synthesis_' + field], inputs['synthesis_' + field])
+        validate_materialized(manifest['study'])
+
     def test_shard_schema_semantic_and_completion_failures_block_synthesis(self):
-        for kind in ('schema', 'semantic', 'evidence', 'coverage', 'incomplete', 'identity', 'backend'):
+        for kind in ('schema', 'semantic', 'evidence', 'coverage', 'partial_coverage', 'incomplete', 'identity', 'backend'):
             for policy in ('strict', 'compromise'):
                 def change(runner, context, data):
                     if context.get('analysis_shard', {}).get('id') != 'R-002':
@@ -182,6 +224,8 @@ class MultiSessionTests(FolderFixture):
                     elif kind == 'semantic': data['claims'][0]['evidence_ids'] = ['study:E-999']
                     elif kind == 'evidence': data['evidence'][0]['quote'] = 'not the source'
                     elif kind == 'coverage': data['coverage'].pop()
+                    elif kind == 'partial_coverage':
+                        data['coverage'][0].update(status='PARTIALLY_INSPECTED', limitation='Only the entry point was inspected.')
                     elif kind == 'incomplete': data.update(completion_status='PARTIAL', limitations=['Missing inspection.'])
                     elif kind == 'identity': data['assigned_subsystem_ids'] = ['S-001']
                     else: raise AuditError('Synthetic backend failure.', code='CLI_FAILED', failure_layer='backend')
@@ -604,5 +648,12 @@ class MultiSessionGitTests(unittest.TestCase):
             self.assertTrue(branch['accepted'])
             inventory = json.loads((runner.run_dir / branch['directory'] / 'source.inventory.json').read_text())
             self.assertEqual([e['source_lines'] for e in inventory['entries'] if e['type'] == 'file'], [1])
+            context = next(c for c in calls if c.get('prompt_variant') == 'synthesis' and c['branch'] == branch['branch'])
+            inputs = synthesis_inputs(branch['analysis_plan'], branch['study_shards'])
+            self.assertNotIn('shard_id_mappings', context)
+            for shard, full in zip(context['validated_shards'], inputs['validated_shards']):
+                self.assertEqual(shard, {k: v for k, v in full.items() if k not in ('evidence', 'claims', 'coverage')})
+            for field in ('evidence', 'claims', 'coverage'):
+                self.assertEqual(context['synthesis_' + field], inputs['synthesis_' + field])
         self.assertEqual(self.repo.symbolic(), 'master')
         self.assertEqual(self.repo.head(), self.master)

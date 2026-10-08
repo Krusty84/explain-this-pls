@@ -6,6 +6,8 @@ import copy
 import json
 import unittest
 
+from src.analysis.study_shards import OBSERVATION_FIELDS
+from src.model.model_boundary import BindingRegistry
 from src.reports.document_rendering import materialize_study
 from fixtures.ledger_response import response
 from src.analysis.ledger import review_context, verify_review_context
@@ -13,6 +15,97 @@ from src.model.model_context import project_model_context, input_measurements
 
 
 class ModelContextTests(unittest.TestCase):
+    def synthesis_context(self, mode):
+        identity = ({'source_directory': '/source', 'source_fingerprint': 'f' * 64} if mode == 'folder'
+                    else {'branch': 'main', 'source_commit': 'a' * 40})
+        context = dict(identity, stage='study', prompt_variant='synthesis', validated_shards=[],
+                       synthesis_evidence=[], synthesis_claims=[], synthesis_coverage=[], shard_id_mappings=[],
+                       coverage_plan={'areas': [], 'exclusions': []})
+        for i in range(2):
+            sid, area = f'R-{i + 1:03d}', f'S-{i + 1:03d}'
+            eids = [f'E-{2 * i + n:03d}' for n in (1, 2)]
+            cids = [f'C-{3 * i + n:03d}' for n in (1, 2, 3)]
+            refs = ['study:' + eid for eid in eids]
+            limitation = 'Runtime queue delivery was not checked.'
+            evidence = [dict(id=eid, source_id='source-001', path='src/queue.py',
+                             start_line=1, end_line=1, quote='# очередь') for eid in eids]
+            claims = [dict(id=cid, statement='Uses the shared queue.', scope=area,
+                           epistemic_kind='FACT', evidence_ids=refs[:n], uncertainty='')
+                      for n, cid in enumerate(cids[:2], 1)]
+            claims.append(dict(id=cids[2], statement='Delivery guarantees are unknown.', scope=area,
+                               epistemic_kind='UNKNOWN', evidence_ids=[], uncertainty=limitation))
+            coverage = [dict(area_id=area, status='PARTIALLY_INSPECTED' if i else 'INSPECTED',
+                             evidence_ids=refs, limitation=limitation if i else '')]
+            shard = dict(identity, task='architecture_study_shard', shard_id=sid,
+                         assigned_subsystem_ids=[area], completion_status='PARTIAL' if i else 'COMPLETE',
+                         evidence=evidence, claims=claims, coverage=coverage, limitations=[limitation])
+            for field in OBSERVATION_FIELDS:
+                shard[field] = [dict(description='Shared queue: очередь.', claim_ids=cids[:])]
+            shard['relationships'][0].update(subsystem_id=area, related_path='src/worker.py')
+            context['validated_shards'].append(shard)
+            for field in ('evidence', 'claims', 'coverage'):
+                context['synthesis_' + field].extend(copy.deepcopy(shard[field]))
+            context['shard_id_mappings'].append(dict(shard_id=sid,
+                evidence_ids={f'E-{n:03d}': eid for n, eid in enumerate(eids, 1)},
+                claim_ids={f'C-{n:03d}': cid for n, cid in enumerate(cids, 1)}))
+            context['coverage_plan']['areas'].append(dict(id=area, paths=['src' if i == 0 else 'src/queue.py']))
+        return context
+
+    def test_synthesis_preserves_registries_observations_and_global_links_once(self):
+        for mode in ('git', 'folder'):
+            with self.subTest(mode=mode):
+                context = self.synthesis_context(mode)
+                original = copy.deepcopy(context)
+                registry = BindingRegistry()
+                binding = registry.bind('study', context, mode)
+                projected = binding.project()
+                # The catalog projection retains the old synthesis input shape.
+                before = registry.bind('catalog', context, mode).project()
+                expected = copy.deepcopy(before)
+                expected.pop('shard_id_mappings')
+                for shard in expected['validated_shards']:
+                    for field in ('evidence', 'claims', 'coverage'):
+                        shard.pop(field)
+                self.assertEqual(projected, expected)
+                self.assertEqual(project_model_context('study', projected), projected)
+                for field in ('evidence', 'claims', 'coverage'):
+                    self.assertEqual(projected['synthesis_' + field], original['synthesis_' + field])
+                claims = {c['id']: c for c in projected['synthesis_claims']}
+                evidence = {'study:' + e['id'] for e in projected['synthesis_evidence']}
+                self.assertEqual((len(claims), len(evidence)), (6, 4))
+                for shard in projected['validated_shards']:
+                    for field in OBSERVATION_FIELDS:
+                        for observation in shard[field]:
+                            self.assertTrue(set(observation['claim_ids']) <= claims.keys())
+                            self.assertTrue(all(claims[c]['scope'] in shard['assigned_subsystem_ids']
+                                                for c in observation['claim_ids']))
+                for record in projected['synthesis_claims'] + projected['synthesis_coverage']:
+                    self.assertTrue(set(record['evidence_ids']) <= evidence)
+                self.assertLess(len(json.dumps(projected, ensure_ascii=False).encode('utf-8')),
+                                len(json.dumps(before, ensure_ascii=False).encode('utf-8')))
+                self.assertEqual(context, original)
+                for output in (projected, project_model_context('study', context)):
+                    output['validated_shards'][0]['relationships'][0]['claim_ids'].clear()
+                    output['synthesis_evidence'][0]['quote'] = 'changed'
+                    output['synthesis_claims'][0]['evidence_ids'].clear()
+                    output['synthesis_coverage'][1]['limitation'] = 'changed'
+                    self.assertEqual(context, original)
+                binding.assert_unchanged(context)
+
+    def test_non_synthesis_projections_keep_shard_registries_and_mappings(self):
+        for stage, variant in (('study', None), ('study', 'revise'), ('catalog', 'synthesis'),
+                               ('review', 'synthesis'), ('compare', 'synthesis'), ('study-shard', 'synthesis')):
+            with self.subTest(stage=stage, variant=variant):
+                context = self.synthesis_context('git')
+                context['analysis_shard'] = {'subsystem_ids': ['S-001', 'S-002']}
+                if variant is None:
+                    context.pop('prompt_variant')
+                else:
+                    context['prompt_variant'] = variant
+                projected = project_model_context(stage, context)
+                self.assertEqual(projected['validated_shards'], context['validated_shards'])
+                self.assertEqual(projected['shard_id_mappings'], context['shard_id_mappings'])
+
     def test_sizes_are_exact_bytes_and_characters_without_token_claims(self):
         measured = input_measurements('АБ', '{"x":1}', '{}', 'АБ test')
         self.assertEqual(measured['template'], {'characters': 2, 'utf8_bytes': 4})
