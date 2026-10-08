@@ -20,12 +20,10 @@ docs/structured-output-protocol.md
 docs/validation-results.md
 patches/opencode-v1.2.27-structured-output-validation.patch
 config.jsonc
-
-# Keep local protocol investigations private; ship only this compatibility guide.
-!docs/
 docs/*
-!docs/xxx-compaction.md
 config.jsonc_codex
 config.jsonc_opencode
 explain.config
 .venv/
+input/*
+architecture-reports/*

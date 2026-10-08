@@ -23,8 +23,10 @@ Register every material assertion and link it from report_sections[].blocks[].cl
 Claims contain id, statement, scope, epistemic_kind, evidence_ids and uncertainty.
 FACT requires supporting source evidence; HYPOTHESIS/UNKNOWN require concrete missing
 checks. Use evidence definitions E-001 etc. with source_id, source-relative path,
-positive start_line/end_line and quote (empty unless the complete normalized range
-is quoted exactly). References use study:E-001. Do not infer truth from a resolved
+positive start_line/end_line and quote (empty or an exact contiguous excerpt
+within the selected lines). Only CRLF is normalized to LF; preserve spaces and
+case. A final newline is optional. For a two-line range "first()\nsecond()\n",
+quote may be "second()". References use study:E-001. Do not infer truth from a resolved
 locator or an author's confidence. Retain contradictions and scope limitations.
 
 Return one coverage entry for every coverage_plan area: area_id, status INSPECTED,

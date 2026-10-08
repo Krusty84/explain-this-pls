@@ -74,10 +74,29 @@ class LedgerTests(unittest.TestCase):
         for field, value in [('path', ''), ('path', ' '), ('path', '../outside'), ('path', '/etc/passwd'),
                              ('path', 'C:/secret'), ('path', 'a\x00b'), ('path', 'missing'),
                              ('source_id', 'unknown'), ('start_line', True), ('start_line', -1),
-                             ('end_line', 0), ('end_line', 100), ('quote', 'invented')]:
+                             ('end_line', 0), ('end_line', 100), ('quote', 'invented'), ('quote', ['print(1)'])]:
             with self.subTest(field=field, value=value):
                 pointer = study(self.context)['evidence'][0] | {field: value}
                 self.assertNotEqual(self.resolved(pointer)['status'], 'RESOLVED')
+
+    def test_source_quotes_match_exact_text_within_selected_lines(self):
+        fragment = '    first = "Привет"\n    second = 2\n    finish()\n'
+        for newline in ('\n', '\r\n'):
+            blob = ('before\n' + fragment + 'after\n').replace('\n', newline).encode()
+            (self.root / 'app.py').write_bytes(blob)
+            for quote in ('', fragment, fragment[:-1], 'Привет', 'second = 2',
+                          '    second = 2\n    finish()', fragment.replace('\n', '\r\n')):
+                with self.subTest(newline=newline, quote=quote):
+                    pointer = study(self.context)['evidence'][0] | dict(start_line=2, end_line=4, quote=quote)
+                    result = self.resolved(pointer)
+                    self.assertEqual(result['status'], 'RESOLVED')
+                    self.assertEqual(result['file_sha256'], hashlib.sha256(blob).hexdigest())
+                    self.assertEqual(pointer['quote'], quote)
+            for quote in ('before', 'after', 'привет', 'second =  2',
+                          '\tsecond = 2', 'second = 2\nfinish()', 'second = 2\r    finish()'):
+                with self.subTest(newline=newline, quote=quote):
+                    pointer = study(self.context)['evidence'][0] | dict(start_line=2, end_line=4, quote=quote)
+                    self.assertEqual(self.resolved(pointer)['status'], 'QUOTE_MISMATCH')
 
     def test_symlink_chain_and_component_swap_never_reads_outside(self):
         (self.root / 'link').symlink_to('/etc', target_is_directory=True)
@@ -135,8 +154,11 @@ class LedgerTests(unittest.TestCase):
             response = review(ctx); response['target'][field] = 'wrong'
             with self.assertRaises(ContractError): validate_result('review', response, ctx)
             ctx = review_context(saved, self.context)
-        data = materialize_study(study(self.context)); data['claims'][0]['document_locators'][0]['quote'] = 'different'
-        with self.assertRaises(ContractError): validate_materialized(data)
+        data = materialize_study(study(self.context))
+        original_quote = data['claims'][0]['document_locators'][0]['quote']
+        for quote in ('different', original_quote[:-1]):
+            data['claims'][0]['document_locators'][0]['quote'] = quote
+            with self.assertRaises(ContractError): validate_materialized(data)
         for key in ('statement', 'scope'):
             changed = copy.deepcopy(saved); changed['claims'][0][key] += ' changed'
             with self.assertRaises(ContractError): freeze_plan(changed, self.context)

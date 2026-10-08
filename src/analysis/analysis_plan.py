@@ -19,10 +19,10 @@ def build_analysis_plan(inventory, coverage_plan, multi_session=True):
     verify_coverage_plan(coverage_plan)
     if coverage_plan['inventory_sha256'] != sha(canonical(inventory['entries'])):
         raise ContractError('Analysis and coverage inventories differ.')
-    # No authoritative source-language classification exists. Use all regular
-    # files in the analyzed inventory; Git preparation already excludes ignored
-    # untracked files. Catalog exclusions do not change the global size metric.
-    files = {e['path']: e for e in inventory['entries'] if e['type'] == 'file'}
+    # Keep the full inventory seal, but size only nonexcluded regular files.
+    # UNCLASSIFIED files still count; overlapping exclusions count once.
+    excluded = {path for area in coverage_plan['exclusions'] for path in area['file_paths']}
+    files = {e['path']: e for e in inventory['entries'] if e['type'] == 'file' and e['path'] not in excluded}
     if any(type(e.get('source_lines')) is not int or e['source_lines'] < 0 for e in files.values()):
         raise ContractError('Inventory is missing physical line counts.')
     areas = [a for a in coverage_plan['areas'] if a['id'] != 'UNCLASSIFIED']
@@ -56,7 +56,7 @@ def build_analysis_plan(inventory, coverage_plan, multi_session=True):
     plan = {'multi_session': multi_session, 'required_sessions': required,
         'thresholds': dict(zip(('max_subsystems_per_session', 'max_source_files_per_session',
                                'max_source_lines_per_session'), capacities)),
-        'metric': 'analyzed_regular_files; LF_count_plus_unterminated_final_line',
+        'metric': 'nonexcluded_regular_files; LF_count_plus_unterminated_final_line',
         'inventory_sha256': coverage_plan['inventory_sha256'], 'coverage_plan_sha256': coverage_plan['plan_sha256'],
         'totals': dict(zip(('subsystems', 'source_files', 'source_lines'), totals)),
         'subsystems': [dict(subsystem_id=sid, file_count=size(memberships[sid])[0],

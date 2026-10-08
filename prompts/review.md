@@ -125,8 +125,10 @@ short spellings such as E-1. The frozen study evidence is never modified.
 Source resolution is a separate program check, not support for your conclusion.
 Never compute hashes, follow symlinks, expose source secrets or cite an unlisted
 source. Limits: 256 pointers, 16 KiB/record, 200 lines and 64 KiB/fragment,
-8 MiB/file, 32 MiB unique file bytes read per resolver call. Lines split on LF with CRLF
-normalized; quote must equal the complete selected range.
+8 MiB/file, 32 MiB unique file bytes read per resolver call. Lines split on LF.
+A nonempty source quote must be an exact contiguous excerpt within the selected
+lines. Only CRLF is normalized to LF; preserve spaces and case. A final newline
+is optional. For a two-line range "first()\nsecond()\n", quote may be "second()".
 
 ## Report and completion
 

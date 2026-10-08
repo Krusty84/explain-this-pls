@@ -236,7 +236,7 @@ def resolve_evidence(stage, pointers, context, expected_files=None, *, expected_
             if len(encoded) > MAX_FRAGMENT_BYTES:
                 raise PointerError('LIMIT_EXCEEDED')
             quote = pointer.get('quote', '')
-            if quote and quote != fragment:
+            if quote and (not isinstance(quote, str) or quote.replace('\r\n', '\n') not in fragment):
                 raise PointerError('QUOTE_MISMATCH')
             result.update(status='RESOLVED', fragment_bytes=len(encoded))
         except PointerError as exc:

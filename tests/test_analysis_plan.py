@@ -109,7 +109,7 @@ class AnalysisPlanTests(unittest.TestCase):
         self.assertEqual(plan['totals'], dict(subsystems=0, source_files=301, source_lines=60000))
         self.assertEqual(plan['required_sessions'], 2)
 
-    def test_catalog_exclusions_change_membership_but_not_inventory_totals(self):
+    def test_catalog_exclusions_change_membership_and_analysis_totals(self):
         _, inventory, _ = synthetic_plan(1, 301, 60000)
         context = {'branch': 'main', 'source_commit': 'abc'}
         catalog = dict(task='architecture_catalog', **context, completion_status='COMPLETE', limitations=[],
@@ -117,9 +117,33 @@ class AnalysisPlanTests(unittest.TestCase):
             exclusions=[dict(path='f0000.py', reason='Excluded fixture content.')])
         coverage = build_coverage_plan(catalog, inventory, context)
         plan = build_analysis_plan(inventory, coverage)
-        self.assertEqual(plan['totals'], dict(subsystems=1, source_files=301, source_lines=60000))
+        self.assertEqual(plan['totals'], dict(subsystems=1, source_files=300, source_lines=59800))
         self.assertEqual(plan['subsystems'][0]['file_count'], 300)
         self.assertEqual(plan['subsystems'][0]['source_lines'], 59800)
+
+    def test_excluded_artifacts_do_not_inflate_sessions_or_change_inventory(self):
+        _, inventory, coverage = synthetic_plan(6, 23, 2096)
+        context = {'branch': 'main', 'source_commit': 'abc'}
+        roots = ('.git', '.build', 'target')
+        for root in roots:
+            inventory['entries'].extend([
+                dict(path=root, type='directory'),
+                dict(path=root + '/archive', type='file', source_lines=2000000)])
+        catalog = dict(task='architecture_catalog', **context, completion_status='COMPLETE', limitations=[],
+            subsystems=[{key: area[key] for key in ('id', 'name', 'purpose', 'paths')} for area in coverage['areas']],
+            exclusions=[dict(path=root, reason='Excluded artifact.') for root in roots])
+        coverage = build_coverage_plan(catalog, inventory, context)
+        original = canonical(inventory)
+        plan = build_analysis_plan(inventory, coverage)
+        self.assertEqual(plan['totals'], dict(subsystems=6, source_files=23, source_lines=2096))
+        self.assertEqual(plan['required_sessions'], 2)
+        self.assertTrue(all(shard['subsystem_ids'] for shard in plan['shards']))
+        self.assertEqual(plan['metric'], 'nonexcluded_regular_files; LF_count_plus_unterminated_final_line')
+        self.assertEqual(canonical(inventory), original)
+        self.assertEqual(verify_analysis_plan(plan, inventory, coverage), plan)
+        inventory['entries'][-1]['source_lines'] += 1
+        with self.assertRaises(ContractError):
+            verify_analysis_plan(plan, inventory, coverage)
 
 
 class MultiSessionConfigTests(FolderFixture):

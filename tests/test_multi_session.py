@@ -3,6 +3,7 @@
 
 """Offline multi-session orchestration through ordinary backend invocations."""
 import copy
+import io
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ from src.contracts.contracts import ContractError, validate_result, validate_sch
 from src.contracts.saved_contracts import SAVED_FOLDER_SCHEMAS, SAVED_SCHEMAS
 from src.runtime.metrics import FIELDS
 from src.runtime.reporting import Reporter
+from src.tui.state import RunState
 from src.reports.document_rendering import validate_materialized
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import response, prompt_context
@@ -27,7 +29,7 @@ import test_explain as git_fixtures
 
 class MultiSessionTests(FolderFixture):
     def run_case(self, *, backend='codex', large=True, enabled=True, change=None, review=False,
-                 policy='strict', keep_going=True, catalog_paths=None):
+                 policy='strict', keep_going=True, catalog_paths=None, reporter=None):
         paths = ['app.py'] + [f'part{i}.py' for i in range(2, 10)] if large else ['app.py']
         for path in paths:
             (self.source / path).write_text('def main(): return 42\n')
@@ -35,7 +37,7 @@ class MultiSessionTests(FolderFixture):
                           execution={'review_enabled': review}, stage_agents={'study': {'model': 'fixture/study-model'}})
         self.value['agent']['backend'] = backend
         cfg = self.config()
-        runner = Runner(cfg, self.base / f'run-{len(list(self.base.glob("run-*")))}')
+        runner = Runner(cfg, self.base / f'run-{len(list(self.base.glob("run-*")))}', reporter=reporter)
         runner.versions[backend + ':' + cfg['_agents']['study']['executable']] = '2.0.0' if backend == 'opencode' else 'fixture'
         calls, exports = [], {}
 
@@ -241,6 +243,53 @@ class MultiSessionTests(FolderFixture):
                         self.assertTrue((self.runner.run_dir / 'study-shards' / sid / 'study-shard.json').exists())
                     name = 'invocation.json' if kind == 'backend' else 'validation.json'
                     self.assertTrue((self.runner.run_dir / 'study-shards/R-002/study-shard.logs/attempt-001' / name).exists())
+                    if kind in ('partial_coverage', 'incomplete'):
+                        error = manifest['study_shards'][1]['study-shard_invocation']['error']
+                        reason = 'coverage_unfinished=1' if kind == 'partial_coverage' else 'completion_status=PARTIAL'
+                        self.assertIn(reason, error['message'])
+                        self.assertEqual(error['details']['code'], 'SHARD_POLICY_UNSATISFIED')
+
+    def test_source_quote_snippets_and_failures_across_backends_and_policies(self):
+        for backend in ('codex', 'claude-code', 'opencode', 'xxx'):
+            for policy in ('strict', 'compromise'):
+                for valid in (True, False):
+                    reporter = Reporter(stdout=io.StringIO(), stderr=io.StringIO(), progress=False)
+                    self.addCleanup(reporter.close)
+                    def change(runner, context, data):
+                        if context['stage'] == 'catalog':
+                            reporter.attach_log(runner.run_dir)
+                        if context['stage'] != 'study-shard': return
+                        for evidence in data['evidence']:
+                            evidence['quote'] = 'return 42'
+                        if not valid and context['analysis_shard']['id'] == 'R-002':
+                            data['evidence'][0]['quote'] = 'private invalid quote'
+                    with self.subTest(backend=backend, policy=policy, valid=valid):
+                        manifest, code = self.run_case(backend=backend, policy=policy, change=change, reporter=reporter)
+                        self.assertEqual(code, 0 if valid else 1, manifest.get('diagnostics'))
+                        self.assertEqual(manifest['synthesis_status'], 'SUCCEEDED' if valid else 'SKIPPED')
+                        if valid:
+                            self.assertTrue(workflow_satisfied(manifest))
+                            self.assertTrue((self.runner.run_dir / 'ARCHITECTURE.md').exists())
+                            continue
+                        invocation = manifest['study_shards'][1]['study-shard_invocation']
+                        error = invocation['error']
+                        self.assertIn('QUOTE_MISMATCH=1', error['message'])
+                        self.assertEqual(error['details']['code'], 'SHARD_POLICY_UNSATISFIED')
+                        self.assertEqual(error['details']['completion_status'], 'COMPLETE')
+                        self.assertEqual(error['details']['evidence_counts']['QUOTE_MISMATCH'], 1)
+                        self.assertNotIn('private invalid quote', json.dumps(error))
+                        attempt = Path(invocation['artifact_directory'])
+                        self.assertTrue(json.loads((attempt / 'validation.json').read_text())['valid'])
+                        prepared = json.loads((attempt / 'prepared.json').read_text())
+                        self.assertFalse(prepared['program_checks']['policy_satisfied'])
+                        self.assertEqual(error['details']['coverage'], prepared['program_checks']['coverage'])
+                        event = next(e for e in manifest['diagnostics'] if e.get('shard_id') == 'R-002')
+                        self.assertEqual(event['message'], error['message'])
+                        state = RunState()
+                        state.apply('error', event)
+                        self.assertEqual(state.row(event)['result'], error['message'])
+                        logged = [json.loads(line) for line in (self.runner.run_dir / 'run.log').read_text().splitlines()]
+                        self.assertTrue(any(e.get('event') == 'error' and e.get('message') == error['message'] for e in logged))
 
     def test_fail_fast_keeps_remaining_shards_planned(self):
         def change(runner, context, data):
@@ -552,21 +601,29 @@ class MultiSessionTests(FolderFixture):
         self.assertNotEqual(code, 0)  # The fixture cannot resolve evidence through a symlink.
         self.assertNotIn('generated_by', manifest['study_shards'][0]['study-shard_invocation'])
 
-    def test_all_empty_shards_keep_existing_synthesis_and_completion_policy(self):
+    def test_unassigned_sources_preserve_coverage_and_empty_study_policy(self):
         for excluded in (False, True):
             for policy in ('strict', 'compromise'):
                 def change(runner, context, data):
                     if context['stage'] == 'catalog':
                         data['subsystems'] = []
                         data['exclusions'] = [dict(path='.', reason='Excluded fixture.')] if excluded else []
+                    elif excluded and context['stage'] == 'study':
+                        data.update(claims=[], evidence=[])
+                        for section in data['report_sections']:
+                            for block in section['blocks']:
+                                block.update(markdown='All source files were excluded.', claim_ids=[])
                 with self.subTest(excluded=excluded, policy=policy), \
                         patch('src.analysis.analysis_plan.MAX_SOURCE_FILES_PER_SESSION', 3):
                     manifest, code = self.run_case(change=change, policy=policy)
                 self.assertEqual([c['context']['stage'] for c in self.calls], ['catalog', 'study'])
-                self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED'] * 3)
-                self.assertEqual([s['subsystem_ids'] for s in manifest['analysis_plan']['shards']], [[], [], []])
+                self.assertEqual([s['status'] for s in manifest['study_shards']], [] if excluded else ['SUCCEEDED'] * 3)
+                self.assertEqual([s['subsystem_ids'] for s in manifest['analysis_plan']['shards']], [[]] if excluded else [[], [], []])
                 self.assertEqual(manifest['metrics']['attempts'], 2)
-                self.assertEqual(manifest['synthesis_status'], 'SUCCEEDED')
+                self.assertEqual(manifest.get('synthesis_status'), None if excluded else 'SUCCEEDED')
+                if excluded:
+                    self.assertEqual(manifest['source_metrics'], dict(subsystems=0, source_files=0, source_lines=0))
+                    self.assertEqual(manifest['study_origin'], 'direct_single_session')
                 self.assertEqual((code, manifest['status']), (2, 'PARTIAL'))
                 self.assertFalse(workflow_satisfied(manifest))
                 self.assertFalse(manifest['study']['program_checks']['policy_satisfied'])
@@ -598,6 +655,11 @@ class MultiSessionGitTests(unittest.TestCase):
                 data = response(context)
                 if kind == 'all_empty' and context['stage'] == 'catalog':
                     data.update(subsystems=[], exclusions=[dict(path='.', reason='Excluded fixture.')])
+                elif kind == 'all_empty' and context['stage'] == 'study':
+                    data.update(claims=[], evidence=[])
+                    for section in data['report_sections']:
+                        for block in section['blocks']:
+                            block.update(markdown='All source files were excluded.', claim_ids=[])
                 return cli_result(command, data)
             def change(stage, data, context, *args, **kwargs):
                 result = prepare_result(stage, data, context, *args, **kwargs)
@@ -611,16 +673,26 @@ class MultiSessionGitTests(unittest.TestCase):
                 manifest, code = runner.run()
             branch = manifest['branches'][0]
             states = branch['study_shards']
+            if kind == 'all_empty':
+                self.assertEqual(states, [])
+                self.assertEqual(branch['required_sessions'], 1)
+                self.assertEqual([c['stage'] for c in calls], ['catalog', 'study'])
+                self.assertEqual(branch['study_origin'], 'direct_single_session')
+                self.assertEqual(code, 2, manifest.get('diagnostics'))
+                validate_schema(branch['study'], SAVED_SCHEMAS['study'])
+                self.assertEqual((branch['study']['branch'], branch['study']['source_commit']),
+                                 (branch['branch'], branch['source_commit']))
+                continue
             self.assertEqual([s['id'] for s in states], ['R-001', 'R-002', 'R-003'])
-            self.assertEqual(sum(c['stage'] == 'study-shard' for c in calls), 0 if kind == 'all_empty' else 1)
+            self.assertEqual(sum(c['stage'] == 'study-shard' for c in calls), 1)
             if kind == 'source_changed':
                 self.assertEqual((code, manifest['critical_failure']), (1, True))
                 self.assertEqual([s['status'] for s in states], ['SUCCEEDED', 'FAILED', 'PLANNED'])
                 self.assertFalse((runner.run_dir / states[1]['directory'] / 'study-shard.json').exists())
                 continue
-            self.assertEqual(code, 2 if kind == 'all_empty' else 0, manifest.get('diagnostics'))
+            self.assertEqual(code, 0, manifest.get('diagnostics'))
             self.assertEqual([s['status'] for s in states], ['SUCCEEDED'] * 3)
-            for state in states if kind == 'all_empty' else states[1:]:
+            for state in states[1:]:
                 data = state['study-shard']
                 validate_schema(data, SAVED_SCHEMAS['study-shard'])
                 self.assertEqual((data['branch'], data['source_commit']), (branch['branch'], branch['source_commit']))

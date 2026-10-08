@@ -65,6 +65,26 @@ def shard_checks(data, context, checks):
         and checks['coverage']['policy_satisfied'])
 
 
+def require_shard_policy(data):
+    checks = data['program_checks']
+    if checks['policy_satisfied']:
+        return
+    reasons = []
+    if data['completion_status'] != 'COMPLETE':
+        reasons.append('completion_status=' + data['completion_status'])
+    if data['assigned_subsystem_ids'] and not data['claims']:
+        reasons.append('claims=0')
+    reasons.extend(f'{status}={count}' for status, count in sorted(checks['evidence_counts'].items())
+                   if status != 'RESOLVED')
+    coverage = checks['coverage']
+    for key in ('missing_ids', 'unfinished_ids', 'unsupported_ids'):
+        if coverage[key]:
+            reasons.append(f'coverage_{key.removesuffix("_ids")}={len(coverage[key])}')
+    raise ContractError('Study shard rejected: ' + ', '.join(reasons) + '.', safe=True,
+        details=dict(code='SHARD_POLICY_UNSATISFIED', completion_status=data['completion_status'],
+                     evidence_counts=checks['evidence_counts'], coverage=coverage))
+
+
 def synthesis_inputs(plan, states):
     """Remap local IDs to the existing global E-/C- ID space, in shard/ID order.
 

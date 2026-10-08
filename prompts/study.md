@@ -192,9 +192,11 @@ to avoid review. HYPOTHESIS/UNKNOWN must name concrete missing checks in uncerta
 FACT uses "" unless a scoped uncertainty must be stated.
 
 Return structured evidence with local IDs E-001 etc., source_id from context.sources,
-path relative to that source's root, start_line, end_line and quote. Use "" for
-quote unless quoting the complete normalized range exactly. Do not calculate
-hashes. The canonical reference form is study:E-001; keep evidence definitions
+path relative to that source's root, start_line, end_line and quote. Use "" or an
+exact contiguous excerpt within the selected lines. Only CRLF is normalized to
+LF; preserve spaces and case. A final newline is optional. For a two-line range
+"first()\nsecond()\n", quote may be "second()". Do not calculate hashes.
+The canonical reference form is study:E-001; keep evidence definitions
 local (E-001). The program can pad short numeric IDs and remove an own-namespace
 prefix on definitions when unambiguous. In study, it also supports exact
 unprefixed references to unique local definitions. It never repairs unknown IDs,

@@ -37,11 +37,16 @@ Return the dedicated shard schema, not a complete global architecture report:
 - relationships: primary subsystem_id, related_path relative to the common source
   root, description of an observed interface or dependency, and claim_ids;
 - evidence: local E-001 IDs, source_id, path, 1-based inclusive line bounds and an
-  optional exact quote (empty string is allowed). Prefer concise ranges;
+  optional exact contiguous quote within those lines (empty string is allowed).
+  Prefer concise ranges;
 - claims: local C-001 IDs, precise statement and scope, epistemic_kind FACT,
   HYPOTHESIS or UNKNOWN, evidence_ids using study:E-001, and uncertainty;
 - coverage: exactly one entry per assigned subsystem, with its area_id, status,
   evidence_ids and limitation. INSPECTED requires evidence within that subsystem.
+
+For source quotes, only CRLF is normalized to LF; preserve spaces and case.
+A final newline is optional. For a two-line range "first()\nsecond()\n",
+quote may be "second()".
 
 FACT requires evidence. HYPOTHESIS and UNKNOWN require a concrete missing check
 in uncertainty. Every observation must reference a claim. Use canonical IDs and

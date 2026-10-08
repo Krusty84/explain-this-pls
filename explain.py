@@ -56,7 +56,7 @@ from src.analysis.revisions import revision_inputs, choose_revision, completed_p
 from src.analysis.git_sources import GitSources
 from src.analysis.source_metrics import PhysicalLines
 from src.analysis.analysis_plan import build_analysis_plan, verify_analysis_plan
-from src.analysis.study_shards import empty_shard_result, synthesis_inputs
+from src.analysis.study_shards import empty_shard_result, require_shard_policy, synthesis_inputs
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ('catalog', 'study', 'review', 'compare')
@@ -1444,8 +1444,7 @@ class Runner:
             validate_result('study-shard', data, context, self.mode)
             meta['local_validation'] = True
             data = prepare_result('study-shard', data, context)
-            if not data['program_checks']['policy_satisfied']:
-                raise ContractError('Shard completion, resolved evidence and primary coverage are required.')
+            require_shard_policy(data)
             guard(context)
             meta['source_integrity_verified'] = True
             meta['source_check_status'] = 'MATCHED_AT_BOUNDARIES'
@@ -2015,8 +2014,7 @@ class Runner:
                                       catalog_recovery=meta.get('catalog_recovery'))
                 if stage == 'study-shard':
                     self.save_attempt_value(attempt, 'prepared.json', data, meta)
-                    if not data['program_checks']['policy_satisfied']:
-                        raise ContractError('Shard completion, resolved evidence and primary coverage are required.')
+                    require_shard_policy(data)
                 if stage in ('study', 'review'):
                     data['normalization_provenance'] = meta['normalization_provenance']
             except SourceChanged as exc:

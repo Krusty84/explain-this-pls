@@ -7,6 +7,8 @@ import asyncio
 import json
 from pathlib import Path
 import signal
+import os
+import sys
 
 from rich.text import Text
 from textual import work
@@ -114,11 +116,65 @@ class ExplainApp(App[int]):
     #config-preview, #step-details { height: auto; }
     .actions { height: 3; margin-top: 1; }
     .actions Button { min-width: 8; margin-right: 1; }
+    
+    /* Flat, outlined buttons */
+    Button.-style-default {
+        height: 3;
+        min-width: 8;
+        line-pad: 1;
+
+        background: transparent !important;
+        background-tint: transparent !important;
+        tint: transparent !important;
+
+        border: solid #b0b0b0 !important;
+        text-style: none;
+        border: solid #808080 !important;
+    }
+
+    /* Primary action: accent border, no fill */
+    Button.-style-default.-primary {
+        border: solid $primary !important;
+    }
+
+    /* Dangerous action: warning border, no fill */
+    Button.-style-default.-warning {
+        border: solid $warning !important;
+    }
+
+    /* Mouse hover and keyboard focus */
+    Button.-style-default:hover,
+    Button.-style-default:focus {
+        border: solid #b0b0b0 !important;
+        text-style: bold;
+    }
+
+    /* Disabled buttons */
+    Button.-style-default:disabled {
+        color: $text-muted !important;
+        border: solid #555555 !important;
+        text-opacity: 50%;
+    }
+
     #run-tabs { height: 1fr; }
     TabPane { padding: 0; }
     #stages, #summary { height: 1fr; min-height: 3; }
     #detail-scroll { height: 8; border-top: solid $primary; }
     """
+
+    def _set_pointer_shape(self, shape: str) -> None:
+        """Map Textual pointer shapes to macOS terminal shapes."""
+        if os.environ.get("TERM_PROGRAM") in (
+            "iTerm.app",
+            "Apple_Terminal",
+        ):
+            shape = {
+                "default": "left_ptr",  # Arrow
+                "pointer": "hand2",     # Hand
+                "text": "xterm",        # I-beam
+            }.get(shape, shape)
+
+        super()._set_pointer_shape(shape)
 
     def __init__(self, args, *, settings_path=None):
         super().__init__()
@@ -168,6 +224,7 @@ class ExplainApp(App[int]):
         yield Footer()
 
     def on_mount(self):
+        self._set_pointer_shape("default")
         self.query_one('#run', Button).display = not self.args.check
         self.query_one('#configs', DataTable).add_columns('Config', 'Mode', 'Source / validation')
         table = self.query_one('#stages', DataTable)
@@ -470,3 +527,11 @@ def launch(args):
         return app.run() or 0
     finally:
         signal.signal(signal.SIGTERM, old_handler)
+
+        if (
+            sys.stdout.isatty()
+            and os.environ.get("TERM_PROGRAM")
+            in ("iTerm.app", "Apple_Terminal")
+        ):
+            sys.stdout.write("\x1b]22;\x07")
+            sys.stdout.flush()
