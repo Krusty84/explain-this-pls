@@ -114,7 +114,7 @@ review or publication. `study.annotated.md` contains generated checks and the re
 `ARCHITECTURE_REVIEW.md` and `BRANCH_COMPARISON.md` contain generated tables;
 `study.original.md` retains the canonical program assembly of authored blocks.
 `review.original.md` and `compare.original.md` preserve original prose.
-`SUBSYSTEM_CATALOG.md` is generated from the validated catalog and its frozen
+`SUBSYSTEM_CATALOG.md` is generated from the validated or recovered catalog and its frozen
 coverage plan, with subsystem tables, exclusions, limitations and unclassified
 paths. It is included in the catalog's `artifact_hashes`; the catalog's
 `report_sha256` continues to identify `catalog.json`.
@@ -716,12 +716,39 @@ UNCLASSIFIED. The resulting coverage.plan.json is immutable for the snapshot and
 shared by all document revisions. Large sources can use multiple study sessions
 before the first global document is assembled.
 
-In compromise mode an invalid catalog produces DIRECTORY_FALLBACK areas from
-top-level directories and root files, retaining explicit limitations. In strict
-mode that failure stops the current source. continue_on_error controls continuation
-and false stops further calls in both policies. Integrity, cleanup and publication
-errors stop the run regardless of policy. An incomplete or fallback catalog and
-remaining UNCLASSIFIED prevent COMPLETE even if usable documentation is retained.
+In compromise mode, catalog recovery first checks response structure, pinned source
+identity, IDs, selector syntax and exclusion rules. Only UNKNOWN_CATALOG_PATH is
+recoverable: selectors absent from the frozen inventory are removed without replacement.
+Valid assignments and exclusions remain. Subsystems with no remaining paths are
+removed; unallocated entries become UNCLASSIFIED through normal reconciliation.
+Traversal and other unsafe selectors are never recovered or authorized. Symlink
+targets are never followed. Strict mode continues to reject unknown paths.
+
+Coverage origin AGENT identifies a catalog that passed validation without recovery.
+AGENT_SALVAGED identifies a catalog with retained subsystems after unknown selectors
+were removed. Its saved completion_status and coverage catalog_status are PARTIAL,
+even if the agent reported COMPLETE. If none remain, DIRECTORY_FALLBACK groups
+top-level directories and root files while retaining valid exclusions and catalog
+limitations. Other catalog failures can use the existing directory fallback in
+compromise mode; catalog identity failures stop analysis for that source.
+
+The original extracted.json and expanded.json are unchanged. Private recovered.json
+holds the filtered catalog; recovery.json records rejected selectors with their
+JSON locations, original self-assessment, provenance and canonical input/output hashes.
+These artifacts are pinned and checked with the other attempt files. validation.json
+identifies recovered.json as its validated object and records original_valid=false.
+The saved program_checks retain the original completion_self_assessment. Rejected
+selector values are not copied into public reports or later model inputs.
+
+Recovered and fallback plans require PARTIAL status, limitations and
+policy_satisfied=false; their provenance is included in the frozen plan hash.
+Successful analysis cannot restore positive catalog acceptance. In strict mode a
+catalog failure stops the current source. continue_on_error=false stops further
+calls after a stage failure or catalog recovery; the recovered catalog is retained.
+Deterministic recovery is not a retry. Integrity, cleanup and publication errors
+stop the run regardless of policy. An incomplete, salvaged
+or fallback catalog and remaining UNCLASSIFIED prevent overall COMPLETE even if
+usable documentation is retained.
 
 Study adds coverage entries `{area_id,status,evidence_ids,limitation}` with status
 INSPECTED, PARTIALLY_INSPECTED or NOT_INSPECTED for every area. A missing response
@@ -795,12 +822,14 @@ are preserved in `study-shards/R-NNN/`. Manifest `study_shards` records PLANNED,
 RUNNING, SUCCEEDED or FAILED, each with its own invocation metadata. With
 continue_on_error=true, recoverable failure permits later planned shards to run;
 false stops them, leaving their state PLANNED. Any failed shard blocks synthesis
-under both result policies. Integrity failures always stop the run. Directory
-fallback cannot supply a validated catalog for multi-session synthesis.
+under both result policies. Integrity failures always stop the run. Multi-session
+analysis accepts AGENT, AGENT_SALVAGED and DIRECTORY_FALLBACK coverage plans after
+the same structural, inventory and frozen-plan verification. Catalog provenance
+does not relax any shard validation or evidence requirement.
 
 Synthesis runs as a study invocation with prompt_variant=synthesis, a neutral
 working directory and the adapters' existing reports-only tool restrictions.
-Inputs include validated catalog/shards, frozen plan, description, priority
+Inputs include the available catalog, validated shards, frozen plan, description, priority
 scenarios and source identity. Evidence and claims receive deterministic global
 E-/C- IDs in shard/ID order. `shard_id_mappings` records the remapping in the saved
 input prompt. The model uses `synthesis.schema.json` or `folder-synthesis.schema.json`:
@@ -821,7 +850,16 @@ The shard artifacts are pinned and checked before synthesis publication.
 
 The global study uses existing materialization, saved schemas, review plans,
 optional review/revision, selection and publication. Unclassified/incomplete
-catalog policy still prevents global success. A failed synthesis retains shards
+catalog policy still prevents global success. A successful synthesis from a salvaged
+or fallback catalog remains usable and is selected and published through the usual
+report pipeline. Original catalog limitations and provenance remain visible in
+study.annotated.md and FINAL_REPORT.md. ARCHITECTURE.md retains the authored study.
+The overall result is PARTIAL (exit 2 in
+compromise mode), accepted=false and coverage_plan.policy_satisfied=false, even
+when all shards, synthesis and optional review finish. Study completion_status
+remains the model's self-assessment; it does not override the overall result.
+Successful processing does not establish architectural correctness. Model-facing
+study, study-shard and synthesis schemas are unchanged. A failed synthesis retains shards
 and diagnostics but publishes no successful or recovered global study. Manifest
 `study_origin` distinguishes direct_single_session from multi_session_synthesis;
 it also records source_metrics, required_sessions, analysis_plan_path,

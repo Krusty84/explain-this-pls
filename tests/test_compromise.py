@@ -62,7 +62,8 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         self.assertNotIn('Старый', final)
         self.assertFalse(manifest['revisions'][0]['review']['program_checks']['policy_satisfied'])
 
-    def run_case(self, change=None, *, backend='codex', policy=None, continue_on_error=True, atomic_override=None):
+    def run_case(self, change=None, *, backend='codex', policy=None, continue_on_error=True, atomic_override=None,
+                 catalog_change=None):
         config = self.config()
         config.pop('result_policy')  # Exercise Runner's default as well as load_config's default.
         if policy is not None:
@@ -80,6 +81,8 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             stage = context.get('stage') or ('review' if 'architecture_document' in context else 'study')
             calls.append((stage, context))
             data = response_for(context)
+            if stage == 'catalog' and catalog_change:
+                catalog_change(data)
             outcome = change(stage, data) if change and stage != 'catalog' else data
             if outcome == 'failure':
                 return {'returncode': 17, 'stdout': b'', 'stderr': b'private backend error'}
@@ -94,6 +97,52 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             manifest, code = runner.run()
         self.manifest, self.calls, self.originals, self.run_dir = manifest, calls, originals, run_dir
         return manifest, code
+
+    def test_catalog_recovery_preserves_original_bytes_and_private_diagnostics(self):
+        def catalog_change(data):
+            data['subsystems'][0]['paths'].append('PRIVATE_UNKNOWN')
+            data['exclusions'].append(dict(path='PRIVATE_EXCLUSION', reason='Unknown exclusion.'))
+            data['limitations'].append('Original catalog limitation.')
+        for backend in ('codex', 'claude-code'):
+            with self.subTest(backend=backend):
+                manifest, code = self.run_case(backend=backend, catalog_change=catalog_change)
+                self.assertEqual((code, manifest['status'], manifest['accepted']), (2, 'PARTIAL', False))
+                plan = manifest['coverage_plan']
+                self.assertEqual(plan['origin'], 'AGENT_SALVAGED')
+                self.assertFalse(plan['policy_satisfied'])
+                self.assertEqual(plan['counts']['excluded_files'], 0)
+                self.assertIn('Original catalog limitation.', plan['limitations'])
+                self.assertTrue(manifest['selection_publication_complete'])
+                self.assertIsNotNone(manifest['study'])
+                self.assertEqual(manifest['review']['verdict'], 'INCONCLUSIVE')
+                attempt = Path(manifest['catalog_invocation']['artifact_directory'])
+                original = (json.dumps(self.originals['catalog'], ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+                self.assertEqual((attempt / 'extracted.json').read_bytes(), original)
+                recovered = json.loads((attempt / 'recovered.json').read_text())
+                recovery = json.loads((attempt / 'recovery.json').read_text())
+                validation = json.loads((attempt / 'validation.json').read_text())
+                self.assertEqual(recovered['completion_status'], 'PARTIAL')
+                self.assertEqual(recovery['completion_self_assessment'], 'COMPLETE')
+                self.assertEqual([r['selector'] for r in recovery['rejected_selectors']],
+                                 ['PRIVATE_UNKNOWN', 'PRIVATE_EXCLUSION'])
+                self.assertEqual(validation['validated_object'], 'recovered.json')
+                self.assertFalse(validation['original_valid'])
+                self.assertTrue(validation['valid'])
+                final = Path(manifest['final_report']).read_text()
+                self.assertIn(manifest['study']['report_markdown'], final)
+                self.assertIn('AGENT_SALVAGED / PARTIAL', final)
+                self.assertNotIn('PRIVATE_UNKNOWN', final)
+                self.assertNotIn('PRIVATE_EXCLUSION', final)
+
+    def test_strict_catalog_paths_are_rejected_without_recovery(self):
+        def catalog_change(data):
+            data['subsystems'][0]['paths'].append('unknown')
+        manifest, code = self.run_case(policy='strict', catalog_change=catalog_change)
+        self.assertEqual((code, manifest['status'], manifest['accepted']), (1, 'FAILED', False))
+        self.assertEqual([s for s, _ in self.calls], ['catalog'])
+        attempt = Path(manifest['catalog_invocation']['artifact_directory'])
+        self.assertFalse((attempt / 'recovered.json').exists())
+        self.assertEqual(manifest['catalog_invocation']['error']['details']['code'], 'UNKNOWN_CATALOG_PATH')
 
     def test_semantic_review_is_retained_for_both_cli_adapters(self):
         for backend in ('codex', 'claude-code'):

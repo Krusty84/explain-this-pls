@@ -84,7 +84,7 @@ def verify_review_context(context):
         raise ContractError('Required frozen review plan is missing') from None
 
 
-def prepare_result(stage, data, context, expected_files=None, *, expected_metadata=None):
+def prepare_result(stage, data, context, expected_files=None, *, expected_metadata=None, catalog_recovery=None):
     """Caller must pass source/cleanup guards and validate its input first.
 
     Runner supplies materialized study (wire review/compare). Library callers may
@@ -107,8 +107,11 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
         'meaning': 'Policy checks concern processing and agent assessments; factual correctness is not established.'}
     result['program_checks'] = checks
     if stage == 'catalog':
-        plan = build_coverage_plan(data, context['_inventory'], context)
+        plan = build_coverage_plan(data, context['_inventory'], context,
+            fallback=bool(catalog_recovery and not data['subsystems']), salvaged=bool(catalog_recovery))
         result['coverage_plan'] = plan
+        if catalog_recovery:
+            checks['completion_self_assessment'] = catalog_recovery['completion_self_assessment']
         checks['policy_satisfied'] = plan['policy_satisfied']
         return result
     if stage == 'compare':

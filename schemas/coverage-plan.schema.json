@@ -11,6 +11,7 @@
       "type": "string",
       "enum": [
         "AGENT",
+        "AGENT_SALVAGED",
         "DIRECTORY_FALLBACK"
       ]
     },

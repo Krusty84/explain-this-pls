@@ -239,14 +239,102 @@ class MultiSessionTests(FolderFixture):
         self.assertFalse((self.runner.run_dir / 'revisions/001/study.json').exists())
         self.assertFalse((self.runner.run_dir / 'ARCHITECTURE.md').exists())
 
-    def test_invalid_catalog_cannot_supply_successful_multi_session_synthesis(self):
+    def test_invalid_catalog_uses_directory_fallback_through_synthesis(self):
         def change(runner, context, data):
             if context['stage'] == 'catalog': data.pop('exclusions')
         manifest, code = self.run_case(change=change, policy='compromise')
-        self.assertNotEqual(code, 0)
-        self.assertEqual(manifest['synthesis_status'], 'SKIPPED')
-        self.assertEqual([s['status'] for s in manifest['study_shards']], ['PLANNED'] * 3)
-        self.assertEqual([c['context']['stage'] for c in self.calls], ['catalog'])
+        self.assertEqual((code, manifest['status']), (2, 'PARTIAL'))
+        self.assertIsNone(manifest.get('catalog'))
+        self.assert_partial_synthesis(manifest, 'DIRECTORY_FALLBACK')
+
+    def assert_partial_synthesis(self, manifest, origin):
+        self.assertEqual(manifest['synthesis_status'], 'SUCCEEDED')
+        self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED'] * 3)
+        self.assertEqual(manifest['coverage_plan']['origin'], origin)
+        self.assertFalse(manifest['coverage_plan']['policy_satisfied'])
+        self.assertFalse(manifest['accepted'])
+        self.assertFalse(workflow_satisfied(manifest))
+        self.assertFalse(manifest['study']['program_checks']['policy_satisfied'])
+        self.assertEqual(manifest['study']['review_plan']['coverage_plan'], manifest['coverage_plan'])
+        self.assertEqual(manifest['selected_revision'], '001')
+        self.assertTrue(manifest['has_usable_material'])
+        self.assertTrue(manifest['selection_publication_complete'])
+        validate_materialized(manifest['study'])
+        validate_schema(manifest['study'], SAVED_FOLDER_SCHEMAS['study'])
+        self.assertTrue((self.runner.run_dir / 'ARCHITECTURE.md').exists())
+        final = Path(manifest['final_report']).read_text()
+        self.assertIn(origin + ' / PARTIAL', final)
+        self.assertIn(manifest['study']['report_markdown'], final)
+        for limitation in manifest['coverage_plan']['limitations']:
+            self.assertIn(limitation, final)
+        self.assertEqual(self.calls[4]['context']['prompt_variant'], 'synthesis')
+
+    def test_salvaged_and_all_unknown_catalogs_publish_partial_synthesis_including_xxx(self):
+        for backend in ('codex', 'xxx'):
+            for all_unknown in (False, True):
+                for review in (False, True):
+                    def change(runner, context, data):
+                        if context['stage'] == 'catalog':
+                            data['limitations'] = ['Original catalog limitation.']
+                            for subsystem in data['subsystems']:
+                                subsystem['paths'] = ([] if all_unknown else subsystem['paths']) + ['private-unknown']
+                    with self.subTest(backend=backend, all_unknown=all_unknown, review=review):
+                        manifest, code = self.run_case(backend=backend, change=change, policy='compromise', review=review)
+                        self.assertEqual((code, manifest['status']), (2, 'PARTIAL'), manifest.get('diagnostics'))
+                        self.assert_partial_synthesis(manifest, 'DIRECTORY_FALLBACK' if all_unknown else 'AGENT_SALVAGED')
+                        self.assertIn('Original catalog limitation.', manifest['coverage_plan']['limitations'])
+                        self.assertNotIn('private-unknown', Path(manifest['final_report']).read_text())
+                        if review:
+                            self.assertEqual(manifest['review']['verdict'], 'INCONCLUSIVE')
+
+    def test_salvaged_unclassified_entries_remain_uninspected_after_synthesis(self):
+        def change(runner, context, data):
+            if context['stage'] == 'catalog':
+                data['subsystems'][-1]['paths'] = ['unknown']
+        manifest, code = self.run_case(change=change, policy='compromise', catalog_paths=['app.py'] * 9)
+        self.assertEqual((code, manifest['status']), (2, 'PARTIAL'))
+        self.assertEqual(manifest['coverage_plan']['origin'], 'AGENT_SALVAGED')
+        unclassified = next(a for a in manifest['study']['coverage'] if a['area_id'] == 'UNCLASSIFIED')
+        self.assertEqual(unclassified['status'], 'NOT_INSPECTED')
+        self.assertFalse(manifest['accepted'])
+
+    def test_catalog_identity_failure_and_strict_unknown_paths_block_analysis(self):
+        for kind, policy in (('identity', 'compromise'), ('unknown', 'strict')):
+            def change(runner, context, data):
+                if context['stage'] != 'catalog': return
+                if kind == 'identity': data['source_snapshot_id'] = 'another'
+                else: data['subsystems'][0]['paths'].append('unknown')
+            with self.subTest(kind=kind):
+                manifest, code = self.run_case(change=change, policy=policy)
+                self.assertEqual((code, manifest['status']), (1, 'FAILED'))
+                self.assertEqual([c['context']['stage'] for c in self.calls], ['catalog'])
+                self.assertFalse((self.runner.run_dir / 'ARCHITECTURE.md').exists())
+
+    def test_fallback_and_salvaged_plans_keep_shard_and_integrity_failures_blocking(self):
+        for origin in ('AGENT_SALVAGED', 'DIRECTORY_FALLBACK'):
+            for kind in ('schema', 'evidence', 'identity', 'source', 'coverage_plan', 'analysis_plan', 'recovery'):
+                def change(runner, context, data):
+                    if context['stage'] == 'catalog':
+                        for subsystem in data['subsystems']:
+                            subsystem['paths'] = ([] if origin == 'DIRECTORY_FALLBACK' else subsystem['paths']) + ['unknown']
+                    if context.get('analysis_shard', {}).get('id') != 'R-002': return
+                    if kind == 'schema': data.pop('components')
+                    elif kind == 'evidence': data['evidence'][0]['quote'] = 'not the source'
+                    elif kind == 'identity': data['source_snapshot_id'] = 'another'
+                    else:
+                        path = {'source': self.source / 'app.py',
+                                'coverage_plan': runner.run_dir / 'coverage.plan.json',
+                                'analysis_plan': runner.run_dir / 'analysis.plan.json',
+                                'recovery': runner.run_dir / 'catalog.logs/attempt-001/recovery.json'}[kind]
+                        path.write_bytes(path.read_bytes() + b'changed')
+                with self.subTest(origin=origin, kind=kind):
+                    manifest, code = self.run_case(change=change, policy='compromise')
+                    self.assertEqual((code, manifest['status']), (1, 'FAILED'))
+                    self.assertFalse(any(c['context'].get('prompt_variant') == 'synthesis' for c in self.calls))
+                    self.assertFalse((self.runner.run_dir / 'ARCHITECTURE.md').exists())
+                    self.assertFalse(manifest['accepted'])
+                    if kind not in ('schema', 'evidence', 'identity'):
+                        self.assertTrue(manifest['critical_failure'])
 
     def test_synthesis_failure_preserves_shards_without_publishing_stale_study(self):
         for kind in ('claims', 'evidence', 'coverage', 'unexpected', 'source_snapshot_id',

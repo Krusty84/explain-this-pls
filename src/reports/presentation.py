@@ -92,7 +92,8 @@ def render_stage(stage, data, language='English'):
         return '> Text retained after contract rejection; full policy checks are not complete.\n\n'
     if stage == 'catalog':
         out = ['# Subsystem catalog', '',
-               'Catalog completion reported by the agent: ' + data['completion_status'], '',
+               'Catalog completion reported by the agent: ' + cell(data['program_checks']['completion_self_assessment']), '',
+               'Catalog: ' + cell(data['coverage_plan']['origin']) + ' / ' + data['coverage_plan']['catalog_status'], '',
                '## Subsystems', '', '| ID | Subsystem | Purpose | Paths |', '| --- | --- | --- | --- |']
         for subsystem in data['subsystems']:
             out.append('| ' + ' | '.join(cell(v) for v in (subsystem['id'], subsystem['name'],

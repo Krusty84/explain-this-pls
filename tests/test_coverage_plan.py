@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from src.contracts.contracts import ContractError, validate_result, validate_schema
-from src.analysis.coverage_plan import build_coverage_plan, coverage_checks, inventory_summary, verify_coverage_plan
+from src.analysis.coverage_plan import build_coverage_plan, coverage_checks, inventory_summary, verify_coverage_plan, recover_catalog_paths
 from src.analysis.ledger import prepare_result, review_context
 from src.reports.presentation import render_stage
 from src.contracts.saved_contracts import SAVED_SCHEMAS
@@ -94,6 +94,108 @@ class CoveragePlanTests(unittest.TestCase):
         plan['areas'][0]['name'] = 'Changed'
         with self.assertRaises(ContractError):
             verify_coverage_plan(plan)
+
+    def recover(self, catalog):
+        context = self.context | {'_inventory': self.inventory}
+        recovered, provenance = recover_catalog_paths(catalog, self.inventory, context)
+        validate_result('catalog', recovered, context)
+        saved = prepare_result('catalog', recovered, context, catalog_recovery=provenance)
+        validate_schema(saved, SAVED_SCHEMAS['catalog'])
+        verify_coverage_plan(saved['coverage_plan'])
+        return saved, provenance
+
+    def test_recovery_keeps_assignments_exclusions_and_private_selector_locations(self):
+        self.catalog['subsystems'][0]['paths'] += ['missing-private']
+        self.catalog['subsystems'] += [dict(id='S-002', name='Absent', purpose='Unknown.', paths=['absent'])]
+        self.catalog['exclusions'] += [dict(path='src/app.p', reason='Invalid exclusion.')]
+        original = copy.deepcopy(self.catalog)
+        saved, provenance = self.recover(self.catalog)
+        plan = saved['coverage_plan']
+        self.assertEqual(plan['origin'], 'AGENT_SALVAGED')
+        self.assertEqual(saved['completion_status'], 'PARTIAL')
+        self.assertEqual(plan['catalog_status'], 'PARTIAL')
+        self.assertFalse(plan['policy_satisfied'])
+        self.assertFalse(saved['program_checks']['policy_satisfied'])
+        self.assertEqual(saved['program_checks']['completion_self_assessment'], 'COMPLETE')
+        self.assertEqual(saved['subsystems'], [original['subsystems'][0] | {'paths': ['src']}])
+        self.assertEqual(plan['areas'][0]['file_paths'], ['src/app.py', 'src/lib.py'])
+        self.assertEqual(saved['exclusions'], original['exclusions'][:2])
+        self.assertEqual(provenance['rejected_selectors'], [
+            {'code': 'UNKNOWN_CATALOG_PATH', 'path': '$.subsystems[0].paths[1]', 'selector': 'missing-private'},
+            {'code': 'UNKNOWN_CATALOG_PATH', 'path': '$.subsystems[1].paths[0]', 'selector': 'absent'},
+            {'code': 'UNKNOWN_CATALOG_PATH', 'path': '$.exclusions[2].path', 'selector': 'src/app.p'}])
+        self.assertEqual(provenance['input_sha256'], sha(canonical(original)))
+        self.assertEqual(self.catalog, original)
+        self.assertNotIn('missing-private', str(saved))
+        self.assertIn('AGENT_SALVAGED / PARTIAL', render_stage('catalog', saved))
+
+    def test_recovery_leaves_unallocated_entries_unclassified(self):
+        self.catalog['subsystems'][0]['paths'] = ['src/app.py', 'absent']
+        saved, _ = self.recover(self.catalog)
+        plan = saved['coverage_plan']
+        self.assertEqual(plan['unclassified_paths'], ['src/lib.py'])
+        self.assertEqual(plan['areas'][-1]['id'], 'UNCLASSIFIED')
+        self.assertEqual(plan['counts']['assigned_files'], 1)
+
+    def test_recovery_without_subsystems_uses_deterministic_fallback_and_valid_exclusions(self):
+        self.catalog['subsystems'][0]['paths'] = ['absent']
+        self.catalog['limitations'] = ['Original catalog limitation.']
+        saved, provenance = self.recover(self.catalog)
+        plan = saved['coverage_plan']
+        self.assertEqual(provenance['origin'], 'DIRECTORY_FALLBACK')
+        self.assertEqual(plan['origin'], 'DIRECTORY_FALLBACK')
+        self.assertEqual(saved['subsystems'], [])
+        self.assertEqual([a['paths'] for a in plan['areas']], [['README.md'], ['linked'], ['src']])
+        self.assertEqual(plan['exclusions'][0]['file_paths'], ['README.md'])
+        self.assertIn('Original catalog limitation.', plan['limitations'])
+        self.assertFalse(plan['policy_satisfied'])
+        self.assertEqual(plan, self.recover(self.catalog)[0]['coverage_plan'])
+
+    def test_recovery_does_not_change_valid_catalogs(self):
+        recovered, provenance = recover_catalog_paths(self.catalog, self.inventory, self.context)
+        self.assertEqual(recovered, self.catalog)
+        self.assertIsNone(provenance)
+        self.assertEqual(self.recover(self.catalog)[0]['coverage_plan']['origin'], 'AGENT')
+
+    def test_fallback_cannot_apply_exclusions_from_a_different_source_identity(self):
+        with self.assertRaises(ContractError):
+            build_coverage_plan(self.catalog | {'source_commit': 'another'}, self.inventory, self.context, fallback=True)
+
+    def test_recovery_never_repairs_other_contract_or_source_boundary_failures(self):
+        for kind in ('identity', 'schema', 'duplicate_paths', 'duplicate_ids', 'duplicate_exclusions',
+                     'empty_paths', 'blank_reason', '../src', '/src', 'src//app.py', 'src/../src', 'src\\app.py'):
+            catalog = copy.deepcopy(self.catalog)
+            catalog['subsystems'][0]['paths'].append('unknown')
+            if kind == 'identity': catalog['source_commit'] = 'another'
+            elif kind == 'schema': catalog.pop('limitations')
+            elif kind == 'duplicate_paths': catalog['subsystems'][0]['paths'].append('unknown')
+            elif kind == 'duplicate_ids': catalog['subsystems'].append(copy.deepcopy(catalog['subsystems'][0]))
+            elif kind == 'duplicate_exclusions': catalog['exclusions'] += [dict(path='unknown', reason='Absent.')] * 2
+            elif kind == 'empty_paths': catalog['subsystems'][0]['paths'] = []
+            elif kind == 'blank_reason': catalog['exclusions'][0]['reason'] = ' '
+            else: catalog['exclusions'].append(dict(path=kind, reason='Unsafe.'))
+            with self.subTest(kind=kind), self.assertRaises(ContractError):
+                recover_catalog_paths(catalog, self.inventory, self.context)
+
+    def test_recovery_does_not_follow_symlink_selectors(self):
+        self.catalog['subsystems'][0]['paths'] = ['linked', 'linked/outside.py']
+        self.catalog['exclusions'] = []
+        saved, provenance = self.recover(self.catalog)
+        area = saved['coverage_plan']['areas'][0]
+        self.assertEqual(area['paths'], ['linked'])
+        self.assertEqual(area['entry_paths'], ['linked'])
+        self.assertEqual(area['file_paths'], [])
+        self.assertEqual(provenance['rejected_selectors'][0]['selector'], 'linked/outside.py')
+
+    def test_recovered_plan_cannot_claim_complete_or_positive_acceptance_even_if_rehashed(self):
+        self.catalog['subsystems'][0]['paths'].append('unknown')
+        saved, _ = self.recover(self.catalog)
+        for field, value in (('catalog_status', 'COMPLETE'), ('policy_satisfied', True), ('limitations', [])):
+            plan = copy.deepcopy(saved['coverage_plan'])
+            plan[field] = value
+            plan['plan_sha256'] = sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))
+            with self.subTest(field=field), self.assertRaises(ContractError):
+                verify_coverage_plan(plan)
 
     def test_unsupported_contract_is_rejected_even_with_matching_hash(self):
         for missing in (False, True):

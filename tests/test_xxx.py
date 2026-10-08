@@ -64,6 +64,28 @@ class XXXTests(unittest.TestCase):
     def prompts(self):
         return [c for c in self.recorded() if c['args'][0] == 'run' and '--help' not in c['args']]
 
+    def test_incomplete_catalogs_publish_partial_multi_session_reports(self):
+        paths = ['app.py'] + [f'part{i}.py' for i in range(2, 10)]
+        for path in paths:
+            (self.source / path).write_text('print(1)\n')
+        self.value['result_policy'] = 'compromise'
+        self.env['AUDIT_TEST_SUBSYSTEM_PATHS'] = json.dumps(paths)
+        for scenario, origin in (('catalog-mixed', 'AGENT_SALVAGED'), ('catalog-unknown', 'DIRECTORY_FALLBACK')):
+            with self.subTest(scenario=scenario):
+                previous = len(self.prompts())
+                manifest, code = self.run_case(scenario)
+                self.assertEqual((code, manifest['status'], manifest['accepted']), (2, 'PARTIAL', False), manifest.get('diagnostics'))
+                self.assertEqual(manifest['coverage_plan']['origin'], origin)
+                self.assertFalse(manifest['coverage_plan']['policy_satisfied'])
+                self.assertEqual(manifest['synthesis_status'], 'SUCCEEDED')
+                self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED'] * 3)
+                self.assertEqual(len(self.prompts()) - previous, 6)
+                self.assertEqual(self.prompts()[-2]['permissions'], {'*': 'deny'})
+                self.assertTrue((self.run_dir / 'ARCHITECTURE.md').exists())
+                self.assertIn(origin + ' / PARTIAL', Path(manifest['final_report']).read_text())
+                self.assertIn('Synthetic catalog limitation.', Path(manifest['final_report']).read_text())
+                self.assertEqual(manifest['review']['verdict'], 'INCONCLUSIVE')
+
 
     def git(self, *args):
         return subprocess.check_output(['git', '-C', str(self.source), *args], stderr=subprocess.STDOUT).decode().strip()

@@ -42,20 +42,50 @@ def inventory_summary(inventory):
             'directories': [groups[p] for p in sorted(groups)]}
 
 
-def build_coverage_plan(catalog, inventory, context, fallback=False):
+def recover_catalog_paths(catalog, inventory, context):
+    """Drop unknown selectors only after all other catalog checks pass."""
+    from src.contracts.contracts import validate_result
+    mode = 'folder' if context.get('source_mode') == 'folder' or 'source_directory' in context else 'git'
+    validate_result('catalog', catalog, {k: v for k, v in context.items() if k != '_inventory'}, mode)
+    exclusions = [e['path'] for e in catalog['exclusions']]
+    if len(exclusions) != len(set(exclusions)):
+        raise contract_violation('INVALID_CATALOG_EXCLUSION', '$.exclusions')
+    known = {e['path'] for e in inventory['entries']}
+    rejected = []
+
+    def keep(selector, location):
+        if selector in known:
+            return True
+        rejected.append({'code': 'UNKNOWN_CATALOG_PATH', 'path': location, 'selector': selector})
+        return False
+
+    recovered = copy.deepcopy(catalog)
+    for i, subsystem in enumerate(recovered['subsystems']):
+        subsystem['paths'] = [p for j, p in enumerate(subsystem['paths'])
+                              if keep(p, f'$.subsystems[{i}].paths[{j}]')]
+    recovered['subsystems'] = [s for s in recovered['subsystems'] if s['paths']]
+    recovered['exclusions'] = [e for i, e in enumerate(recovered['exclusions'])
+                               if keep(e['path'], f'$.exclusions[{i}].path')]
+    if not rejected:
+        return catalog, None
+    recovered['completion_status'] = 'PARTIAL'
+    recovered['limitations'].append('Unknown catalog paths were discarded; catalog acceptance is unavailable.')
+    provenance = {'origin': 'AGENT_SALVAGED' if recovered['subsystems'] else 'DIRECTORY_FALLBACK',
+                  'hash_format': 'canonical-json-utf8', 'input_sha256': sha(canonical(catalog)),
+                  'recovered_sha256': sha(canonical(recovered)),
+                  'completion_self_assessment': catalog['completion_status'],
+                  'rejected_selectors': rejected}
+    return recovered, provenance
+
+
+def build_coverage_plan(catalog, inventory, context, fallback=False, *, salvaged=False):
     entries = inventory['entries']
     known = {e['path']: e for e in entries}
     leaves = {p for p, e in known.items() if e['type'] in ('file', 'symlink')}
     files = {p for p, e in known.items() if e['type'] == 'file'}
-    if fallback:
-        roots = sorted({p.split('/')[0] for p in leaves})
-        catalog = {'completion_status': 'PARTIAL', 'limitations': ['Directory fallback; agent catalog unavailable.'],
-                   'subsystems': [{'id': f'S-{i + 1:03d}', 'name': p,
-                                   'purpose': 'Directory fallback grouping.', 'paths': [p]}
-                                  for i, p in enumerate(roots)], 'exclusions': []}
-    if type(catalog) is not dict:
-        raise ContractError('Catalog is unavailable.')
-    if not fallback:
+    if not fallback or catalog is not None:
+        if type(catalog) is not dict:
+            raise ContractError('Catalog is unavailable.')
         from src.contracts.contracts import validate_wire_identity, nonblank, unique_ids
         mode = 'folder' if context.get('source_mode') == 'folder' or 'source_directory' in context else 'git'
         validate_wire_identity('catalog', catalog, context, mode)
@@ -63,6 +93,15 @@ def build_coverage_plan(catalog, inventory, context, fallback=False):
         unique_ids(catalog['subsystems'], r'S-[0-9]{3,}', '$.subsystems')
         if catalog['completion_status'] != 'COMPLETE' and not catalog['limitations']:
             raise ContractError('PARTIAL/BLOCKED catalog requires explicit limitations.')
+    if fallback:
+        roots = sorted({p.split('/')[0] for p in leaves})
+        catalog = {'completion_status': 'PARTIAL',
+                   'limitations': copy.deepcopy((catalog or {}).get('limitations', [])) +
+                                  ['Directory fallback; usable agent catalog unavailable.'],
+                   'subsystems': [{'id': f'S-{i + 1:03d}', 'name': p,
+                                   'purpose': 'Directory fallback grouping.', 'paths': [p]}
+                                  for i, p in enumerate(roots)],
+                   'exclusions': copy.deepcopy((catalog or {}).get('exclusions', []))}
     subsystems = catalog['subsystems']
     ids = [s['id'] for s in subsystems]
     if len(ids) != len(set(ids)) or 'UNCLASSIFIED' in ids:
@@ -99,7 +138,8 @@ def build_coverage_plan(catalog, inventory, context, fallback=False):
                       'paths': sorted(unclassified), 'entry_paths': sorted(unclassified),
                       'file_paths': sorted(unclassified & files), 'required': True})
     summary = inventory_summary(inventory)
-    plan = {'contract_id': CONTRACT_ID, 'origin': 'DIRECTORY_FALLBACK' if fallback else 'AGENT',
+    plan = {'contract_id': CONTRACT_ID,
+            'origin': 'DIRECTORY_FALLBACK' if fallback else 'AGENT_SALVAGED' if salvaged else 'AGENT',
             'catalog_status': catalog['completion_status'], 'limitations': copy.deepcopy(catalog['limitations']),
             'sources': source_catalog(context), 'inventory_sha256': sha(canonical(entries)),
             'areas': areas, 'exclusions': exclusions, 'unclassified_paths': sorted(unclassified),
@@ -108,7 +148,7 @@ def build_coverage_plan(catalog, inventory, context, fallback=False):
                        'assigned_files': len(assigned & files), 'excluded_files': len(excluded & files),
                        'unclassified_files': len(unclassified & files),
                        'overlapping_files': sum(sum(p in a['file_paths'] for a in areas) > 1 for p in files)},
-            'policy_satisfied': not fallback and catalog['completion_status'] == 'COMPLETE' and not unclassified}
+            'policy_satisfied': not (fallback or salvaged) and catalog['completion_status'] == 'COMPLETE' and not unclassified}
     return plan | {'plan_sha256': sha(canonical(plan))}
 
 
@@ -120,6 +160,8 @@ def verify_coverage_plan(plan):
             or plan.get('plan_sha256') != sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))):
         raise ContractError('Frozen coverage plan changed.')
     identifiers = [a['id'] for a in plan['areas']]
+    if plan['origin'] != 'AGENT' and (plan['catalog_status'] != 'PARTIAL' or not plan['limitations']):
+        raise ContractError('Recovered and fallback coverage plans require PARTIAL status and limitations.')
     if (len(identifiers) != len(set(identifiers)) or
             any(identifier != 'UNCLASSIFIED' and not re.fullmatch(r'S-[0-9]{3,}', identifier) for identifier in identifiers)):
         raise ContractError('Coverage plan has invalid or duplicate area IDs.')

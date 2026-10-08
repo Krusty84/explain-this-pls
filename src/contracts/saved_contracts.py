@@ -24,7 +24,7 @@ IDENTITY['properties'].update(repository=string(), branch=NULL_STRING, base_comm
     source_type=string('commit', 'working_tree'), snapshot_id=string(), submodule_head=string())
 NULL_IDENTITY = dict(IDENTITY, type=['object', 'null'])
 SOURCE = obj(id=string(), root=string(), identity=IDENTITY)
-COVERAGE_PLAN = obj(contract_id=string(CONTRACT_ID), origin=string('AGENT', 'DIRECTORY_FALLBACK'),
+COVERAGE_PLAN = obj(contract_id=string(CONTRACT_ID), origin=string('AGENT', 'AGENT_SALVAGED', 'DIRECTORY_FALLBACK'),
     catalog_status=string('COMPLETE', 'PARTIAL', 'BLOCKED'), limitations=STRINGS, sources=array(SOURCE), inventory_sha256=string(),
     areas=array(obj(id=string(), name=string(), purpose=string(), paths=STRINGS, entry_paths=STRINGS,
                     file_paths=STRINGS, required={'type': 'boolean'})),

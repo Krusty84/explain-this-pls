@@ -62,6 +62,10 @@ else:
                                for p in Path.cwd().rglob('*') if p.is_file() and not p.is_symlink()}
     record()
     data = response(context)
+    if stage == 'catalog' and scenario in ('catalog-mixed', 'catalog-unknown'):
+        data['limitations'] = ['Synthetic catalog limitation.']
+        for subsystem in data['subsystems']:
+            subsystem['paths'] = ([] if scenario == 'catalog-unknown' else subsystem['paths']) + ['unknown']
     if scenario == 'missing-claims' and stage == 'study': del data['claims']
     if scenario == 'markdown-study' and stage == 'study':
         del data['report_sections']; data['report_markdown'] = '# Unsupported study'

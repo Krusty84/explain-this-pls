@@ -51,7 +51,7 @@ from src.reports.presentation import render_stage
 from src.model.model_context import CONTEXT_FORMAT
 from src.model.model_boundary import BindingRegistry
 from src.analysis.source_decoding import normalize_source_decoding
-from src.analysis.coverage_plan import build_coverage_plan, inventory_summary, verify_coverage_plan
+from src.analysis.coverage_plan import build_coverage_plan, inventory_summary, verify_coverage_plan, recover_catalog_paths
 from src.analysis.revisions import revision_inputs, choose_revision, completed_pair
 from src.analysis.git_sources import GitSources
 from src.analysis.source_metrics import PhysicalLines
@@ -1280,6 +1280,14 @@ class Runner:
             validation['validated_object'] = 'expanded.json'
             validate_schema(data, binding.schema)
             expanded = candidate
+            if stage == 'catalog' and self.compromise:
+                candidate, recovery = recover_catalog_paths(expanded, context['_inventory'], context)
+                if recovery:
+                    self.save_attempt_value(attempt, 'recovered.json', candidate, meta)
+                    self.save_attempt_value(attempt, 'recovery.json', recovery, meta)
+                    meta['catalog_recovery'] = {k: v for k, v in recovery.items() if k != 'rejected_selectors'}
+                    validation.update(validated_object='recovered.json', original_valid=False,
+                                      catalog_recovery=meta['catalog_recovery'])
             if stage in ('study', 'review'):
                 candidate, changes = normalize_evidence(stage, expanded, context, self.mode)
                 provenance = normalization_provenance(expanded, candidate, changes)
@@ -1377,6 +1385,8 @@ class Runner:
         item[stage + '_usable'] = usable_study(item) if stage == 'study' else bool(stage_document(item, stage))
         if material is not None and not self.cfg['continue_on_error']:
             raise ContractError('Stopped after retaining unvalidated material (continue_on_error=false).')
+        if meta.get('catalog_recovery') and not self.cfg['continue_on_error']:
+            raise ContractError('Stopped after recovering an invalid catalog (continue_on_error=false).')
 
     def publish_coverage_plan(self, plan, directory):
         verify_coverage_plan(plan)
@@ -1426,10 +1436,8 @@ class Runner:
         item['study_shards'] = [dict(id=s['id'], status='PLANNED', errors=[],
             directory=str((directory / 'study-shards' / s['id']).relative_to(self.run_dir))) for s in plan['shards']]
         persist()
-        if context['coverage_plan']['origin'] != 'AGENT':
-            item['synthesis_status'] = 'SKIPPED'
-            item['errors'].append('Multi-session study requires a validated catalog; directory fallback cannot supply synthesis.')
-            return None
+        self.assert_coverage_file(context)
+        self.assert_analysis_file(context)
         for shard, state in zip(plan['shards'], item['study_shards']):
             state['status'] = 'RUNNING'
             persist()
@@ -1608,7 +1616,8 @@ class Runner:
             context['inventory_summary'] = inventory_summary(inventory)
             catalog = run_stage('catalog', item, context, directory)
             if catalog is None:
-                if not self.compromise:
+                error = (item.get('catalog_invocation') or {}).get('error', {})
+                if not self.compromise or error.get('failure_kind') == 'IDENTITY_MISMATCH':
                     return
                 plan = build_coverage_plan(None, inventory, context, fallback=True)
                 self.publish_coverage_plan(plan, directory)
@@ -1961,7 +1970,8 @@ class Runner:
                 budget.check()
             # Publish after the CLI exits and temporary invocation files are removed.
             try:
-                data = prepare_result(stage, data, context, evidence_pins, expected_metadata=evidence_metadata)
+                data = prepare_result(stage, data, context, evidence_pins, expected_metadata=evidence_metadata,
+                                      catalog_recovery=meta.get('catalog_recovery'))
                 if stage == 'study-shard':
                     self.save_attempt_value(attempt, 'prepared.json', data, meta)
                     if not data['program_checks']['policy_satisfied']:
