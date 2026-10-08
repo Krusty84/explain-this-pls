@@ -5,11 +5,13 @@
 import copy
 import json
 import os
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 from explain import AuditError, Runner
-from src.analysis.evidence import canonical
+from src.analysis.evidence import canonical, sha
+from src.analysis.study_shards import synthesis_inputs
 from src.contracts.contracts import validate_schema, workflow_satisfied
 from src.contracts.saved_contracts import SAVED_FOLDER_SCHEMAS
 from src.reports.document_rendering import validate_materialized
@@ -109,6 +111,34 @@ class MultiSessionTests(FolderFixture):
                 self.assertEqual(len(synthesis['context']['validated_shards']), 3)
                 self.assertEqual(len(synthesis['context']['synthesis_claims']), 9)
                 self.assertNotIn('_synthesis_resolutions', synthesis['context'])
+                attempt = Path(manifest['synthesis_invocation']['artifact_directory'])
+                raw = json.loads((attempt / 'extracted.json').read_text())
+                expanded = json.loads((attempt / 'expanded.json').read_text())
+                normalized = json.loads((attempt / 'normalized.json').read_text())
+                schema = json.loads((attempt / 'schema.json').read_text())
+                self.assertEqual(set(raw), {'task', 'source_directory', 'source_snapshot_id',
+                                           'completion_status', 'limitations', 'report_sections'})
+                self.assertEqual(set(schema['properties']), set(raw))
+                self.assertEqual(schema, json.loads(synthesis['prompt'].split('# Required final JSON Schema\n')[1]))
+                if backend == 'claude-code':
+                    command = synthesis['command']
+                    self.assertEqual(schema, json.loads(command[command.index('--json-schema') + 1]))
+                inputs = synthesis_inputs(plan, manifest['study_shards'])
+                saved = copy.deepcopy(manifest['study'])
+                for claim in saved['claims']:
+                    claim.pop('document_locators')
+                for field in ('evidence', 'claims', 'coverage'):
+                    expected = inputs['synthesis_' + field]
+                    self.assertEqual(expanded[field], expected)
+                    self.assertEqual(normalized[field], expected)
+                    self.assertEqual(saved[field], expected)
+                self.assertEqual([e['id'] for e in saved['evidence']], [f'E-{i:03d}' for i in range(1, 10)])
+                self.assertEqual([c['id'] for c in saved['claims']], [f'C-{i:03d}' for i in range(1, 10)])
+                self.assertEqual([c['evidence_ids'] for c in saved['claims']],
+                                 [[f'study:E-{i:03d}'] for i in range(1, 10)])
+                binding = json.loads((attempt / 'binding.json').read_text())
+                self.assertEqual(binding['wire_sha256'], sha(canonical(raw)))
+                self.assertEqual(binding['expanded_sha256'], sha(canonical(expanded)))
                 if backend == 'codex':
                     self.assertIn('features.shell_tool=false', synthesis['command'])
                 elif backend == 'claude-code':
@@ -219,20 +249,38 @@ class MultiSessionTests(FolderFixture):
         self.assertEqual([c['context']['stage'] for c in self.calls], ['catalog'])
 
     def test_synthesis_failure_preserves_shards_without_publishing_stale_study(self):
-        for field in ('claims', 'evidence', 'coverage', 'report_sections'):
-            def change(runner, context, data):
-                if context.get('prompt_variant') != 'synthesis': return
-                if field == 'claims': data['claims'][0]['statement'] = 'Invented claim'
-                elif field == 'evidence': data['evidence'][0]['path'] = 'invented.py'
-                else: data[field].pop()
-            with self.subTest(field=field):
-                manifest, code = self.run_case(change=change, policy='compromise')
-                self.assertNotEqual(code, 0)
-                self.assertEqual(manifest['synthesis_status'], 'FAILED')
-                self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED'] * 3)
-                self.assertFalse((self.runner.run_dir / 'ARCHITECTURE.md').exists())
-                self.assertFalse((self.runner.run_dir / 'revisions/001/study.json').exists())
-                self.assertFalse((self.runner.run_dir / 'revisions/001/study.material.json').exists())
+        for kind in ('claims', 'evidence', 'coverage', 'unexpected', 'source_snapshot_id',
+                     'source_directory', 'task', 'missing_claim_ids', 'unbound_claim',
+                     'unknown_claim', 'duplicate_claim', 'section_order', 'missing_section', 'backend'):
+            for policy in ('strict', 'compromise'):
+                def change(runner, context, data):
+                    if context.get('prompt_variant') != 'synthesis': return
+                    block = data['report_sections'][0]['blocks'][0]
+                    if kind in ('claims', 'evidence', 'coverage'):
+                        data[kind] = copy.deepcopy(context['synthesis_' + kind])
+                    elif kind in ('source_snapshot_id', 'source_directory', 'task', 'unexpected'):
+                        data[kind] = 'invalid'
+                    elif kind == 'missing_claim_ids': block.pop('claim_ids')
+                    elif kind == 'unbound_claim': block['claim_ids'].pop()
+                    elif kind == 'unknown_claim': block['claim_ids'].append('C-999')
+                    elif kind == 'duplicate_claim': block['claim_ids'].append(block['claim_ids'][0])
+                    elif kind == 'section_order': data['report_sections'].reverse()
+                    elif kind == 'missing_section': data['report_sections'].pop()
+                    else: raise AuditError('Synthetic backend failure.', code='CLI_FAILED', failure_layer='backend')
+                with self.subTest(kind=kind, policy=policy):
+                    manifest, code = self.run_case(change=change, policy=policy, review=True)
+                    self.assertEqual(code, 1)
+                    self.assertFalse(manifest['accepted'])
+                    self.assertEqual(manifest['synthesis_status'], 'FAILED')
+                    self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED'] * 3)
+                    self.assertFalse((self.runner.run_dir / 'ARCHITECTURE.md').exists())
+                    self.assertFalse((self.runner.run_dir / 'revisions/001/study.json').exists())
+                    self.assertFalse((self.runner.run_dir / 'revisions/001/study.material.json').exists())
+                    self.assertFalse(any(c['context']['stage'] == 'review' for c in self.calls))
+                    if kind in ('claims', 'evidence', 'coverage', 'unexpected', 'source_snapshot_id', 'source_directory', 'task'):
+                        attempt = Path(manifest['synthesis_invocation']['artifact_directory'])
+                        self.assertTrue((attempt / 'extracted.json').exists())
+                        self.assertFalse((attempt / 'expanded.json').exists())
 
     def test_synthesis_reuses_resolved_evidence_and_review_consumes_global_study(self):
         from src.analysis.ledger import resolve_evidence

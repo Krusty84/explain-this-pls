@@ -1,0 +1,94 @@
+{
+  "type": "object",
+  "properties": {
+    "completion_status": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "PARTIAL",
+        "BLOCKED"
+      ]
+    },
+    "report_sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "scope",
+              "context",
+              "components",
+              "startup_and_flows",
+              "data_and_state",
+              "cross_cutting",
+              "constraints",
+              "change_navigation",
+              "unknowns",
+              "evidence_basis"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "markdown": {
+                  "type": "string"
+                },
+                "claim_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "markdown",
+                "claim_ids"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "key",
+          "title",
+          "blocks"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "task": {
+      "type": "string",
+      "enum": [
+        "architecture_documentation"
+      ]
+    },
+    "source_directory": {
+      "type": "string"
+    },
+    "source_snapshot_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "completion_status",
+    "report_sections",
+    "limitations",
+    "task",
+    "source_directory",
+    "source_snapshot_id"
+  ],
+  "additionalProperties": false
+}

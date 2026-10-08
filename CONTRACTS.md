@@ -40,7 +40,8 @@ The review and revision sections below describe the opt-in reviewed workflow.
 
 The orchestrator selects the required response schema for each stage and validates
 its structure locally.
-`schemas/{catalog,study,review,compare}.schema.json` and their `folder-` variants
+`schemas/{catalog,study,study-shard,synthesis,review,compare}.schema.json` and the
+available `folder-` variants
 are **model wire** schemas generated from `MODEL_SCHEMAS` / `MODEL_FOLDER_SCHEMAS`
 in `src/contracts/contracts.py`. Internal `SCHEMAS` / `FOLDER_SCHEMAS` validate the expanded
 representation, which retains full integrity identities. Separate `saved-*.schema.json`
@@ -54,6 +55,7 @@ Unsupported results are rejected without modifying their artifacts.
 | Data | Authority |
 | --- | --- |
 | `completion_status`, narrative, claims, evidence pointers, findings, assessments, study coverage, omission-search activity | Agent; completion is a self-assessment |
+| Synthesized study `evidence`, `claims`, `coverage` | Python deep-copies the frozen, remapped records from validated shards; the synthesis agent cannot supply them |
 | Transport completion/error/timeout/interruption and cleanup | Backend adapter and runner |
 | Expected source identities, review target, contract/artifact identifiers in invocation metadata and manifest | Orchestrator |
 | `program_checks` (including coverage checks), `verdict`, frozen plan, hashes, file distribution, reverse links, tables | Python, after local wire validation |
@@ -70,6 +72,11 @@ records `rule: "MODEL_BINDING"`, `hash_format: "canonical-json-utf8"`,
 after verified expansion they cover the whole original wire and expanded canonical
 objects, not pretty-printed artifact bytes. Binding records are private
 and do not enter model context. Expanding an ID adds no facts or positive status.
+For synthesis, expansion also inserts the three frozen registry arrays after
+model identity and synthesis schema validation. `extracted.json` has only the
+model-authored response; `expanded.json` has the complete study input. The same
+binding hashes cover these distinct objects. Direct studies and revisions still
+supply their own registry arrays under the full study wire schema.
 Transport/stdout and stderr remain private attempt artifacts. A saved `study.json`,
 `review.json` or `compare.json` is a separate representation with processed wire
 fields and `program_checks`. Study narrative is authored as sections/blocks;
@@ -458,6 +465,7 @@ Live processing preserves the existing source/cleanup guards:
 2. Retain the original object in private `extracted.json`. Verify model identity
    bindings and write `expanded.json` and `binding.json`. An unknown, foreign or
    stale binding is an identity failure and cannot be repaired or recovered.
+   Synthesis must pass its model schema before expansion copies frozen registries.
    For study/review, check prerequisites on the expanded object, create the
    candidate, and write private `normalized.json` and `normalization.json`
    separately. These files are required even for zero edits.
@@ -544,8 +552,9 @@ never overwrite the original `extracted.json`, manifest, material or review.
 
 ## Frozen registry and review plan
 
-Study claims have `id`, `statement`, `scope`, `epistemic_kind`, `evidence_ids`,
-`uncertainty` on the wire. `report_sections` has exactly ten sections, with keys
+Direct-study and revision claims have `id`, `statement`, `scope`, `epistemic_kind`,
+`evidence_ids`, `uncertainty` on the wire. Synthesis references frozen shard claims
+and does not return claim records. `report_sections` has exactly ten sections, with keys
 `scope`, `context`, `components`, `startup_and_flows`, `data_and_state`,
 `cross_cutting`, `constraints`, `change_navigation`, `unknowns`, `evidence_basis`
 in that order. Each has `title` and `blocks`, each block `markdown` and `claim_ids`.
@@ -554,7 +563,7 @@ claim.block_ids, hashes, provenance, report_markdown or document locators.
 Sections and Markdown together are rejected as a hybrid wire response.
 
 All material narrative/table/scenario claims
-must be registered by the authoring agent. This requirement is not a claim that
+must be registered by the authoring agent (the shard agents for synthesis). This requirement is not a claim that
 Python can find every factual assertion in free text, or prove a block's semantic
 correspondence to its claims. Definitions must be unique, block references must
 exist and be unique within each block, and every claim must be linked. Multiple
@@ -794,9 +803,19 @@ working directory and the adapters' existing reports-only tool restrictions.
 Inputs include validated catalog/shards, frozen plan, description, priority
 scenarios and source identity. Evidence and claims receive deterministic global
 E-/C- IDs in shard/ID order. `shard_id_mappings` records the remapping in the saved
-input prompt. Local checks require exact evidence, claim and coverage equality
-with the remapped inputs; the model assembles the existing global report sections.
-It cannot mint source evidence or change a claim's scope/certainty. Source evidence
+input prompt. The model uses `synthesis.schema.json` or `folder-synthesis.schema.json`:
+only task/source identity, completion_status, limitations and report_sections are
+permitted. Every registered claim must appear in a block's claim_ids, and all ten
+sections must retain their required order. Registry arrays and other unexpected
+fields are rejected, even if they match the inputs.
+
+After checking model identity and the synthesis schema, Python deep-copies
+`synthesis_evidence`, `synthesis_claims` and `synthesis_coverage` from the frozen
+binding context into the complete study. Missing inputs are never fabricated.
+The unchanged full study contract validates the assembled object. Local checks
+also require exact evidence, claim and coverage equality, including array order,
+with the remapped inputs before publication. The model cannot mint source evidence
+or change a claim's scope/certainty. Source evidence
 resolutions are reused from validated shards, under the same boundary guards.
 The shard artifacts are pinned and checked before synthesis publication.
 

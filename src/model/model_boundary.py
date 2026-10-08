@@ -189,11 +189,21 @@ class Binding:
                             or ref.get('branch') not in (self._context['baseline_branch'], diff.get('branch'))):
                         raise _error('$.differences[].evidence_refs[]')
 
+    @property
+    def schema(self):
+        stage = 'synthesis' if self._stage == 'study' and self._context.get('prompt_variant') == 'synthesis' else self._stage
+        return (MODEL_FOLDER_SCHEMAS if self._mode == 'folder' else MODEL_SCHEMAS)[stage]
+
     def expand(self, raw, allow_invalid=False):
         self.validate_identity(raw)
-        if not allow_invalid:
-            validate_schema(raw, (MODEL_FOLDER_SCHEMAS if self._mode == 'folder' else MODEL_SCHEMAS)[self._stage])
+        synthesis = self._stage == 'study' and self._context.get('prompt_variant') == 'synthesis'
+        if not allow_invalid or synthesis:
+            validate_schema(raw, self.schema)
         expanded = copy.deepcopy(raw)
+        if synthesis:
+            # Only a validated narrative may receive the frozen registries.
+            for field in ('evidence', 'claims', 'coverage'):
+                expanded[field] = copy.deepcopy(self._context['synthesis_' + field])
         if self._mode == 'folder':
             expanded.pop('source_snapshot_id', None)
             expanded['source_fingerprint'] = self._context['source_fingerprint']

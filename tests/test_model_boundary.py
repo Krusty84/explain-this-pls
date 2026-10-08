@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
+# SPDX-License-Identifier: MIT
+
 import copy
 import json
 import unittest
@@ -6,6 +10,7 @@ from src.contracts.contracts import (ContractError, MODEL_SCHEMAS, MODEL_FOLDER_
                        FOLDER_SCHEMAS, validate_schema)
 from src.reports.document_rendering import materialize_study
 from src.analysis.evidence import canonical, sha, source_catalog
+from src.analysis.study_shards import validate_synthesis
 from fixtures.ledger_response import response
 from src.analysis.ledger import review_context
 from src.model.model_boundary import BindingRegistry
@@ -64,6 +69,88 @@ class ModelBoundaryTests(unittest.TestCase):
         self.assertEqual(record['mappings'][0]['identity']['fingerprint'], context['source_fingerprint'])
         self.assertIsNone(binding.record(None, None)['wire_sha256'])
         validate_schema(expanded, FOLDER_SCHEMAS['study'])
+
+    def synthesis(self, mode):
+        context = self.folder() if mode == 'folder' else {'branch': 'main', 'source_commit': 'a' * 40}
+        context['coverage_plan'] = {'areas': [{'id': 'S-001'}, {'id': 'S-002'}]}
+        study = response(context)
+        study['evidence'].append(study['evidence'][0] | {'id': 'E-002'})
+        study['claims'].append(study['claims'][0] | {'id': 'C-002', 'evidence_ids': ['study:E-002']})
+        return context | {'prompt_variant': 'synthesis'} | {
+            'synthesis_' + field: study[field] for field in ('evidence', 'claims', 'coverage')}
+
+    def test_synthesis_copies_frozen_registries_without_aliases(self):
+        for mode in ('git', 'folder'):
+            with self.subTest(mode=mode):
+                context = self.synthesis(mode)
+                binding = BindingRegistry().bind('study', context, mode)
+                wire = response(binding.project())
+                original = copy.deepcopy(wire)
+                expanded = binding.expand(wire, allow_invalid=True)
+                validate_schema(expanded, (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)['study'])
+                validate_synthesis(expanded, context)
+                for field in ('evidence', 'claims', 'coverage'):
+                    self.assertNotIn(field, wire)
+                    self.assertNotIn(field, binding.schema['properties'])
+                    self.assertEqual(expanded[field], context['synthesis_' + field])
+                expanded['evidence'][0]['path'] = 'changed.py'
+                expanded['claims'][0]['evidence_ids'].clear()
+                expanded['coverage'][0]['evidence_ids'].clear()
+                binding.assert_unchanged(context)
+                validate_synthesis(binding.expand(wire), context)
+                self.assertEqual(wire, original)
+
+    def test_synthesis_rejects_identity_and_schema_errors_before_assembly(self):
+        for mode in ('git', 'folder'):
+            context = self.synthesis(mode)
+            # Missing inputs must not be accessed before the model contract passes.
+            for field in ('evidence', 'claims', 'coverage'):
+                context.pop('synthesis_' + field)
+            binding = BindingRegistry().bind('study', context, mode)
+            wire = response(BindingRegistry().bind('study', self.synthesis(mode), mode).project())
+            if mode == 'folder':
+                wire['source_snapshot_id'] = binding.project()['source_snapshot_id']
+            identities = ('source_directory', 'source_snapshot_id') if mode == 'folder' else ('branch', 'source_commit')
+            for field in (*identities, 'task', 'evidence', 'claims', 'coverage', 'unexpected'):
+                with self.subTest(mode=mode, field=field), self.assertRaises(ContractError):
+                    binding.expand(wire | {field: 'invalid'}, allow_invalid=True)
+            with self.assertRaises(KeyError):
+                binding.expand(wire)
+
+    def test_synthesis_registry_invariant_includes_order_and_nested_content(self):
+        context = self.synthesis('git')
+        binding = BindingRegistry().bind('study', context)
+        wire = response(binding.project())
+        for field in ('evidence', 'claims', 'coverage'):
+            for change in ('order', 'remove', 'insert', 'content'):
+                expanded = binding.expand(wire)
+                records = expanded[field]
+                if change == 'order': records.reverse()
+                elif change == 'remove': records.pop()
+                elif change == 'insert': records.append(copy.deepcopy(records[0]))
+                else: records[0][next(iter(records[0]))] = 'changed'
+                with self.subTest(field=field, change=change), self.assertRaises(ContractError) as caught:
+                    validate_synthesis(expanded, context)
+                self.assertEqual(caught.exception.details['code'], 'SYNTHESIS_INPUT_CHANGED')
+        binding._context['synthesis_claims'][0]['statement'] = 'changed'
+        with self.assertRaises(ContractError):
+            binding.expand(wire)
+
+    def test_direct_study_and_revision_still_require_model_registries(self):
+        for mode in ('git', 'folder'):
+            for variant in ('study', 'revise'):
+                context = self.synthesis(mode) | {'prompt_variant': variant}
+                binding = BindingRegistry().bind('study', context, mode)
+                wire = response(binding.project())
+                for field in ('evidence', 'claims', 'coverage'):
+                    self.assertIn(field, binding.schema['required'])
+                    invalid = copy.deepcopy(wire)
+                    invalid.pop(field)
+                    with self.subTest(mode=mode, variant=variant, field=field), self.assertRaises(ContractError):
+                        binding.expand(invalid)
+                expanded = binding.expand(wire)
+                for field in ('evidence', 'claims', 'coverage'):
+                    self.assertEqual(expanded[field], wire[field])
 
     def test_review_expansion_and_repair_preserve_contents_and_commits(self):
         context = self.review()

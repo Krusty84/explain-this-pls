@@ -58,9 +58,8 @@ def response(context):
         return data
     if context.get('prompt_variant') == 'synthesis':
         data.pop('report_markdown')
-        data.update(task='architecture_documentation', report_sections=sections(),
-                    **{key: copy.deepcopy(context['synthesis_' + key]) for key in ('evidence', 'claims', 'coverage')})
-        data['report_sections'][0]['blocks'][0]['claim_ids'] = [c['id'] for c in data['claims']]
+        data.update(task='architecture_documentation', report_sections=sections())
+        data['report_sections'][0]['blocks'][0]['claim_ids'] = [c['id'] for c in context['synthesis_claims']]
         return data
     data['evidence'] = [dict(id='E-001', source_id='source-001', path='app.py', start_line=1, end_line=1, quote='')]
     if stage == 'review':

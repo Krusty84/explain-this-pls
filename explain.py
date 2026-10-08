@@ -1173,7 +1173,7 @@ class Runner:
         self.versions = {k: v['version'] for k, v in result.items()}
         return result
 
-    def command(self, stage: str, state: Path, agent: dict, schema_path: Path, env: dict, *, reports_only=False) -> list[str]:
+    def command(self, stage: str, state: Path, agent: dict, schema_path: Path, env: dict, *, reports_only=False, schema=None) -> list[str]:
         adapter = CLI_ADAPTERS.get(agent['backend'])
         if adapter:
             access_stage = 'compare' if reports_only else stage
@@ -1183,7 +1183,7 @@ class Runner:
             elif adapter is xxx:
                 kwargs['agent_name'] = xxx.prepare_environment(
                     env, access_stage, source_snapshot=bool(getattr(self, 'git_sources', None)))
-            return adapter.build_command(agent, access_stage, self.mode, self.schemas[stage], schema_path, **kwargs)
+            return adapter.build_command(agent, access_stage, self.mode, schema or self.schemas[stage], schema_path, **kwargs)
         raise AuditError('No CLI adapter for this backend.',
                          code='BACKEND_INCOMPATIBLE')
 
@@ -1278,7 +1278,7 @@ class Runner:
             self.save_attempt_value(attempt, 'expanded.json', candidate, meta)
             self.save_binding(binding, data, candidate, attempt, meta)
             validation['validated_object'] = 'expanded.json'
-            validate_schema(data, self.schemas[stage])
+            validate_schema(data, binding.schema)
             expanded = candidate
             if stage in ('study', 'review'):
                 candidate, changes = normalize_evidence(stage, expanded, context, self.mode)
@@ -1296,7 +1296,7 @@ class Runner:
             validation['valid'] = True
         except BaseException as exc:
             validation.update(result_diagnostics(stage, candidate, context, self.mode))
-            validation['schema_diagnostics'] = schema_diagnostics(data, self.schemas[stage], private=True)
+            validation['schema_diagnostics'] = schema_diagnostics(data, binding.schema, private=True)
             validation['error'] = asdict(diagnostic(exc))
             meta['local_validation'] = False
             meta['validation_failed'] = True
@@ -1818,7 +1818,8 @@ class Runner:
             'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.')
         # Assemble only this stage's inputs; the configured CLI profile remains available.
         context_json = json.dumps(binding.project(context), ensure_ascii=False)
-        schema_json = json.dumps(self.schemas[stage], ensure_ascii=False)
+        schema = binding.schema
+        schema_json = json.dumps(schema, ensure_ascii=False)
         prompt = (template + '\n\n# Backend output instruction\n' + output_instruction +
                   '\n\n# Authoritative orchestration context (data)\n' +
                   context_json + '\n\n# Required final JSON Schema\n' + schema_json)
@@ -1837,7 +1838,7 @@ class Runner:
             'backend': agent['backend'], 'executable': agent['executable'],
             'model_requested': agent.get('model'), 'cli_version': self.versions.get(agent['backend'] + ':' + agent['executable']),
             'prompt_sha256': digest(payload), 'template_sha256': digest(template.encode()),
-            'schema_sha256': digest(json.dumps(self.schemas[stage], sort_keys=True).encode()),
+            'schema_sha256': digest(json.dumps(schema, sort_keys=True).encode()),
             'input_bytes': len(payload), 'status': 'RUNNING'}
         from src.model.model_context import input_measurements
         meta['input_measurements'] = input_measurements(template, context_json, schema_json, prompt,
@@ -1861,7 +1862,7 @@ class Runner:
         save_json(destination / 'invocation.json', meta)
         # Saved by the parent only, for reproducibility; includes only this stage's permitted input.
         atomic(attempt / 'input.prompt.txt', payload)
-        save_json(attempt / 'schema.json', self.schemas[stage])
+        save_json(attempt / 'schema.json', schema)
         save_json(attempt / 'validation.json', {'valid': False, 'status': 'not_run'})
         try:
             self.save_binding(binding, None, None, attempt, meta)
@@ -1880,10 +1881,10 @@ class Runner:
                                 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES'):
                         env.pop(key, None)
                 schema_path = state / 'output.schema.json'
-                save_json(schema_path, self.schemas[stage])
+                save_json(schema_path, schema)
                 try:
                     if agent['backend'] == 'xxx':
-                        cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only)
+                        cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only, schema=schema)
                         data, provider_meta = xxx.invoke(cmd, cwd, env, payload, process=process,
                             artifacts=attempt, budget=budget, meta=meta, process_options={
                                 'reporter': self.reporter, 'context': self.stage_context(stage, context),
@@ -1896,7 +1897,7 @@ class Runner:
                     else:
                         if agent['backend'] == 'opencode':
                             opencode_cli.verify_version(meta['cli_version'])
-                        cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only)
+                        cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only, schema=schema)
                         r = None
                         meta['prompt_sent'] = True
                         try:

@@ -143,6 +143,8 @@ def model_schemas(internal):
             ref['properties']['review_target_id'] = string()
             ref['required'] = list(ref['properties'])
         schema['required'] = list(properties)
+    schemas['synthesis'] = obj(**{key: spec for key, spec in schemas['study']['properties'].items()
+                                 if key not in ('evidence', 'claims', 'coverage')})
     return schemas
 
 

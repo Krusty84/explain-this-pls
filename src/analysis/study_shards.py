@@ -59,8 +59,8 @@ def shard_checks(data, context, checks):
 def synthesis_inputs(plan, states):
     """Remap local IDs to the existing global E-/C- ID space, in shard/ID order.
 
-    A synthesis may arrange prose and blocks, but cannot mint or modify claims,
-    evidence or coverage. Exact registry equality is checked before publication.
+    A synthesis supplies prose and blocks. Python copies these registries into
+    the study and checks exact content and order before publication.
     """
     expected = [s['id'] for s in plan['shards']]
     if [s['id'] for s in states] != expected or any(s['status'] != 'SUCCEEDED' for s in states):
@@ -104,6 +104,5 @@ def synthesis_inputs(plan, states):
 
 def validate_synthesis(data, context):
     for field in ('evidence', 'claims', 'coverage'):
-        key = 'area_id' if field == 'coverage' else 'id'
-        if sorted(data[field], key=lambda r: r[key]) != sorted(context['synthesis_' + field], key=lambda r: r[key]):
+        if data[field] != context['synthesis_' + field]:
             raise contract_violation('SYNTHESIS_INPUT_CHANGED', '$.' + field)
