@@ -292,6 +292,8 @@ class Reporter(NullReporter):
         return STAGE_MESSAGES.get(context.get('stage'), STAGE_MESSAGES['study'])[0]
 
     def metric_models(self, metrics):
+        if metrics.get('generated_by') == 'orchestrator':
+            return 'orchestrator'
         labels = []
         for entry in metrics.get('by_model', []):
             model = entry.get('model_actual')

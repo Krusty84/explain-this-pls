@@ -56,7 +56,7 @@ from src.analysis.revisions import revision_inputs, choose_revision, completed_p
 from src.analysis.git_sources import GitSources
 from src.analysis.source_metrics import PhysicalLines
 from src.analysis.analysis_plan import build_analysis_plan, verify_analysis_plan
-from src.analysis.study_shards import synthesis_inputs
+from src.analysis.study_shards import empty_shard_result, synthesis_inputs
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ('catalog', 'study', 'review', 'compare')
@@ -1081,7 +1081,9 @@ class Runner:
                 'stage': context.get('prompt_variant', stage) if stage == 'study' else stage,
                 'revision_id': context.get('revision_id'),
                 **({'shard_id': context['analysis_shard']['id']} if 'analysis_shard' in context else {}),
-                'backend': self.cfg['_agents'].get('study' if stage == 'study-shard' else stage, {}).get('backend')}
+                **({'generated_by': context['generated_by']} if context.get('generated_by') else {}),
+                'backend': None if context.get('generated_by') == 'orchestrator' else
+                    self.cfg['_agents'].get('study' if stage == 'study-shard' else stage, {}).get('backend')}
 
     def stage_started(self, stage, context):
         started = self.reporter.clock()
@@ -1431,7 +1433,35 @@ class Runner:
                 self.critical_failure = True
                 raise AuditError('Validated shard artifact changed.', code='STUDY_SHARD_CHANGED', failure_layer='integrity') from exc
 
-    def run_study_shards(self, item, context, directory, run_stage, persist):
+    def complete_empty_shard(self, context, destination, guard):
+        meta = {'stage': 'study-shard', 'generated_by': 'orchestrator', 'reason': 'empty_subsystem_assignment',
+                'started_at': now(), 'status': 'RUNNING',
+                'metrics': {'attempts': 0, 'by_model': [],
+                            'usage': usage({key: 0 for key in FIELDS}, source='not_sent')}}
+        private_directory(destination)
+        try:
+            data = empty_shard_result(context['analysis_shard'], context)
+            validate_result('study-shard', data, context, self.mode)
+            meta['local_validation'] = True
+            data = prepare_result('study-shard', data, context)
+            if not data['program_checks']['policy_satisfied']:
+                raise ContractError('Shard completion, resolved evidence and primary coverage are required.')
+            guard(context)
+            meta['source_integrity_verified'] = True
+            meta['source_check_status'] = 'MATCHED_AT_BOUNDARIES'
+            meta['report_sha256'] = self.publish_result('study-shard', data, destination)
+            meta['artifact_hashes'] = {name: {'sha256': digest(blob), 'bytes': len(blob)}
+                                      for name, blob in self.artifact_contents('study-shard', data).items()}
+            meta.update(status='SUCCEEDED', finished_at=now(), publication_complete=True)
+            save_json(destination / 'invocation.json', meta)
+            return data, meta
+        except BaseException as exc:
+            meta.update(status='FAILED', error=asdict(diagnostic(exc)), finished_at=now(), publication_complete=False)
+            with contextlib.suppress(OSError):
+                save_json(destination / 'invocation.json', meta)
+            raise
+
+    def run_study_shards(self, item, context, directory, run_stage, run_empty_shard, persist):
         plan = item['analysis_plan']
         item['study_shards'] = [dict(id=s['id'], status='PLANNED', errors=[],
             directory=str((directory / 'study-shards' / s['id']).relative_to(self.run_dir))) for s in plan['shards']]
@@ -1442,8 +1472,11 @@ class Runner:
             state['status'] = 'RUNNING'
             persist()
             try:
-                data = run_stage('study-shard', state, context | {'analysis_shard': shard},
-                                 self.run_dir / state['directory'])
+                shard_context = context | {'analysis_shard': shard}
+                if not shard['subsystem_ids']:
+                    data = run_empty_shard(state, shard_context, self.run_dir / state['directory'])
+                else:
+                    data = run_stage('study-shard', state, shard_context, self.run_dir / state['directory'])
                 state['status'] = 'SUCCEEDED' if data is not None and data['program_checks']['policy_satisfied'] else 'FAILED'
             finally:
                 if state['status'] == 'RUNNING':
@@ -1566,12 +1599,13 @@ class Runner:
             self.assert_analysis_file(stage_context)
             self.assert_revision_files(item)
 
-        def run_stage(stage, state, stage_context, stage_dir):
+        def execute_stage(stage, state, stage_context, stage_dir, *, local=False):
             started = self.stage_started(stage, stage_context)
             destination = stage_dir / (stage + '.logs')
             try:
                 guard(stage_context)
-                data, meta = self.invoke(stage, stage_context, destination)
+                data, meta = (self.complete_empty_shard(stage_context, destination, guard) if local else
+                              self.invoke(stage, stage_context, destination))
                 self.store_stage(state, stage, data, meta, stage_context)
                 if data is not None:
                     self.stage_finished(stage, stage_context, data, started,
@@ -1607,6 +1641,13 @@ class Runner:
                 finally:
                     persist()
 
+        def run_stage(stage, state, stage_context, stage_dir):
+            return execute_stage(stage, state, stage_context, stage_dir)
+
+        def run_empty_shard(state, stage_context, stage_dir):
+            return execute_stage('study-shard', state, stage_context | {'generated_by': 'orchestrator'},
+                                 stage_dir, local=True)
+
         try:
             guard(context)
             inventory, _ = self.source_inventory()
@@ -1641,7 +1682,7 @@ class Runner:
                         study_origin='multi_session_synthesis' if analysis['required_sessions'] > 1 else 'direct_single_session')
             synthesis = None
             if analysis['required_sessions'] > 1:
-                synthesis = self.run_study_shards(item, context, directory, run_stage, persist)
+                synthesis = self.run_study_shards(item, context, directory, run_stage, run_empty_shard, persist)
                 if synthesis is None:
                     return
             previous = None

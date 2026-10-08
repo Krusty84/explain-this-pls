@@ -10,6 +10,15 @@ from src.contracts.contracts import ContractError, contract_violation, reference
 OBSERVATION_FIELDS = ('components', 'significant_flows', 'data_and_state', 'constraints', 'relationships')
 
 
+def empty_shard_result(shard, context):
+    if shard['subsystem_ids']:
+        raise ContractError('Only unassigned shards can be completed locally.')
+    identity = ('source_directory', 'source_fingerprint') if 'source_directory' in context else ('branch', 'source_commit')
+    return dict(task='architecture_study_shard', shard_id=shard['id'], assigned_subsystem_ids=[],
+                completion_status='COMPLETE', **{key: context[key] for key in identity},
+                **{key: [] for key in (*OBSERVATION_FIELDS, 'evidence', 'claims', 'coverage', 'limitations')})
+
+
 def validate_shard(data, context):
     shard = context['analysis_shard']
     assigned = shard['subsystem_ids']
@@ -67,13 +76,19 @@ def synthesis_inputs(plan, states):
         raise ContractError('Every planned shard must succeed before synthesis.')
     evidence, claims, coverage, shards, mappings, resolutions = [], [], [], [], [], []
     artifact_hashes = {}
-    for state in states:
+    for planned, state in zip(plan['shards'], states):
         original = state['study-shard']
         meta = state['study-shard_invocation']
-        if (not meta.get('backend_result_valid') or not meta.get('local_validation')
+        local = meta.get('generated_by') == 'orchestrator'
+        if local:
+            if (meta.get('reason') != 'empty_subsystem_assignment' or planned['subsystem_ids']
+                    or not meta.get('source_integrity_verified')
+                    or {k: v for k, v in original.items() if k != 'program_checks'} != empty_shard_result(planned, original)):
+                raise ContractError('Only validated empty assignments may bypass backend invocation.')
+        if ((not local and not meta.get('backend_result_valid')) or not meta.get('local_validation')
                 or not meta.get('publication_complete') or not original['program_checks']['policy_satisfied']):
             raise ContractError('Synthesis requires published, locally validated shard results.')
-        for field in ('artifact_hashes', 'attempt_hashes', 'binding_hashes'):
+        for field in (('artifact_hashes',) if local else ('artifact_hashes', 'attempt_hashes', 'binding_hashes')):
             artifact_hashes.update({state['directory'] + '/' + name: pin for name, pin in meta[field].items()})
         shard = copy.deepcopy(original)
         shard.pop('program_checks')
