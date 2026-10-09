@@ -34,6 +34,54 @@
   "reports_dir": "../architecture-reports/legacy-app",
   "output_language": "English",
 
+  // Source filtering is opt-in. Paths below are examples, not application defaults.
+  // Review each entry: legacy code and resources can use these directory names.
+  // Use exact source-root-relative paths with "/"; directories exclude their contents.
+  // "node_modules" does not match "packages/web/node_modules". No globs here.
+  "source_filter": {
+    // Folder mode only; works without .git. Git keeps its normal ignore behavior.
+    "follow_gitignore": false,
+    "exclude_paths": [
+      // Uncomment only the paths you want to exclude.
+      // General: VCS, IDE and temporary artifacts
+      // ".git", ".hg", ".svn", ".idea", ".vs", ".DS_Store", ".cache",
+      // "build", "dist", "temp", "tmp", "coverage",
+
+      // Java: Maven, Gradle, Spring Boot, Quarkus, Micronaut, Jakarta EE, Android
+      // ".gradle", "target", "out", ".cxx", "android/.gradle", "android/.cxx",
+      // "android/build", "android/app/build", "app/build",
+
+      // JS/TS: React, Next.js, Vue, Nuxt, Angular, SvelteKit, Astro, Vite,
+      // NestJS, Remix, Electron, Expo
+      // "node_modules", "bower_components", ".next", ".nuxt", ".nitro", ".output",
+      // ".angular/cache", ".svelte-kit", ".astro", ".vite", ".turbo", ".parcel-cache",
+      // ".expo", ".vercel", ".netlify", ".yarn/cache", ".pnpm-store",
+      // "storybook-static", "playwright-report", "test-results",
+
+      // C/C++: CMake, Qt, Meson, Ninja, Autotools, Bazel, Unreal Engine
+      // "CMakeFiles", "CMakeCache.txt", "cmake-build-debug", "cmake-build-release",
+      // "cmake-build-relwithdebinfo", "cmake-build-minsizerel", "autom4te.cache",
+      // ".deps", ".libs", "bazel-out", "bazel-bin", "bazel-testlogs",
+      // "Binaries", "Intermediate", "DerivedDataCache",
+
+      // Rust: Cargo, Actix Web, Axum, Rocket, Bevy, Tauri; also uses "target" above
+      // ".rustc_info.json", "src-tauri/target",
+
+      // Go: Gin, Echo, Fiber, Buffalo, standard tools; no mandatory build directory
+      // "coverage.out", "__debug_bin",
+
+      // Python: Django, Flask, FastAPI, Celery, pytest, mypy, Ruff, tox, Poetry, Jupyter
+      // ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+      // ".tox", ".nox", ".hypothesis", ".ipynb_checkpoints", ".eggs", ".pytype",
+      // "__pypackages__", "htmlcov", "staticfiles",
+
+      // Swift: SwiftPM, Xcode, SwiftUI, UIKit, Vapor, Carthage
+      // ".build", "DerivedData", "Carthage/Build", "ios/build",
+
+      // Extra review required: these often contain source, scripts or resources.
+      // "Pods", "ios/Pods", "Carthage/Checkouts", "vendor", "bin", "Saved"
+    ]
+  },
   // Evidence verification only; paths are relative to the common source root.
   // Most specific path wins; "." selects the whole tree. No agent UTF-8 copies.
   "source_decoding": {

@@ -80,7 +80,7 @@ original source, including ignored files, do not change that copy.
 Copy the example for your agent to `config.jsonc`, or use a project-specific name
 such as `config_prj1.jsonc` or `config_superErp.jsonc`:
 
-- [Codex CLI](config.example.jsonc)
+- [Codex CLI](config.codex.example.jsonc)
 - [Claude Code](config.claude-code.example.jsonc)
 - [OpenCode V2](config.opencode.example.jsonc)
 - [OpenCode 1.2.27 / XXX](config.xxx.example.jsonc)
@@ -88,7 +88,7 @@ such as `config_prj1.jsonc` or `config_superErp.jsonc`:
 For example, with Codex CLI:
 
 ```sh
-cp config.example.jsonc config.jsonc
+cp config.codex.example.jsonc config.jsonc
 ```
 
 Open `config.jsonc` in a text editor and replace the example paths and branch names
@@ -134,6 +134,57 @@ For folder analysis, replace the source settings with:
 
 Keep the report and agent settings. Folder mode creates the architecture report
 and, when enabled, a review without requiring Git; `git_mode` settings are ignored.
+
+Set `source_filter` to remove files before hashing, inventory, catalog navigation,
+coverage planning, and study assignments. Omitted settings preserve existing behavior:
+
+```json
+"source_filter": {
+  "follow_gitignore": false,
+  "exclude_paths": []
+}
+```
+
+`exclude_paths` applies in both modes, including committed Git snapshots. Use exact,
+case-sensitive paths relative to the common source root, with `/` separators.
+An entry excludes that file or directory and its descendants. `build` does not match
+`builder` or `packages/web/build`. Add nested paths explicitly. Absolute paths, empty
+components, `.`, `..`, backslashes, duplicates, and glob patterns are rejected.
+Use `.gitignore` for patterns. Configured exclusions take precedence over negation.
+
+`follow_gitignore` accepts only a JSON boolean. Set it to `true` for Folder mode
+to read root and nested `.gitignore` files, even without a `.git` directory.
+Rules use their containing directory as the base and support wildcards, anchors,
+directory rules, and negation through
+[pathspec](https://python-path-specification.readthedocs.io/en/v0.12.1/readme.html).
+An ignored parent directory is pruned; a negation for a child cannot reopen it.
+Rule files inside pruned directories and symbolic-link rule files are not read.
+Explicitly excluding a `.gitignore` file in Folder mode disables that rule file.
+A `.gitignore` that ignores itself remains active as filter metadata.
+Folder mode has no index, so rules apply to every matching source file.
+
+This flag controls additional Folder filtering. It does not disable Git's existing
+ignore handling. Git still includes tracked files unless `exclude_paths` removes
+them, and excludes ignored untracked files. Git's existing rule and submodule
+control-file checks remain active during snapshot preparation.
+
+The four example configs contain optional exclusions for Java, JS/TS, C/C++, Rust,
+Go, Python, and Swift. All entries are commented out. Review them before use:
+names such as `target`, `build`, and `dist` are shared across ecosystems and can
+contain required code or resources. There is no framework detection or default
+artifact exclusion list.
+
+Run artifacts record filter settings and excluded paths or pruned roots, with
+`CONFIG` or `GITIGNORE` origins. Folder `source.inventory.json` also records active
+rule-file hashes and the matching rule's file and line. Git `source.snapshot.json`
+records filter exclusions; its `git_state` records working-tree rule provenance.
+These records are separate from the Catalog LLM's advisory exclusions.
+Active Folder rule files are pinned even when a rule edit would not change selection.
+Changes confined to excluded source content do not invalidate a filtered Folder snapshot.
+
+Filtering is not a security boundary. In Folder mode, direct CLI file tools can
+still access the original directory, including excluded paths. No sandbox or source
+copy is added.
 
 #### Main settings
 
@@ -203,7 +254,7 @@ reported as unverified and need factual references from both selected studies.
 Existing configurations without this setting now skip review; add `true` to
 retain the previous workflow. No CLI flag is needed.
 
-The [commented configuration](config.example.jsonc) describes additional options:
+The [commented configuration](config.codex.example.jsonc) describes additional options:
 
 - **Execution limits:** each stage has a one-hour limit by default. With review
   enabled, one correction round and repeat review are allowed after substantive review findings. Adjust
@@ -225,7 +276,7 @@ The included prompts are ready to use. To customize them, copy an existing
 [review](prompts/review.md), or [comparison](prompts/compare.md)
 template, keep its required response format, and set its path in `prompts`.
 Store custom templates outside the source directory. See the
-[commented configuration](config.example.jsonc) for examples.
+[commented configuration](config.codex.example.jsonc) for examples.
 
 ### Run explain-this-pls
 

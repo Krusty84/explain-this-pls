@@ -51,6 +51,7 @@ from src.reports.presentation import render_stage
 from src.model.model_context import CONTEXT_FORMAT
 from src.model.model_boundary import BindingRegistry
 from src.analysis.source_decoding import normalize_source_decoding
+from src.analysis.source_filter import normalize_source_filter, excluded_root, gitignore_spec, gitignore_match
 from src.analysis.coverage_plan import build_coverage_plan, inventory_summary, verify_coverage_plan, recover_catalog_paths
 from src.analysis.revisions import revision_inputs, choose_revision, completed_pair
 from src.analysis.git_sources import GitSources
@@ -751,22 +752,27 @@ class Repository:
                             'Gitlink/submodule SHA changes are not file diffs of the nested repositories.']}
 
 class Folder:
-    def __init__(self, path: Path, *, canonical=False):
+    def __init__(self, path: Path, *, canonical=False, source_filter=None):
         self.path = path if canonical else path.resolve()
         self.inventory = None
         self.metadata = {}
         self.files = {}
         self.exclude_git = False
+        self.source_filter = normalize_source_filter(source_filter if source_filter is not None else {})
+        self.ignore_rules = {}
 
     def _scan(self, *, exclude_git=False, files=None, expected=None):
         entries, metadata = [], {}
+        rules, exclusions = {}, []
+        filtered = self.source_filter['follow_gitignore'] or self.source_filter['exclude_paths']
 
         def changed(name):
             raise AuditError('Source folder changed during the run; files will not be restored.',
                              code='SOURCE_CHANGED', failure_layer='integrity', node_path=name)
 
         def record(info, name):
-            metadata[name] = stamp(info)
+            # Excluded additions/removals can change a parent's timestamps.
+            metadata[name] = stamp(info)[:3] if filtered and stat.S_ISDIR(info.st_mode) else stamp(info)
             if expected is not None and metadata[name] != expected.get(name):
                 changed(name)
 
@@ -776,16 +782,64 @@ class Folder:
                     changed(name)
                 raise AuditError(f'Source changed while fingerprinting: {name}')
 
-        def directory(fd, relative):
+        def load_rules(fd, relative, scopes):
+            child = '.gitignore' if relative == '.' else relative + '/.gitignore'
+            if not self.source_filter['follow_gitignore'] or excluded_root(child, self.source_filter):
+                return scopes
+            try:
+                info = os.stat('.gitignore', dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return scopes
+            if not stat.S_ISREG(info.st_mode):
+                return scopes
+            record(info, child)
+            if expected is not None:
+                rule = self.ignore_rules[child]
+            else:
+                rule_fd = os.open('.gitignore', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                try:
+                    unchanged(info, os.fstat(rule_fd), child)
+                    data = bytearray()
+                    while block := os.read(rule_fd, 1024 * 1024):
+                        data.extend(block)
+                    unchanged(info, os.fstat(rule_fd), child)
+                finally:
+                    os.close(rule_fd)
+                lines = PhysicalLines()
+                lines.update(data)
+                rule = {'sha256': digest(data), 'source_lines': lines.count,
+                        'spec': gitignore_spec(data)}
+            unchanged(info, os.stat('.gitignore', dir_fd=fd, follow_symlinks=False), child)
+            rules[child] = rule
+            return (*scopes, (relative, child, rule['spec']))
+
+        def directory(fd, relative, scopes=()):
             before = os.fstat(fd)
             record(before, relative)
             entries.append({'path': relative, 'type': 'directory',
                             'mode': format(stat.S_IMODE(before.st_mode), '04o')})
+            scopes = load_rules(fd, relative, scopes)
             for name in sorted(os.listdir(fd)):
                 if exclude_git and name == '.git':
                     continue
                 child = name if relative == '.' else relative + '/' + name
+                root = excluded_root(child, self.source_filter)
+                if root:
+                    exclusions.append({'path': child, 'origin': 'CONFIG', 'rule': root})
+                    continue
                 info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if child in rules and stamp(info) != metadata[child]:
+                    changed(child)
+                ignored = None
+                for base, rule_path, spec in scopes:
+                    local = child if base == '.' else child[len(base) + 1:]
+                    include, line = gitignore_match(spec, local, stat.S_ISDIR(info.st_mode))
+                    if include is not None:
+                        ignored = {'path': child, 'origin': 'GITIGNORE', 'rule_file': rule_path,
+                                   'line': line} if include else None
+                if ignored:
+                    exclusions.append(ignored)
+                    continue
                 record(info, child)
                 entry = {'path': child, 'mode': format(stat.S_IMODE(info.st_mode), '04o')}
                 if stat.S_ISLNK(info.st_mode):
@@ -799,9 +853,12 @@ class Folder:
                     try:
                         unchanged(info, os.fstat(child_fd), child)
                         if stat.S_ISDIR(info.st_mode):
-                            directory(child_fd, child)
+                            directory(child_fd, child, scopes)
                         else:
-                            if files is None:
+                            if child in rules:
+                                file_hash = rules[child]['sha256']
+                                source_lines = rules[child]['source_lines']
+                            elif files is None:
                                 sha = hashlib.sha256()
                                 lines = PhysicalLines()
                                 while block := os.read(child_fd, 1024 * 1024):
@@ -824,6 +881,9 @@ class Folder:
                 else:
                     raise AuditError(f'Unsupported special file in source folder: {child}')
                 unchanged(info, os.stat(name, dir_fd=fd, follow_symlinks=False), child)
+            rule_path = '.gitignore' if relative == '.' else relative + '/.gitignore'
+            if rule_path in rules and stamp(os.stat('.gitignore', dir_fd=fd, follow_symlinks=False)) != metadata[rule_path]:
+                changed(rule_path)
             unchanged(before, os.fstat(fd), relative)
 
         try:
@@ -844,15 +904,21 @@ class Folder:
             actual_files = {e['path'] for e in entries if e['type'] == 'file'}
             if actual_files != files.keys():
                 changed(next(iter(actual_files ^ files.keys())))
-        return entries, metadata
+        return entries, metadata, rules, exclusions
 
     def snapshot(self, *, exclude_git=False, files=None) -> dict:
         """Pin one inventory; prepared copies reuse hashes from their initial reads."""
-        entries, metadata = self._scan(exclude_git=exclude_git, files=files)
-        fingerprint = digest(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode())
+        entries, metadata, rules, exclusions = self._scan(exclude_git=exclude_git, files=files)
+        rule_provenance = [{'path': path, 'sha256': rule['sha256']} for path, rule in sorted(rules.items())]
+        filtered = self.source_filter['follow_gitignore'] or self.source_filter['exclude_paths']
+        basis = {'entries': entries, 'settings': self.source_filter, 'rule_files': rule_provenance} if filtered else entries
+        fingerprint = digest(json.dumps(basis, sort_keys=True, separators=(',', ':')).encode())
         self.inventory = {'source_directory': str(self.path), 'source_fingerprint': fingerprint,
-                          'algorithm': 'sha256', 'entries': entries}
+                          'algorithm': 'sha256', 'entries': entries,
+                          'source_filter': dict(self.source_filter, exclude_paths=list(self.source_filter['exclude_paths']),
+                                                rule_files=rule_provenance, exclusions=exclusions)}
         self.metadata, self.exclude_git = metadata, exclude_git
+        self.ignore_rules = rules
         self.files = {e['path']: e for e in entries if e['type'] == 'file'}
         return self.inventory
 
@@ -861,8 +927,10 @@ class Folder:
             raise AuditError('Source folder has no pinned snapshot.', failure_layer='integrity')
         if self.inventory['source_fingerprint'] != fingerprint:
             raise AuditError('Source folder changed from the pinned snapshot.', failure_layer='integrity')
-        entries, _ = self._scan(exclude_git=self.exclude_git, files=self.files, expected=self.metadata)
-        if entries != self.inventory['entries']:
+        if self.source_filter != {key: self.inventory['source_filter'][key] for key in self.source_filter}:
+            raise AuditError('Source filter changed during the run.', code='SOURCE_CHANGED', failure_layer='integrity')
+        entries, _, rules, _ = self._scan(exclude_git=self.exclude_git, files=self.files, expected=self.metadata)
+        if entries != self.inventory['entries'] or rules.keys() != self.ignore_rules.keys():
             raise AuditError('Source folder changed during the run; files will not be restored.',
                              code='SOURCE_CHANGED', failure_layer='integrity')
 
@@ -892,7 +960,7 @@ def load_config(path: Path) -> dict:
     allowed = {'reports_dir', 'agent', 'stage_agents',
         'output_language', 'priority_scenarios', 'continue_on_error', 'project_description', 'prompts',
         'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy', 'source_decoding', 'multi_session',
-        'max_source_bytes_per_session'}
+        'max_source_bytes_per_session', 'source_filter'}
     if set(value) - allowed:
         raise AuditError(f'Unknown configuration keys: {set(value) - allowed}')
     try:
@@ -900,6 +968,7 @@ def load_config(path: Path) -> dict:
             raise ValueError('execution must be a JSON object.')
         value['execution'] = execution_settings(value.get('execution'))
         value['source_decoding'] = normalize_source_decoding(value.get('source_decoding'))
+        value['source_filter'] = normalize_source_filter(value.get('source_filter', {}))
     except ValueError as exc:
         raise AuditError(str(exc), code='INVALID_CONFIG') from exc
     for key in ('mode', 'reports_dir', 'agent'):
@@ -1028,7 +1097,7 @@ class Runner:
             raise AuditError('--trust-repository requires git mode; it cannot be used in folder mode.')
         self.source = config[self.mode + '_mode']
         self.source_path = Path(self.source['path' if self.mode == 'folder' else 'repository'])
-        self.folder = Folder(self.source_path) if self.mode == 'folder' else None
+        self.folder = Folder(self.source_path, source_filter=config.get('source_filter')) if self.mode == 'folder' else None
         self.repo = Repository(self.source_path, trust_repository=trust_repository,
                                reporter=self.reporter) if self.mode == 'git' else None
         self.schemas = MODEL_FOLDER_SCHEMAS if self.mode == 'folder' else MODEL_SCHEMAS
@@ -1051,7 +1120,8 @@ class Runner:
             folder = self.folder
         else:
             if getattr(self, '_source_folder', None) is None:
-                self._source_folder = Folder(self.source_path, canonical=True)
+                settings = dict(self.cfg.get('source_filter', {}), follow_gitignore=False)
+                self._source_folder = Folder(self.source_path, canonical=True, source_filter=settings)
             folder = self._source_folder
         if folder.inventory is None:
             folder.snapshot(exclude_git=self.repo is not None)
@@ -2133,7 +2203,8 @@ class Runner:
             original_branch, original_commit = self.repo.symbolic(), self.repo.head()
             manifest['original_checkout'] = {'branch': original_branch, 'commit': original_commit}
             manifest['original_hierarchy'] = self.repo.original
-            self.git_sources = GitSources(self.repo, Folder, UnsafeRepository, neutral_temporary_base(original_path))
+            self.git_sources = GitSources(self.repo, Folder, UnsafeRepository, neutral_temporary_base(original_path),
+                                          source_filter=self.cfg.get('source_filter'))
             working_label = original_branch if original_branch in pins else 'working tree (' + (original_branch or 'detached HEAD') + ')'
             working = self.git_sources.working(working_label)
             labels = list(self.source['branches'])

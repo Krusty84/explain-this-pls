@@ -16,6 +16,7 @@ import uuid
 
 from src.analysis.evidence import canonical, sha, open_source_directory, _read_confined, SourceChanged, stamp
 from src.analysis.source_metrics import physical_lines
+from src.analysis.source_filter import normalize_source_filter, excluded_root
 
 
 def ignore_path(node):
@@ -50,8 +51,9 @@ def ignore_path(node):
 
 
 class GitSources:
-    def __init__(self, repo, folder_type, error_type, temporary_base):
+    def __init__(self, repo, folder_type, error_type, temporary_base, *, source_filter=None):
         self.repo, self.folder_type, self.error = repo, folder_type, error_type
+        self.source_filter = normalize_source_filter(source_filter if source_filter is not None else {})
         base = Path(temporary_base).resolve()
         if base == repo.path or repo.path in base.parents:
             raise self.error('Source snapshots must be outside the original repository.', node_path=str(base))
@@ -126,7 +128,7 @@ class GitSources:
                 stream.flush()
                 check(node.git(*arguments, '--file', stream.name, *query, allowed=(0, 1)))
 
-    def read_working(self, node, path, *, replaced_file=False, read=True):
+    def read_working(self, node, path, *, replaced_file=False, read=True, metadata_only=False):
         """Missing files are deletions. Symlinks are metadata, never copied links."""
         key = node.path / path
         cached = self._working_files.get(key)
@@ -162,15 +164,20 @@ class GitSources:
             if not stat.S_ISREG(info.st_mode):
                 raise self.error('Unsupported source file type.', node_path=path)
             data, _ = _read_confined(node.path, path, info.st_size, pinned=metadata,
-                                     read=read or cached is None)
+                                     read=not metadata_only and (read or cached is None))
             if stamp(info) != stamp(os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)):
                 self.fail('Source changed during source preparation.', path)
             if cached is None:
                 file_stamp = stamp(info)
-                if file_stamp not in self._hashes:
+                if metadata_only:
+                    # An explicitly excluded rule remains a Git control input.
+                    # Pin its identity/timestamps without reading source bytes.
+                    entry = {'type': 'file', 'stamp': file_stamp}
+                elif file_stamp not in self._hashes:
                     self._hashes[file_stamp] = sha(data)
-                entry = {'type': 'file', 'mode': '100755' if info.st_mode & 0o111 else '100644',
-                         'size': len(data), 'sha256': self._hashes[file_stamp], 'source_lines': physical_lines(data)}
+                if not metadata_only:
+                    entry = {'type': 'file', 'mode': '100755' if info.st_mode & 0o111 else '100644',
+                             'size': len(data), 'sha256': self._hashes[file_stamp], 'source_lines': physical_lines(data)}
                 self._working_files[key] = (metadata, entry)
             else:
                 entry = cached[1]
@@ -195,7 +202,11 @@ class GitSources:
         for path in paths:
             candidates.update(str(parent / '.gitignore') for parent in Path(path).parents if str(parent) != '.')
         for path in sorted(candidates):
-            entry, _ = self.read_working(node, path, read=False)
+            full = str((node.path / path).relative_to(self.repo.path))
+            root = excluded_root(full, self.source_filter)
+            if root and root != full:
+                continue
+            entry, _ = self.read_working(node, path, read=False, metadata_only=bool(root))
             rules[path] = entry
         for path in (node.git_dir / 'info/exclude', excludes):
             # Git resolves exclusion paths; pin their bytes once and guard metadata.
@@ -225,6 +236,7 @@ class GitSources:
 
     def working_scan(self, destination=None):
         entries, states, submodules = {}, {}, []
+        exclusions = set()
         modified = False
         untracked_count = 0
         self.repo.assert_expected()
@@ -250,6 +262,14 @@ class GitSources:
             untracked = {os.fsdecode(p) for p in node.git('-c', ignore_arg, 'ls-files', '--others',
                          '--exclude-standard', '-z').split(b'\0') if p}
             paths |= untracked
+            # Git reports ignored roots without visiting their contents to count files.
+            for raw in node.git('-c', ignore_arg, 'ls-files', '--others', '--ignored',
+                                '--exclude-standard', '--directory', '-z').split(b'\0'):
+                if raw:
+                    ignored = os.fsdecode(raw).rstrip('/')
+                    full = ignored if prefix == '.' else prefix + '/' + ignored
+                    root = excluded_root(full, self.source_filter)
+                    exclusions.add((root or full, 'CONFIG' if root else 'GITIGNORE'))
             untracked_count += len(untracked)
             # Index distinctions survive even when disk bytes equal HEAD.
             modified |= {p: tuple(v[:1] + v[2:]) for p, v in tree.items()} != index
@@ -258,13 +278,19 @@ class GitSources:
                      'rules': self.ignore_token(node, paths, excludes)}
             states[prefix] = state
             local = {}
+            omitted = set()
             for path in sorted(paths - set(child_links)):
                 node.safe_relative(path)
+                full = path if prefix == '.' else prefix + '/' + path
+                root = excluded_root(full, self.source_filter)
+                if root:
+                    exclusions.add((root, 'CONFIG'))
+                    omitted.add(path)
+                    continue
                 entry, data = self.read_working(node, path, replaced_file=path in index, read=destination is not None)
                 if entry is None:
                     modified |= path in tree
                     continue
-                full = path if prefix == '.' else prefix + '/' + path
                 entries[full] = entry
                 local[path] = entry
                 if destination is not None and data is not None:
@@ -274,7 +300,7 @@ class GitSources:
                         stream.write(data)
                     target.chmod(0o700 if entry['mode'] == '100755' else 0o600)
                     self._copied_metadata[full] = stamp(target.stat())
-            modified |= bool(set(tree) - set(child_links) - set(local))
+            modified |= bool(set(tree) - set(child_links) - set(local) - omitted)
             if prefix != '.':
                 parent_path = self.repo.descriptions[prefix]['parent'] or '.'
                 parent = self.repo.nodes[parent_path]
@@ -287,7 +313,9 @@ class GitSources:
                     actual={'commit': base, 'ref': node.symbolic_ref()}, snapshot_verified=True))
         self.repo.assert_expected()
         return {'entries': entries, 'git_state': states, 'submodules': submodules,
-                'has_local_changes': bool(modified), 'untracked_files': untracked_count}
+                'has_local_changes': bool(modified), 'untracked_files': untracked_count,
+                'source_filter': dict(self.source_filter,
+                    exclusions=[{'path': p, 'origin': origin} for p, origin in sorted(exclusions)])}
 
     def finish(self, label, kind, commit, path, state, branch, metadata):
         folder = self.folder_type(path, canonical=True)
@@ -325,13 +353,17 @@ class GitSources:
     def commit(self, label, commit):
         path = self.root / uuid.uuid4().hex
         path.mkdir(mode=0o700)
-        entries, metadata = {}, {}
+        entries, metadata, exclusions = {}, {}, set()
         for prefix, pinned in self.repo.plans[commit].items():
             node = self.repo.nodes[prefix]
             for relative, (mode, kind, oid) in self.entries(node, pinned).items():
                 if mode == '160000':
                     continue
                 full = relative if prefix == '.' else prefix + '/' + relative
+                root = excluded_root(full, self.source_filter)
+                if root:
+                    exclusions.add(root)
+                    continue
                 data = node.git('cat-file', 'blob', oid)
                 if mode == '120000':
                     entries[full] = {'type': 'symlink', 'target': os.fsdecode(data), 'mode': mode}
@@ -347,7 +379,10 @@ class GitSources:
                     raise self.error('Unsupported committed source type.', node_path=full)
         subs = [dict(self.repo.descriptions[p], expected_commit=c, actual_head=c, snapshot_verified=True)
                 for p, c in self.repo.plans[commit].items() if p != '.']
-        return self.finish(label, 'commit', commit, path, {'entries': entries, 'submodules': subs}, label, metadata)
+        state = {'entries': entries, 'submodules': subs,
+                 'source_filter': dict(self.source_filter,
+                     exclusions=[{'path': p, 'origin': 'CONFIG'} for p in sorted(exclusions)])}
+        return self.finish(label, 'commit', commit, path, state, label, metadata)
 
     def assert_intact(self, snapshot=None):
         for item in ([snapshot] if snapshot else self.snapshots.values()):
