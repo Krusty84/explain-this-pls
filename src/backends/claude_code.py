@@ -19,18 +19,11 @@ def required_flags(mode: str) -> list[str]:
 
 
 def build_command(agent: dict, stage: str, mode: str, schema: dict,
-                  schema_path: Path, *, excluded_root: Path | None = None) -> list[str]:
+                  schema_path: Path) -> list[str]:
     tools = '' if stage == 'compare' else 'Read,Glob,Grep'
     cmd = [agent['executable'], '-p', '--no-session-persistence', '--output-format', 'json',
         '--json-schema', json.dumps(schema), '--permission-mode', 'dontAsk',
         '--tools', tools, '--disallowedTools', 'mcp__*']
-    if excluded_root is not None:
-        # Native Read deny rules also cover built-in search tools. This is not
-        # an OS sandbox: https://code.claude.com/docs/en/permissions#read-and-edit
-        path = str(excluded_root)
-        for char in ('\\', '*', '?', '[', ']'):
-            path = path.replace(char, '\\' + char)
-        cmd += ['Read(/' + path + '/**)']
     if tools:
         cmd += ['--allowedTools', tools]
     if agent.get('model'):

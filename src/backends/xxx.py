@@ -68,7 +68,7 @@ def required_flags(mode):
     return ['--format', '--agent', '--model', '--title']
 
 
-def prepare_environment(env, stage, *, source_snapshot=False):
+def prepare_environment(env, stage):
     try:
         config = strict_json(env.get('OPENCODE_CONFIG_CONTENT') or '{}')
         if type(config) is not dict or type(config.get('agent', {})) is not dict:
@@ -79,8 +79,7 @@ def prepare_environment(env, stage, *, source_snapshot=False):
     permission = {'*': 'deny'}
     if stage != 'compare':
         permission.update(read='allow', glob='allow', grep='allow', list='allow')
-        if source_snapshot:
-            permission['external_directory'] = 'deny'
+        permission['external_directory'] = 'deny'
     name = 'architecture-audit-' + secrets.token_hex(16)
     config.setdefault('agent', {})[name] = {'mode': 'primary', 'permission': permission}
     config['share'] = 'disabled'

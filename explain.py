@@ -6,7 +6,7 @@
 
 macOS or Linux, Python 3.11+, and one or more authenticated coding-agent CLIs.
 Git >= 2.34.1 is required only for git mode; folder mode needs no Git.
-Textual provides the interactive interface. Git inputs use source copies without worktree switches.
+Textual provides the interactive interface. Git branches are checked out sequentially in place.
 The parent publishes reports. The agent receives stdin and returns structured JSON.
 """
 from __future__ import annotations
@@ -54,7 +54,7 @@ from src.analysis.source_decoding import normalize_source_decoding
 from src.analysis.source_filter import normalize_source_filter, excluded_root, gitignore_spec, gitignore_match
 from src.analysis.coverage_plan import build_coverage_plan, inventory_summary, verify_coverage_plan, recover_catalog_paths
 from src.analysis.revisions import revision_inputs, choose_revision, completed_pair
-from src.analysis.git_sources import GitSources
+from src.analysis.git_sources import ignore_path, tracked_paths, ignored_paths, inventory_delta
 from src.analysis.source_metrics import PhysicalLines
 from src.analysis.analysis_plan import DEFAULT_MAX_SOURCE_BYTES_PER_SESSION, build_analysis_plan, verify_analysis_plan
 from src.analysis.study_shards import empty_shard_result, require_shard_policy, synthesis_inputs
@@ -439,12 +439,21 @@ class Repository:
                 except AuditError as exc:
                     raise UnsafeRepository(**vars(exc.with_context(node_path=path).diagnostic())) from exc
             return
-        # Historical name retained for callers; dirtiness is valid input.
         if self.git('ls-files', '--unmerged', '-z'):
             raise UnsafeRepository('Conflicted Git index.', node_path=str(self.path))
         flags = self.git('ls-files', '-v', '-z').split(b'\0')
         if any(line and (line[:1].islower() or line[:1] == b'S') for line in flags):
             raise UnsafeRepository('assume-unchanged/skip-worktree entries are unsupported.')
+        if not hasattr(self, 'excludes_file'):
+            self.excludes_file = ignore_path(self)
+        # Do not inspect children before their Git directories have been verified.
+        # Check staged gitlinks separately; --ignore-submodules=all hides them.
+        staged = self.git('diff', '--cached', '--name-only', '-z', '--no-ext-diff',
+                          '--no-textconv', '--ignore-submodules=none', 'HEAD', '--')
+        if staged or self.git('-c', 'core.excludesFile=' + str(self.excludes_file), 'status',
+                              '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=all'):
+            raise UnsafeRepository('A clean checkout is required: staged, tracked, or non-ignored untracked changes exist.',
+                                   code='SOURCE_CHANGED', failure_layer='integrity', node_path=str(self.path))
 
     @staticmethod
     def safe_relative(value: str) -> str:
@@ -544,7 +553,14 @@ class Repository:
         return {'directories': directories, 'files': files}
 
     def control_metadata(self) -> dict:
-        return {'HEAD': self.read_head()[1], 'index': self.file_stamp(self.git_dir / 'index')}
+        rules = {}
+        for path in (self.git_dir / 'info/exclude', getattr(self, 'excludes_file', None)):
+            if path is not None:
+                try:
+                    rules[str(path)] = [list(stamp(path.lstat())), list(stamp(path.stat()))]
+                except FileNotFoundError:
+                    rules[str(path)] = None
+        return {'HEAD': self.read_head()[1], 'index': self.file_stamp(self.git_dir / 'index'), 'ignore_rules': rules}
 
     def reference_metadata(self, ref: str) -> dict:
         path = self.git_dir / ref
@@ -634,8 +650,8 @@ class Repository:
                     self.descriptions[path] = {'path': path, 'parent': None if parent is None else
                         str(parent.path.relative_to(self.path)), 'name': name}
                     actual = node.head()
-                    # Working submodules use their actual checkout, independently
-                    # of the base/index gitlink. Commit plans are validated below.
+                    if required is not None and actual != required:
+                        raise UnsafeRepository('Submodule HEAD differs from its parent gitlink.')
                     required = actual
                     ref = node.symbolic_ref()
                     if ref and not ref.startswith('refs/heads/'):
@@ -677,9 +693,7 @@ class Repository:
         initial = {}
         self.reporter.emit('snapshot_started', snapshot='original')
         visit(self, '.', None, None, None, 'original', initial, True)
-        self.base_plan = {}
-        visit(self, '.', None, None, initial['.'], 'working tree base', self.base_plan)
-        self.plans[initial['.']] = self.base_plan
+        self.plans[initial['.']] = initial
         self.reporter.emit('snapshot_completed', snapshot='original', commit=initial['.'])
         result = {}
         for name in branches:
@@ -703,12 +717,15 @@ class Repository:
             try:
                 node.guard_metadata()
                 state = self.expected[path]
-                if node.control_metadata() != state['control'] or node.head() != state['commit'] or node.symbolic_ref() != state['ref']:
+                head = ('ref: ' + state['ref'] if state['ref'] else state['commit']).encode()
+                # The pinned HEAD bytes prove detached commit identity; attached
+                # originals also verify their ref below. Do not re-resolve HEAD.
+                if node.control_metadata() != state['control'] or node.read_head()[0].strip() != head:
                     raise UnsafeRepository('HEAD/index changed outside the orchestrator.')
                 original = self.original[path]
                 if original['ref'] and (node.reference_metadata(original['ref']) != original['ref_identity'] or
                         node.text('rev-parse', '--verify', original['ref']) != original['commit']):
-                    raise UnsafeRepository('Original branch moved during source preparation.')
+                    raise UnsafeRepository('Original branch moved during the run.')
                 node.policy()
                 node.clean(local=True)
             except (AuditError, OSError) as exc:
@@ -716,6 +733,68 @@ class Repository:
                 error = UnsafeRepository(**vars(detail.with_context(node_path=path).diagnostic()))
                 error.node = path
                 raise error from exc
+
+    def switch_node(self, path, commit, ref=None, *, restoring=False, persist=lambda: None):
+        node = self.nodes[path]
+        node.guard_metadata()
+        node.policy()
+        control = node.control_metadata()
+        if control['ignore_rules'] != self.expected[path]['control']['ignore_rules']:
+            raise UnsafeRepository('Ignore rules changed before checkout.', node_path=path)
+        if not restoring and control != self.expected[path]['control']:
+            raise UnsafeRepository('HEAD/index or ignore rules changed before checkout.', node_path=path)
+        original = self.original[path]
+        if original['ref'] and (node.reference_metadata(original['ref']) != original['ref_identity'] or
+                node.text('rev-parse', '--verify', original['ref']) != original['commit']):
+            raise UnsafeRepository('Original branch moved during the run.', node_path=path)
+        entry = {'node_path': path, 'commit': commit, 'ref': ref,
+                 'restoring': restoring, 'status': 'STARTED'}
+        self.journal.append(entry)
+        persist()
+        try:
+            arguments = ['switch', '--no-recurse-submodules', '--no-overwrite-ignore']
+            arguments += ['--no-guess', ref[len('refs/heads/'):]] if ref else ['--detach', commit]
+            node.git(*arguments)
+            node.guard_metadata()
+            if node.head() != commit or node.symbolic_ref() != ref:
+                raise UnsafeRepository('Checkout did not reach the expected HEAD.', node_path=path)
+            self.expected[path] = {'commit': commit, 'ref': ref, 'control': node.control_metadata()}
+            entry['status'] = 'COMPLETE'
+        except BaseException as exc:
+            entry.update(status='FAILED', error=str(exc) or type(exc).__name__)
+            raise
+        finally:
+            persist()
+
+    def checkout(self, commit, persist=lambda: None):
+        self.assert_expected()
+        for path, required in self.plans[commit].items():
+            self.switch_node(path, required, persist=persist)
+        self.assert_expected()
+
+    def restore(self, persist=lambda: None):
+        result = {'restored': True, 'nodes': {}, 'journal_errors': []}
+        def checkpoint():
+            try:
+                persist()
+            except OSError as exc:
+                # Report output failure without preventing a safe restoration.
+                if str(exc) not in result['journal_errors']:
+                    result['journal_errors'].append(str(exc))
+        for path in reversed(self.nodes):
+            original = self.original[path]
+            state = {'commit': original['commit'], 'ref': original['ref'], 'restored': False}
+            result['nodes'][path] = state
+            try:
+                self.switch_node(path, original['commit'], original['ref'], restoring=True, persist=checkpoint)
+                self.nodes[path].clean(local=True)
+                state['restored'] = True
+            except BaseException as exc:
+                state['error'] = str(exc) or type(exc).__name__
+                result['restored'] = False
+                if isinstance(exc, KeyboardInterrupt):
+                    result['interrupted'] = True
+        return result
 
     def submodules(self, commit: str, verified: bool = False) -> list[dict]:
         if verified:
@@ -752,7 +831,7 @@ class Repository:
                             'Gitlink/submodule SHA changes are not file diffs of the nested repositories.']}
 
 class Folder:
-    def __init__(self, path: Path, *, canonical=False, source_filter=None):
+    def __init__(self, path: Path, *, canonical=False, source_filter=None, paths=None):
         self.path = path if canonical else path.resolve()
         self.inventory = None
         self.metadata = {}
@@ -760,11 +839,13 @@ class Folder:
         self.exclude_git = False
         self.source_filter = normalize_source_filter(source_filter if source_filter is not None else {})
         self.ignore_rules = {}
+        self.paths = None if paths is None else frozenset(paths) | {
+            str(parent) for path in paths for parent in Path(path).parents}
 
     def _scan(self, *, exclude_git=False, files=None, expected=None):
         entries, metadata = [], {}
         rules, exclusions = {}, []
-        filtered = self.source_filter['follow_gitignore'] or self.source_filter['exclude_paths']
+        filtered = self.paths is not None or self.source_filter['follow_gitignore'] or self.source_filter['exclude_paths']
 
         def changed(name):
             raise AuditError('Source folder changed during the run; files will not be restored.',
@@ -823,6 +904,8 @@ class Folder:
                 if exclude_git and name == '.git':
                     continue
                 child = name if relative == '.' else relative + '/' + name
+                if self.paths is not None and child not in self.paths:
+                    continue
                 root = excluded_root(child, self.source_filter)
                 if root:
                     exclusions.append({'path': child, 'origin': 'CONFIG', 'rule': root})
@@ -869,8 +952,6 @@ class Folder:
                             else:
                                 if child not in files or info.st_size != files[child]['size']:
                                     changed(child)
-                                if '_stamp' in files[child] and stamp(info) != files[child]['_stamp']:
-                                    changed(child)
                                 file_hash = files[child]['sha256']
                                 source_lines = files[child]['source_lines']
                             entry.update(type='file', size=info.st_size, sha256=file_hash, source_lines=source_lines)
@@ -906,9 +987,9 @@ class Folder:
                 changed(next(iter(actual_files ^ files.keys())))
         return entries, metadata, rules, exclusions
 
-    def snapshot(self, *, exclude_git=False, files=None) -> dict:
-        """Pin one inventory; prepared copies reuse hashes from their initial reads."""
-        entries, metadata, rules, exclusions = self._scan(exclude_git=exclude_git, files=files)
+    def snapshot(self, *, exclude_git=False) -> dict:
+        """Pin one content inventory; later checks reuse its hashes."""
+        entries, metadata, rules, exclusions = self._scan(exclude_git=exclude_git)
         rule_provenance = [{'path': path, 'sha256': rule['sha256']} for path, rule in sorted(rules.items())]
         filtered = self.source_filter['follow_gitignore'] or self.source_filter['exclude_paths']
         basis = {'entries': entries, 'settings': self.source_filter, 'rule_files': rule_provenance} if filtered else entries
@@ -1106,25 +1187,24 @@ class Runner:
         self.versions: dict[str, str] = {}
 
     def assert_source(self):
-        if getattr(self, 'git_sources', None) is not None:
-            self.git_sources.assert_intact(getattr(self, 'active_snapshot', None))
-        elif self.repo:
+        if self.repo:
             self.repo.assert_expected()
             if getattr(self, '_source_folder', None) is not None:
                 self._source_folder.assert_snapshot(self._source_folder.inventory['source_fingerprint'])
 
     def source_inventory(self):
-        if getattr(self, 'active_snapshot', None) is not None:
-            folder = self.git_sources.guards[self.active_snapshot['path']]
-        elif self.folder:
+        if self.folder:
             folder = self.folder
         else:
             if getattr(self, '_source_folder', None) is None:
                 settings = dict(self.cfg.get('source_filter', {}), follow_gitignore=False)
-                self._source_folder = Folder(self.source_path, canonical=True, source_filter=settings)
+                self._source_folder = Folder(self.source_path, canonical=True, source_filter=settings,
+                                             paths=tracked_paths(self.repo))
             folder = self._source_folder
         if folder.inventory is None:
             folder.snapshot(exclude_git=self.repo is not None)
+            if self.repo:
+                folder.inventory['source_filter']['exclusions'].extend(ignored_paths(self.repo, folder.source_filter))
         folder.assert_snapshot(folder.inventory['source_fingerprint'])
         return folder.inventory, folder.metadata
 
@@ -1253,12 +1333,11 @@ class Runner:
         adapter = CLI_ADAPTERS.get(agent['backend'])
         if adapter:
             access_stage = 'compare' if reports_only else stage
-            kwargs = {'excluded_root': self.repo.path} if adapter is claude_code and getattr(self, 'git_sources', None) else {}
+            kwargs = {}
             if adapter is opencode_cli:
                 kwargs['agent_name'] = opencode_cli.prepare_environment(env, access_stage)
             elif adapter is xxx:
-                kwargs['agent_name'] = xxx.prepare_environment(
-                    env, access_stage, source_snapshot=bool(getattr(self, 'git_sources', None)))
+                kwargs['agent_name'] = xxx.prepare_environment(env, access_stage)
             return adapter.build_command(agent, access_stage, self.mode, schema or self.schemas[stage], schema_path, **kwargs)
         raise AuditError('No CLI adapter for this backend.',
                          code='BACKEND_INCOMPATIBLE')
@@ -1759,7 +1838,7 @@ class Runner:
             for number in range(1, revision_rounds + 2):
                 revision_id = f'{number:03d}'
                 revision_dir = directory / 'revisions' / revision_id
-                revision = {key: item[key] for key in ('branch', 'source_commit', 'source_directory', 'source_fingerprint', 'source_snapshot') if key in item}
+                revision = {key: item[key] for key in ('branch', 'source_commit', 'source_directory', 'source_fingerprint') if key in item}
                 revision.update(revision_id=revision_id, directory=str(revision_dir.relative_to(self.run_dir)),
                                 study=None, review=None, errors=[], review_enabled=review_enabled, workflow_satisfied=False)
                 if not review_enabled:
@@ -1995,7 +2074,7 @@ class Runner:
                 state = Path(raw).resolve()
                 cwd = state if reports_only else self.source_path
                 env = cli_env(cwd)
-                if getattr(self, 'git_sources', None):
+                if self.repo:
                     for key in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE',
                                 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES'):
                         env.pop(key, None)
@@ -2184,17 +2263,17 @@ class Runner:
         manifest = {'run_id': self.run_dir.name, 'started_at': now(), 'repository': str(self.repo.path),
             'review_enabled': self.execution['review_enabled'],
             'git': self.repo.runtime.manifest(), 'baseline_branch': self.source['baseline_branch'],
-            'status': 'RUNNING', 'isolation': 'independent-source-copies; cli-native-permissions',
+            'status': 'RUNNING', 'isolation': 'in-place-checkout; cli-native-permissions',
             'platform': sys.platform, 'branches': [], 'errors': [], 'switch_journal': [],
-            'source_preservation': 'Analyzer performs no writes to the original repository.',
+            'source_preservation': 'Only the orchestrator switches checkouts; agents have read-only source access.',
             'publication_complete': False}
         self.manifest = manifest
         def persist():
             manifest['metrics'] = self.metrics.snapshot()
             save_json(self.run_dir / 'manifest.json', manifest)
         persist()
-        original_path = self.source_path
-        self.git_sources = None
+        inventories = {}
+        code = 1
         try:
             if not self.cfg['project_description']:
                 self.reporter.emit('description_missing')
@@ -2203,55 +2282,36 @@ class Runner:
             original_branch, original_commit = self.repo.symbolic(), self.repo.head()
             manifest['original_checkout'] = {'branch': original_branch, 'commit': original_commit}
             manifest['original_hierarchy'] = self.repo.original
-            self.git_sources = GitSources(self.repo, Folder, UnsafeRepository, neutral_temporary_base(original_path),
-                                          source_filter=self.cfg.get('source_filter'))
-            working_label = original_branch if original_branch in pins else 'working tree (' + (original_branch or 'detached HEAD') + ')'
-            working = self.git_sources.working(working_label)
-            labels = list(self.source['branches'])
-            if original_branch not in pins and working['has_local_changes']:
-                labels.append(working_label)
-            for branch in self.source['branches']:
-                if branch != original_branch:
-                    self.git_sources.commit(branch, pins[branch])
-            manifest['snapshot_plans'] = {name: {
-                'source_snapshot': item['source_snapshot'], 'submodules': item['submodules']}
-                for name, item in self.git_sources.snapshots.items() if name in labels}
-            manifest['working_tree'] = {key: working[key] for key in ('has_local_changes', 'untracked_files', 'git_state')}
-            manifest['working_tree']['ignored_files'] = 'excluded using Git standard rules'
-            self.reporter.emit('sources_prepared', working_changes=working['has_local_changes'],
-                               untracked_files=working['untracked_files'], revisions=labels,
-                               ignored_files='excluded', additional_revision=working_label if working_label not in pins and working['has_local_changes'] else None)
-            self.repo.assert_expected()
+            manifest['checkout_plans'] = {branch: dict(self.repo.plans[commit]) for branch, commit in pins.items()}
+            manifest['switch_journal'] = self.repo.journal
             manifest['cli_checks'] = self.check_cli()
-            self.git_sources.assert_intact()
+            self.repo.assert_expected()
             if check_only:
                 manifest['status'], code = 'PREFLIGHT_OK', 0
             else:
-                for branch in labels:
-                    prepared = self.git_sources.snapshots[branch]
-                    provenance = prepared['source_snapshot']
-                    commit = provenance['base_commit']
-                    self.source_path = prepared['path']
-                    self.active_snapshot = prepared
+                for branch in self.source['branches']:
+                    self.assert_source()
+                    self._source_folder = None
+                    commit = pins[branch]
+                    self.repo.checkout(commit, persist)
                     self.analysis_started = True
                     self.active_stage = {}
-                    self.reporter.emit('branch_started', branch=branch, commit=commit,
-                                       source_type=provenance['source_type'], snapshot_id=provenance['snapshot_id'])
+                    self.reporter.emit('branch_started', branch=branch, commit=commit)
                     branch_dir = self.run_dir / 'branches' / slug(branch)
-                    item = {'branch': branch, 'source_commit': commit, 'source_snapshot': provenance,
-                        'additional_revision': branch not in pins, 'submodules': prepared['submodules'],
+                    item = {'branch': branch, 'source_commit': commit,
+                        'submodules': self.repo.submodules(commit, verified=True),
                         'directory': str(branch_dir.relative_to(self.run_dir)), 'study': None, 'review': None, 'errors': []}
                     manifest['branches'].append(item)
-                    save_json(branch_dir / 'source.snapshot.json', {k: v for k, v in prepared.items() if k not in ('path', 'inventory')})
+                    inventories[branch], _ = self.source_inventory()
                     persist()
                     context = {'source_mode': 'git', 'branch': branch, 'source_commit': commit,
-                        'source_snapshot': provenance, 'submodules': item['submodules'],
+                        'submodules': item['submodules'],
                         'repository': str(self.source_path), 'output_language': self.cfg['output_language'],
                         'project_description': self.cfg['project_description'],
                         'priority_scenarios': self.cfg['priority_scenarios'], 'execution_mode': 'static-only',
-                        'source_access': 'Prepared independent copy only; no .git or ignored untracked contents. '
-                            'Symlinks are metadata only. Use relative project paths. For working_tree, source_commit '
-                            'is a base commit, not the identity of file bytes. Native CLI permissions are not full filesystem isolation.'}
+                        'source_access': 'Read tracked source files in this repository at the pinned commit. '
+                            'Do not read .git, ignored untracked files, or configured exclusions. Do not follow symlinks. '
+                            'Do not modify sources or Git state. Native CLI permissions are not full filesystem isolation.'}
                     self.run_source(item, context, branch_dir, persist)
                     item['accepted'] = accepted(item)
                     persist()
@@ -2266,7 +2326,7 @@ class Runner:
                         'requested_branches': self.source['branches'], 'output_language': self.cfg['output_language'],
                         'project_description': self.cfg['project_description'],
                         'scope': 'reports-only comparison; source inspection is outside task scope',
-                        'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'source_snapshot', 'submodules', 'study', 'review',
+                        'branches': [{k: b.get(k) for k in ('branch', 'source_commit', 'submodules', 'study', 'review',
                                                            'study_material', 'review_material', 'errors', 'selected_revision', 'coverage_plan')} |
                                       {'accepted': accepted(b), 'workflow_satisfied': workflow_satisfied(b),
                                        'review_enabled': self.execution['review_enabled']} |
@@ -2274,13 +2334,13 @@ class Runner:
                                         ('publication_complete', 'contract_id', 'artifact_format', 'status', 'model_requested', 'model_actual',
                                          'model_actual_source', 'source_check_status', 'review_quality')}
                                       for stage in ('study', 'review')} for b in entries if b['branch'] in self.source['branches']],
-                        'git_deltas': {b: self.git_sources.delta(baseline, b) for b in self.source['branches'] if b != baseline}}
+                        'git_deltas': {b: inventory_delta(baseline, b, inventories, pins, self.repo.plans) for b in self.source['branches'] if b != baseline}}
                     bundle['required_unresolved_branches'] = required_unresolved(bundle)
                     comp_dir = self.run_dir / 'comparison'
                     save_json(comp_dir / 'inputs.json', bundle)
                     started = self.stage_started('compare', bundle)
                     try:
-                        self.git_sources.assert_intact()
+                        self.assert_source()
                         for entry in entries:
                             self.assert_revision_files(entry)
                         can_compare = (comparison_possible(selected_entries, baseline) if self.compromise
@@ -2291,7 +2351,7 @@ class Runner:
                             comparison, meta = self.publish_blocked_comparison(bundle, comp_dir / 'compare.logs')
                     finally:
                         try:
-                            self.git_sources.assert_intact()
+                            self.assert_source()
                             for entry in entries:
                                 self.assert_revision_files(entry)
                         except AuditError as exc:
@@ -2311,18 +2371,30 @@ class Runner:
             code = 130 if isinstance(exc, KeyboardInterrupt) else 1
             self.record_error(manifest, exc, phase='run' if self.analysis_started else 'preflight')
         finally:
-            self.source_path = original_path
-            self.active_snapshot = None
-            if self.git_sources is not None:
+            self._source_folder = None
+            if getattr(self.repo, 'journal', []):
                 try:
-                    self.git_sources.close()
-                    manifest['temporary_sources_removed'] = True
-                except OSError as exc:
-                    manifest['temporary_sources_removed'] = False
-                    manifest['errors'].append('Temporary source cleanup failed.')
-                    manifest['status'] = 'FAILED'
-                    code = 130 if code == 130 else 1
-                    self.record_error(manifest, exc, phase='cleanup')
+                    self.reporter.emit('restoration_started')
+                finally:
+                    restoration = self.repo.restore(persist)
+                    manifest['restoration'] = restoration
+                    if not restoration['restored']:
+                        manifest['status'] = 'FAILED'
+                        code = 130 if code == 130 or restoration.get('interrupted') else 1
+                        for path, state in restoration['nodes'].items():
+                            if not state['restored']:
+                                error = UnsafeRepository('Original checkout restoration failed: ' + state['error'],
+                                    code='RESTORATION_FAILED', failure_layer='integrity', node_path=path)
+                                manifest['errors'].append(str(error))
+                                self.record_error(manifest, error, phase='restoration')
+                    self.reporter.emit('restoration_completed', restored=restoration['restored'])
+                    for message in restoration['journal_errors']:
+                        error = AuditError('Could not save restoration journal: ' + message,
+                                           code='RESTORATION_JOURNAL_FAILED', failure_layer='publication')
+                        manifest['errors'].append(str(error))
+                        manifest['status'] = 'FAILED'
+                        code = 130 if code == 130 else 1
+                        self.record_error(manifest, error, phase='restoration')
         manifest.update(finished_at=now(), exit_code=code)
         persist()
         return manifest, code
@@ -2496,7 +2568,7 @@ def run_audit(args, reporter) -> int:
             except OSError as save_error:
                 reporter.error(save_error)
     finally:
-        # Presentation failures never bypass temporary-source or resource cleanup.
+        # Presentation failures never bypass Git runtime cleanup.
         if runner and runner.repo:
             try:
                 runner.repo.close()

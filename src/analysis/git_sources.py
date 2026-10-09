@@ -1,22 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Read-only Git inputs and independent, disposable source copies.
-
-Git selects paths; descriptor-relative reads select bytes. No checkout, index
-write, filter, archive export attribute, or symlink traversal is involved.
-"""
-from __future__ import annotations
+"""Git path selection and deltas over saved, in-place source inventories."""
 import os
 from pathlib import Path
-import stat
 import subprocess
-import tempfile
-import uuid
 
-from src.analysis.evidence import canonical, sha, open_source_directory, _read_confined, SourceChanged, stamp
-from src.analysis.source_metrics import physical_lines
-from src.analysis.source_filter import normalize_source_filter, excluded_root
+from src.analysis.evidence import canonical, sha
+from src.analysis.source_filter import excluded_root
 
 
 def ignore_path(node):
@@ -50,361 +41,56 @@ def ignore_path(node):
     return Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config'))) / 'git/ignore'
 
 
-class GitSources:
-    def __init__(self, repo, folder_type, error_type, temporary_base, *, source_filter=None):
-        self.repo, self.folder_type, self.error = repo, folder_type, error_type
-        self.source_filter = normalize_source_filter(source_filter if source_filter is not None else {})
-        base = Path(temporary_base).resolve()
-        if base == repo.path or repo.path in base.parents:
-            raise self.error('Source snapshots must be outside the original repository.', node_path=str(base))
-        self.temporary = tempfile.TemporaryDirectory(prefix='archaudit-sources-', dir=temporary_base)
-        self.root = Path(self.temporary.name).resolve()
-        self.snapshots = {}
-        self.guards = {}
-
-    def close(self):
-        self.temporary.cleanup()
-
-    def fail(self, message, path=None):
-        raise self.error(message, code='SOURCE_CHANGED', failure_layer='integrity', node_path=path)
-
-    def entries(self, node, commit):
-        result = {}
-        for record in node.git('ls-tree', '-r', '-z', commit).split(b'\0'):
-            if record:
-                header, raw = record.split(b'\t', 1)
-                path = os.fsdecode(raw)
-                node.safe_relative(path)
-                result[path] = header.decode('ascii').split()
-        return result
-
-    def index(self, node):
-        result = {}
-        for record in node.git('ls-files', '--stage', '-z').split(b'\0'):
-            if record:
-                header, raw = record.split(b'\t', 1)
-                mode, oid, stage = header.decode('ascii').split()
-                path = os.fsdecode(raw)
-                node.safe_relative(path)
-                if stage != '0':
-                    raise self.error('Conflicted Git index.', node_path=str(node.path / path))
-                result[path] = (mode, oid)
-        return result
-
-    def check_modules(self, node, index, expected):
-        """Only path/name changes are structural; URL/other edits are source data."""
-        wanted = {path: value['name'] for path, value in expected.items()}
-        def check(raw):
-            paths = {}
-            for record in raw.split(b'\0'):
-                if record:
-                    key, path = os.fsdecode(record).split('\n', 1)
-                    name = key[len('submodule.'):-len('.path')]
-                    node.safe_relative(path)
-                    node.safe_relative(name)
-                    if path in paths or name in paths.values():
-                        raise self.error('Duplicate submodule path/name.', node_path=str(node.path / '.gitmodules'))
-                    paths[path] = name
-            if paths != wanted:
-                raise self.error('Unsupported submodule structure change in .gitmodules.',
-                                 node_path=str(node.path / '.gitmodules'))
-        arguments = ['config', '--no-includes', '--null']
-        query = ['--get-regexp', r'^submodule\..*\.path$']
-        record = index.get('.gitmodules')
-        if record:
-            if record[0] not in ('100644', '100755'):
-                raise self.error('.gitmodules must be a regular file.', node_path=str(node.path / '.gitmodules'))
-            check(node.git(*arguments, '--blob', record[1], *query, allowed=(0, 1)))
-        else:
-            check(b'')
-        entry, data = self.read_working(node, '.gitmodules')
-        if entry is not None and data is None:
-            raise self.error('.gitmodules must be a regular file.', node_path=str(node.path / '.gitmodules'))
-        if data is None:
-            check(b'')
-        else:
-            with tempfile.NamedTemporaryFile(dir=self.root, prefix='modules-') as stream:
-                stream.write(data)
-                stream.flush()
-                check(node.git(*arguments, '--file', stream.name, *query, allowed=(0, 1)))
-
-    def read_working(self, node, path, *, replaced_file=False, read=True, metadata_only=False):
-        """Missing files are deletions. Symlinks are metadata, never copied links."""
-        key = node.path / path
-        cached = self._working_files.get(key)
-        if self._working_pinned and cached is None:
-            self.fail('Source paths changed during source preparation.', path)
-        fd = open_source_directory(node.path)
-        fds = [fd]
-        try:
-            metadata = {'.': stamp(os.fstat(fd))[:3]}
-            parts = path.split('/')
-            for index, name in enumerate(parts[:-1], 1):
-                fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
-                fds.append(fd)
-                metadata['/'.join(parts[:index])] = stamp(os.fstat(fd))[:3]
-            info = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
-            metadata[path] = stamp(info)[:3] if stat.S_ISDIR(info.st_mode) else stamp(info)
-            if cached is not None and metadata != cached[0]:
-                self.fail('Source changed during source preparation.', path)
-            if replaced_file and stat.S_ISDIR(info.st_mode):
-                # A former file can become a directory. Git enumerates its new
-                # children separately; the old file is a deletion.
-                self._working_files[key] = (metadata, None)
-                return None, None
-            if stat.S_ISLNK(info.st_mode):
-                target = os.readlink(parts[-1], dir_fd=fd)
-                if stamp(info) != stamp(os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)):
-                    self.fail('Symbolic link changed during source preparation.', path)
-                entry = {'type': 'symlink', 'target': target, 'mode': '120000'}
-                if cached is not None and entry != cached[1]:
-                    self.fail('Symbolic link changed during source preparation.', path)
-                self._working_files[key] = (metadata, entry)
-                return entry, None
-            if not stat.S_ISREG(info.st_mode):
-                raise self.error('Unsupported source file type.', node_path=path)
-            data, _ = _read_confined(node.path, path, info.st_size, pinned=metadata,
-                                     read=not metadata_only and (read or cached is None))
-            if stamp(info) != stamp(os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)):
-                self.fail('Source changed during source preparation.', path)
-            if cached is None:
-                file_stamp = stamp(info)
-                if metadata_only:
-                    # An explicitly excluded rule remains a Git control input.
-                    # Pin its identity/timestamps without reading source bytes.
-                    entry = {'type': 'file', 'stamp': file_stamp}
-                elif file_stamp not in self._hashes:
-                    self._hashes[file_stamp] = sha(data)
-                if not metadata_only:
-                    entry = {'type': 'file', 'mode': '100755' if info.st_mode & 0o111 else '100644',
-                             'size': len(data), 'sha256': self._hashes[file_stamp], 'source_lines': physical_lines(data)}
-                self._working_files[key] = (metadata, entry)
-            else:
-                entry = cached[1]
-            return entry, data if read else None
-        except FileNotFoundError:
-            if cached is not None and cached != (None, None):
-                self.fail('Source disappeared during source preparation.', path)
-            self._working_files[key] = (None, None)
-            return None, None
-        except (OSError, ValueError, SourceChanged) as exc:
-            raise self.error('Cannot safely read source during preparation.', node_path=path,
-                             code='SOURCE_CHANGED', failure_layer='integrity') from exc
-        finally:
-            for opened in reversed(fds):
-                os.close(opened)
-
-    def ignore_token(self, node, paths, excludes):
-        # Read rules only, never the contents of ignored files. Rules can change
-        # even when they happen to select the same set in both scans.
-        rules = {}
-        candidates = {'.gitignore'}
-        for path in paths:
-            candidates.update(str(parent / '.gitignore') for parent in Path(path).parents if str(parent) != '.')
-        for path in sorted(candidates):
-            full = str((node.path / path).relative_to(self.repo.path))
-            root = excluded_root(full, self.source_filter)
-            if root and root != full:
+def tracked_paths(repo):
+    paths = set()
+    for prefix, node in repo.nodes.items():
+        for raw in node.git('ls-files', '--stage', '-z').split(b'\0'):
+            if not raw:
                 continue
-            entry, _ = self.read_working(node, path, read=False, metadata_only=bool(root))
-            rules[path] = entry
-        for path in (node.git_dir / 'info/exclude', excludes):
-            # Git resolves exclusion paths; pin their bytes once and guard metadata.
-            try:
-                info = path.stat()
-                token = (stamp(path.lstat()), stamp(info))
-            except FileNotFoundError:
-                token = None
-            if path in self._rule_files:
-                before, value = self._rule_files[path]
-                if before != token:
-                    self.fail('Ignore rules changed during source preparation.', str(path))
-            else:
-                if self._working_pinned:
-                    self.fail('Ignore rule paths changed during source preparation.', str(path))
-                value = None
-                if token is not None:
-                    data = path.read_bytes()
-                    if token != (stamp(path.lstat()), stamp(path.stat())):
-                        self.fail('Ignore rules changed during source preparation.', str(path))
-                    if stamp(info) not in self._hashes:
-                        self._hashes[stamp(info)] = sha(data)
-                    value = self._hashes[stamp(info)]
-                self._rule_files[path] = (token, value)
-            rules[str(path)] = value
-        return rules
+            header, name = raw.split(b'\t', 1)
+            if header.split()[0] == b'160000':
+                continue
+            relative = node.safe_relative(os.fsdecode(name))
+            paths.add(relative if prefix == '.' else prefix + '/' + relative)
+    return paths
 
-    def working_scan(self, destination=None):
-        entries, states, submodules = {}, {}, []
-        exclusions = set()
-        modified = False
-        untracked_count = 0
-        self.repo.assert_expected()
-        for prefix, node in self.repo.nodes.items():
-            base = self.repo.original[prefix]['commit']
-            index = self.index(node)
-            tree = self.entries(node, base)
-            child_links = {p: oid for p, (mode, oid) in index.items() if mode == '160000'}
-            expected_links = node.tree(base)
-            if set(child_links) != set(expected_links):
-                raise self.error('Unsupported staged submodule structure change.', node_path=prefix)
-            if expected_links or '.gitmodules' in index:
-                self.check_modules(node, index, expected_links)
-            try:
-                excludes = ignore_path(node)
-            except ValueError as exc:
-                raise self.error('Cannot resolve Git ignore configuration.', node_path=str(node.path)) from exc
-            ignore_arg = 'core.excludesFile=' + str(excludes)
-            status = node.git('-c', ignore_arg, 'status', '--porcelain=v1', '-z',
-                              '--untracked-files=all', '--ignore-submodules=all')
-            modified |= bool(status)
-            paths = {os.fsdecode(p) for p in node.git('ls-files', '--cached', '-z').split(b'\0') if p}
-            untracked = {os.fsdecode(p) for p in node.git('-c', ignore_arg, 'ls-files', '--others',
-                         '--exclude-standard', '-z').split(b'\0') if p}
-            paths |= untracked
-            # Git reports ignored roots without visiting their contents to count files.
-            for raw in node.git('-c', ignore_arg, 'ls-files', '--others', '--ignored',
-                                '--exclude-standard', '--directory', '-z').split(b'\0'):
-                if raw:
-                    ignored = os.fsdecode(raw).rstrip('/')
-                    full = ignored if prefix == '.' else prefix + '/' + ignored
-                    root = excluded_root(full, self.source_filter)
-                    exclusions.add((root or full, 'CONFIG' if root else 'GITIGNORE'))
-            untracked_count += len(untracked)
-            # Index distinctions survive even when disk bytes equal HEAD.
-            modified |= {p: tuple(v[:1] + v[2:]) for p, v in tree.items()} != index
-            state = {'head': node.head(), 'branch': node.symbolic(), 'index': index,
-                     'status': [os.fsdecode(p) for p in status.split(b'\0') if p],
-                     'rules': self.ignore_token(node, paths, excludes)}
-            states[prefix] = state
-            local = {}
-            omitted = set()
-            for path in sorted(paths - set(child_links)):
-                node.safe_relative(path)
-                full = path if prefix == '.' else prefix + '/' + path
-                root = excluded_root(full, self.source_filter)
-                if root:
-                    exclusions.add((root, 'CONFIG'))
-                    omitted.add(path)
-                    continue
-                entry, data = self.read_working(node, path, replaced_file=path in index, read=destination is not None)
-                if entry is None:
-                    modified |= path in tree
-                    continue
-                entries[full] = entry
-                local[path] = entry
-                if destination is not None and data is not None:
-                    target = destination / full
-                    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                    with target.open('xb') as stream:
-                        stream.write(data)
-                    target.chmod(0o700 if entry['mode'] == '100755' else 0o600)
-                    self._copied_metadata[full] = stamp(target.stat())
-            modified |= bool(set(tree) - set(child_links) - set(local) - omitted)
-            if prefix != '.':
-                parent_path = self.repo.descriptions[prefix]['parent'] or '.'
-                parent = self.repo.nodes[parent_path]
-                relative = str(node.path.relative_to(parent.path))
-                baseline_link = self.entries(parent, self.repo.base_plan[parent_path])[relative][2]
-                index_link = self.index(parent)[relative][1]
-                modified |= base != baseline_link
-                submodules.append(dict(self.repo.descriptions[prefix], base_gitlink=baseline_link,
-                    index_gitlink=index_link, actual_head=base, expected_commit=base,
-                    actual={'commit': base, 'ref': node.symbolic_ref()}, snapshot_verified=True))
-        self.repo.assert_expected()
-        return {'entries': entries, 'git_state': states, 'submodules': submodules,
-                'has_local_changes': bool(modified), 'untracked_files': untracked_count,
-                'source_filter': dict(self.source_filter,
-                    exclusions=[{'path': p, 'origin': origin} for p, origin in sorted(exclusions)])}
 
-    def finish(self, label, kind, commit, path, state, branch, metadata):
-        folder = self.folder_type(path, canonical=True)
-        files = {name: entry | {'_stamp': metadata[name]} for name, entry in state['entries'].items()
-                 if entry['type'] == 'file'}
-        inventory = folder.snapshot(files=files)
-        provenance = {'repository': str(self.repo.path), 'branch': branch, 'base_commit': commit,
-                      'source_type': kind, 'snapshot_id': path.name,
-                      'fingerprint': sha(canonical(state))}
-        result = {'path': path, 'inventory': inventory, 'source_snapshot': provenance, **state}
-        self.snapshots[label] = result
-        self.guards[path] = folder
-        return result
-
-    def working(self, label):
-        path = self.root / uuid.uuid4().hex
-        path.mkdir(mode=0o700)
-        self._working_files, self._rule_files, self._hashes, self._copied_metadata = {}, {}, {}, {}
-        self._working_pinned = False
-        try:
-            before = self.working_scan()
-            self._working_pinned = True
-            copied = self.working_scan(path)
-            after = self.working_scan()
-            if before != copied or copied != after:
-                left, right = (before, copied) if before != copied else (copied, after)
-                changed = next((p for p in sorted(left['entries'].keys() | right['entries'].keys())
-                                if left['entries'].get(p) != right['entries'].get(p)), str(self.repo.path))
-                self.fail('Source, index or ignore rules changed during source preparation; retry the run.', changed)
-            return self.finish(label, 'working_tree', self.repo.original['.']['commit'], path, copied,
-                               self.repo.symbolic(), self._copied_metadata)
-        except (OSError, ValueError, SourceChanged) as exc:
-            self.fail('Source changed or became unreadable during source preparation; retry the run.')
-
-    def commit(self, label, commit):
-        path = self.root / uuid.uuid4().hex
-        path.mkdir(mode=0o700)
-        entries, metadata, exclusions = {}, {}, set()
-        for prefix, pinned in self.repo.plans[commit].items():
-            node = self.repo.nodes[prefix]
-            for relative, (mode, kind, oid) in self.entries(node, pinned).items():
-                if mode == '160000':
-                    continue
+def ignored_paths(repo, settings):
+    exclusions = set()
+    for prefix, node in repo.nodes.items():
+        for raw in node.git('-c', 'core.excludesFile=' + str(node.excludes_file), 'ls-files',
+                            '--others', '--ignored', '--exclude-standard', '--directory', '-z').split(b'\0'):
+            if raw:
+                relative = os.fsdecode(raw).rstrip('/')
                 full = relative if prefix == '.' else prefix + '/' + relative
-                root = excluded_root(full, self.source_filter)
-                if root:
-                    exclusions.add(root)
-                    continue
-                data = node.git('cat-file', 'blob', oid)
-                if mode == '120000':
-                    entries[full] = {'type': 'symlink', 'target': os.fsdecode(data), 'mode': mode}
-                elif mode in ('100644', '100755'):
-                    target = path / full
-                    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                    target.write_bytes(data)
-                    target.chmod(0o700 if mode == '100755' else 0o600)
-                    metadata[full] = stamp(target.stat())
-                    entries[full] = {'type': 'file', 'mode': mode, 'size': len(data), 'sha256': sha(data),
-                                     'source_lines': physical_lines(data)}
-                else:
-                    raise self.error('Unsupported committed source type.', node_path=full)
-        subs = [dict(self.repo.descriptions[p], expected_commit=c, actual_head=c, snapshot_verified=True)
-                for p, c in self.repo.plans[commit].items() if p != '.']
-        state = {'entries': entries, 'submodules': subs,
-                 'source_filter': dict(self.source_filter,
-                     exclusions=[{'path': p, 'origin': 'CONFIG'} for p in sorted(exclusions)])}
-        return self.finish(label, 'commit', commit, path, state, label, metadata)
+                root = excluded_root(full, settings)
+                exclusions.add((root or full, 'CONFIG' if root else 'GITIGNORE'))
+    return [{'path': path, 'origin': origin} for path, origin in sorted(exclusions)]
 
-    def assert_intact(self, snapshot=None):
-        for item in ([snapshot] if snapshot else self.snapshots.values()):
-            try:
-                self.guards[item['path']].assert_snapshot(item['inventory']['source_fingerprint'])
-            except RuntimeError as exc:
-                self.fail('Prepared source snapshot changed during analysis.', getattr(exc, 'node_path', None) or str(item['path']))
 
-    def delta(self, baseline, other):
-        a, b = self.snapshots[baseline], self.snapshots[other]
-        changes = []
-        for path in sorted(a['entries'].keys() | b['entries'].keys()):
-            old, new = a['entries'].get(path), b['entries'].get(path)
-            if old != new:
-                changes.append({'path': path, 'status': 'A' if old is None else 'D' if new is None else 'M',
-                    'old_mode': old['mode'] if old else '000000', 'new_mode': new['mode'] if new else '000000',
-                    'old_sha256': sha(canonical(old)) if old else None, 'new_sha256': sha(canonical(new)) if new else None})
-        old_subs = {s['path']: s for s in a['submodules']}
-        subs = [dict(path=s['path'], baseline_commit=old_subs[s['path']]['expected_commit'],
-                     branch_commit=s['expected_commit']) for s in b['submodules']
-                if old_subs[s['path']]['expected_commit'] != s['expected_commit']]
-        return {'orientation': 'baseline_snapshot_to_branch_snapshot',
-                'baseline_source': a['source_snapshot'], 'branch_source': b['source_snapshot'],
-                'changes': changes, 'submodule_changes': subs, 'identical_trees': not changes and not subs,
-                'limitations': ['Snapshot path/content/mode changes only; renames appear as deletion plus addition.']}
+def inventory_delta(baseline, other, inventories, pins, plans):
+    def entries(label):
+        result = {}
+        for entry in inventories[label]['entries']:
+            if entry['type'] == 'directory':
+                continue
+            mode = ('120000' if entry['type'] == 'symlink' else
+                    '100755' if int(entry['mode'], 8) & 0o111 else '100644')
+            result[entry['path']] = {k: v for k, v in entry.items() if k != 'path'} | {'mode': mode}
+        return result
+    a, b = entries(baseline), entries(other)
+    changes = []
+    for path in sorted(a.keys() | b.keys()):
+        old, new = a.get(path), b.get(path)
+        if old != new:
+            changes.append({'path': path, 'status': 'A' if old is None else 'D' if new is None else 'M',
+                'old_mode': old['mode'] if old else '000000', 'new_mode': new['mode'] if new else '000000',
+                'old_sha256': sha(canonical(old)) if old else None,
+                'new_sha256': sha(canonical(new)) if new else None})
+    subs = [dict(path=path, baseline_commit=commit, branch_commit=plans[pins[other]][path])
+            for path, commit in plans[pins[baseline]].items()
+            if path != '.' and commit != plans[pins[other]][path]]
+    return {'orientation': 'baseline_tree_to_branch_tree', 'baseline_commit': pins[baseline],
+            'branch_commit': pins[other], 'changes': changes, 'submodule_changes': subs,
+            'identical_trees': not changes and not subs,
+            'limitations': ['Filtered path/content/mode changes only; renames appear as deletion plus addition.']}

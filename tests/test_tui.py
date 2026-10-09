@@ -317,7 +317,7 @@ class LiveTuiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertGreater(app.query_one('#stages', DataTable).row_count, 2)
                 self.assertEqual(app.query_one('#run-tabs', TabbedContent).active, 'summary-tab')
 
-    async def test_keyboard_cancel_stops_silent_agent_and_removes_git_copies(self):
+    async def test_keyboard_cancel_stops_silent_agent_and_restores_checkout(self):
         self.prepare('git')
         marker = self.base / 'agent-process.json'
         self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': 'wait', 'seconds': 60,
@@ -336,9 +336,10 @@ class LiveTuiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(app.last_exit_code, 130)
                 with self.assertRaises(ProcessLookupError):
                     os.kill(child['pid'], 0)
-                self.assertFalse(Path(child['cwd']).exists())
+                self.assertEqual(Path(child['cwd']), self.repo_path)
                 manifest = json.loads(Path(app.pending_result['result']['manifest']).read_text())
-                self.assertTrue(manifest['temporary_sources_removed'])
+                self.assertTrue(manifest['restoration']['restored'])
+                self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD').strip(), 'master')
                 self.assertEqual(app.query_one('#run-tabs', TabbedContent).active, 'summary-tab')
 
     async def test_quit_waits_for_worker_cleanup_and_returns_interrupted_code(self):

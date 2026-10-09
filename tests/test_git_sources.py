@@ -1,20 +1,23 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Offline regression tests for actual working bytes and read-only Git inputs."""
-import json
+"""Offline integration tests for sequential checkouts in the original repository."""
 import hashlib
+import io
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from explain import Repository, Folder, UnsafeRepository, Runner, load_config
-from src.analysis.git_sources import GitSources
+from explain import Repository, Folder, UnsafeRepository, Runner, load_config, run_audit
+from src.analysis.git_sources import tracked_paths
 from src.analysis.evidence import resolve_evidence
+from src.runtime.reporting import Reporter
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,7 +46,10 @@ class GitSourceTests(unittest.TestCase):
         (self.home / 'audit-profile.json').write_text('{"model":"configured-model"}')
 
     def git(self, *args):
-        return subprocess.check_output(['git', '-C', str(self.path), *args], stderr=subprocess.PIPE).decode().strip()
+        env = {k: os.environ[k] for k in ('PATH', 'LANG') if k in os.environ}
+        env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0')
+        return subprocess.check_output(['git', '-C', str(self.path), *args],
+                                       env=env, stderr=subprocess.PIPE).decode().strip()
 
     def write(self, name, data):
         target = self.path / name
@@ -55,162 +61,18 @@ class GitSourceTests(unittest.TestCase):
                 if p.is_file() and not p.is_symlink()}
 
     def prepare(self, branches=('main', 'alias')):
-        pins = self.repo.preflight(list(branches))
-        sources = GitSources(self.repo, Folder, UnsafeRepository, self.base)
-        self.addCleanup(sources.close)
-        return sources, pins
+        return self.repo.preflight(list(branches))
 
-    def dirty(self):
-        self.write('app.py', 'INDEX_SENTINEL\n')
-        self.git('add', 'app.py')
-        self.write('app.py', 'WORKING_SENTINEL\n')
-        self.write('new/deep/.hidden', 'UNTRACKED_SENTINEL\n')
-        self.write('.gitignore', '*.env\nbuild/\nnode_modules/\n')
-        for path in ('.env', 'build/secret', 'node_modules/secret'):
-            self.write(path, 'IGNORED_SECRET_SENTINEL\n')
+    def capture(self):
+        folder = Folder(self.path, paths=tracked_paths(self.repo))
+        folder.snapshot(exclude_git=True)
+        return folder
 
-    def test_disk_bytes_index_metadata_and_independent_copies(self):
-        for kind in ('unstaged', 'staged', 'mixed'):
-            with self.subTest(kind=kind):
-                self.write('app.py', 'INDEX_SENTINEL\n' if kind == 'mixed' else 'WORKING_SENTINEL\n')
-                if kind != 'unstaged': self.git('add', 'app.py')
-                self.write('app.py', 'WORKING_SENTINEL\n')
-                before = self.state()
-                sources, _ = self.prepare()
-                item = sources.working('main')
-                self.assertEqual((item['path'] / 'app.py').read_text(), 'WORKING_SENTINEL\n')
-                self.assertNotEqual((item['path'] / 'app.py').stat().st_ino, (self.path / 'app.py').stat().st_ino)
-                self.assertEqual(item['git_state']['.']['index']['app.py'][1], self.git('rev-parse', ':app.py'))
-                self.assertEqual(before, self.state())
-
-    def test_add_delete_rename_hidden_untracked_and_ignore_semantics(self):
-        self.dirty()
-        self.git('rm', 'deleted.txt')
-        self.git('mv', 'rename.txt', 'renamed.txt')
-        self.write('new-staged', 'ADDED_SENTINEL\n')
-        self.git('add', 'new-staged')
-        self.write('new/.gitignore', '*.tmp\n!keep.tmp\n')
-        self.write('new/hide.tmp', 'IGNORED_SECRET_SENTINEL\n')
-        self.write('new/keep.tmp', 'KEEP_SENTINEL\n')
-        self.write('info-hidden', 'IGNORED_SECRET_SENTINEL\n')
-        with (self.path / '.git/info/exclude').open('a') as stream: stream.write('\ninfo-hidden\n')
-        sources, pins = self.prepare()
-        before = self.state()
-        item = sources.working('main')
-        files = {str(p.relative_to(item['path'])) for p in item['path'].rglob('*') if p.is_file()}
-        self.assertTrue({'app.py', 'new/deep/.hidden', 'tracked.env', 'renamed.txt', 'new-staged', 'new/keep.tmp'} <= files)
-        self.assertFalse({'.env', 'deleted.txt', 'rename.txt', 'new/hide.tmp', 'info-hidden'} & files)
-        self.assertFalse(any('.git' in p.split('/') for p in files))
-        self.assertNotIn('IGNORED_SECRET_SENTINEL', ''.join(p.read_text() for p in item['path'].rglob('*') if p.is_file()))
-        sources.commit('alias', pins['alias'])
-        delta = sources.delta('alias', 'main')
-        changes = {c['path']: c['status'] for c in delta['changes']}
-        self.assertEqual(changes['deleted.txt'], 'D')
-        self.assertEqual(changes['new/deep/.hidden'], 'A')
-        self.assertEqual(before, self.state())
-
-    def test_global_ignores_and_current_working_rules(self):
-        excludes = self.home / 'ignore'
-        excludes.write_text('global-secret\n')
-        (self.home / '.gitconfig').write_text('[core]\n excludesFile = ' + str(excludes) + '\n[filter "danger"]\n smudge = false\n')
-        self.write('global-secret', 'IGNORED_SECRET_SENTINEL\n')
-        self.write('.gitignore', 'current-secret\n')
-        self.write('current-secret', 'IGNORED_SECRET_SENTINEL\n')
-        with patch.dict(os.environ, {'HOME': str(self.home)}):
-            sources, _ = self.prepare()
-            item = sources.working('main')
-        self.assertNotIn('global-secret', item['entries'])
-        self.assertNotIn('current-secret', item['entries'])
-
-    def test_xdg_global_default_and_conditional_config_include(self):
-        xdg = self.home / 'xdg'
-        (xdg / 'git').mkdir(parents=True)
-        (xdg / 'git/ignore').write_text('xdg-secret\n')
-        self.write('xdg-secret', 'IGNORED_SECRET_SENTINEL\n')
-        self.write('conditional-secret', 'IGNORED_SECRET_SENTINEL\n')
-        with patch.dict(os.environ, {'HOME': str(self.home), 'XDG_CONFIG_HOME': str(xdg)}):
-            sources, _ = self.prepare()
-            self.assertNotIn('xdg-secret', sources.working('default')['entries'])
-            includes = self.home / 'included.config'
-            excludes = self.home / 'conditional.ignore'
-            excludes.write_text('conditional-secret\n')
-            includes.write_text('[core]\n excludesFile = ' + str(excludes) + '\n')
-            (self.home / '.gitconfig').write_text('[includeIf "gitdir:' + str(self.path / '.git') + '"]\n path = ' + str(includes) + '\n')
-            self.assertNotIn('conditional-secret', sources.working('conditional')['entries'])
-
-    def test_symlinks_are_metadata_and_excluded_evidence_is_never_opened(self):
-        self.dirty()
-        outside = self.base / 'outside-secret'
-        outside.write_text('OUTSIDE_SECRET_SENTINEL\n')
-        (self.path / 'link-ignored').symlink_to('.env')
-        (self.path / 'link-outside').symlink_to(outside)
-        sources, _ = self.prepare()
-        item = sources.working('main')
-        self.assertEqual(item['entries']['link-ignored']['type'], 'symlink')
-        self.assertFalse((item['path'] / 'link-ignored').exists())
-        context = {'branch': 'main', 'source_commit': self.repo.head(), 'repository': str(item['path']),
-                   'source_snapshot': item['source_snapshot']}
-        pointer = {'id': 'E1', 'source_id': 'source-001', 'path': '.env', 'start_line': 1, 'end_line': 1}
-        with patch('src.analysis.evidence._read_confined', side_effect=AssertionError('Excluded read')):
-            result = resolve_evidence('study', [pointer], context, {'app.py': 'unused'})
-        self.assertEqual(result[0]['status'], 'NOT_FOUND')
-
-    def test_concurrent_allowed_source_index_and_rules_changes_fail_preparation(self):
-        for name in ('app.py', '.gitignore', 'index'):
-            with self.subTest(name=name):
-                sources, _ = self.prepare()
-                scan = sources.working_scan
-                def change(destination=None):
-                    result = scan(destination)
-                    if destination is not None:
-                        if name == 'index': self.git('update-index', '--assume-unchanged', 'app.py')
-                        else: self.write(name, 'changed-during-copy\n')
-                    return result
-                with patch.object(sources, 'working_scan', side_effect=change):
-                    with self.assertRaises(UnsafeRepository): sources.working('main')
-                if name == 'index': self.git('update-index', '--no-assume-unchanged', 'app.py')
-
-    def test_ignored_mutation_does_not_change_fingerprint_but_snapshot_mutation_fails(self):
-        self.dirty()
-        sources, _ = self.prepare()
-        first = sources.working('main')
-        self.write('.env', 'another excluded secret\n')
-        self.write('build/new-file', 'excluded\n')
-        second = sources.working('again')
-        self.assertEqual(first['source_snapshot']['fingerprint'], second['source_snapshot']['fingerprint'])
-        self.write('app.py', 'later original edit\n')
-        sources.assert_intact()
-        (first['path'] / 'app.py').write_text('snapshot corruption\n')
-        with self.assertRaisesRegex(UnsafeRepository, 'snapshot changed'): sources.assert_intact()
-
-    def test_ignored_creation_during_copy_and_working_eol_bytes(self):
-        self.dirty()
-        sources, _ = self.prepare()
-        scan = sources.working_scan
-        def change(destination=None):
-            result = scan(destination)
-            if destination is not None: self.write('build/created-during-copy', 'excluded\n')
-            return result
-        with patch.object(sources, 'working_scan', side_effect=change):
-            item = sources.working('main')
-        self.assertNotIn('build/created-during-copy', item['entries'])
-        self.git('config', 'core.autocrlf', 'true')
-        (self.path / 'app.py').write_bytes(b'WORKING_SENTINEL\r\n')
-        sources, _ = self.prepare()
-        item = sources.working('eol')
-        self.assertEqual((item['path'] / 'app.py').read_bytes(), b'WORKING_SENTINEL\r\n')
-
-    def test_conflicted_index_and_unfinished_operations_remain_rejected(self):
-        self.git('switch', 'alias')
-        self.write('app.py', 'OTHER\n')
-        self.git('commit', '-am', 'other')
+    def topic(self):
+        self.git('switch', '-c', 'topic')
+        self.write('app.py', 'TOPIC_SENTINEL\n')
+        self.git('commit', '-am', 'topic')
         self.git('switch', 'main')
-        self.write('app.py', 'MAIN\n')
-        self.git('commit', '-am', 'main')
-        subprocess.run(['git', '-C', str(self.path), 'merge', 'alias'], capture_output=True)
-        with self.assertRaisesRegex(UnsafeRepository, 'Unfinished Git operation'): self.prepare()
-        (self.path / '.git/MERGE_HEAD').unlink()
-        with self.assertRaisesRegex(UnsafeRepository, 'Conflicted Git index'): self.prepare()
 
     def run_cli(self, backend, branches=('main', 'alias'), check=False, action=None, partial_branches=(), policy='compromise'):
         cli = self.base / ('fake-' + backend)
@@ -222,7 +84,7 @@ class GitSourceTests(unittest.TestCase):
         config = {'mode': 'git', 'result_policy': policy,
                   'git_mode': {'repository': str(self.path), 'branches': list(branches), 'baseline_branch': branches[0]},
                   'reports_dir': str(self.base / 'reports'), 'agent': {'backend': backend, 'executable': str(cli)},
-                  'execution': {'review_enabled': True, 'stage_timeout_seconds': 1 if action == 'wait' else 30}, 'continue_on_error': False}
+                  'execution': {'review_enabled': True, 'stage_timeout_seconds': 1 if action == 'wait' else 60}, 'continue_on_error': False}
         config_path = self.base / 'config.json'
         config_path.write_text(json.dumps(config))
         env = {'PATH': os.environ['PATH'], 'HOME': str(self.home), 'AUDIT_TEST_CALL_LOG': str(calls),
@@ -238,96 +100,256 @@ class GitSourceTests(unittest.TestCase):
         records = [json.loads(line) for line in calls.read_text().splitlines()]
         return result, manifest, records
 
-    def test_cli_agents_read_working_and_untracked_bytes_without_ignored_content(self):
-        self.dirty()
-        before = self.state()
+    def test_all_backends_analyze_original_repository_sequentially(self):
+        self.topic()
+        original = self.git('rev-parse', 'HEAD')
         for backend in ('codex', 'claude-code', 'xxx', 'opencode'):
             with self.subTest(backend=backend):
-                result, manifest, calls = self.run_cli(backend)
+                result, manifest, calls = self.run_cli(backend, ('topic', 'main', 'alias'))
                 self.assertEqual(result.returncode, 0, result.stderr)
-                observed = [c for c in calls if 'source_files' in c and 'app.py' in c['source_files']]
-                self.assertEqual(len(observed), 6)
-                for call in observed[:3]:
-                    self.assertEqual(call['source_files']['app.py'], 'WORKING_SENTINEL\n')
-                    self.assertEqual(call['source_files']['new/deep/.hidden'], 'UNTRACKED_SENTINEL\n')
-                    self.assertNotIn('IGNORED_SECRET_SENTINEL', json.dumps(call))
-                    if backend == 'xxx': self.assertEqual(call['permissions']['external_directory'], 'deny')
-                    if backend == 'claude-code': self.assertIn('Read(/' + str(self.path) + '/**)', call['args'])
-                for call in observed[3:]:
-                    self.assertEqual(call['source_files']['app.py'], 'HEAD_SENTINEL\n')
-                    self.assertNotIn('new/deep/.hidden', call['source_files'])
-                self.assertEqual(manifest['branches'][0]['source_snapshot']['source_type'], 'working_tree')
-                self.assertEqual(manifest['branches'][1]['source_snapshot']['source_type'], 'commit')
-                evidence = manifest['branches'][0]['study']['program_checks']['evidence'][0]
-                self.assertEqual(evidence['file_sha256'], hashlib.sha256(b'WORKING_SENTINEL\n').hexdigest())
-                self.assertEqual(evidence['source_identity'], dict(mode='git', **manifest['branches'][0]['source_snapshot']))
-                inputs = json.loads((Path(manifest['final_report']).parent / 'comparison/inputs.json').read_text())
-                delta = inputs['git_deltas']['alias']
-                self.assertFalse(delta['identical_trees'])
-                self.assertEqual(next(c['status'] for c in delta['changes'] if c['path'] == 'new/deep/.hidden'), 'D')
-                self.assertEqual(manifest['pins']['main'], manifest['pins']['alias'])
+                observed = [c for c in calls if 'source_files' in c]
+                self.assertEqual([c['context']['branch'] for c in observed],
+                                 ['topic'] * 3 + ['main'] * 3 + ['alias'] * 3)
+                for call in observed:
+                    self.assertEqual(Path(call['cwd']), self.path)
+                    content = 'TOPIC_SENTINEL\n' if call['context']['branch'] == 'topic' else 'HEAD_SENTINEL\n'
+                    self.assertEqual(call['source_files']['app.py'], content)
+                    self.assertFalse(any('.git' in p.split('/') for p in call['source_files']))
+                    self.assertNotIn('source_snapshot', call['context'])
+                for item in manifest['branches']:
+                    evidence = item['study']['program_checks']['evidence'][0]
+                    self.assertEqual(evidence['source_identity'],
+                        {'mode': 'git', 'branch': item['branch'], 'commit': manifest['pins'][item['branch']]})
+                    content = b'TOPIC_SENTINEL\n' if item['branch'] == 'topic' else b'HEAD_SENTINEL\n'
+                    self.assertEqual(evidence['file_sha256'], hashlib.sha256(content).hexdigest())
+                    inventory_path = Path(manifest['final_report']).parent / item['directory'] / 'source.inventory.json'
+                    self.assertTrue(inventory_path.is_file())
+                    self.assertNotIn(self.path, inventory_path.parents)
+                self.assertEqual(manifest['comparison']['completion_status'], 'COMPLETE')
+                bundle = json.loads((Path(manifest['final_report']).parent / 'comparison/inputs.json').read_text())
+                self.assertEqual(bundle['git_deltas']['main']['changes'][0]['path'], 'app.py')
+                self.assertTrue(manifest['restoration']['restored'])
+                self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
+                self.assertEqual(self.git('rev-parse', 'HEAD'), original)
+                self.assertEqual(self.git('status', '--porcelain'), '')
+                self.assertFalse({'source_snapshot', 'snapshot_plans', 'working_tree', 'temporary_sources_removed'} & manifest.keys())
+
+    def test_initial_dirty_and_untracked_states_are_rejected(self):
+        for kind in ('tracked', 'staged', 'untracked'):
+            with self.subTest(kind=kind):
+                filename = 'new.txt' if kind == 'untracked' else 'app.py'
+                self.write(filename, 'dirty\n')
+                if kind == 'staged': self.git('add', filename)
+                before = self.state()
+                with self.assertRaisesRegex(UnsafeRepository, 'clean checkout'): self.prepare()
                 self.assertEqual(before, self.state())
-                self.assertTrue(all(not Path(c['cwd']).exists() for c in observed))
+                if kind == 'untracked': (self.path / filename).unlink()
+                else: self.write(filename, 'HEAD_SENTINEL\n')
+                if kind == 'staged': self.git('add', filename)
 
-    def test_extra_revision_for_unselected_or_detached_working_tree(self):
-        self.dirty()
-        for detached in (False, True):
-            if detached: self.git('switch', '--detach', 'HEAD')
-            result, manifest, calls = self.run_cli('codex', ('alias',))
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(len(manifest['branches']), 2)
-            extra = manifest['branches'][1]
-            self.assertTrue(extra['additional_revision'])
-            self.assertEqual(extra['source_snapshot']['branch'], None if detached else 'main')
-            self.assertEqual(manifest['baseline_branch'], 'alias')
-            report = Path(manifest['final_report']).read_text()
-            self.assertIn(extra['branch'], report)
-            self.assertIn(extra['source_snapshot']['snapshot_id'], report)
+    def test_ignored_files_and_symlinks_are_outside_readable_inventory(self):
+        self.write('.gitignore', '*.env\nbuild/\n')
+        (self.path / 'link').symlink_to('/outside/source')
+        self.git('add', '.gitignore', 'link')
+        self.git('commit', '-m', 'ignore rules and link')
+        self.write('build/secret', 'IGNORED_SECRET\n')
+        self.write('.env', 'IGNORED_SECRET\n')
+        self.prepare()
+        folder = self.capture()
+        files = folder.files
+        self.assertIn('tracked.env', files)
+        self.assertNotIn('.env', files)
+        self.assertNotIn('build/secret', files)
+        self.assertNotIn('link', files)
+        self.assertFalse(any('.git' in p.split('/') for p in files))
+        self.write('build/new', 'ignored\n')
+        folder.assert_snapshot(folder.inventory['source_fingerprint'])
+        context = dict(branch='main', source_commit=self.repo.head(), repository=str(self.path))
+        pointer = dict(id='E1', source_id='source-001', path='.env', start_line=1, end_line=1)
+        with patch('src.analysis.evidence._read_confined', side_effect=AssertionError('Excluded read')):
+            evidence = resolve_evidence('study', [pointer], context,
+                {p: e['sha256'] for p, e in files.items()}, expected_metadata=folder.metadata)
+        self.assertEqual(evidence[0]['status'], 'NOT_FOUND')
 
-    def test_check_and_failures_leave_all_original_bytes_unchanged(self):
-        self.dirty()
-        # A user's stash is part of the preservation assertion.
-        stash = self.git('stash', 'create')
-        self.git('stash', 'store', '-m', 'user stash', stash)
+    def test_global_xdg_and_conditional_ignore_rules_remain_supported(self):
+        xdg = self.home / 'xdg'
+        (xdg / 'git').mkdir(parents=True)
+        (xdg / 'git/ignore').write_text('secret\n')
+        self.write('secret', 'ignored\n')
+        with patch.dict(os.environ, {'HOME': str(self.home), 'XDG_CONFIG_HOME': str(xdg)}):
+            self.prepare()
+            self.assertNotIn('secret', self.capture().files)
+        includes = self.home / 'included.config'
+        excludes = self.home / 'conditional.ignore'
+        excludes.write_text('secret\n')
+        includes.write_text('[core]\n excludesFile = ' + str(excludes) + '\n')
+        (self.home / '.gitconfig').write_text('[includeIf "gitdir:' + str(self.path / '.git') + '"]\n path = ' + str(includes) + '\n')
+        with patch.dict(os.environ, {'HOME': str(self.home)}):
+            repo = Repository(self.path)
+            self.addCleanup(repo.close)
+            repo.preflight(['main'])
+            excludes.write_text('other\n')
+            with self.assertRaises(UnsafeRepository): repo.assert_expected()
+
+    def test_check_does_not_switch_copy_inventory_or_invoke_model(self):
+        self.topic()
         before = self.state()
-        result, manifest, calls = self.run_cli('codex', check=True)
+        result, manifest, calls = self.run_cli('codex', ('main', 'topic'), check=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(before, self.state())
+        self.assertEqual(manifest['switch_journal'], [])
         self.assertFalse(any('context' in c for c in calls))
-        for backend in ('codex', 'opencode'):
-            for action in ('error', 'wait', 'interrupt'):
-                with self.subTest(backend=backend, action=action):
-                    result, manifest, calls = self.run_cli(backend, action=action)
-                    self.assertEqual(result.returncode, 130 if action == 'interrupt' else 1)
-                    self.assertEqual(before, self.state())
-                    self.assertTrue(manifest['temporary_sources_removed'])
-                    self.assertTrue(all(not Path(c['cwd']).exists() for c in calls if 'context' in c))
+        self.assertFalse(list(Path(manifest['repository']).glob('**/source.inventory.json')))
+        run = Path(manifest['final_report']).parent if manifest.get('final_report') else self.base / 'reports'
+        self.assertFalse(list(run.rglob('source.inventory.json')))
 
-    def test_additional_revision_does_not_replace_selected_comparison(self):
-        self.git('branch', 'second')
-        self.dirty()
-        result, manifest, _ = self.run_cli('codex', ('alias', 'second'))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(manifest['branches']), 3)
-        self.assertEqual(manifest['baseline_branch'], 'alias')
-        self.assertEqual(manifest['comparison']['compared_branches'], ['second'])
-        bundle = json.loads((Path(manifest['final_report']).parent / 'comparison/inputs.json').read_text())
-        self.assertEqual(bundle['requested_branches'], ['alias', 'second'])
-        self.assertEqual([b['branch'] for b in bundle['branches']], ['alias', 'second'])
+    def test_ignore_rule_changes_are_detected_and_block_restoration(self):
+        self.prepare()
+        self.repo.checkout(self.repo.head())
+        self.write('.git/info/exclude', 'app.py\n')
+        with self.assertRaises(UnsafeRepository):
+            self.repo.assert_expected()
+        result = self.repo.restore()
+        self.assertFalse(result['restored'])
+        self.assertIn('Ignore rules changed', result['nodes']['.']['error'])
+        self.assertEqual((self.path / '.git/info/exclude').read_text(), 'app.py\n')
 
-    def test_ignored_only_does_not_add_revision(self):
-        self.write('.git/info/exclude', 'only-ignored\n')
-        self.write('only-ignored', 'IGNORED_SECRET_SENTINEL\n')
-        result, manifest, _ = self.run_cli('codex', ('alias',))
+    def test_no_source_temporary_directory_or_blob_extraction(self):
+        self.run_cli('codex', check=True)
+        cfg = load_config(self.base / 'config.json')
+        runner = Runner(cfg, self.base / 'no-copies')
+        temporary = tempfile.TemporaryDirectory
+        def allocate(*args, **kwargs):
+            self.assertNotEqual(kwargs.get('prefix'), 'archaudit-sources-')
+            return temporary(*args, **kwargs)
+        git = Repository.git
+        def command(node, *args, **kwargs):
+            self.assertNotIn(args[0], ('reset', 'clean', 'stash', 'checkout', 'worktree', 'archive', 'fetch'))
+            self.assertFalse(args[:2] == ('cat-file', 'blob'))
+            return git(node, *args, **kwargs)
+        env = {'HOME': str(self.home), 'PATH': os.environ['PATH'],
+               'AUDIT_TEST_CALL_LOG': str(self.base / 'allocation-calls.jsonl')}
+        with patch.dict(os.environ, env, clear=True), patch('tempfile.TemporaryDirectory', side_effect=allocate), \
+                patch.object(Repository, 'git', command):
+            manifest, code = runner.run()
+        self.assertEqual(code, 0, manifest['errors'])
+        self.assertTrue(manifest['restoration']['restored'])
+
+    def test_detached_unselected_original_is_restored_without_extra_revision(self):
+        self.topic()
+        self.git('switch', '--detach', 'main')
+        original = self.git('rev-parse', 'HEAD')
+        result, manifest, _ = self.run_cli('codex', ('topic',))
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([b['branch'] for b in manifest['branches']], ['topic'])
+        self.assertEqual(self.git('rev-parse', 'HEAD'), original)
+        self.assertIsNone(self.repo.symbolic_ref())
+        self.assertTrue(manifest['restoration']['restored'])
+
+    def test_analysis_uses_pins_even_if_an_unchecked_branch_ref_moves(self):
+        self.topic()
+        pins = self.prepare(('main', 'topic'))
+        self.git('branch', '-f', 'topic', 'main')
+        try:
+            self.repo.checkout(pins['topic'])
+            self.assertEqual(self.repo.head(), pins['topic'])
+            self.assertEqual((self.path / 'app.py').read_text(), 'TOPIC_SENTINEL\n')
+        finally:
+            self.assertTrue(self.repo.restore()['restored'])
+
+    def test_index_and_original_ref_changes_are_not_accepted(self):
+        self.topic()
+        pins = self.prepare(('main', 'topic'))
+        self.repo.checkout(pins['topic'])
+        try:
+            self.git('update-index', '--assume-unchanged', 'app.py')
+            with self.assertRaises(UnsafeRepository): self.repo.assert_expected()
+            self.git('update-index', '--no-assume-unchanged', 'app.py')
+            self.git('update-ref', 'refs/heads/main', pins['topic'])
+            restoration = self.repo.restore()
+            self.assertFalse(restoration['restored'])
+            self.assertIn('Original branch moved', restoration['nodes']['.']['error'])
+            self.assertEqual(self.git('rev-parse', 'main'), pins['topic'])
+        finally:
+            self.git('update-ref', 'refs/heads/main', pins['main'])
+
+    def test_interrupt_during_restoration_is_reported(self):
+        pins = self.prepare(('alias',))
+        self.repo.checkout(pins['alias'])
+        with patch.object(self.repo, 'switch_node', side_effect=KeyboardInterrupt()):
+            restored = self.repo.restore()
+        self.assertFalse(restored['restored'])
+        self.assertTrue(restored['interrupted'])
+        self.assertTrue(self.repo.restore()['restored'])
+
+    def test_journal_write_failure_does_not_prevent_restoration(self):
+        self.topic()
+        pins = self.prepare(('topic',))
+        self.repo.checkout(pins['topic'])
+        def fail():
+            raise OSError('journal disk full')
+        restored = self.repo.restore(fail)
+        self.assertTrue(restored['restored'])
+        self.assertEqual(restored['journal_errors'], ['journal disk full'])
+        self.assertEqual(self.repo.symbolic(), 'main')
+
+    def test_failure_timeout_and_interrupt_restore_original(self):
+        self.topic()
+        for kind in ('error', 'wait', 'interrupt'):
+            with self.subTest(kind=kind):
+                result, manifest, _ = self.run_cli('codex', ('topic', 'main'), action=kind)
+                self.assertEqual(result.returncode, 130 if kind == 'interrupt' else 1, result.stderr)
+                self.assertTrue(manifest['restoration']['restored'])
+                self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
+                self.assertEqual((self.path / 'app.py').read_text(), 'HEAD_SENTINEL\n')
+
+    def test_ui_disconnect_before_restoration_still_restores_and_returns_130(self):
+        self.topic()
+        self.run_cli('codex', ('topic',), check=True)
+        def emit(event):
+            if event.event == 'restoration_started':
+                raise KeyboardInterrupt('UI disconnected')
+        reporter = Reporter(stdout=io.StringIO(), stderr=io.StringIO(), progress=False, event_sink=emit)
+        env = {'HOME': str(self.home), 'PATH': os.environ['PATH'],
+               'AUDIT_TEST_CALL_LOG': str(self.base / 'disconnect-calls.jsonl')}
+        args = SimpleNamespace(config=self.base / 'config.json', check=False, trust_repository=False)
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(run_audit(args, reporter), 130)
+        manifests = [json.loads(path.read_text()) for path in (self.base / 'reports').glob('*/manifest.json')]
+        manifest = next(m for m in manifests if m['status'] != 'PREFLIGHT_OK')
+        self.assertTrue(manifest['restoration']['restored'])
+        self.assertEqual(manifest['exit_code'], 130)
+        self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
+
+    def test_source_change_is_fatal_and_blocked_restoration_is_explicit(self):
+        self.topic()
+        result, manifest, _ = self.run_cli('codex', ('topic', 'main'), action='file')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertFalse(manifest['restoration']['restored'])
         self.assertEqual(len(manifest['branches']), 1)
+        self.assertIn('RESTORATION_FAILED', {d['code'] for d in manifest['diagnostics']})
+        self.assertEqual((self.path / 'app.py').read_text(), 'external modification\n')
+        self.assertIn('not fully restored', result.stderr)
 
-    def test_accepted_extra_revision_does_not_enable_unaccepted_selected_comparison(self):
-        self.git('branch', 'second')
-        self.dirty()
-        result, manifest, calls = self.run_cli('codex', ('alias', 'second'),
-                                             partial_branches=('alias', 'second'), policy='strict')
-        self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertEqual([b['accepted'] for b in manifest['branches']], [False, False, True])
-        self.assertEqual(manifest['comparison']['completion_status'], 'BLOCKED')
-        self.assertEqual(manifest['comparison']['unresolved_branches'], ['alias', 'second'])
-        self.assertFalse(any(c.get('stage') == 'compare' for c in calls))
+    def test_ignored_file_collision_does_not_overwrite_content(self):
+        self.git('switch', '-c', 'topic')
+        self.write('collision', 'tracked\n')
+        self.git('add', 'collision')
+        self.git('commit', '-m', 'collision')
+        self.git('switch', 'main')
+        self.write('.git/info/exclude', 'collision\n')
+        self.write('collision', 'ignored original\n')
+        result, manifest, _ = self.run_cli('codex', ('topic',))
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(manifest['restoration']['restored'])
+        self.assertEqual((self.path / 'collision').read_text(), 'ignored original\n')
+        self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
+
+    def test_timestamp_changes_are_detected_without_refreshing_hashes(self):
+        self.prepare()
+        folder = self.capture()
+        file = self.path / 'app.py'
+        st = file.stat()
+        os.utime(file, ns=(st.st_atime_ns, st.st_mtime_ns + 1000000))
+        with self.assertRaisesRegex(Exception, 'changed'):
+            folder.assert_snapshot(folder.inventory['source_fingerprint'])

@@ -2,7 +2,7 @@
 
 The supplied architecture_document is the subject of this review, not the source
 of truth. Independently inspect the source identified by the orchestration context.
-In git mode, use only the supplied prepared repository root and source_snapshot identity. In folder mode,
+In git mode, use the supplied repository root and pinned branch/commit identity. In folder mode,
 use source_directory and source_snapshot_id; inspect hidden files too, do not follow
 symbolic links, and do not use Git. The orchestrator checks source state at stage
 boundaries, not continuously. Missing Git history alone is not a documentation defect
@@ -15,7 +15,7 @@ architecture is false. Do not treat recovered metadata as verified facts.
 Use cited locations as starting points and actively search for counterexamples.
 This is a documentation audit, not a formal proof of software correctness.
 In git mode, the recursive submodules in the context are part of the source scope.
-Inspect their supplied snapshot bytes; never initialize, update, fetch or switch
+Inspect their pinned checkout bytes; never initialize, update, fetch or switch
 them. A working submodule may differ from its base/index gitlink. Cite relative
 file paths and the appropriate source ID when verifying evidence.
 Never reproduce credentials or secret parameters from repository/submodule URLs.
@@ -182,9 +182,8 @@ finding or creates an omission finding. Never silently drop a prior obligation.
 Unresolved, unchecked or missing prior findings and new HIGH/MEDIUM findings prevent
 acceptance. Perform the complete registry and omission review again, not only a diff.
 
-In Git mode, source_snapshot.source_type distinguishes working_tree from commit.
-Use only repository (the prepared copy), never source_snapshot.repository (origin
-metadata). Ignored untracked files and .git are absent; do not search the original
-checkout to recover them. Symbolic links are metadata only. Keep source links
-relative to the project. Describe working-tree provenance explicitly; never claim
-its base commit is the exact version of all inspected files.
+In Git mode, repository is the original checkout at source_commit for the requested
+branch. Inspect only tracked files in the allowed source inventory and listed
+recursive submodules. Do not inspect .git, ignored untracked files, or configured
+exclusions. Symlinks are metadata only. Keep source paths relative to the project.
+Never modify files or switch, initialize, update, or fetch Git checkouts.

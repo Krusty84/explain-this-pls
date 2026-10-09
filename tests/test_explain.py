@@ -153,23 +153,23 @@ class RepoFixture(unittest.TestCase):
         self.assertEqual(self.repo.symbolic(),'master')
         self.assertEqual(self.repo.head(),self.master)
         self.repo.clean()
-    def test_pins_prepare_sources_without_switching(self):
-        from explain import Folder
-        from src.analysis.git_sources import GitSources
+    def test_pins_then_detached_checkout_and_restore(self):
         before = (self.repo_path / '.git/HEAD').read_bytes()
         pins = self.repo.preflight(['master', 'test01'])
-        sources = GitSources(self.repo, Folder, UnsafeRepository, self.base)
-        self.addCleanup(sources.close)
-        snapshot = sources.commit('test01', pins['test01'])
-        self.assertIn('test01', (snapshot['path'] / 'app.py').read_text())
         self.assertEqual(before, (self.repo_path / '.git/HEAD').read_bytes())
+        try:
+            self.repo.checkout(pins['test01'])
+            self.assertIn('test01', (self.repo_path / 'app.py').read_text())
+            self.assertIsNone(self.repo.symbolic())
+        finally:
+            self.assertTrue(self.repo.restore()['restored'])
         self.assertEqual(self.repo.symbolic(), 'master')
-    def test_dirty_worktree_accepted(self):
+    def test_dirty_worktree_rejected(self):
         (self.repo_path/'app.py').write_text('changed')
-        self.repo.clean()
-    def test_untracked_accepted(self):
-        (self.repo_path/'old-report.md').write_text('must not affect next run')
-        self.repo.clean()
+        with self.assertRaises(UnsafeRepository):self.repo.clean()
+    def test_untracked_rejected(self):
+        (self.repo_path/'old-report.md').write_text('untracked')
+        with self.assertRaises(UnsafeRepository):self.repo.clean()
     def test_ignored_files_accepted(self):
         (self.repo_path/'.gitignore').write_text('cache.tmp\n')
         self.git('add','.gitignore');self.git('commit','-m','ignore')
@@ -206,7 +206,7 @@ class RepoFixture(unittest.TestCase):
         self.assertEqual(len(fake.calls),10)
         for stage,context in fake.calls:
             self.assertEqual(context['project_description'],config['project_description'],stage)
-        self.assertEqual(result['isolation'],'independent-source-copies; cli-native-permissions')
+        self.assertEqual(result['isolation'],'in-place-checkout; cli-native-permissions')
         self.assertNotIn('isolation_probe',result)
         self.assertEqual(self.repo.symbolic(),'master')
         self.assertEqual(self.repo.head(),self.master)
@@ -249,7 +249,7 @@ class RepoFixture(unittest.TestCase):
                 self.assertNotIn('comparison',result)
                 self.assertNotIn('comparison_invocation',result)
                 self.assertFalse((dest/'comparison').exists())
-                self.assertTrue(result['temporary_sources_removed'])
+                self.assertTrue(result['restoration']['restored'])
                 self.assertEqual(self.repo.symbolic(),'master')
                 self.assertEqual(self.repo.head(),self.master)
                 self.repo.clean()
@@ -286,9 +286,9 @@ class RepoFixture(unittest.TestCase):
             return result
         fake.invoke=modify_during_compare
         result,code=fake.run()
-        self.assertEqual(code,0)
-        self.assertEqual(result['status'],'COMPLETE')
-        self.assertTrue(result['temporary_sources_removed'])
+        self.assertEqual(code,1)
+        self.assertEqual(result['status'],'FAILED')
+        self.assertFalse(result['restoration']['restored'])
         self.assertEqual((self.repo_path/'app.py').read_text(),'external change\n')
 
 class FakeRunner(Runner):
@@ -302,7 +302,9 @@ class FakeRunner(Runner):
             data=response(dict(context, stage=stage))
         elif stage=='study':
             assert 'architecture_document' not in context and 'branches' not in context
-            assert not (self.source_path / '.git').exists()
+            assert (self.source_path / '.git').exists()
+            assert self.repo.head() == context['source_commit']
+            assert self.repo.symbolic_ref() is None
             assert context['branch'] in (self.source_path/'app.py').read_text()
             if context['branch']==self.fail_branch:raise AuditError('simulated CLI failure', code='CLI_FAILED', failure_layer='backend')
             data=response(dict(context, stage=stage))
@@ -571,7 +573,7 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                         self.assertEqual(call['home'],str(home))
                         self.assertEqual(call['context']['project_description'],cfg['project_description'])
                         compare='baseline_branch' in call['context']
-                        self.assertNotEqual(Path(call['cwd']),self.repo_path)
+                        self.assertEqual(Path(call['cwd']) == self.repo_path, not compare)
                         if not compare: self.assertEqual(call['cwd'], call['context']['repository'])
                         if backend=='opencode':
                             self.assertEqual(call['permissions']['*'],'deny')

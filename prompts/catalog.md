@@ -48,7 +48,7 @@ hidden or linked entries. Do not follow symbolic links. Unassigned entries remai
 visible as UNCLASSIFIED and receive study assignments; your COMPLETE is a work-completion assessment, not proof
 that this grouping fully describes the system.
 
-In Git mode inspect only the supplied prepared snapshot and listed recursive submodules. Never initialize, update, fetch or switch them. In folder
+In Git mode inspect only the supplied pinned checkout and listed recursive submodules. Never initialize, update, fetch or switch them. In folder
 mode inspect the supplied directory in place without Git. Use no external services,
 old reports, shared memories or unrelated directories. Do not execute project code,
 imports, scripts, builds, tests, installers or generators. Do not modify sources,
@@ -63,9 +63,8 @@ only the orchestrator's evidence checks; your CLI may not support those encoding
 No transcoded source copies are supplied. PARTIAL/BLOCKED require concrete limits.
 Use output_language for prose and preserve paths, IDs and enum values.
 
-In Git mode, source_snapshot.source_type distinguishes working_tree from commit.
-Use only repository (the prepared copy), never source_snapshot.repository (origin
-metadata). Ignored untracked files and .git are absent; do not search the original
-checkout to recover them. Symbolic links are metadata only. Keep source links
-relative to the project. Describe working-tree provenance explicitly; never claim
-its base commit is the exact version of all inspected files.
+In Git mode, repository is the original checkout at source_commit for the requested
+branch. Inspect only tracked files in the allowed source inventory and listed
+recursive submodules. Do not inspect .git, ignored untracked files, or configured
+exclusions. Symlinks are metadata only. Keep source paths relative to the project.
+Never modify files or switch, initialize, update, or fetch Git checkouts.

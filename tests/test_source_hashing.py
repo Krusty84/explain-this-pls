@@ -10,8 +10,9 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
-from explain import AuditError, Folder, Runner, UnsafeRepository, load_config
+from explain import AuditError, Folder, Runner, load_config
 from src.analysis.evidence import SourceChanged, resolve_evidence
+from src.analysis.git_sources import tracked_paths
 from src.contracts.contracts import validate_schema
 from src.contracts.saved_contracts import RESOLUTION
 from fixtures.cli_response import cli_result
@@ -172,62 +173,32 @@ class GitHashingTests(unittest.TestCase):
     setUp = git_fixtures.GitSourceTests.setUp
     git = git_fixtures.GitSourceTests.git
     write = git_fixtures.GitSourceTests.write
-    prepare = git_fixtures.GitSourceTests.prepare
-    dirty = git_fixtures.GitSourceTests.dirty
 
-    def test_preparation_and_guards_reuse_digests_including_ignore_rules(self):
-        self.dirty()
-        self.git('config', 'core.excludesFile', str(self.path / '.gitignore'))
-        sources, pins = self.prepare()
-        rules = (self.path / '.gitignore').read_bytes()
-        with hashed_payloads() as hashes:
-            working = sources.working('main')
-            committed = sources.commit('alias', pins['alias'])
-            for _ in range(3):
-                sources.assert_intact()
-        self.assertEqual(hashes[b'WORKING_SENTINEL\n'], 1)
-        self.assertEqual(hashes[b'HEAD_SENTINEL\n'], 1)
-        self.assertEqual(hashes[rules], 1)
-        self.assertFalse(any('_stamp' in e for e in working['inventory']['entries']))
-        self.assertEqual(working['entries']['app.py']['sha256'],
-                         next(e['sha256'] for e in working['inventory']['entries'] if e['path'] == 'app.py'))
-        (committed['path'] / 'app.py').write_bytes(b'corrupt\n')
-        with patch('hashlib.sha256', side_effect=AssertionError('Guard recalculated a digest')), \
-                self.assertRaises(UnsafeRepository):
-            sources.assert_intact()
+    def test_checkouts_and_guards_reuse_one_inventory_per_branch(self):
+        pins = self.repo.preflight(['main', 'alias'])
+        try:
+            with hashed_payloads() as hashes:
+                for branch in ('main', 'alias'):
+                    self.repo.checkout(pins[branch])
+                    folder = Folder(self.path, paths=tracked_paths(self.repo))
+                    inventory = folder.snapshot(exclude_git=True)
+                    for _ in range(3):
+                        self.repo.assert_expected()
+                        folder.assert_snapshot(inventory['source_fingerprint'])
+            self.assertEqual(hashes[b'HEAD_SENTINEL\n'], 2)
+            self.assertFalse(any('_stamp' in e for e in inventory['entries']))
+            self.write('app.py', 'corrupt\n')
+            with patch('hashlib.sha256', side_effect=AssertionError('Guard recalculated a digest')), \
+                    self.assertRaises(AuditError):
+                folder.assert_snapshot(inventory['source_fingerprint'])
+        finally:
+            self.write('app.py', 'HEAD_SENTINEL\n')
+            self.assertTrue(self.repo.restore()['restored'])
 
-    def test_copy_changes_fail_without_rehashing_original(self):
-        sources, _ = self.prepare()
-        scan = sources.working_scan
-
-        def change(destination=None):
-            result = scan(destination)
-            if destination is not None:
-                self.write('app.py', 'CHANGED_SENTINEL\n')
-            return result
-
-        with hashed_payloads() as hashes, patch.object(sources, 'working_scan', side_effect=change):
-            with self.assertRaises(UnsafeRepository):
-                sources.working('main')
-        self.assertEqual(hashes[b'HEAD_SENTINEL\n'], 1)
-        self.assertEqual(hashes[b'CHANGED_SENTINEL\n'], 0)
-
-    def test_prepared_copy_changes_cannot_receive_a_new_baseline(self):
-        sources, _ = self.prepare()
-        scan = sources.working_scan
-
-        def change(destination=None):
-            result = scan(destination)
-            if destination is not None:
-                (destination / 'app.py').write_bytes(b'COPY_SENTINEL\n')
-            return result
-
-        with hashed_payloads() as hashes, patch.object(sources, 'working_scan', side_effect=change):
-            with self.assertRaises(AuditError) as caught:
-                sources.working('main')
-        self.assertEqual(caught.exception.code, 'SOURCE_CHANGED')
-        self.assertEqual(hashes[b'HEAD_SENTINEL\n'], 1)
-        self.assertEqual(hashes[b'COPY_SENTINEL\n'], 0)
+    def test_preflight_does_not_hash_or_inventory_sources(self):
+        with hashed_payloads() as hashes, patch.object(Folder, 'snapshot', side_effect=AssertionError('Source inventory')):
+            self.repo.preflight(['main', 'alias'])
+        self.assertEqual(hashes[b'HEAD_SENTINEL\n'], 0)
 
 
 class RecursiveHashingTests(RecursiveFixture, unittest.TestCase):
@@ -253,11 +224,11 @@ class RecursiveHashingTests(RecursiveFixture, unittest.TestCase):
         self.assertEqual(code, 0, manifest['errors'])
         self.assertIn('compare', stages)
         self.assertEqual(stages.count('study'), 3)
-        self.assertEqual(hashes[b'original\n'], 3)  # One file in each working submodule/root.
+        self.assertEqual(hashes[b'original\n'], 3)  # One file in each checked-out submodule/root.
         for path in self.paths:
             self.assertEqual(hashes[f'topic: {path}\n'.encode()], 1)
         for path in (self.path, self.path / 'vendor/модуль with spaces'):
-            self.assertEqual(hashes[(path / '.gitmodules').read_bytes()], 2)  # Working and commit snapshots.
+            self.assertEqual(hashes[(path / '.gitmodules').read_bytes()], 2)  # One inventory per branch checkout.
 
 
 if __name__ == '__main__':

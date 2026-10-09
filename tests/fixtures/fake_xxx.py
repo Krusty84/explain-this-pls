@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import subprocess
 import sys
 import time
 import uuid
@@ -58,8 +59,26 @@ else:
     call.update(context=context, prompt=prompt, agent=agent, model=model, session_id=session,
                 permissions=config['agent'][agent]['permission'], config=config)
     if os.environ.get('AUDIT_FAKE_CAPTURE_SOURCES') and stage != 'compare':
-        call['source_files'] = {str(p.relative_to(Path.cwd())): p.read_text(errors='replace')
-                               for p in Path.cwd().rglob('*') if p.is_file() and not p.is_symlink()}
+        expected_file = os.environ.get('AUDIT_TEST_EXPECTED')
+        expected = (json.loads(Path(expected_file).read_text())[context['branch']] if expected_file else
+                    {'.': {'commit': context['source_commit']}})
+        call['source_files'], call['observed'] = {}, {}
+        assert Path(context['repository']) == Path.cwd()
+        for relative, required in expected.items():
+            source = Path.cwd() / relative
+            commit = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD']).decode().strip()
+            assert commit == required['commit']
+            assert subprocess.run(['git', '-C', str(source), 'symbolic-ref', '-q', 'HEAD'],
+                                  capture_output=True).returncode == 1
+            content = (source / 'app.py').read_text()
+            if 'content' in required: assert content == required['content']
+            call['observed'][relative] = {'commit': commit, 'content': content}
+            names = subprocess.check_output(['git', '-C', str(source), 'ls-files', '-z']).split(b'\0')
+            for name in names:
+                if name:
+                    file = source / os.fsdecode(name)
+                    if not file.is_symlink() and file.is_file():
+                        call['source_files'][str(file.relative_to(Path.cwd()))] = file.read_text(errors='replace')
     record()
     data = response(context)
     if stage == 'catalog' and scenario in ('catalog-mixed', 'catalog-unknown'):

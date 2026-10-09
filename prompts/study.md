@@ -7,11 +7,9 @@ design, a refactoring proposal, a directory listing, or an API reference.
 ## Scope, independence, and operations
 
 The orchestration context supplies source_mode, output language, and priority scenarios.
-In git mode, repository is the prepared snapshot root. source_snapshot identifies
-its origin and source_type. For working_tree, source_commit is only the base commit;
-read the supplied disk bytes, including partial staging and non-ignored untracked
-files. For commit snapshots, read the supplied pinned blob bytes. Listed submodules
-are included in this same copy. Cite relative project paths and the source's own ID.
+In git mode, repository is the original checkout at the pinned source_commit for
+branch. Read its allowed tracked source files and listed recursive submodules.
+Cite relative project paths and the source's own ID.
 Never initialize, update, fetch or switch a repository or submodule.
 Never reproduce credentials or secret parameters from repository/submodule URLs.
 In folder mode, it supplies source_directory and source_snapshot_id. Inspect that
@@ -239,9 +237,8 @@ including submodules. They apply only to program evidence verification. Whether
 you can read such files depends on this CLI; no UTF-8 copies are created. Disclose
 decoding gaps and never assume replacement characters are original source text.
 
-In Git mode, source_snapshot.source_type distinguishes working_tree from commit.
-Use only repository (the prepared copy), never source_snapshot.repository (origin
-metadata). Ignored untracked files and .git are absent; do not search the original
-checkout to recover them. Symbolic links are metadata only. Keep source links
-relative to the project. Describe working-tree provenance explicitly; never claim
-its base commit is the exact version of all inspected files.
+In Git mode, repository is the original checkout at source_commit for the requested
+branch. Inspect only tracked files in the allowed source inventory and listed
+recursive submodules. Do not inspect .git, ignored untracked files, or configured
+exclusions. Symlinks are metadata only. Keep source paths relative to the project.
+Never modify files or switch, initialize, update, or fetch Git checkouts.

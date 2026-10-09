@@ -203,7 +203,7 @@ class ReporterTests(unittest.TestCase):
             ('snapshot_started', {'snapshot': 'original'}),
             ('snapshot_completed', {'snapshot': 'original'}),
             ('branch_started', {'branch': 'main', 'commit': 'a' * 40}),
-            ('process_stopping', {}), ('restoration_started', {}), ('restoration_completed', {}),
+            ('process_stopping', {}),
         ]
         for verbose in (False, True):
             with self.subTest(verbose=verbose):
@@ -225,6 +225,14 @@ class ReporterTests(unittest.TestCase):
                 self.assertEqual([record['event'] for record in records], [event for event, _ in events])
                 self.assertEqual(records[0]['replacement_count'], 142)
                 self.assertEqual(records[7]['commit'], 'a' * 40)
+
+    def test_restoration_success_and_failure_are_visible(self):
+        self.reporter.emit('restoration_started')
+        self.reporter.emit('restoration_completed', restored=True)
+        self.reporter.emit('restoration_completed', restored=False)
+        self.assertIn('Restoring the original checkout hierarchy.', self.err.getvalue())
+        self.assertIn('Original checkout hierarchy restored.', self.err.getvalue())
+        self.assertIn('Original checkout hierarchy was not fully restored.', self.err.getvalue())
 
     def test_stage_outcomes_are_specific_and_recovered_text_is_not_success(self):
         r = self.reporter
@@ -649,7 +657,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                             self.assertTrue((branch_dir / report).is_file())
                         for call in invocations:
                             self.assertEqual(call['context']['source_mode'], 'git')
-                            self.assertNotEqual(Path(call['cwd']), self.repo_path)
+                            self.assertEqual(Path(call['cwd']), self.repo_path)
                             self.assertEqual(call['cwd'], call['context']['repository'])
                     self.assertEqual(self.repo.symbolic(), 'master')
                     self.assertEqual(self.repo.head(), self.master)
@@ -871,7 +879,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.assertEqual(self.repo.symbolic(), 'master')
         manifests = list(self.reports.glob('*/manifest.json'))
         self.assertEqual(len(manifests), 1)
-        self.assertTrue(json.loads(manifests[0].read_text())['temporary_sources_removed'])
+        self.assertTrue(json.loads(manifests[0].read_text())['restoration']['restored'])
 
     def test_broken_stderr_preserves_success_and_early_failure_exit_codes(self):
         success = self.prepare('git')
@@ -996,17 +1004,17 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         data = json.loads(result.stdout)
         self.assertEqual(result.returncode, 130, result.stderr)
         manifest = json.loads(Path(data['manifest']).read_text())
-        self.assertTrue(manifest['temporary_sources_removed'])
+        self.assertTrue(manifest['restoration']['restored'])
         self.assertEqual(data['metrics'], manifest['metrics'])
         self.assertEqual(data['metrics']['usage']['total_tokens'], 120)
         self.assertEqual(data['metrics']['usage']['coverage']['total_tokens'], 'partial')
         self.assertEqual(result.stderr.count('[WARN] Stopping analysis…'), 1)
-        for message in ('Stopping the active CLI process', 'Restoring the original checkout hierarchy',
+        for message in ('Restoring the original checkout hierarchy',
                         'Original checkout hierarchy restored'):
-            self.assertNotIn(message, result.stderr)
+            self.assertIn(message, result.stderr)
         records = [json.loads(line) for line in (Path(data['manifest']).parent / 'run.log').read_text().splitlines()]
         events = [record['event'] for record in records]
-        expected = ['stop_requested', 'process_stopping']
+        expected = ['stop_requested', 'process_stopping', 'restoration_started', 'restoration_completed']
         positions = [events.index(event) for event in expected]
         self.assertEqual(positions, sorted(positions))
         self.assertEqual(self.repo.symbolic(), 'master')
@@ -1039,7 +1047,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                 patch('src.runtime.reporting.RunLogHandler.emit', side_effect=OSError('disk full')):
             self.assertEqual(main(), 0)
         manifest = json.loads(Path(json.loads(out.getvalue())['manifest']).read_text())
-        self.assertTrue(manifest['temporary_sources_removed'])
+        self.assertTrue(manifest['restoration']['restored'])
         self.assertEqual(broken.write.call_count, 1)
 
 
@@ -1072,9 +1080,10 @@ class RecursiveDiagnosticTests(recursive.RecursiveFixture, unittest.TestCase):
             manifest, code = runner.run()
         self.assertEqual(code, 1)
         self.assertIn('PRIMARY agent failure', err.getvalue())
-        self.assertTrue(manifest['temporary_sources_removed'])
+        self.assertFalse(manifest['restoration']['restored'])
         self.assertEqual((self.paths[recursive.LEAF] / 'app.py').read_text(), 'external change')
-        self.assertGreaterEqual(len(manifest['diagnostics']), 1)
+        self.assertGreaterEqual(len(manifest['diagnostics']), 2)
+        self.assertIn('RESTORATION_FAILED', {d['code'] for d in manifest['diagnostics']})
 
 
 if __name__ == '__main__':

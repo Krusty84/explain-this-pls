@@ -157,7 +157,7 @@ Do not sum that older field across attempts.
 The run manifest and final stdout JSON contain the same `metrics` snapshot:
 
 - `duration_seconds`: monotonic wall time of this run, including local preparation,
-  processing, temporary-source cleanup and report publication up to final metrics capture.
+  processing, checkout restoration and report publication up to final metrics capture.
 - `attempts`: orchestrator attempts, including failed attempts;
   it is not a count of the backend's internal model requests or tool calls.
 - `usage`: aggregate counters and their availability, described below.
@@ -222,7 +222,7 @@ An explicit model adds --model provider/model; otherwise the configured default
 is preserved. The prompt and schema arrive through stdin. No standalone, attach,
 continue or session option is sent. The transient V1 config uses agent/permission,
 allows read/glob/grep/list for source stages, and denies tools for compare.
-Git snapshots retain external_directory denial. User authentication, configuration,
+Source stages retain external_directory denial. User authentication, configuration,
 compaction and hooks stay intact; automatic sharing is disabled for this child.
 No installed binary, global configuration or other backend adapter is modified.
 
@@ -313,51 +313,58 @@ Incomplete/error streams retain partial counters. The CLI does not report the
 actual model in these events, so that field remains unknown. Counters describe
 reported steps; internal title generation or other unreported activity may be absent.
 
-## Git source preparation
+## Git source access and lifecycle
 
-Existing `mode: "git"` configurations use internal source snapshots by default;
-there are no dirty/untracked/snapshot options. The original repository is read-only
-throughout preparation and analysis. No stash, reset, clean, checkout, switch,
-index update or restoration is performed by the analyzer. Only owned temporary
-sources and invocation data are removed. Folder mode retains its original behavior.
+`mode: "git"` analyzes requested branches sequentially in the original repository.
+There is no copy-based mode or source strategy setting. Folder mode is unchanged.
+The root and every recursive submodule must start clean, with each submodule HEAD
+matching its parent's gitlink. Ignored untracked files are permitted; other
+untracked files and staged or tracked modifications are rejected.
 
-The current branch is matched by its immediate symbolic HEAD identity, never by
-SHA alone. When selected, it uses working bytes. Other selected branches use pinned
-commits. An unselected current branch or detached HEAD with analyzable local changes
-adds a labeled working-tree revision. Ignored-only changes add none. Baseline and
-requested branch comparisons remain unchanged. Deltas compare snapshot contents
-recursively, including additions, removals, modes and submodules; renames appear as
-deletion plus addition. A base SHA is provenance, not a working snapshot identity.
+Preflight records original refs and SHAs, resolves all requested branch SHAs and
+recursive gitlinks, and checks required commit/tree/blob objects locally. Submodule
+paths and logical names must match the original hierarchy. Uninitialized nodes,
+conflicts, unfinished operations, sparse checkout, unsafe metadata, and configured
+filters remain rejected. No fetch, initialization, or custom submodule update runs.
+`--check` performs these checks and CLI capability checks without source inventories,
+checkout switches, source copies, or model calls.
 
-Git selects cached and non-ignored untracked paths with NUL-delimited output and
-`--exclude-standard`. Standard root/nested rules, negation, info/exclude and global
-excludes apply. A read-only Git config query imports only the effective
-`core.excludesFile`; normal Git commands retain the hardened runtime config.
-Tracked files matching an ignore pattern stay in scope. Missing files are recorded
-as deletions. Partial staging never substitutes index bytes for disk bytes. Index
-mode/object IDs and status are preserved separately. No hard links are used.
-Symlinks are metadata only, excluded from readable files and source coverage.
+For each branch, the orchestrator switches the root and then its submodules using
+`git switch --detach <pinned-sha>`, with hooks and recursion disabled, network
+transports denied, and ignored-file overwrite protection. Only a verified switch
+updates expected HEAD/index metadata. Each source stage runs in the original root.
+Catalog, file assignment, Study, revisions, Review, and evidence validation complete
+before the next branch. Source and Git guards remain active at stage boundaries.
 
-Recursive submodules use their actual checkout for working snapshots, including
-local modifications and untracked files. Metadata distinguishes the parent's base
-gitlink, staged gitlink and actual child HEAD. Commit snapshots use the gitlinks of
-each pinned commit. Required objects must exist locally. Changed submodule paths
-or logical names, uninitialized nodes, conflicts, unfinished operations, sparse
-checkout, unsafe metadata and configured filters remain rejected.
+Git selects tracked paths with NUL-delimited output. Recursive submodule paths use
+the common root. Configured exclusions apply before content hashing. Tracked files
+matching ignore patterns stay in scope; `.git` and untracked files are excluded.
+Root/nested Git ignore rules, info/exclude, and effective global core.excludesFile
+still determine whether untracked files make a checkout dirty. The hardened Git
+runtime imports only the global ignore setting. Symlinks remain metadata only.
 
-Preparation hashes each source file once per snapshot. Later preparation scans,
-copying and destination inventories reuse those hashes, including files also read
-as ignore rules or `.gitmodules`. Descriptor-relative no-follow reads, pinned path
-metadata, ignore-rule metadata and index/HEAD guards detect preparation changes.
-A mismatch fails with SOURCE_CHANGED rather than publishing mixed states. Ignored
-contents are never fingerprinted. Every later stage—including substantive revisions,
-review and evidence checks—reads the same independent copy. Its initial inventory
-is reused and its filesystem metadata is checked at stage boundaries. These checks
-do not guarantee continuous OS-level immutability or sandbox arbitrary native CLI
-code. Claude denies reads of the
-original checkout through its native Read rules; OpenCode/XXX deny external
-directory access; Codex retains its native read-only sandbox. Git environment
-variables that redirect repository paths are removed from source invocations. `--check` prepares and discards the same sources, with no model calls.
+One inventory hashes the checked-out bytes per branch, including normal Git
+checkout transformations such as line endings. Descriptor-relative no-follow reads,
+pinned filesystem metadata, and Git HEAD/index/config/ref/ignore-rule checks detect
+unexpected changes. Later stage guards reuse the inventory hashes. Source access
+is read-only under each CLI's native permissions; it is not full filesystem isolation.
+Repository-redirecting Git environment variables are removed from source invocations.
+
+Branch inventories and validated artifacts are saved outside the repository before
+switching. Comparison uses those artifacts and deltas from saved filtered inventories
+and pinned submodule commits. Deltas include nested additions, removals, content,
+symlink targets, and modes; renames appear as deletion plus addition. Earlier
+inventories are never checked against a later checkout's files.
+
+The manifest records `pins`, `checkout_plans`, `original_checkout`,
+`original_hierarchy`, `switch_journal`, and `restoration`. It has no copy provenance,
+working-tree revision, or temporary-source cleanup fields. Each attempted switch is
+journaled before execution. `finally` restores children before parents, using the
+original branch names or detached SHAs. Every safe node is attempted independently,
+and original refs, commits, and cleanliness are verified. A restoration failure
+makes the run fail and retains both primary and restoration diagnostics. An
+interrupted run retains exit code 130. Restoration never forces checkout or uses
+stash, reset, or clean; unexpected edits can prevent restoration.
 
 ## Evidence locators
 
@@ -368,11 +375,9 @@ bare references only when their definitions identify one namespace. Review
 requires explicit namespaces when its own evidence and study evidence share an ID.
 The orchestrator assigns `source-001` to the main source and subsequent IDs to
 submodules sorted by root-relative path. Each nested source must be cited through
-its own source ID. Git snapshot identity contains source_type (`commit` or
-`working_tree`), original repository, branch (null for detached HEAD), base_commit,
-snapshot_id and fingerprint. Submodule identities share the snapshot identity and
-add their root path and pinned/actual HEAD. A working snapshot is not identified
-by its base commit alone.
+its own source ID. Git source identity contains `mode`, the requested `branch`,
+and its pinned `commit`. Submodule identities contain their pinned `commit`,
+`parent_commit`, and root-relative `submodule_path`.
 The internal folder identity is its fingerprint and canonical directory; the model
 receives `source_directory` and `source_snapshot_id` instead. Folder mode does not
 call Git. The resolver uses no network.
@@ -384,9 +389,9 @@ opened directory descriptor with `O_NOFOLLOW`; directory/file identities are
 checked before/after access. No symlink target or special file is read, including
 during component replacement races. Detected source changes are fatal integrity
 failures, not recoverable model format failures.
-The runner pins one inventory per source snapshot for the entire run, including
-preflight-only runs. Folder mode hashes the initial tree; Git mode reuses hashes
-from source preparation. Later guards check path membership, device/inode, type,
+The runner pins one inventory per analyzed branch or Folder source. Folder mode
+also creates its inventory in preflight-only runs; Git preflight does not.
+Each inventory hashes source bytes once. Later guards check path membership, device/inode, type,
 permissions, size, modification/change timestamps and symlink targets without
 reading or hashing file contents. Access times are excluded. Metadata-only changes,
 including timestamp touches, invalidate the snapshot; guards never refresh the
@@ -396,8 +401,8 @@ fingerprints or model prompts.
 Evidence paths must belong to the allowed inventory before any content read.
 Confined reads check the pinned file and directory metadata before and after
 access, including nested sources, then reuse the initial file hash. In Git mode
-these checks cover the independent copy. Working copies preserve the
-actual disk bytes; commit copies use raw Git blobs without checkout transforms.
+these checks cover the active checkout. Hashes describe actual checked-out bytes,
+including Git checkout transformations.
 Inventories do not enter prompts and do not count as agent source inspection.
 
 Lines are positive integers (booleans are not integers), inclusive and ordered.

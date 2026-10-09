@@ -14,8 +14,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from explain import AuditError, Repository, Runner, UnsafeRepository, load_config, Folder
-from src.analysis.git_sources import GitSources
+from explain import AuditError, Repository, Runner, UnsafeRepository, load_config
 
 ROOT = Path(__file__).resolve().parents[1]
 CHILD = 'vendor/модуль with spaces'
@@ -135,24 +134,31 @@ class RecursiveFixture:
 
 
 class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
-    def test_full_cli_reads_each_snapshot_for_every_backend_and_restores(self):
+    def test_full_cli_reads_each_checkout_for_every_backend_and_restores(self):
         before = self.state()
-        for backend in ('codex', 'claude-code', 'opencode'):
+        for backend in ('codex', 'claude-code', 'opencode', 'xxx'):
             with self.subTest(backend=backend):
+                if backend == 'xxx':
+                    self.cli.write_text('#!' + sys.executable + '\nimport runpy\nrunpy.run_path(' +
+                        repr(str(ROOT / 'tests/fixtures/fake_xxx.py')) + ', run_name="__main__")\n')
+                    self.env.update(AUDIT_FAKE_CALLS=str(self.calls), AUDIT_FAKE_CAPTURE_SOURCES='1')
                 self.config['agent']['backend'] = backend
                 self.env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
                 self.env['OPENCODE_CONFIG_CONTENT'] = '{"provider":{"custom":{"options":{"baseURL":"https://example.invalid"}}}}'
                 result, manifest = self.execute()
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(manifest['status'], 'COMPLETE')
-                self.assertTrue(manifest['temporary_sources_removed'])
+                self.assertTrue(manifest['restoration']['restored'])
                 self.assert_original(before)
                 calls = [json.loads(s) for s in self.calls.read_text().splitlines()]
                 stages = [c for c in calls if 'context' in c]
                 self.assertEqual(len(stages), 7)
                 for call in stages[:-1]:
                     self.assertEqual(call['observed'], self.expected[call['context']['branch']])
-                delta = stages[-1]['context']['git_deltas']['topic']['submodule_changes']
+                changes = stages[-1]['context']['git_deltas']['topic']
+                self.assertEqual({d['path'] for d in changes['changes']},
+                                 {'app.py', CHILD + '/app.py', LEAF + '/app.py'})
+                delta = changes['submodule_changes']
                 self.assertEqual({d['path'] for d in delta}, {CHILD, LEAF})
                 for item in delta:
                     self.assertEqual(item['baseline_commit'], self.expected['master'][item['path']]['commit'])
@@ -164,7 +170,7 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(manifest['status'], 'PREFLIGHT_OK')
         self.assertEqual(before, self.state())
-        self.assertEqual(len(manifest['snapshot_plans']['topic']['submodules']), 2)
+        self.assertEqual(len(manifest['checkout_plans']['topic']), 3)
         self.assertEqual(manifest['switch_journal'], [])
         self.assertTrue(all('context' not in json.loads(s) for s in self.calls.read_text().splitlines()))
 
@@ -183,40 +189,62 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
                 summary = json.loads(result.stdout)
                 self.assertEqual(summary['final_report'], manifest['final_report'])
                 self.assertTrue(summary['has_usable_material'])
-                self.assertTrue(manifest['temporary_sources_removed'])
+                self.assertTrue(manifest['restoration']['restored'])
                 self.assert_original(before)
 
     def test_integrity_failure_is_fatal_even_with_continue_on_error(self):
-        before = self.state()
         self.config['continue_on_error'] = True
         self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': 'file', 'path': LEAF})
         result, manifest = self.execute()
         self.assertEqual(result.returncode, 1)
         self.assertEqual(manifest['status'], 'FAILED')
-        self.assertTrue(manifest['temporary_sources_removed'])
+        self.assertFalse(manifest['restoration']['restored'])
         self.assertEqual(len(manifest['branches']), 1)
-        self.assertEqual(before, self.state())
+        self.assertEqual((self.paths[LEAF] / 'app.py').read_text(), 'external modification\n')
 
-    def test_same_sha_attached_head_is_detected(self):
+    def test_same_sha_attached_head_is_detected_and_restored(self):
+        before = self.state()
         self.config['git_mode']['branches'] = ['master']
         self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'review', 'kind': 'attach', 'path': str(self.paths[CHILD])})
         result, manifest = self.execute()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(git(self.paths[CHILD], 'symbolic-ref', 'HEAD'), 'refs/heads/external-branch')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertTrue(manifest['restoration']['restored'])
+        self.assert_original(before)
 
-    def test_compare_modification_of_nested_metadata_is_preserved(self):
+    def test_compare_modification_of_nested_metadata_fails_restoration(self):
         self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'compare', 'kind': 'metadata', 'path': str(self.paths[LEAF])})
         result, manifest = self.execute()
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertFalse(manifest['restoration']['restored'])
+        self.assertFalse(manifest['restoration']['nodes'][LEAF]['restored'])
+        self.assertIn('RESTORATION_FAILED', {d['code'] for d in manifest['diagnostics']})
         self.assertEqual(git(self.paths[LEAF], 'config', '--get', 'external.changed'), 'true')
 
-    def test_live_source_change_after_fixation_does_not_change_snapshot(self):
+    def test_preflight_detects_changes_during_cli_checks(self):
         self.env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'check', 'kind': 'file', 'path': str(self.paths[LEAF])})
         result, manifest = self.execute(check=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(manifest['status'], 'PREFLIGHT_OK')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(manifest['status'], 'FAILED')
         self.assertEqual(manifest['switch_journal'], [])
         self.assertEqual((self.paths[LEAF] / 'app.py').read_text(), 'external modification\n')
+
+    def test_partial_checkout_failure_restores_every_node(self):
+        before = self.state()
+        self.config['git_mode']['branches'] = ['topic']
+        self.config['git_mode']['baseline_branch'] = 'topic'
+        self.write_config()
+        runner = Runner(load_config(self.config_path), self.base / 'partial-switch')
+        original = runner.repo.switch_node
+        def switch(path, commit, ref=None, **kwargs):
+            original(path, commit, ref, **kwargs)
+            if path == CHILD and not kwargs.get('restoring'):
+                raise OSError('Interrupted after child checkout')
+        with patch.object(runner, 'check_cli', return_value={}), patch.object(runner.repo, 'switch_node', side_effect=switch):
+            manifest, code = runner.run()
+        self.assertEqual(code, 1)
+        self.assertEqual(manifest['branches'], [])
+        self.assertTrue(manifest['restoration']['restored'])
+        self.assert_original(before)
 
     def test_hooks_and_custom_update_are_never_executed(self):
         sentinel = self.base / 'hook-ran'
@@ -254,7 +282,7 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(manifest['original_hierarchy'][LEAF]['git_dir'], str(leaf_gd))
 
-    def test_cli_never_runs_mutating_git_commands(self):
+    def test_cli_only_switches_and_never_uses_destructive_or_network_commands(self):
         before = self.state()
         shim_dir = self.base / 'git-shim'
         shim_dir.mkdir()
@@ -262,13 +290,13 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
         self.env['PATH'] = str(shim_dir) + os.pathsep + self.env['PATH']
         shim = shim_dir / 'git'
         shim.write_text('#!' + sys.executable + '\nimport os, sys\n' +
-            "assert not set(sys.argv[1:]) & {'switch', 'checkout', 'reset', 'clean', 'stash', 'add', 'commit'}\n" +
+            "assert not set(sys.argv[1:]) & {'checkout', 'reset', 'clean', 'stash', 'add', 'commit', 'fetch', 'worktree', 'archive'}\n" +
             'os.execv(' + repr(real_git) + ', [' + repr(real_git) + ', *sys.argv[1:]])\n')
         shim.chmod(0o700)
         result, manifest = self.execute()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(manifest['switch_journal'], [])
-        self.assertEqual(before, self.state())
+        self.assertTrue(manifest['switch_journal'])
+        self.assert_original(before)
 
 
 class RecursivePreflightTests(RecursiveFixture, unittest.TestCase):
@@ -302,13 +330,11 @@ class RecursivePreflightTests(RecursiveFixture, unittest.TestCase):
                     if kind == 'staged':
                         git(path, 'add', filename)
                     before = self.state()
-                    self.repo.preflight(['master', 'topic'])
-                    sources = GitSources(self.repo, Folder, UnsafeRepository, self.base)
-                    self.addCleanup(sources.close)
-                    item = sources.working('master')
-                    copied = item['path'] / (filename if relative == '.' else relative + '/' + filename)
-                    self.assertEqual(copied.exists(), kind != 'ignored')
-                    if kind != 'ignored': self.assertEqual(copied.read_text(), 'dirty\n')
+                    if kind == 'ignored':
+                        self.repo.preflight(['master', 'topic'])
+                    else:
+                        with self.assertRaises(UnsafeRepository):
+                            self.repo.preflight(['master', 'topic'])
                     self.assertEqual(before, self.state())
                     if old is None:
                         file.unlink()
@@ -331,16 +357,10 @@ class RecursivePreflightTests(RecursiveFixture, unittest.TestCase):
         parent, leaf = self.paths[CHILD], self.paths[LEAF]
         git(parent, 'config', 'submodule.nested logical name.ignore', 'all')
         git(parent, 'update-index', '--cacheinfo', '160000', self.expected['topic'][LEAF]['commit'], 'nested/深い child')
-        self.repo.preflight(['master', 'topic'])
+        self.reject_unchanged('clean checkout')
         git(parent, 'update-index', '--cacheinfo', '160000', self.expected['master'][LEAF]['commit'], 'nested/深い child')
         git(leaf, 'switch', 'topic')
-        self.repo.preflight(['master', 'topic'])
-        sources = GitSources(self.repo, Folder, UnsafeRepository, self.base)
-        self.addCleanup(sources.close)
-        item = sources.working('master')
-        leaf_meta = next(s for s in item['submodules'] if s['path'] == LEAF)
-        self.assertNotEqual(leaf_meta['actual_head'], leaf_meta['base_gitlink'])
-        self.assertEqual((item['path'] / LEAF / 'app.py').read_text(), 'topic: ' + LEAF + '\n')
+        self.reject_unchanged('clean checkout|parent gitlink')
 
     def test_unsafe_committed_paths_and_reused_gitfile_are_rejected(self):
         parent = self.paths[CHILD]
@@ -437,30 +457,19 @@ class RecursivePreflightTests(RecursiveFixture, unittest.TestCase):
             self.repo.preflight(['master', 'topic'])
 
 
-class RecursiveSnapshotTests(RecursiveFixture, unittest.TestCase):
-    def test_packed_refs_and_nested_working_gitlinks_are_preserved(self):
+class RecursiveCheckoutTests(RecursiveFixture, unittest.TestCase):
+    def test_packed_refs_and_recursive_checkouts_are_restored(self):
         for path in self.paths.values(): git(path, 'pack-refs', '--all')
-        # Each of base gitlink, index gitlink, actual child HEAD and file bytes
-        # is independently represented.
-        git(self.paths[LEAF], 'switch', 'topic')
-        git(self.paths[CHILD], 'add', 'nested/深い child')
-        (self.paths[LEAF] / 'app.py').write_text('nested working bytes\n')
-        (self.paths[LEAF] / 'untracked.txt').write_text('nested untracked bytes\n')
-        (self.paths[LEAF] / 'ignored.txt').write_text('nested excluded secret\n')
         before = self.state()
         pins = self.repo.preflight(['master', 'topic'])
-        sources = GitSources(self.repo, Folder, UnsafeRepository, self.base)
-        self.addCleanup(sources.close)
-        working = sources.working('master')
-        committed = sources.commit('topic', pins['topic'])
-        self.assertEqual((working['path'] / LEAF / 'app.py').read_text(), 'nested working bytes\n')
-        self.assertTrue((working['path'] / LEAF / 'untracked.txt').exists())
-        self.assertFalse((working['path'] / LEAF / 'ignored.txt').exists())
-        self.assertEqual((committed['path'] / LEAF / 'app.py').read_text(), 'topic: ' + LEAF + '\n')
-        leaf = next(s for s in working['submodules'] if s['path'] == LEAF)
-        self.assertNotEqual(leaf['base_gitlink'], leaf['index_gitlink'])
-        self.assertEqual(leaf['index_gitlink'], leaf['actual_head'])
-        self.assertEqual(before, self.state())
+        try:
+            for branch in ('topic', 'master'):
+                self.repo.checkout(pins[branch])
+                self.assertEqual(self.contents(), self.expected[branch])
+                self.assertTrue(all(node.symbolic_ref() is None for node in self.repo.nodes.values()))
+        finally:
+            self.assertTrue(self.repo.restore()['restored'])
+        self.assert_original(before)
 
     def test_metadata_changes_during_preparation_are_rejected(self):
         self.repo.preflight(['master', 'topic'])
@@ -474,7 +483,7 @@ class RecursiveSnapshotTests(RecursiveFixture, unittest.TestCase):
         shutil.copytree(moved, gd)
         with self.assertRaisesRegex(UnsafeRepository, 'metadata changed'): self.repo.assert_expected()
 
-    def test_primary_agent_failure_is_preserved_and_only_copies_are_removed(self):
+    def test_primary_agent_failure_is_preserved_and_checkouts_are_restored(self):
         before = self.state()
         self.write_config()
         runner = Runner(load_config(self.config_path), self.base / 'run')
@@ -483,8 +492,8 @@ class RecursiveSnapshotTests(RecursiveFixture, unittest.TestCase):
             manifest, code = runner.run()
         self.assertEqual(code, 1)
         self.assertIn('PRIMARY agent failure', str(manifest['branches']))
-        self.assertTrue(manifest['temporary_sources_removed'])
-        self.assertEqual(before, self.state())
+        self.assertTrue(manifest['restoration']['restored'])
+        self.assert_original(before)
 
 
 @unittest.skipUnless(os.geteuid() == 0, 'Actual UID 0 required; run in the isolated CI container. No mocked ownership.')

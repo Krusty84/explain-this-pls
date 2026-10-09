@@ -67,12 +67,20 @@ class RepositoryTrustTests(unittest.TestCase):
                         self.assertFalse(call.kwargs.get('shell', False))
                         self.assertEqual(command[command.index('-C') + 1], str(path))
                         settings = [command[i + 1] for i, arg in enumerate(command) if arg == '-c']
-                        self.assertEqual(settings, protected)
-                        self.assertEqual(call.kwargs['env'], {'PATH': inherited['PATH'],
+                        self.assertEqual(settings[:len(protected)], protected)
+                        self.assertIn(settings[len(protected):], ([], ['core.excludesFile=' + str(repo.excludes_file)]))
+                        expected_env = {'PATH': inherited['PATH'],
                             'LANG': 'C', 'LC_ALL': 'C', 'GIT_CONFIG_NOSYSTEM': '1',
                             'GIT_CONFIG_GLOBAL': repo.env['GIT_CONFIG_GLOBAL'], 'GIT_TERMINAL_PROMPT': '0',
                             'GIT_OPTIONAL_LOCKS': '0', 'GIT_PAGER': 'cat',
-                            'GIT_NO_LAZY_FETCH': '1', 'GIT_ALLOW_PROTOCOL': '', 'GIT_NO_REPLACE_OBJECTS': '1'})
+                            'GIT_NO_LAZY_FETCH': '1', 'GIT_ALLOW_PROTOCOL': '', 'GIT_NO_REPLACE_OBJECTS': '1'}
+                        if command[-1] == 'core.excludesFile':
+                            self.assertIn('config', command)
+                            self.assertIn('--get', command)
+                            expected_env['HOME'] = inherited['HOME']
+                            if '--global' in command:
+                                expected_env['GIT_CONFIG_GLOBAL'] = inherited['GIT_CONFIG_GLOBAL']
+                        self.assertEqual(call.kwargs['env'], expected_env)
                     self.assertEqual(dict(os.environ), inherited)
 
     def test_only_dubious_ownership_gets_hint_and_never_retries(self):
@@ -188,7 +196,7 @@ class StartupCLIIntegrationTests(unittest.TestCase):
             self.assertEqual(self.repo.head(), self.master)
             self.repo.clean()
             if not check:
-                self.assertTrue(manifest['temporary_sources_removed'])
+                self.assertTrue(manifest['restoration']['restored'])
 
     def test_main_with_mocked_euids_completes_real_pipeline_in_both_modes(self):
         for euid in (0, 1000):
@@ -270,13 +278,13 @@ class StartupCLIIntegrationTests(unittest.TestCase):
         self.assertIn('--trust-repository requires git mode', result.stderr)
         self.assertFalse(self.reports.exists())
 
-    def test_trust_accepts_dirty_checkout(self):
+    def test_trust_does_not_accept_dirty_checkout(self):
         (self.repo_path / 'app.py').write_text('uncommitted change\n')
         for check in (False, True):
             result = self.execute('git', check, trust=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn(json.loads(result.stdout)['status'], ('COMPLETE', 'PREFLIGHT_OK'))
-            self.assertIn('working changes included', result.stderr)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertEqual(json.loads(result.stdout)['status'], 'FAILED')
+            self.assertIn('clean checkout', result.stderr)
             self.assertNotIn(OWNERSHIP_HINT, result.stderr)
             self.assertEqual(self.repo.symbolic(), 'master')
             self.assertEqual((self.repo_path / 'app.py').read_text(), 'uncommitted change\n')

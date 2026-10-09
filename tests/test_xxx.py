@@ -253,7 +253,7 @@ class XXXTests(unittest.TestCase):
         self.assertEqual(len([c for c in self.recorded() if c['args'][0] == 'export' and '--help' not in c['args']]), 3)
         self.assertEqual(len([c for c in self.recorded() if c['args'][:2] == ['session', 'delete'] and '--help' not in c['args']]), 3)
         for call in calls:
-            self.assertEqual(call['permissions'], {'*': 'deny', 'read': 'allow', 'glob': 'allow', 'grep': 'allow', 'list': 'allow'})
+            self.assertEqual(call['permissions'], {'*': 'deny', 'read': 'allow', 'glob': 'allow', 'grep': 'allow', 'list': 'allow', 'external_directory': 'deny'})
             self.assertNotIn('--model', call['args'])
             self.assertEqual(call['config']['share'], 'disabled')
         self.assertEqual(manifest['study_invocation']['retry_policy']['orchestrator_retries'], 0)

@@ -538,7 +538,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         self.assertNotRegex(text, SGR)
         self.assertIn('[OK] master / Architecture report created. | Elapsed:', text)
         self.assertIn('[OK] master / Review complete. No significant issues reported. | Elapsed:', text)
-        self.assertNotIn('checkout hierarchy', text)
+        self.assertIn('Original checkout hierarchy restored.', text)
         self.assertNotIn('      Elapsed:', text)
         self.assertNotIn('\x1b[?25', text)
         tail = text.split('[OK] master / Review complete.', 1)[1]
@@ -631,7 +631,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         self.assertIn('[FAIL] main / Project analysis failed.', r.stderr.getvalue())
         self.assertIn('[RUN] other / Analyzing project…', r.stderr.getvalue())
         self.assertIn('[RUN] Comparing branch reports…', r.stderr.getvalue())
-        self.assertTrue(manifest['temporary_sources_removed'])
+        self.assertTrue(manifest['restoration']['restored'])
         self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
 
     def test_ctrl_c_clears_live_xxx_cli_spinner_and_no_progress_remains_plain(self):
@@ -696,7 +696,7 @@ from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import explain
 owner, method = ((explain.Folder, 'snapshot') if sys.argv[2] == 'folder'
-                 else (explain.GitSources, 'working'))
+                 else (explain.Repository, 'preflight'))
 gate = Path(sys.argv[3])
 original = getattr(owner, method)
 def delayed(*args, **kwargs):

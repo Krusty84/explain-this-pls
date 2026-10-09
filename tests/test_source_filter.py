@@ -13,7 +13,7 @@ from explain import AuditError, Folder, Runner, UnsafeRepository
 from src.analysis.analysis_plan import build_analysis_plan, verify_analysis_plan
 from src.analysis.coverage_plan import build_coverage_plan, inventory_summary
 from src.analysis.evidence import resolve_evidence, _read_confined
-from src.analysis.git_sources import GitSources
+from src.analysis.git_sources import tracked_paths, ignored_paths, inventory_delta
 from src.analysis.source_filter import normalize_source_filter
 from test_folder import FolderFixture
 import test_git_sources as git_fixtures
@@ -289,87 +289,68 @@ class GitFilterTests(unittest.TestCase):
     setUp = git_fixtures.GitSourceTests.setUp
     git = git_fixtures.GitSourceTests.git
     write = git_fixtures.GitSourceTests.write
-    dirty = git_fixtures.GitSourceTests.dirty
 
-    def test_explicitly_excluded_git_rules_are_pinned_without_source_reads(self):
-        self.dirty()
+    def test_excluded_tracked_git_rules_still_have_integrity_guards(self):
+        self.write('.gitignore', '*.env\n')
+        self.git('add', '.gitignore')
+        self.git('commit', '-m', 'ignore rules')
+        self.write('.env', 'ignored\n')
         self.repo.preflight(['main'])
-        sources = GitSources(self.repo, Folder, UnsafeRepository, self.base,
-                             source_filter={'exclude_paths': ['.gitignore']})
-        self.addCleanup(sources.close)
-        def read(root, path, *args, **kwargs):
-            if path == '.gitignore':
-                self.assertFalse(kwargs['read'])
-            return _read_confined(root, path, *args, **kwargs)
+        folder = Folder(self.path, paths=tracked_paths(self.repo), source_filter={'exclude_paths': ['.gitignore']})
+        with hashed_payloads() as hashes:
+            inventory = folder.snapshot(exclude_git=True)
+        self.assertEqual(hashes[b'*.env\n'], 0)
+        self.assertNotIn('.gitignore', folder.files)
+        self.assertNotIn('.env', folder.files)
+        self.assertIn('tracked.env', folder.files)
+        self.write('.gitignore', '*.env\n# changed\n')
+        with self.assertRaises(UnsafeRepository): self.repo.assert_expected()
 
-        with patch('src.analysis.git_sources._read_confined', side_effect=read):
-            item = sources.working('main')
-        self.assertNotIn('.gitignore', item['entries'])
-        self.assertNotIn('.env', item['entries'])
-        self.assertIn('tracked.env', item['entries'])
-        scan = sources.working_scan
-
-        def change(destination=None):
-            result = scan(destination)
-            if destination is not None:
-                self.write('.gitignore', '*.env\nbuild/\nnode_modules/\n# changed\n')
-            return result
-
-        with patch.object(sources, 'working_scan', side_effect=change):
-            with self.assertRaises(UnsafeRepository):
-                sources.working('changed')
-
-    def test_tracked_untracked_and_explicit_exclusions_across_snapshots(self):
+    def test_tracked_files_and_explicit_exclusions_across_checkouts(self):
         self.write('build/generated.py', 'EXCLUDED_BUILD\n')
         self.write('pkg/build/keep.py', 'NESTED_SOURCE\n')
+        self.write('.gitignore', '*.env\n')
         self.git('add', '.')
         self.git('commit', '-m', 'build fixture')
         self.git('branch', '-f', 'alias')
-        self.dirty()
-        self.write('new/excluded.py', 'EXCLUDED_UNTRACKED\n')
-        for follow in (False, True):
-            pins = self.repo.preflight(['main', 'alias'])
-            settings = {'follow_gitignore': follow, 'exclude_paths': ['build', 'app.py', 'new/excluded.py']}
-            sources = GitSources(self.repo, Folder, UnsafeRepository, self.base, source_filter=settings)
-            self.addCleanup(sources.close)
-            original_read = sources.read_working
-
-            def read(node, path, **kwargs):
-                self.assertFalse(path in settings['exclude_paths'] or path.startswith('build/'), path)
-                return original_read(node, path, **kwargs)
-
-            with patch.object(sources, 'read_working', side_effect=read), hashed_payloads() as hashes:
-                working = sources.working('main')
-                committed = sources.commit('alias', pins['alias'])
-                sources.assert_intact()
-            for item in (working, committed):
-                self.assertTrue({'tracked.env', 'pkg/build/keep.py'} <= item['entries'].keys())
-                self.assertFalse({'app.py', 'build/generated.py', 'new/excluded.py'} & item['entries'].keys())
-                self.assertFalse((item['path'] / 'build').exists())
-                self.assertIn({'path': 'build', 'origin': 'CONFIG'}, item['source_filter']['exclusions'])
-            self.assertIn('new/deep/.hidden', working['entries'])
-            self.assertNotIn('.env', working['entries'])
-            self.assertIn({'path': '.env', 'origin': 'GITIGNORE'}, working['source_filter']['exclusions'])
+        self.write('.env', 'IGNORED_SECRET\n')
+        pins = self.repo.preflight(['main', 'alias'])
+        inventories = {}
+        settings = {'exclude_paths': ['build', 'app.py']}
+        try:
+            with hashed_payloads() as hashes:
+                for branch in ('main', 'alias'):
+                    self.repo.checkout(pins[branch])
+                    folder = Folder(self.path, paths=tracked_paths(self.repo), source_filter=settings)
+                    inventories[branch] = folder.snapshot(exclude_git=True)
+                    folder.assert_snapshot(inventories[branch]['source_fingerprint'])
+                    self.assertTrue({'tracked.env', 'pkg/build/keep.py'} <= folder.files.keys())
+                    self.assertFalse({'app.py', 'build/generated.py', '.env'} & folder.files.keys())
+                    self.assertIn({'path': '.env', 'origin': 'GITIGNORE'}, ignored_paths(self.repo, folder.source_filter))
             self.assertEqual(hashes[b'EXCLUDED_BUILD\n'], 0)
-            self.assertEqual(hashes[b'WORKING_SENTINEL\n'], 0)
             self.assertEqual(hashes[b'HEAD_SENTINEL\n'], 0)
-            self.assertEqual(hashes[b'EXCLUDED_UNTRACKED\n'], 0)
-            self.assertFalse({'app.py', 'build/generated.py'} & {c['path'] for c in sources.delta('alias', 'main')['changes']})
+            self.assertEqual(hashes[b'IGNORED_SECRET\n'], 0)
+            self.assertEqual(inventory_delta('main', 'alias', inventories, pins, self.repo.plans)['changes'], [])
+        finally:
+            self.assertTrue(self.repo.restore()['restored'])
 
 
 class SubmoduleFilterTests(RecursiveFixture, unittest.TestCase):
     def test_paths_use_common_root_and_keep_source_identities(self):
         self.addCleanup(self.repo.close)
         pins = self.repo.preflight(['master', 'topic'])
-        sources = GitSources(self.repo, Folder, UnsafeRepository, self.base,
-                             source_filter={'exclude_paths': [CHILD + '/app.py', LEAF]})
-        self.addCleanup(sources.close)
-        for item in (sources.working('master'), sources.commit('topic', pins['topic'])):
-            self.assertIn('app.py', item['entries'])
-            self.assertNotIn(CHILD + '/app.py', item['entries'])
-            self.assertFalse(any(p.startswith(LEAF + '/') for p in item['entries']))
-            self.assertEqual({s['path'] for s in item['submodules']}, {CHILD, LEAF})
-        sources.assert_intact()
+        try:
+            for branch in ('master', 'topic'):
+                self.repo.checkout(pins[branch])
+                folder = Folder(self.path, paths=tracked_paths(self.repo),
+                                source_filter={'exclude_paths': [CHILD + '/app.py', LEAF]})
+                folder.snapshot(exclude_git=True)
+                self.assertIn('app.py', folder.files)
+                self.assertNotIn(CHILD + '/app.py', folder.files)
+                self.assertFalse(any(p.startswith(LEAF + '/') for p in folder.files))
+                self.assertEqual({s['path'] for s in self.repo.submodules(pins[branch], verified=True)}, {CHILD, LEAF})
+        finally:
+            self.assertTrue(self.repo.restore()['restored'])
 
 
 if __name__ == '__main__':

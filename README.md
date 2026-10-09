@@ -56,24 +56,12 @@ a command to launch the app without activating the environment.
 
 Choose how to provide your source code:
 
-- **Git mode:** use a standalone local clone with one or more local branches.
-  Choose a baseline for comparison. Fetch the branches you need before starting.
-  Working changes and non-ignored untracked files are included by default. Ignored
-  files stay untouched and are excluded. Conflicted indexes and unfinished Git
-  operations must be resolved before analysis.
+- **Git mode:** use a clean standalone local clone with one or more local branches.
+  Choose a baseline for comparison. All required commits must exist locally.
+  Staged changes, tracked changes, non-ignored untracked files, conflicts, and
+  unfinished Git operations are rejected. Ignored untracked files are excluded.
 - **Folder mode:** use an existing directory containing your source files.
   Git and a clean checkout are not required. Hidden files are included too.
-
-Submodules, including nested ones, must already be initialized locally. Their
-working changes and non-ignored untracked files are included in the working
-snapshot; their actual HEAD may differ from the base or staged gitlink.
-Versions needed by the selected branches must be available locally, and submodule
-names and paths must match across those branches and the original checkout.
-
-Keep this package outside the source directory. Avoid editing allowed sources,
-the index or ignore rules while snapshots are being prepared. Once preparation
-finishes, every analysis stage reads the same independent copy. Later edits to the
-original source, including ignored files, do not change that copy.
 
 ### Configuration
 
@@ -118,8 +106,7 @@ This example analyzes two branches and writes reports in English:
 ```
 
 For a single branch, set `git_mode.branches` to `["main"]` and
-`git_mode.baseline_branch` to `"main"`. Comparison is skipped. Git mode never
-switches, stashes, resets, cleans, stages or commits the original checkout.
+`git_mode.baseline_branch` to `"main"`. Comparison is skipped.
 
 For folder analysis, replace the source settings with:
 
@@ -145,7 +132,7 @@ coverage planning, and study assignments. Omitted settings preserve existing beh
 }
 ```
 
-`exclude_paths` applies in both modes, including committed Git snapshots. Use exact,
+`exclude_paths` applies in both modes, including each Git branch checkout. Use exact,
 case-sensitive paths relative to the common source root, with `/` separators.
 An entry excludes that file or directory and its descendants. `build` does not match
 `builder` or `packages/web/build`. Add nested paths explicitly. Absolute paths, empty
@@ -166,7 +153,7 @@ Folder mode has no index, so rules apply to every matching source file.
 This flag controls additional Folder filtering. It does not disable Git's existing
 ignore handling. Git still includes tracked files unless `exclude_paths` removes
 them, and excludes ignored untracked files. Git's existing rule and submodule
-control-file checks remain active during snapshot preparation.
+control-file checks remain active throughout the run.
 
 The four example configs contain optional exclusions for Java, JS/TS, C/C++, Rust,
 Go, Python, and Swift. All entries are commented out. Review them before use:
@@ -176,28 +163,28 @@ artifact exclusion list.
 
 Run artifacts record filter settings and excluded paths or pruned roots, with
 `CONFIG` or `GITIGNORE` origins. Folder `source.inventory.json` also records active
-rule-file hashes and the matching rule's file and line. Git `source.snapshot.json`
-records filter exclusions; its `git_state` records working-tree rule provenance.
+rule-file hashes and the matching rule's file and line. Git `source.inventory.json`
+also records filter exclusions. The manifest records pinned commits, recursive
+checkout plans, switch attempts, and verified restoration results.
 These records are separate from the Catalog LLM's advisory exclusions.
 Active Folder rule files are pinned even when a rule edit would not change selection.
 Changes confined to excluded source content do not invalidate a filtered Folder snapshot.
 
-Filtering is not a security boundary. In Folder mode, direct CLI file tools can
-still access the original directory, including excluded paths. No sandbox or source
-copy is added.
+Filtering is not a security boundary. Direct CLI file tools can still access the
+original directory, including excluded paths. Native CLI permissions apply.
 
 #### Main settings
 
-| Field                 | Purpose                                                      |
-| --------------------- | ------------------------------------------------------------ |
-| `mode`                | Analyze Git branches (`"git"`) or a directory (`"folder"`).  |
-| `git_mode`            | Source repository, local branches and the baseline branch.   |
-| `folder_mode.path`    | Source directory for folder mode.                            |
-| `reports_dir`         | Destination for results; each run gets a separate subfolder. |
-| `project_description` | Optional introduction to the system's purpose and history.   |
-| `output_language`     | Report language; defaults to `"Russian"`.                    |
-| `priority_scenarios`  | Optional workflows or areas to focus on.                     |
-| `multi_session`       | Defaults to `true`; set `false` to force one study session. Multiple sessions run sequentially. |
+| Field                          | Purpose                                                                                                           |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `mode`                         | Analyze Git branches (`"git"`) or a directory (`"folder"`).                                                       |
+| `git_mode`                     | Source repository, local branches and the baseline branch.                                                        |
+| `folder_mode.path`             | Source directory for folder mode.                                                                                 |
+| `reports_dir`                  | Destination for results; each run gets a separate subfolder.                                                      |
+| `project_description`          | Optional introduction to the system's purpose and history.                                                        |
+| `output_language`              | Report language; defaults to `"Russian"`.                                                                         |
+| `priority_scenarios`           | Optional workflows or areas to focus on.                                                                          |
+| `multi_session`                | Defaults to `true`; set `false` to force one study session. Multiple sessions run sequentially.                   |
 | `max_source_bytes_per_session` | Positive integer; defaults to `262144` (256 KiB) assigned source-file bytes per session. Applies to all backends. |
 
 #### Agent settings

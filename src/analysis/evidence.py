@@ -52,14 +52,10 @@ def source_catalog(context):
     identity = ({'mode': 'folder', 'fingerprint': context['source_fingerprint'],
                  'directory': context['source_directory']} if folder else
                 {'mode': 'git', 'branch': context['branch'], 'commit': context['source_commit']})
-    snapshot = context.get('source_snapshot')
-    if snapshot and not folder:
-        identity = dict(mode='git', **snapshot)
     result = [dict(id='source-001', root='.', identity=identity)]
     if not folder:
         for index, sub in enumerate(sorted(context.get('submodules', []), key=lambda s: s['path']), 2):
-            sub_identity = ({'mode': 'git', 'commit': sub['expected_commit'], 'parent_commit': context['source_commit']}
-                            if not snapshot else dict(mode='git', **snapshot, submodule_head=sub['expected_commit']))
+            sub_identity = {'mode': 'git', 'commit': sub['expected_commit'], 'parent_commit': context['source_commit']}
             sub_identity['submodule_path'] = sub['path']
             result.append(dict(id=f'source-{index:03d}', root=sub['path'], identity=sub_identity))
     return result
@@ -165,7 +161,7 @@ def _read_confined(root, relative, limit, *, expected=None, pinned=None, read=Tr
 
 def resolve_evidence(stage, pointers, context, expected_files=None, *, expected_metadata=None):
     catalog = {s['id']: s for s in source_catalog(context)}
-    if context.get('source_snapshot') and expected_files is None:
+    if context.get('_inventory') is not None and expected_files is None:
         expected_files = {e['path']: e['sha256'] for e in context.get('_inventory', {}).get('entries', [])
                           if e['type'] == 'file'}
     root = context.get('source_directory', context.get('repository'))
@@ -200,7 +196,7 @@ def resolve_evidence(stage, pointers, context, expected_files=None, *, expected_
             # Repository control files are not architectural source evidence.
             if '.git' in relative.split('/'):
                 raise PointerError('INVALID_POINTER')
-            if ((context.get('source_snapshot') or expected_metadata is not None)
+            if ((context.get('_inventory') is not None or expected_metadata is not None)
                     and expected_files is not None and relative not in expected_files):
                 raise PointerError('NOT_FOUND')
             if relative in cache:

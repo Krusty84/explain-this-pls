@@ -22,7 +22,7 @@ class XXXCLITests(unittest.TestCase):
                   'compaction': {'auto': True}, 'plugin': ['local-plugin'], 'share': 'auto'}
         env = {'OPENCODE_CONFIG_CONTENT': json.dumps(config), 'HOME': '/home/user',
                'OPENCODE_AUTO_SHARE': '1', 'PROVIDER_API_KEY': 'private'}
-        name = xxx.prepare_environment(env, 'study', source_snapshot=True)
+        name = xxx.prepare_environment(env, 'study')
         actual = json.loads(env['OPENCODE_CONFIG_CONTENT'])
         for key in ('agents', 'compaction', 'plugin'):
             self.assertEqual(actual[key], config[key])

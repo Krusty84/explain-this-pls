@@ -19,15 +19,23 @@ def inspect_sources(context):
     observed = {}
     root = Path(context['repository'])
     assert root == Path.cwd()
-    assert not any(p.name == '.git' for p in root.rglob('*'))
+    call['source_files'] = {}
     for relative, record in expected.items():
         path = root / relative
+        commit = subprocess.check_output(['git', '-C', str(path), 'rev-parse', 'HEAD']).decode().strip()
+        assert commit == record['commit'], (relative, commit, record)
+        assert subprocess.run(['git', '-C', str(path), 'symbolic-ref', '-q', 'HEAD'],
+                              capture_output=True).returncode == 1
         content = (path / 'app.py').read_text()
         if 'content' in record:
             assert content == record['content'], (relative, content, record)
-        observed[relative] = {'commit': record['commit'], 'content': content}
-    call['source_files'] = {str(p.relative_to(root)): p.read_text(errors='replace')
-                            for p in root.rglob('*') if p.is_file() and not p.is_symlink()}
+        observed[relative] = {'commit': commit, 'content': content}
+        names = subprocess.check_output(['git', '-C', str(path), 'ls-files', '-z']).split(b'\0')
+        for name in names:
+            if name:
+                source = path / os.fsdecode(name)
+                if source.is_file() and not source.is_symlink():
+                    call['source_files'][str(source.relative_to(root))] = source.read_text(errors='replace')
     call['observed'] = observed
 
 
