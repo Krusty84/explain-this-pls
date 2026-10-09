@@ -794,29 +794,35 @@ NOT_MEASURED.
 ## Multi-session study
 
 The top-level `multi_session` setting is a strict boolean, default `true` when
-omitted. `false` forces the ordinary single-study path. Catalog always uses one
+omitted. `false` forces the ordinary single-study path. The top-level
+`max_source_bytes_per_session` setting defaults to `262144` (256 KiB). It accepts
+only positive integers; zero, negative numbers, booleans, floats, strings and null
+are invalid. The same setting applies to all backends. Catalog always uses one
 invocation. The backend-independent planner starts with this session target:
 
 ```
-N_target = max(1, ceil(areas / 4), ceil(source_files / 300), ceil(source_lines / 50000))
+N_target = max(1, ceil(areas / 4), ceil(source_files / 300), ceil(source_bytes / max_source_bytes_per_session))
 ```
 
 Areas include UNCLASSIFIED. File batching can increase the target when groups do
-not fit; unused sessions are removed. The thresholds are code constants, not user
-settings. One resulting session uses the existing study call, with no shard or
-synthesis calls. Multiple sessions use study shards in stable
+not fit; unused sessions are removed. The area and file thresholds remain code
+constants; the byte threshold is configurable. One resulting session uses the
+existing study call, with no shard or synthesis calls. Multiple sessions use study shards in stable
 R-001, R-002, ... order, then one synthesis call. There is no concurrency. Shards
 and synthesis inherit the effective `stage_agents.study` selection. Their fixed
 internal prompts are `study-shard.md` and `synthesis.md`; direct study and revision
 keep the existing configurable prompts.
 
-Size metrics describe **eligible regular files**, not inspected files or semantic source lines.
+Size metrics describe **eligible regular files**. The byte limit measures the total
+size of source files assigned to a session, not bytes actually read by the LLM.
 Inventory has no authoritative language classification. Directories and symlinks
 do not count; no new extension/vendor/generated heuristics are applied. Git source
 preparation retains its existing ignored-untracked exclusions. Catalog exclusions
-affect area membership and analysis file/line totals. The complete inventory and
+affect area membership and analysis file/byte totals. The complete inventory and
 coverage counts retain excluded files with their explicit paths and reasons.
-`source_lines` counts LF bytes plus one for a nonempty unterminated final line.
+Planning `source_bytes` sums the frozen inventory's `size` values. The planner
+does not reread source files or add filesystem scans. The inventory retains
+`source_lines`, which counts LF bytes plus one for a nonempty unterminated final line.
 Blank lines count; CRLF counts once; standalone CR is not a separator. Binary
 bytes use the same rule. Empty files have zero lines. Counts are collected during
 the existing hash read (or reused from Git source preparation), without another
@@ -827,12 +833,17 @@ It contains the enable flag, exact session count, thresholds, metric definition,
 global totals, area sizes, shard primary_file_paths, oversized_file_paths and loads.
 The existing subsystem fields include the UNCLASSIFIED area when present. It binds the inventory
 and coverage-plan hashes. Local validation rebuilds the plan and compares canonical
-JSON, checking every assignment, count, ID, capacity flag and hash. Once study
+JSON using the expected configured byte limit, checking every assignment, count,
+ID, capacity flag and hash. The effective limit is frozen in
+`thresholds.max_source_bytes_per_session`; totals, areas and shards use `source_bytes`.
+The metric is `nonexcluded_regular_files; sum_inventory_size_bytes`.
+A changed effective limit invalidates the plan, even if assignments remain the same.
+Old line-based plans must be regenerated. Once study
 starts, every boundary checks the frozen plan bytes; changes are integrity failures.
 
-Area cost is max(1/4, files/300, lines/50000). Descending cost, then area ID,
+Area cost is max(1/4, files/300, bytes/max_source_bytes_per_session). Descending cost, then area ID,
 determines placement order. Sorted file paths form batches within the file and
-line limits. Each batch goes to the least-loaded shard that can hold it, with
+byte limits. Each batch goes to the least-loaded shard that can hold it, with
 shard order breaking ties; a new shard is added when none fits. Shard load uses
 the same maximum with its area count. Rational arithmetic determines placement;
 normalized_load is a JSON number. Each inventory path counts once per shard

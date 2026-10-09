@@ -78,6 +78,7 @@ class MultiSessionTests(FolderFixture):
         return manifest, code
 
     def test_small_or_disabled_uses_one_ordinary_study(self):
+        self.value['max_source_bytes_per_session'] = 22
         for large, enabled in ((False, True), (True, False)):
             with self.subTest(large=large, enabled=enabled):
                 manifest, code = self.run_case(large=large, enabled=enabled)
@@ -87,6 +88,8 @@ class MultiSessionTests(FolderFixture):
                 self.assertEqual(manifest['study_origin'], 'direct_single_session')
                 self.assertEqual(manifest['study_shards'], [])
                 self.assertNotIn('synthesis_invocation', manifest)
+                self.assertEqual(manifest['analysis_plan']['thresholds']['max_source_bytes_per_session'], 22)
+                self.assertEqual(manifest['analysis_plan']['shards'][0]['over_capacity'], large)
 
     def test_success_uses_same_plan_all_backends_and_disables_synthesis_tools(self):
         assignments = []
@@ -323,6 +326,18 @@ class MultiSessionTests(FolderFixture):
         self.assertEqual([c['context']['stage'] for c in self.calls], ['catalog', 'study-shard'])
         self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED', 'FAILED', 'PLANNED'])
 
+    def test_changed_configured_limit_stops_later_integrity_checks(self):
+        for variant in ('study', 'study-shard', 'synthesis'):
+            self.value['max_source_bytes_per_session'] = 66
+            def change(runner, context, data):
+                if context.get('prompt_variant', context['stage']) == variant:
+                    runner.cfg['max_source_bytes_per_session'] = 67
+            with self.subTest(variant=variant):
+                manifest, code = self.run_case(change=change, large=variant != 'study')
+                self.assertEqual((code, manifest['critical_failure']), (1, True))
+                self.assertIn('ANALYSIS_PLAN_CHANGED', {d['code'] for d in manifest['diagnostics']})
+                self.assertFalse((self.runner.run_dir / 'ARCHITECTURE.md').exists())
+
     def test_shard_mutation_during_synthesis_prevents_revision_publication(self):
         def change(runner, context, data):
             if context.get('prompt_variant') == 'synthesis':
@@ -493,17 +508,22 @@ class MultiSessionTests(FolderFixture):
         self.assertEqual([c['context'].get('prompt_variant', c['context']['stage']) for c in self.calls],
                          ['catalog', 'study-shard', 'study-shard', 'study-shard', 'synthesis', 'review', 'revise', 'review'])
 
-    def test_file_and_line_thresholds_split_one_subsystem_and_merge_coverage(self):
-        for threshold in ('MAX_SOURCE_FILES_PER_SESSION', 'MAX_SOURCE_LINES_PER_SESSION'):
+    def test_file_and_byte_thresholds_split_one_subsystem_and_merge_coverage(self):
+        for threshold in ('files', 'bytes'):
             for backend in ('codex', 'claude-code', 'opencode', 'xxx'):
+                setting = (patch('src.analysis.analysis_plan.MAX_SOURCE_FILES_PER_SESSION', 3) if threshold == 'files'
+                           else patch.dict(self.value, max_source_bytes_per_session=66))
                 with self.subTest(threshold=threshold, backend=backend), \
-                        patch('src.analysis.analysis_plan.' + threshold, 3), \
+                        setting, \
                         patch('explain.validate_result', wraps=validate_result) as validator:
                     manifest, code = self.run_case(catalog_paths=['.'], backend=backend)
                 self.assertEqual(code, 0, manifest.get('diagnostics'))
                 self.assertEqual(manifest['required_sessions'], 3)
                 plan, states = manifest['analysis_plan'], manifest['study_shards']
                 self.assertTrue(all(not s['over_capacity'] and s['source_files'] == 3 for s in plan['shards']))
+                self.assertEqual(plan['thresholds']['max_source_bytes_per_session'], 66 if threshold == 'bytes' else 262144)
+                self.assertEqual(plan['totals']['source_bytes'], 198)
+                self.assertTrue(all(s['source_bytes'] == 66 for s in plan['shards']))
                 self.assertEqual([s['subsystem_ids'] for s in plan['shards']], [['S-001']] * 3)
                 self.assertEqual({p for s in plan['shards'] for p in s['primary_file_paths']},
                                  {'app.py'} | {f'part{i}.py' for i in range(2, 10)})
@@ -674,7 +694,7 @@ class MultiSessionTests(FolderFixture):
                 self.assertEqual(manifest['metrics']['attempts'], 2 if excluded else 5)
                 self.assertEqual(manifest.get('synthesis_status'), None if excluded else 'SUCCEEDED')
                 if excluded:
-                    self.assertEqual(manifest['source_metrics'], dict(subsystems=0, source_files=0, source_lines=0))
+                    self.assertEqual(manifest['source_metrics'], dict(subsystems=0, source_files=0, source_bytes=0))
                     self.assertEqual(manifest['study_origin'], 'direct_single_session')
                 self.assertEqual((code, manifest['status']), (2, 'PARTIAL'))
                 self.assertFalse(workflow_satisfied(manifest))
@@ -699,6 +719,7 @@ class MultiSessionGitTests(unittest.TestCase):
             cfg = self.config()
             cfg['git_mode']['branches'] = ['master']
             cfg['execution']['review_enabled'] = False
+            cfg['max_source_bytes_per_session'] = 5
             runner = Runner(cfg, self.base / kind)
             calls = []
             def process(command, cwd, env, payload, **kwargs):
@@ -718,12 +739,13 @@ class MultiSessionGitTests(unittest.TestCase):
                 if kind == 'source_changed' and context.get('analysis_shard', {}).get('id') == 'R-002':
                     (Path(context['repository']) / 'app.py').write_text('changed\n')
                 return result
-            with self.subTest(kind=kind), patch('src.analysis.analysis_plan.MAX_SOURCE_FILES_PER_SESSION', 1), \
+            with self.subTest(kind=kind), \
                     patch.dict(os.environ, {'AUDIT_TEST_SUBSYSTEM_PATHS': json.dumps(['.'])}), \
                     patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process), \
                     patch('explain.prepare_result', side_effect=change):
                 manifest, code = runner.run()
             branch = manifest['branches'][0]
+            self.assertEqual(branch['analysis_plan']['thresholds']['max_source_bytes_per_session'], 5)
             states = branch['study_shards']
             if kind == 'all_empty':
                 self.assertEqual(states, [])

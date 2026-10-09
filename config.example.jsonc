@@ -2,6 +2,9 @@
   // Default true. Set false to force the legacy single-study session.
   // Multiple study sessions run sequentially, not concurrently.
   "multi_session": true,
+  // Total assigned source-file bytes per session, not bytes read by the LLM.
+  // Positive integer; default 256 KiB. Individual files remain intact.
+  "max_source_bytes_per_session": 262144,
 
   // Default: retain useful text with caveats; use "strict" to reject contract violations. Policy success is not factual proof.
   "result_policy": "compromise",

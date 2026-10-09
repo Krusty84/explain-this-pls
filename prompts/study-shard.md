@@ -11,8 +11,10 @@ source, or attempt to re-audit the entire repository. You may inspect other sour
 locations only when needed to understand interfaces or relationships with your
 primary subsystems. Do not claim coverage of these other locations.
 Respect the explicit catalog exclusions in coverage_plan.
-Keep files intact. oversized_file_paths identifies files above the session line
-limit; report any investigation you cannot finish as a concrete limitation.
+Keep files intact. oversized_file_paths identifies files above the session byte
+limit. The configured max_source_bytes_per_session (default 256 KiB) measures the
+total size of assigned source files, not bytes actually read by the LLM.
+Report any investigation you cannot finish as a concrete limitation.
 Scheduling a file does not mean it was inspected. Report missing checks and files
 as PARTIALLY_INSPECTED or NOT_INSPECTED; do not infer completeness from assignment.
 

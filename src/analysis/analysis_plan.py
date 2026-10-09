@@ -10,12 +10,15 @@ from src.contracts.contracts import ContractError
 
 MAX_SUBSYSTEMS_PER_SESSION = 4
 MAX_SOURCE_FILES_PER_SESSION = 300
-MAX_SOURCE_LINES_PER_SESSION = 50_000
+DEFAULT_MAX_SOURCE_BYTES_PER_SESSION = 262_144
 
 
-def build_analysis_plan(inventory, coverage_plan, multi_session=True):
+def build_analysis_plan(inventory, coverage_plan, multi_session=True, *,
+                        max_source_bytes_per_session=DEFAULT_MAX_SOURCE_BYTES_PER_SESSION):
     if type(multi_session) is not bool:
         raise ContractError('multi_session must be boolean.')
+    if type(max_source_bytes_per_session) is not int or max_source_bytes_per_session <= 0:
+        raise ContractError('max_source_bytes_per_session must be a positive integer.')
     verify_coverage_plan(coverage_plan)
     if coverage_plan['inventory_sha256'] != sha(canonical(inventory['entries'])):
         raise ContractError('Analysis and coverage inventories differ.')
@@ -23,18 +26,18 @@ def build_analysis_plan(inventory, coverage_plan, multi_session=True):
     # UNCLASSIFIED files still count; overlapping exclusions count once.
     excluded = {path for area in coverage_plan['exclusions'] for path in area['file_paths']}
     files = {e['path']: e for e in inventory['entries'] if e['type'] == 'file' and e['path'] not in excluded}
-    if any(type(e.get('source_lines')) is not int or e['source_lines'] < 0 for e in files.values()):
-        raise ContractError('Inventory is missing physical line counts.')
+    if any(type(e.get('size')) is not int or e['size'] < 0 for e in files.values()):
+        raise ContractError('Inventory must contain nonnegative integer file sizes.')
     areas = coverage_plan['areas']
     memberships = {a['id']: set(a['file_paths']) for a in areas}
     if set().union(*memberships.values()) != set(files):
         raise ContractError('Coverage areas do not match eligible inventory files.')
-    capacities = (MAX_SUBSYSTEMS_PER_SESSION, MAX_SOURCE_FILES_PER_SESSION, MAX_SOURCE_LINES_PER_SESSION)
-    totals = (len(areas), len(files), sum(e['source_lines'] for e in files.values()))
+    capacities = (MAX_SUBSYSTEMS_PER_SESSION, MAX_SOURCE_FILES_PER_SESSION, max_source_bytes_per_session)
+    totals = (len(areas), len(files), sum(e['size'] for e in files.values()))
     required = max(1, *((size + cap - 1) // cap for size, cap in zip(totals, capacities))) if multi_session else 1
 
     def size(paths):
-        return len(paths), sum(files[p]['source_lines'] for p in paths)
+        return len(paths), sum(files[p]['size'] for p in paths)
 
     def load(count, paths):
         return max(Fraction(n, cap) for n, cap in zip((count, *size(paths)), capacities))
@@ -44,15 +47,15 @@ def build_analysis_plan(inventory, coverage_plan, multi_session=True):
     for sid in ordered:
         if not memberships[sid]:
             continue
-        batches, batch, lines = [], set(), 0
+        batches, batch, source_bytes = [], set(), 0
         for path in sorted(memberships[sid]):
-            count = files[path]['source_lines']
+            count = files[path]['size']
             if multi_session and batch and (len(batch) == MAX_SOURCE_FILES_PER_SESSION
-                    or lines + count > MAX_SOURCE_LINES_PER_SESSION):
+                    or source_bytes + count > max_source_bytes_per_session):
                 batches.append(batch)
-                batch, lines = set(), 0
+                batch, source_bytes = set(), 0
             batch.add(path)
-            lines += count
+            source_bytes += count
         batches.append(batch)
         for paths in batches:
             candidates = [b for b in bins if not multi_session or not b['paths'] or
@@ -72,27 +75,30 @@ def build_analysis_plan(inventory, coverage_plan, multi_session=True):
     shards = []
     for i, shard in enumerate(bins):
         count = len(shard['subsystem_ids'])
-        file_count, lines = size(shard['paths'])
+        file_count, source_bytes = size(shard['paths'])
         weight = load(count, shard['paths'])
         shards.append(dict(id=f'R-{i + 1:03d}', subsystem_ids=sorted(shard['subsystem_ids']),
             primary_file_paths=sorted(shard['paths']),
-            oversized_file_paths=sorted(p for p in shard['paths'] if files[p]['source_lines'] > MAX_SOURCE_LINES_PER_SESSION),
-            subsystem_count=count, source_files=file_count, source_lines=lines,
+            oversized_file_paths=sorted(p for p in shard['paths'] if files[p]['size'] > max_source_bytes_per_session),
+            subsystem_count=count, source_files=file_count, source_bytes=source_bytes,
             normalized_load=float(weight), over_capacity=weight > 1))
     plan = {'multi_session': multi_session, 'required_sessions': len(shards),
         'thresholds': dict(zip(('max_subsystems_per_session', 'max_source_files_per_session',
-                               'max_source_lines_per_session'), capacities)),
-        'metric': 'nonexcluded_regular_files; LF_count_plus_unterminated_final_line',
+                               'max_source_bytes_per_session'), capacities)),
+        'metric': 'nonexcluded_regular_files; sum_inventory_size_bytes',
         'inventory_sha256': coverage_plan['inventory_sha256'], 'coverage_plan_sha256': coverage_plan['plan_sha256'],
-        'totals': dict(zip(('subsystems', 'source_files', 'source_lines'), totals)),
+        'totals': dict(zip(('subsystems', 'source_files', 'source_bytes'), totals)),
         'subsystems': [dict(subsystem_id=sid, file_count=size(memberships[sid])[0],
-                            source_lines=size(memberships[sid])[1]) for sid in sorted(memberships)],
+                            source_bytes=size(memberships[sid])[1]) for sid in sorted(memberships)],
         'shards': shards}
     return plan | {'plan_sha256': sha(canonical(plan))}
 
 
-def verify_analysis_plan(plan, inventory, coverage_plan):
+def verify_analysis_plan(plan, inventory, coverage_plan, *,
+                         max_source_bytes_per_session=DEFAULT_MAX_SOURCE_BYTES_PER_SESSION):
     """Rebuild locally to check assignment, metrics, ordering, thresholds and seal."""
-    if type(plan) is not dict or canonical(plan) != canonical(build_analysis_plan(inventory, coverage_plan, plan.get('multi_session'))):
+    if type(plan) is not dict or canonical(plan) != canonical(build_analysis_plan(
+            inventory, coverage_plan, plan.get('multi_session'),
+            max_source_bytes_per_session=max_source_bytes_per_session)):
         raise ContractError('Frozen analysis plan changed or is inconsistent.')
     return plan

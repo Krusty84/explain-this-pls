@@ -147,6 +147,7 @@ and, when enabled, a review without requiring Git; `git_mode` settings are ignor
 | `output_language`     | Report language; defaults to `"Russian"`.                    |
 | `priority_scenarios`  | Optional workflows or areas to focus on.                     |
 | `multi_session`       | Defaults to `true`; set `false` to force one study session. Multiple sessions run sequentially. |
+| `max_source_bytes_per_session` | Positive integer; defaults to `262144` (256 KiB) assigned source-file bytes per session. Applies to all backends. |
 
 #### Agent settings
 
@@ -165,8 +166,10 @@ in this configuration.
 The frozen inventory determines study scope. Catalog areas are provisional grouping
 hints. Every nonexcluded regular file, including unclassified files, receives a
 primary assignment. Large groups split into deterministic batches of at most 300
-files and 50,000 physical lines, keeping each file intact. Catalog exclusions stay
-visible in coverage accounting; overlapping files count once in global totals.
+files and `max_source_bytes_per_session` bytes (default 256 KiB), keeping each file intact.
+The byte limit measures the total size of assigned source files, not bytes actually
+read by the LLM. Catalog exclusions stay visible in coverage accounting;
+overlapping files count once in global totals.
 The full inventory remains available for source integrity checks.
 When one session suffices, the ordinary study runs. Larger sources use
 sequential file-batch studies, then one synthesis call with source tools
@@ -174,7 +177,7 @@ disabled. Set `"multi_session": false` to keep
 the legacy single-study path, regardless of source size.
 
 `analysis.plan.json` records metrics, primary file paths and oversized individual
-files. Such files can exceed the line limit. Empty sessions are removed; empty
+files. Such files can exceed the byte limit. Empty sessions are removed; empty
 catalog areas share an existing session. Each shard has separate artifacts and attempt
 metrics under `study-shards/R-001/`, etc. All shards must pass local checks before
 synthesis. Review and revision, if enabled, use the resulting global study.

@@ -55,7 +55,7 @@ from src.analysis.coverage_plan import build_coverage_plan, inventory_summary, v
 from src.analysis.revisions import revision_inputs, choose_revision, completed_pair
 from src.analysis.git_sources import GitSources
 from src.analysis.source_metrics import PhysicalLines
-from src.analysis.analysis_plan import build_analysis_plan, verify_analysis_plan
+from src.analysis.analysis_plan import DEFAULT_MAX_SOURCE_BYTES_PER_SESSION, build_analysis_plan, verify_analysis_plan
 from src.analysis.study_shards import empty_shard_result, require_shard_policy, synthesis_inputs
 
 ROOT = Path(__file__).resolve().parent
@@ -891,7 +891,8 @@ def load_config(path: Path) -> dict:
         raise AuditError('Configuration must be a JSON object.')
     allowed = {'reports_dir', 'agent', 'stage_agents',
         'output_language', 'priority_scenarios', 'continue_on_error', 'project_description', 'prompts',
-        'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy', 'source_decoding', 'multi_session'}
+        'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy', 'source_decoding', 'multi_session',
+        'max_source_bytes_per_session'}
     if set(value) - allowed:
         raise AuditError(f'Unknown configuration keys: {set(value) - allowed}')
     try:
@@ -936,7 +937,8 @@ def load_config(path: Path) -> dict:
         if len(set(branches)) != len(branches) or source['baseline_branch'] not in branches:
             raise AuditError('Branches must be unique and include baseline_branch.')
     defaults = {'output_language': 'Russian', 'project_description': '', 'priority_scenarios': [],
-        'continue_on_error': True, 'stage_agents': {}, 'prompts': {}, 'result_policy': 'compromise', 'multi_session': True}
+        'continue_on_error': True, 'stage_agents': {}, 'prompts': {}, 'result_policy': 'compromise', 'multi_session': True,
+        'max_source_bytes_per_session': DEFAULT_MAX_SOURCE_BYTES_PER_SESSION}
     for key, default in defaults.items():
         value.setdefault(key, default)
     if not isinstance(value['project_description'], str):
@@ -949,6 +951,8 @@ def load_config(path: Path) -> dict:
         raise AuditError('continue_on_error must be boolean.')
     if type(value['multi_session']) is not bool:
         raise AuditError('multi_session must be boolean.')
+    if type(value['max_source_bytes_per_session']) is not int or value['max_source_bytes_per_session'] <= 0:
+        raise AuditError('max_source_bytes_per_session must be a positive integer.', code='INVALID_CONFIG')
     if value['result_policy'] not in ('compromise', 'strict'):
         raise AuditError('result_policy must be compromise or strict.')
     if not isinstance(value['priority_scenarios'], list) or any(not isinstance(s, str) for s in value['priority_scenarios']):
@@ -1416,7 +1420,8 @@ class Runner:
             return
         try:
             inventory = context.get('_inventory') or self.analysis_inventories[context['analysis_plan']['inventory_sha256']]
-            plan = verify_analysis_plan(context['analysis_plan'], inventory, context['coverage_plan'])
+            plan = verify_analysis_plan(context['analysis_plan'], inventory, context['coverage_plan'],
+                max_source_bytes_per_session=self.cfg.get('max_source_bytes_per_session', DEFAULT_MAX_SOURCE_BYTES_PER_SESSION))
             expected = (json.dumps(plan, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
             relative = str(Path(context['_analysis_plan_path']).relative_to(self.run_dir))
             if read_confined(self.run_dir, relative, len(expected)) != expected:
@@ -1659,8 +1664,10 @@ class Runner:
             item['coverage_plan'] = plan
             context.update(coverage_plan=plan, _coverage_plan_path=str(directory / 'coverage.plan.json'))
             context.pop('inventory_summary', None)
-            analysis = build_analysis_plan(inventory, plan, self.cfg.get('multi_session', True))
-            verify_analysis_plan(analysis, inventory, plan)
+            byte_limit = self.cfg.get('max_source_bytes_per_session', DEFAULT_MAX_SOURCE_BYTES_PER_SESSION)
+            analysis = build_analysis_plan(inventory, plan, self.cfg.get('multi_session', True),
+                                           max_source_bytes_per_session=byte_limit)
+            verify_analysis_plan(analysis, inventory, plan, max_source_bytes_per_session=byte_limit)
             self.analysis_inventories[analysis['inventory_sha256']] = inventory
             context.update(analysis_plan=analysis, _analysis_plan_path=str(directory / 'analysis.plan.json'))
             path = Path(context['_analysis_plan_path'])
