@@ -48,7 +48,9 @@ def response(context):
             components=[], significant_flows=[], data_and_state=[], constraints=[], relationships=[])
         for i, area in enumerate(context['coverage_plan']['areas'], 1):
             eid, cid = f'E-{i:03d}', f'C-{i:03d}'
-            path = area['paths'][0]
+            primary = context['analysis_shard'].get('primary_file_paths', [])
+            path = next((p for p in primary if any(root == '.' or p == root or p.startswith(root + '/')
+                                                 for root in area['paths'])), area['paths'][0])
             path = 'app.py' if path == '.' else path
             data['evidence'].append(dict(id=eid, source_id='source-001', path=path, start_line=1, end_line=1, quote=''))
             data['claims'].append(dict(id=cid, statement=f"{area['id']} contains code", scope=area['id'],

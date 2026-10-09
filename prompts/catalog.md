@@ -1,10 +1,15 @@
-# Map this source snapshot into named subsystems
+# Build a preliminary navigation map of this source snapshot
 
-Create a navigation and coverage catalog for one shared architecture study. Inspect
+Create a provisional navigation catalog for one shared architecture study. Inspect
 the supplied tree using read-only file listing, search and reading. The context
 contains source identity, a compact directory summary and source_decoding rules;
 the orchestrator separately checks your paths against its complete inventory.
 Directory names alone do not establish architectural responsibilities.
+Identify entry points, build structures, registrations and likely responsibilities.
+Subsystem classifications are grouping hints, not established architecture or
+indivisible study assignments. State uncertainty in names, purposes or limitations.
+The frozen source inventory determines which non-excluded files must be scheduled;
+study may split these groups and discover different boundaries.
 
 The compact directory summary is the authoritative structural map: it lists every
 top-level group with file, symlink and directory counts, and it is complete for
@@ -37,9 +42,10 @@ Each subsystem has a unique stable id (S-001 etc.), name, purpose and paths.
 Paths are relative to the common source root, including submodules. A directory
 selects its contents; "." selects the source root. Select meaningful responsibility
 areas; overlapping subsystem paths are allowed and remain explicit. Do not invent paths. Explain each deliberate
-exclusion with its path and reason; never silently omit vendor, generated, binary,
+exclusion with its path and reason. Unknown purpose is not a reason to exclude a
+file. Never silently omit vendor, generated, binary,
 hidden or linked entries. Do not follow symbolic links. Unassigned entries remain
-visible as UNCLASSIFIED; your COMPLETE is a work-completion assessment, not proof
+visible as UNCLASSIFIED and receive study assignments; your COMPLETE is a work-completion assessment, not proof
 that this grouping fully describes the system.
 
 In Git mode inspect only the supplied prepared snapshot and listed recursive submodules. Never initialize, update, fetch or switch them. In folder

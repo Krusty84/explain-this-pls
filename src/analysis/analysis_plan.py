@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Backend-independent whole-subsystem planning over a frozen inventory."""
+"""Backend-independent file batching over a frozen inventory."""
 from fractions import Fraction
 
 from src.analysis.coverage_plan import verify_coverage_plan
@@ -25,7 +25,10 @@ def build_analysis_plan(inventory, coverage_plan, multi_session=True):
     files = {e['path']: e for e in inventory['entries'] if e['type'] == 'file' and e['path'] not in excluded}
     if any(type(e.get('source_lines')) is not int or e['source_lines'] < 0 for e in files.values()):
         raise ContractError('Inventory is missing physical line counts.')
-    areas = [a for a in coverage_plan['areas'] if a['id'] != 'UNCLASSIFIED']
+    areas = coverage_plan['areas']
+    memberships = {a['id']: set(a['file_paths']) for a in areas}
+    if set().union(*memberships.values()) != set(files):
+        raise ContractError('Coverage areas do not match eligible inventory files.')
     capacities = (MAX_SUBSYSTEMS_PER_SESSION, MAX_SOURCE_FILES_PER_SESSION, MAX_SOURCE_LINES_PER_SESSION)
     totals = (len(areas), len(files), sum(e['source_lines'] for e in files.values()))
     required = max(1, *((size + cap - 1) // cap for size, cap in zip(totals, capacities))) if multi_session else 1
@@ -36,24 +39,47 @@ def build_analysis_plan(inventory, coverage_plan, multi_session=True):
     def load(count, paths):
         return max(Fraction(n, cap) for n, cap in zip((count, *size(paths)), capacities))
 
-    memberships = {a['id']: set(a['file_paths']) for a in areas}
     ordered = sorted(memberships, key=lambda sid: (-load(1, memberships[sid]), sid))
-    bins = [{'id': f'R-{i + 1:03d}', 'subsystem_ids': [], 'paths': set()} for i in range(required)]
+    bins = [{'subsystem_ids': set(), 'paths': set()} for _ in range(required)]
     for sid in ordered:
-        shard = min(bins, key=lambda b: (load(len(b['subsystem_ids']), b['paths']), b['id']))
-        shard['subsystem_ids'].append(sid)
-        # A physical inventory path counts once per shard, even across overlapping
-        # subsystems. Shard totals may overlap across shards; global totals never do.
-        shard['paths'].update(memberships[sid])
+        if not memberships[sid]:
+            continue
+        batches, batch, lines = [], set(), 0
+        for path in sorted(memberships[sid]):
+            count = files[path]['source_lines']
+            if multi_session and batch and (len(batch) == MAX_SOURCE_FILES_PER_SESSION
+                    or lines + count > MAX_SOURCE_LINES_PER_SESSION):
+                batches.append(batch)
+                batch, lines = set(), 0
+            batch.add(path)
+            lines += count
+        batches.append(batch)
+        for paths in batches:
+            candidates = [b for b in bins if not multi_session or not b['paths'] or
+                          load(len(b['subsystem_ids'] | {sid}), b['paths'] | paths) <= 1]
+            if not candidates:
+                bins.append({'subsystem_ids': set(), 'paths': set()})
+                candidates = [bins[-1]]
+            shard = min(candidates, key=lambda b: load(len(b['subsystem_ids']), b['paths']))
+            shard['subsystem_ids'].add(sid)
+            # Overlapping catalog hints can share work; physical paths count only
+            # once within a shard and once in the global inventory totals.
+            shard['paths'].update(paths)
+    bins = [b for b in bins if b['paths']] or [bins[0]]
+    # Empty/excluded areas still need a coverage report, not their own session.
+    for sid in sorted(sid for sid in memberships if not memberships[sid]):
+        min(bins, key=lambda b: load(len(b['subsystem_ids']), b['paths']))['subsystem_ids'].add(sid)
     shards = []
-    for shard in bins:
+    for i, shard in enumerate(bins):
         count = len(shard['subsystem_ids'])
         file_count, lines = size(shard['paths'])
         weight = load(count, shard['paths'])
-        shards.append(dict(id=shard['id'], subsystem_ids=sorted(shard['subsystem_ids']),
+        shards.append(dict(id=f'R-{i + 1:03d}', subsystem_ids=sorted(shard['subsystem_ids']),
+            primary_file_paths=sorted(shard['paths']),
+            oversized_file_paths=sorted(p for p in shard['paths'] if files[p]['source_lines'] > MAX_SOURCE_LINES_PER_SESSION),
             subsystem_count=count, source_files=file_count, source_lines=lines,
             normalized_load=float(weight), over_capacity=weight > 1))
-    plan = {'multi_session': multi_session, 'required_sessions': required,
+    plan = {'multi_session': multi_session, 'required_sessions': len(shards),
         'thresholds': dict(zip(('max_subsystems_per_session', 'max_source_files_per_session',
                                'max_source_lines_per_session'), capacities)),
         'metric': 'nonexcluded_regular_files; LF_count_plus_unterminated_final_line',

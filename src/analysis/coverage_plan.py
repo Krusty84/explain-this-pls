@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Deterministic catalog reconciliation; file assignment is not understanding."""
+"""Reconcile advisory catalog areas with inventory; assignment is not inspection."""
 from __future__ import annotations
 import copy
 import re
@@ -134,7 +134,7 @@ def build_coverage_plan(catalog, inventory, context, fallback=False, *, salvaged
     unclassified = leaves - assigned - excluded
     if unclassified:
         areas.append({'id': 'UNCLASSIFIED', 'name': 'Unclassified source entries',
-                      'purpose': 'Entries not assigned or explicitly excluded by the catalog.',
+                      'purpose': 'Investigate entries not classified or explicitly excluded by the catalog.',
                       'paths': sorted(unclassified), 'entry_paths': sorted(unclassified),
                       'file_paths': sorted(unclassified & files), 'required': True})
     summary = inventory_summary(inventory)
@@ -206,12 +206,13 @@ def coverage_checks(data, context, resolutions, *, area_ids=None):
     reports = {r['area_id']: r for r in data['coverage']}
     resolved = {e['id']: e for e in resolutions if e['status'] == 'RESOLVED'}
     sources = {s['id']: s for s in source_catalog(context)}
+    primary = set(context['analysis_shard']['primary_file_paths']) if area_ids is not None else None
 
     def within(evidence, area):
         source = sources.get(evidence['source_id'], {})
         prefix = source.get('identity', {}).get('submodule_path', '')
         path = prefix + '/' + evidence['path'] if prefix else evidence['path']
-        return path in area['file_paths']
+        return path in area['file_paths'] and (primary is None or path in primary)
 
     expected = [a['id'] for a in areas]
     required = {a['id'] for a in areas if a['required']}

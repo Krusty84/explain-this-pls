@@ -15,7 +15,6 @@ from src.analysis.evidence import canonical, sha
 from src.analysis.study_shards import OBSERVATION_FIELDS, empty_shard_result, synthesis_inputs
 from src.contracts.contracts import ContractError, validate_result, validate_schema, workflow_satisfied
 from src.contracts.saved_contracts import SAVED_FOLDER_SCHEMAS, SAVED_SCHEMAS
-from src.runtime.metrics import FIELDS
 from src.runtime.reporting import Reporter
 from src.tui.state import RunState
 from src.reports.document_rendering import validate_materialized
@@ -382,7 +381,7 @@ class MultiSessionTests(FolderFixture):
                         if review:
                             self.assertEqual(manifest['review']['verdict'], 'INCONCLUSIVE')
 
-    def test_salvaged_unclassified_entries_remain_uninspected_after_synthesis(self):
+    def test_salvaged_unclassified_entries_are_studied_without_hiding_catalog_limits(self):
         def change(runner, context, data):
             if context['stage'] == 'catalog':
                 data['subsystems'][-1]['paths'] = ['unknown']
@@ -390,7 +389,11 @@ class MultiSessionTests(FolderFixture):
         self.assertEqual((code, manifest['status']), (2, 'PARTIAL'))
         self.assertEqual(manifest['coverage_plan']['origin'], 'AGENT_SALVAGED')
         unclassified = next(a for a in manifest['study']['coverage'] if a['area_id'] == 'UNCLASSIFIED')
-        self.assertEqual(unclassified['status'], 'NOT_INSPECTED')
+        self.assertEqual(unclassified['status'], 'INSPECTED')
+        self.assertTrue(unclassified['evidence_ids'])
+        assigned = [s for s in manifest['analysis_plan']['shards'] if 'UNCLASSIFIED' in s['subsystem_ids']]
+        self.assertEqual({p for s in assigned for p in s['primary_file_paths'] if p != 'app.py'},
+                         set(manifest['coverage_plan']['unclassified_paths']))
         self.assertFalse(manifest['accepted'])
 
     def test_catalog_identity_failure_and_strict_unknown_paths_block_analysis(self):
@@ -490,7 +493,7 @@ class MultiSessionTests(FolderFixture):
         self.assertEqual([c['context'].get('prompt_variant', c['context']['stage']) for c in self.calls],
                          ['catalog', 'study-shard', 'study-shard', 'study-shard', 'synthesis', 'review', 'revise', 'review'])
 
-    def test_file_and_line_thresholds_can_produce_empty_shards_without_splitting(self):
+    def test_file_and_line_thresholds_split_one_subsystem_and_merge_coverage(self):
         for threshold in ('MAX_SOURCE_FILES_PER_SESSION', 'MAX_SOURCE_LINES_PER_SESSION'):
             for backend in ('codex', 'claude-code', 'opencode', 'xxx'):
                 with self.subTest(threshold=threshold, backend=backend), \
@@ -499,39 +502,34 @@ class MultiSessionTests(FolderFixture):
                     manifest, code = self.run_case(catalog_paths=['.'], backend=backend)
                 self.assertEqual(code, 0, manifest.get('diagnostics'))
                 self.assertEqual(manifest['required_sessions'], 3)
-                self.assertTrue(manifest['analysis_plan']['shards'][0]['over_capacity'])
                 plan, states = manifest['analysis_plan'], manifest['study_shards']
-                self.assertEqual([s['subsystem_ids'] for s in plan['shards']], [['S-001'], [], []])
+                self.assertTrue(all(not s['over_capacity'] and s['source_files'] == 3 for s in plan['shards']))
+                self.assertEqual([s['subsystem_ids'] for s in plan['shards']], [['S-001']] * 3)
+                self.assertEqual({p for s in plan['shards'] for p in s['primary_file_paths']},
+                                 {'app.py'} | {f'part{i}.py' for i in range(2, 10)})
                 self.assertEqual([s['id'] for s in states], ['R-001', 'R-002', 'R-003'])
-                self.assertEqual([c['context']['stage'] for c in self.calls], ['catalog', 'study-shard', 'study'])
+                self.assertEqual([c['context']['stage'] for c in self.calls],
+                                 ['catalog', 'study-shard', 'study-shard', 'study-shard', 'study'])
                 validated = [c.args[1]['shard_id'] for c in validator.call_args_list if c.args[0] == 'study-shard']
                 self.assertEqual(validated, ['R-001', 'R-002', 'R-003'])
-                self.assertEqual(manifest['metrics']['attempts'], 3)
+                self.assertEqual(manifest['metrics']['attempts'], 5)
                 rows = [s for s in manifest['metrics']['stages'] if s['stage'] == 'study-shard']
-                self.assertEqual([s['attempts'] for s in rows], [1, 0, 0])
-                for planned, state, row in zip(plan['shards'][1:], states[1:], rows[1:]):
+                self.assertEqual([s['attempts'] for s in rows], [1, 1, 1])
+                for planned, state in zip(plan['shards'], states):
                     data, meta = state['study-shard'], state['study-shard_invocation']
                     self.assertEqual((state['status'], meta['status']), ('SUCCEEDED', 'SUCCEEDED'))
-                    self.assertEqual(meta['generated_by'], 'orchestrator')
-                    self.assertEqual(row['generated_by'], 'orchestrator')
-                    self.assertEqual(Reporter().metric_models(row), 'orchestrator')
-                    self.assertIsNone(row['backend'])
-                    self.assertNotIn('backend_result_valid', meta)
-                    self.assertNotIn('invocation_id', meta)
-                    self.assertTrue(meta['local_validation'] and meta['publication_complete'] and meta['source_integrity_verified'])
-                    self.assertEqual({k: v for k, v in data.items() if k != 'program_checks'}, empty_shard_result(planned, manifest))
+                    self.assertNotIn('generated_by', meta)
+                    self.assertTrue(meta['local_validation'] and meta['publication_complete'] and meta['backend_result_valid'])
+                    self.assertIn(data['evidence'][0]['path'], planned['primary_file_paths'])
+                    self.assertFalse(data['program_checks']['coverage']['completeness_measured'])
                     validate_schema(data, SAVED_FOLDER_SCHEMAS['study-shard'])
-                    for metrics in (row, meta['metrics']):
-                        self.assertEqual(metrics['attempts'], 0)
-                        self.assertEqual(metrics['by_model'], [])
-                        self.assertEqual([metrics['usage'][key] for key in FIELDS], [0] * len(FIELDS))
-                    directory = self.runner.run_dir / state['directory']
-                    self.assertEqual(json.loads((directory / 'study-shard.json').read_text()), data)
-                    self.assertEqual(list((directory / 'study-shard.logs').iterdir()), [directory / 'study-shard.logs/invocation.json'])
                 inputs = synthesis_inputs(plan, states)
                 self.assertEqual([s['shard_id'] for s in inputs['validated_shards']], ['R-001', 'R-002', 'R-003'])
-                for field in ('evidence', 'claims', 'coverage'):
-                    self.assertEqual(inputs['synthesis_' + field], states[0]['study-shard'][field])
+                self.assertEqual(inputs['synthesis_coverage'], [dict(area_id='S-001', status='INSPECTED',
+                    evidence_ids=['study:E-001', 'study:E-002', 'study:E-003'], limitation='')])
+                self.assertEqual(manifest['study']['coverage'], inputs['synthesis_coverage'])
+                self.assertEqual(len(inputs['synthesis_evidence']), 3)
+                self.assertEqual(len(inputs['synthesis_claims']), 3)
                 for state in states:
                     path = state['directory'] + '/study-shard.json'
                     blob = (self.runner.run_dir / path).read_bytes()
@@ -541,11 +539,23 @@ class MultiSessionTests(FolderFixture):
         with patch('src.analysis.analysis_plan.MAX_SOURCE_FILES_PER_SESSION', 3):
             manifest, code = self.run_case(catalog_paths=['.'])
         self.assertEqual(code, 0)
+        # Retain validation coverage for locally completed empty assignments even
+        # though the planner no longer produces them alongside file workloads.
+        plan = copy.deepcopy(manifest['analysis_plan'])
+        empty = dict(id='R-004', subsystem_ids=[], primary_file_paths=[])
+        plan['shards'].append(empty)
+        data = prepare_result('study-shard', empty_shard_result(empty, manifest),
+                              manifest | {'analysis_shard': empty})
+        meta = dict(generated_by='orchestrator', reason='empty_subsystem_assignment',
+                    source_integrity_verified=True, local_validation=True, publication_complete=True, artifact_hashes={})
+        original_states = manifest['study_shards'] + [dict(id='R-004', status='SUCCEEDED', directory='study-shards/R-004',
+                                                         **{'study-shard': data, 'study-shard_invocation': meta})]
+        synthesis_inputs(plan, original_states)
         for kind in ('marker', 'reason', 'source', 'validation', 'publication', 'policy', 'assignment',
                      'id', 'completion', *OBSERVATION_FIELDS, 'evidence', 'claims', 'coverage', 'limitations',
                      'model_backend', 'model_as_local', 'order', 'missing'):
-            states = copy.deepcopy(manifest['study_shards'])
-            data, meta = states[1]['study-shard'], states[1]['study-shard_invocation']
+            states = copy.deepcopy(original_states)
+            data, meta = states[-1]['study-shard'], states[-1]['study-shard_invocation']
             if kind == 'marker': meta.pop('generated_by')
             elif kind == 'reason': meta['reason'] = 'another'
             elif kind in ('source', 'validation', 'publication'):
@@ -560,9 +570,47 @@ class MultiSessionTests(FolderFixture):
             elif kind == 'missing': states.pop()
             else: data[kind] = ['unexpected content']
             with self.subTest(kind=kind), self.assertRaises(ContractError):
-                synthesis_inputs(manifest['analysis_plan'], states)
+                synthesis_inputs(plan, states)
 
-    def test_empty_shard_source_and_plan_guards_prevent_publication(self):
+    def test_incomplete_split_scope_and_dependency_only_evidence_block_synthesis(self):
+        for kind in ('partial', 'dependency_only'):
+            for policy in ('strict', 'compromise'):
+                def change(runner, context, data):
+                    if context.get('analysis_shard', {}).get('id') != 'R-002':
+                        return
+                    if kind == 'partial':
+                        data['coverage'][0].update(status='PARTIALLY_INSPECTED', limitation='Only one assigned file was read.')
+                    else:
+                        # The source evidence is valid and belongs to the same
+                        # catalog area, but it is outside this batch's scope.
+                        data['evidence'][0]['path'] = 'app.py'
+                with self.subTest(kind=kind, policy=policy), patch('src.analysis.analysis_plan.MAX_SOURCE_FILES_PER_SESSION', 3):
+                    manifest, code = self.run_case(catalog_paths=['.'], change=change, policy=policy)
+                self.assertEqual(code, 1)
+                self.assertEqual(manifest['synthesis_status'], 'SKIPPED')
+                self.assertFalse(workflow_satisfied(manifest))
+                self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED', 'FAILED', 'SUCCEEDED'])
+                error = manifest['study_shards'][1]['study-shard_invocation']['error']['details']['coverage']
+                self.assertEqual(error['unfinished_ids' if kind == 'partial' else 'unsupported_ids'], ['S-001'])
+                self.assertFalse(error['completeness_measured'])
+
+    def test_dependency_evidence_outside_primary_scope_remains_valid_for_claims(self):
+        def change(runner, context, data):
+            if context.get('analysis_shard', {}).get('id') != 'R-002':
+                return
+            data['evidence'].append(dict(id='E-002', source_id='source-001', path='app.py', start_line=1, end_line=1, quote=''))
+            data['claims'][0]['evidence_ids'].append('study:E-002')
+            data['relationships'].append(dict(subsystem_id='S-001', related_path='app.py',
+                description='Dependency outside the primary scope.', claim_ids=['C-001']))
+        with patch('src.analysis.analysis_plan.MAX_SOURCE_FILES_PER_SESSION', 3):
+            manifest, code = self.run_case(catalog_paths=['.'], change=change)
+        self.assertEqual(code, 0, manifest.get('diagnostics'))
+        self.assertEqual(manifest['synthesis_status'], 'SUCCEEDED')
+        inputs = synthesis_inputs(manifest['analysis_plan'], manifest['study_shards'])
+        self.assertEqual(inputs['validated_shards'][1]['relationships'][0]['related_path'], 'app.py')
+        self.assertEqual(inputs['synthesis_claims'][1]['evidence_ids'], ['study:E-002', 'study:E-003'])
+
+    def test_split_shard_source_and_plan_guards_prevent_publication(self):
         for kind in ('source', 'coverage_plan', 'analysis_plan', 'previous_shard'):
             def change(stage, data, context, *args, **kwargs):
                 result = prepare_result(stage, data, context, *args, **kwargs)
@@ -578,10 +626,12 @@ class MultiSessionTests(FolderFixture):
                 manifest, code = self.run_case(catalog_paths=['.'])
             self.assertEqual((code, manifest['critical_failure']), (1, True))
             self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED', 'FAILED', 'PLANNED'])
-            self.assertFalse((self.runner.run_dir / 'study-shards/R-002/study-shard.json').exists())
-            self.assertEqual([c['context']['stage'] for c in self.calls], ['catalog', 'study-shard'])
+            if kind != 'previous_shard':
+                self.assertFalse((self.runner.run_dir / 'study-shards/R-002/study-shard.json').exists())
+            self.assertFalse((self.runner.run_dir / 'ARCHITECTURE.md').exists())
+            self.assertEqual([c['context']['stage'] for c in self.calls], ['catalog', 'study-shard', 'study-shard'])
 
-    def test_empty_shard_artifact_mutation_blocks_synthesis_publication(self):
+    def test_split_shard_artifact_mutation_blocks_synthesis_publication(self):
         def change(runner, context, data):
             if context.get('prompt_variant') == 'synthesis':
                 path = runner.run_dir / 'study-shards/R-002/study-shard.json'
@@ -596,8 +646,8 @@ class MultiSessionTests(FolderFixture):
         with patch('src.analysis.analysis_plan.MAX_SOURCE_FILES_PER_SESSION', 3):
             manifest, code = self.run_case(catalog_paths=['link.py'])
         shard = manifest['analysis_plan']['shards'][0]
-        self.assertEqual((shard['subsystem_ids'], shard['source_files']), (['S-001'], 0))
-        self.assertEqual([c['context']['stage'] for c in self.calls], ['catalog', 'study-shard'])
+        self.assertEqual((shard['subsystem_ids'], shard['source_files']), (['S-001', 'UNCLASSIFIED'], 3))
+        self.assertEqual([c['context']['stage'] for c in self.calls], ['catalog'] + ['study-shard'] * 3)
         self.assertNotEqual(code, 0)  # The fixture cannot resolve evidence through a symlink.
         self.assertNotIn('generated_by', manifest['study_shards'][0]['study-shard_invocation'])
 
@@ -616,10 +666,12 @@ class MultiSessionTests(FolderFixture):
                 with self.subTest(excluded=excluded, policy=policy), \
                         patch('src.analysis.analysis_plan.MAX_SOURCE_FILES_PER_SESSION', 3):
                     manifest, code = self.run_case(change=change, policy=policy)
-                self.assertEqual([c['context']['stage'] for c in self.calls], ['catalog', 'study'])
+                self.assertEqual([c['context']['stage'] for c in self.calls],
+                                 ['catalog'] + ([] if excluded else ['study-shard'] * 3) + ['study'])
                 self.assertEqual([s['status'] for s in manifest['study_shards']], [] if excluded else ['SUCCEEDED'] * 3)
-                self.assertEqual([s['subsystem_ids'] for s in manifest['analysis_plan']['shards']], [[]] if excluded else [[], [], []])
-                self.assertEqual(manifest['metrics']['attempts'], 2)
+                self.assertEqual([s['subsystem_ids'] for s in manifest['analysis_plan']['shards']],
+                                 [[]] if excluded else [['UNCLASSIFIED']] * 3)
+                self.assertEqual(manifest['metrics']['attempts'], 2 if excluded else 5)
                 self.assertEqual(manifest.get('synthesis_status'), None if excluded else 'SUCCEEDED')
                 if excluded:
                     self.assertEqual(manifest['source_metrics'], dict(subsystems=0, source_files=0, source_lines=0))
@@ -627,8 +679,8 @@ class MultiSessionTests(FolderFixture):
                 self.assertEqual((code, manifest['status']), (2, 'PARTIAL'))
                 self.assertFalse(workflow_satisfied(manifest))
                 self.assertFalse(manifest['study']['program_checks']['policy_satisfied'])
-                self.assertEqual(manifest['study']['claims'], [])
-                self.assertEqual(manifest['study']['evidence'], [])
+                self.assertEqual(len(manifest['study']['claims']), 0 if excluded else 3)
+                self.assertEqual(len(manifest['study']['evidence']), 0 if excluded else 3)
                 self.assertEqual([a['area_id'] for a in manifest['study']['coverage']], [] if excluded else ['UNCLASSIFIED'])
 
 
@@ -638,7 +690,7 @@ class MultiSessionGitTests(unittest.TestCase):
     git = git_fixtures.RepoFixture.git
     config = git_fixtures.RepoFixture.config
 
-    def test_git_empty_shards_preserve_identity_and_source_guards(self):
+    def test_git_split_shards_preserve_identity_and_source_guards(self):
         for name in ('part2.py', 'part3.py'):
             (self.repo_path / name).write_text('pass\n')
         self.git('add', '.')
@@ -684,7 +736,7 @@ class MultiSessionGitTests(unittest.TestCase):
                                  (branch['branch'], branch['source_commit']))
                 continue
             self.assertEqual([s['id'] for s in states], ['R-001', 'R-002', 'R-003'])
-            self.assertEqual(sum(c['stage'] == 'study-shard' for c in calls), 1)
+            self.assertEqual(sum(c['stage'] == 'study-shard' for c in calls), 2 if kind == 'source_changed' else 3)
             if kind == 'source_changed':
                 self.assertEqual((code, manifest['critical_failure']), (1, True))
                 self.assertEqual([s['status'] for s in states], ['SUCCEEDED', 'FAILED', 'PLANNED'])
@@ -696,7 +748,7 @@ class MultiSessionGitTests(unittest.TestCase):
                 data = state['study-shard']
                 validate_schema(data, SAVED_SCHEMAS['study-shard'])
                 self.assertEqual((data['branch'], data['source_commit']), (branch['branch'], branch['source_commit']))
-                self.assertEqual(state['study-shard_invocation']['generated_by'], 'orchestrator')
+                self.assertNotIn('generated_by', state['study-shard_invocation'])
             synthesis_inputs(branch['analysis_plan'], states)
 
     def test_git_snapshots_synthesize_review_and_compare_without_cross_source_plan_checks(self):

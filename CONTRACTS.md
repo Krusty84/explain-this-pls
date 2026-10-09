@@ -737,9 +737,12 @@ The catalog stage uses the same read-only source scope and boundary guards as st
 Its wire task is architecture_catalog, with source identity, completion_status,
 limitations, subsystems `{id,name,purpose,paths}` and exclusions `{path,reason}`.
 The agent receives source information and a compact directory summary; Python
-checks selectors against the full file inventory. Explicit exclusions and symlinks
+checks selectors against the full file inventory. Subsystems are provisional
+navigation hints, not established architecture or indivisible scheduling units.
+Unknown purpose is not an exclusion reason. Explicit exclusions and symlinks
 remain represented, and links are never followed. Unallocated entries become
-UNCLASSIFIED. The resulting coverage.plan.json is immutable for the snapshot and
+UNCLASSIFIED; their regular files still receive primary study assignments.
+The resulting coverage.plan.json is immutable for the snapshot and
 shared by all document revisions. Large sources can use multiple study sessions
 before the first global document is assembled.
 
@@ -792,24 +795,27 @@ NOT_MEASURED.
 
 The top-level `multi_session` setting is a strict boolean, default `true` when
 omitted. `false` forces the ordinary single-study path. Catalog always uses one
-invocation. The backend-independent planner computes:
+invocation. The backend-independent planner starts with this session target:
 
 ```
-N = max(1, ceil(subsystems / 4), ceil(source_files / 300), ceil(source_lines / 50000))
+N_target = max(1, ceil(areas / 4), ceil(source_files / 300), ceil(source_lines / 50000))
 ```
 
-The thresholds are code constants, not user settings. `N == 1` uses the existing
-study call, with no shard or synthesis calls. `N > 1` uses study shards in stable
+Areas include UNCLASSIFIED. File batching can increase the target when groups do
+not fit; unused sessions are removed. The thresholds are code constants, not user
+settings. One resulting session uses the existing study call, with no shard or
+synthesis calls. Multiple sessions use study shards in stable
 R-001, R-002, ... order, then one synthesis call. There is no concurrency. Shards
 and synthesis inherit the effective `stage_agents.study` selection. Their fixed
 internal prompts are `study-shard.md` and `synthesis.md`; direct study and revision
 keep the existing configurable prompts.
 
-Size metrics describe **analyzed regular files**, not semantic source lines.
+Size metrics describe **eligible regular files**, not inspected files or semantic source lines.
 Inventory has no authoritative language classification. Directories and symlinks
 do not count; no new extension/vendor/generated heuristics are applied. Git source
 preparation retains its existing ignored-untracked exclusions. Catalog exclusions
-affect subsystem membership but do not subtract from global inventory totals.
+affect area membership and analysis file/line totals. The complete inventory and
+coverage counts retain excluded files with their explicit paths and reasons.
 `source_lines` counts LF bytes plus one for a nonempty unterminated final line.
 Blank lines count; CRLF counts once; standalone CR is not a separator. Binary
 bytes use the same rule. Empty files have zero lines. Counts are collected during
@@ -818,28 +824,34 @@ source-content scan. Metadata guards reuse the frozen counts.
 
 `analysis.plan.json` is saved beside `coverage.plan.json` and `source.inventory.json`.
 It contains the enable flag, exact session count, thresholds, metric definition,
-global totals, subsystem sizes and shard assignments/loads. It binds the inventory
+global totals, area sizes, shard primary_file_paths, oversized_file_paths and loads.
+The existing subsystem fields include the UNCLASSIFIED area when present. It binds the inventory
 and coverage-plan hashes. Local validation rebuilds the plan and compares canonical
 JSON, checking every assignment, count, ID, capacity flag and hash. Once study
 starts, every boundary checks the frozen plan bytes; changes are integrity failures.
 
-Subsystem cost is max(1/4, files/300, lines/50000). Descending cost, then subsystem
-ID, determines placement order. Each whole subsystem goes to the least-loaded
-shard, with shard ID breaking ties. Shard load uses the same maximum with its
-subsystem count. Rational arithmetic determines placement; normalized_load is a
-JSON number. Each inventory path counts once per shard despite overlapping areas.
-Global totals also count paths once; sums across shards can exceed global totals.
-An indivisible oversized subsystem remains intact and sets `over_capacity: true`.
-The exact formula can produce empty shards when N exceeds subsystem count. These
-have explicit empty assignments, make no source observations, and require formal
-COMPLETE responses. They do not split the oversized subsystem.
+Area cost is max(1/4, files/300, lines/50000). Descending cost, then area ID,
+determines placement order. Sorted file paths form batches within the file and
+line limits. Each batch goes to the least-loaded shard that can hold it, with
+shard order breaking ties; a new shard is added when none fits. Shard load uses
+the same maximum with its area count. Rational arithmetic determines placement;
+normalized_load is a JSON number. Each inventory path counts once per shard
+despite overlapping areas. Global totals also count paths once; sums across
+shards can exceed global totals. Oversized individual files remain intact in
+their own batches and set `over_capacity: true`; their paths are explicit.
+Unused sessions are removed. Areas without regular files share an existing
+session for their coverage report. No assignment is treated as inspection.
 
 The shard schema carries task/source/shard identity, assigned subsystem IDs,
 components, flows, state, constraints, cross-area relationships, evidence, claims,
 coverage, limitations and completion. Observation records link claims; relationships
 link a primary subsystem to an inventoried common-root-relative path. The model
 receives only its primary coverage areas and assignment, with source identity and
-normal study context. Other locations may be read only to understand interfaces.
+normal study context. primary_file_paths gives the exact common-root-relative file
+scope. Coverage for an area concerns its intersection with these paths, even when
+other shards share the area ID. INSPECTED requires resolved evidence in that
+intersection. Other locations may be read to understand interfaces and support
+dependency claims, but cannot establish primary coverage.
 Model scope changes are identity failures. No shard produces a global report.
 
 Each shard must pass backend completion, binding, schema, semantics, source
@@ -864,6 +876,9 @@ only task/source identity, completion_status, limitations and report_sections ar
 permitted. Every registered claim must appear in a block's claim_ids, and all ten
 sections must retain their required order. Registry arrays and other unexpected
 fields are rejected, even if they match the inputs.
+Python merges repeated area coverage into one record, retaining all evidence
+references and limitations. A partial or uninspected contribution cannot become
+INSPECTED through this merge. Coverage completeness remains unmeasured.
 
 After checking model identity and the synthesis schema, Python deep-copies
 `synthesis_evidence`, `synthesis_claims` and `synthesis_coverage` from the frozen

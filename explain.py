@@ -1486,14 +1486,7 @@ class Runner:
             item['synthesis_status'] = 'SKIPPED'
             return None
         self.assert_revision_files(item)
-        inputs = synthesis_inputs(plan, item['study_shards'])
-        # UNCLASSIFIED has no catalog subsystem and cannot acquire coverage from
-        # a shard. Preserve the existing global coverage failure explicitly.
-        for area in context['coverage_plan']['areas']:
-            if area['id'] == 'UNCLASSIFIED':
-                inputs['synthesis_coverage'].append(dict(area_id='UNCLASSIFIED', status='NOT_INSPECTED',
-                    evidence_ids=[], limitation='Catalog left entries unclassified; no primary shard owns them.'))
-        return inputs
+        return synthesis_inputs(plan, item['study_shards'])
 
     def select_source_revision(self, item, directory, *, publish):
         self.assert_revision_files(item)

@@ -11,7 +11,7 @@ OBSERVATION_FIELDS = ('components', 'significant_flows', 'data_and_state', 'cons
 
 
 def empty_shard_result(shard, context):
-    if shard['subsystem_ids']:
+    if shard['subsystem_ids'] or shard.get('primary_file_paths'):
         raise ContractError('Only unassigned shards can be completed locally.')
     identity = ('source_directory', 'source_fingerprint') if 'source_directory' in context else ('branch', 'source_commit')
     return dict(task='architecture_study_shard', shard_id=shard['id'], assigned_subsystem_ids=[],
@@ -98,6 +98,8 @@ def synthesis_inputs(plan, states):
     artifact_hashes = {}
     for planned, state in zip(plan['shards'], states):
         original = state['study-shard']
+        if (original['shard_id'] != planned['id'] or original['assigned_subsystem_ids'] != planned['subsystem_ids']):
+            raise ContractError('Synthesis shard assignment changed.')
         meta = state['study-shard_invocation']
         local = meta.get('generated_by') == 'orchestrator'
         if local:
@@ -132,8 +134,21 @@ def synthesis_inputs(plan, states):
         coverage.extend(shard['coverage'])
         shards.append(shard)
         mappings.append({'shard_id': state['id'], 'evidence_ids': eid_map, 'claim_ids': cid_map})
+    # A catalog area can span several primary file batches. Keep one global
+    # coverage record and retain every contributing evidence reference and limit.
+    merged = {}
+    for area in coverage:
+        sid = area['area_id']
+        if sid not in merged:
+            merged[sid] = copy.deepcopy(area)
+            continue
+        previous = merged[sid]
+        if previous['status'] != area['status']:
+            previous['status'] = 'PARTIALLY_INSPECTED'
+        previous['evidence_ids'] = sorted(set(previous['evidence_ids'] + area['evidence_ids']))
+        previous['limitation'] = '\n'.join(dict.fromkeys(s for s in (previous['limitation'], area['limitation']) if s))
     return {'validated_shards': shards, 'synthesis_evidence': evidence, 'synthesis_claims': claims,
-            'synthesis_coverage': sorted(coverage, key=lambda a: a['area_id']), 'shard_id_mappings': mappings,
+            'synthesis_coverage': [merged[sid] for sid in sorted(merged)], 'shard_id_mappings': mappings,
             '_synthesis_resolutions': resolutions, '_shard_artifact_hashes': artifact_hashes}
 
 

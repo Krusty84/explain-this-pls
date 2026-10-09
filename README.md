@@ -162,19 +162,23 @@ in this configuration.
 #### Optional settings
 
 **Multi-session study is enabled by default.** Catalog remains one model call.
-The planner uses the maximum of subsystem count / 4, nonexcluded regular files / 300,
-and their physical lines / 50,000, rounded up. Catalog exclusions are removed from
-file and line totals; overlapping files count once, and unclassified files still
-count. The full inventory remains available for source integrity checks.
-When this gives one session, the ordinary study runs. Larger sources use
-sequential whole-subsystem studies, then one synthesis call with source tools
+The frozen inventory determines study scope. Catalog areas are provisional grouping
+hints. Every nonexcluded regular file, including unclassified files, receives a
+primary assignment. Large groups split into deterministic batches of at most 300
+files and 50,000 physical lines, keeping each file intact. Catalog exclusions stay
+visible in coverage accounting; overlapping files count once in global totals.
+The full inventory remains available for source integrity checks.
+When one session suffices, the ordinary study runs. Larger sources use
+sequential file-batch studies, then one synthesis call with source tools
 disabled. Set `"multi_session": false` to keep
 the legacy single-study path, regardless of source size.
 
-`analysis.plan.json` records metrics, assignments and capacity overruns. An
-oversized subsystem stays intact. Each shard has separate artifacts and attempt
+`analysis.plan.json` records metrics, primary file paths and oversized individual
+files. Such files can exceed the line limit. Empty sessions are removed; empty
+catalog areas share an existing session. Each shard has separate artifacts and attempt
 metrics under `study-shards/R-001/`, etc. All shards must pass local checks before
 synthesis. Review and revision, if enabled, use the resulting global study.
+Assignment is not proof of inspection. Incomplete investigation remains a limitation.
 
 **Review is opt-in.** In any existing JSON or JSONC configuration, enable it with:
 

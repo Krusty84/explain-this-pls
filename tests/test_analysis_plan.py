@@ -33,6 +33,25 @@ def synthetic_plan(subsystems=9, files=9, lines=9, *, enabled=True, overlap=Fals
 
 
 class AnalysisPlanTests(unittest.TestCase):
+    def assert_inventory_scheduled(self, plan, inventory, coverage):
+        excluded = {p for area in coverage['exclusions'] for p in area['file_paths']}
+        eligible = {e['path']: e['source_lines'] for e in inventory['entries']
+                    if e['type'] == 'file' and e['path'] not in excluded}
+        assigned = {p for shard in plan['shards'] for p in shard['primary_file_paths']}
+        self.assertEqual(assigned, set(eligible))
+        self.assertEqual(plan['totals']['source_files'], len(eligible))
+        self.assertEqual(plan['totals']['source_lines'], sum(eligible.values()))
+        for shard in plan['shards']:
+            paths = shard['primary_file_paths']
+            self.assertEqual(paths, sorted(set(paths)))
+            self.assertEqual(shard['source_files'], len(paths))
+            self.assertEqual(shard['source_lines'], sum(eligible[p] for p in paths))
+            if eligible:
+                self.assertTrue(paths)
+            if plan['multi_session'] and not shard['oversized_file_paths']:
+                self.assertLessEqual(shard['source_files'], 300)
+                self.assertLessEqual(shard['source_lines'], 50000)
+
     def test_each_threshold_and_maximum(self):
         for s, f, l, n in ((4, 300, 50000, 1), (5, 5, 5, 2), (2, 301, 301, 2),
                            (2, 2, 50001, 2), (9, 601, 150001, 4), (9, 901, 1, 4),
@@ -42,12 +61,14 @@ class AnalysisPlanTests(unittest.TestCase):
                 self.assertEqual(plan['required_sessions'], n)
                 self.assertEqual(len(plan['shards']), n)
                 self.assertEqual(verify_analysis_plan(plan, inventory, coverage), plan)
+                self.assert_inventory_scheduled(plan, inventory, coverage)
 
     def test_disabled_forces_one_complete_assignment(self):
-        plan, _, _ = synthetic_plan(13, 901, 150001, enabled=False)
+        plan, inventory, coverage = synthetic_plan(13, 901, 150001, enabled=False)
         self.assertEqual(plan['required_sessions'], 1)
         self.assertEqual(plan['shards'][0]['subsystem_count'], 13)
         self.assertFalse(plan['multi_session'])
+        self.assert_inventory_scheduled(plan, inventory, coverage)
 
     def test_deterministic_bytes_ties_and_exact_assignment(self):
         plan, inventory, coverage = synthetic_plan()
@@ -74,19 +95,28 @@ class AnalysisPlanTests(unittest.TestCase):
         self.assertEqual(plan['shards'][0]['normalized_load'], 50001 / 50000)
         self.assertEqual(plan['shards'][1]['subsystem_ids'], ['S-002', 'S-003'])
 
-    def test_oversized_indivisible_subsystem_keeps_empty_bins_visible(self):
-        plan, _, _ = synthetic_plan(1, 901, 200001)
+    def test_oversized_subsystem_is_split_into_nonempty_file_batches(self):
+        plan, inventory, coverage = synthetic_plan(1, 901, 200001)
         self.assertEqual(plan['required_sessions'], 5)
-        self.assertEqual(plan['shards'][0]['subsystem_ids'], ['S-001'])
+        self.assertTrue(all(s['subsystem_ids'] == ['S-001'] and not s['over_capacity'] for s in plan['shards']))
+        self.assert_inventory_scheduled(plan, inventory, coverage)
+        self.assertEqual(canonical(plan), canonical(build_analysis_plan(inventory, coverage)))
+
+    def test_oversized_individual_file_stays_intact_without_empty_sessions(self):
+        plan, inventory, coverage = synthetic_plan(1, 1, 250001)
+        self.assertEqual(plan['required_sessions'], 1)
+        self.assertEqual(plan['shards'][0]['primary_file_paths'], ['f0000.py'])
+        self.assertEqual(plan['shards'][0]['oversized_file_paths'], ['f0000.py'])
         self.assertTrue(plan['shards'][0]['over_capacity'])
-        self.assertTrue(all(s['subsystem_ids'] == [] and s['normalized_load'] == 0 for s in plan['shards'][1:]))
+        self.assert_inventory_scheduled(plan, inventory, coverage)
 
     def test_overlaps_count_once_per_shard_and_once_globally(self):
-        plan, _, _ = synthetic_plan(9, 6, 60, overlap=True)
+        plan, inventory, coverage = synthetic_plan(9, 6, 60, overlap=True)
         self.assertEqual(plan['totals'], dict(subsystems=9, source_files=6, source_lines=60))
         self.assertTrue(all(s['source_files'] == 6 and s['source_lines'] == 60 for s in plan['shards']))
         self.assertEqual(plan['shards'][0]['normalized_load'], .75)
         self.assertTrue(all(s['file_count'] == 6 for s in plan['subsystems']))
+        self.assert_inventory_scheduled(plan, inventory, coverage)
 
     def test_plan_validation_rejects_tampering_even_with_recomputed_seal(self):
         plan, inventory, coverage = synthetic_plan()
@@ -96,6 +126,8 @@ class AnalysisPlanTests(unittest.TestCase):
                    lambda p: p['shards'][0]['subsystem_ids'].pop(),
                    lambda p: p['shards'][1]['subsystem_ids'].append('S-001'),
                    lambda p: p['shards'][0].update(source_lines=100), lambda p: p.update(multi_session=False),
+                   lambda p: p['shards'][0]['primary_file_paths'].pop(),
+                   lambda p: p['shards'][0]['oversized_file_paths'].append('f0000.py'),
                    lambda p: p['totals'].update(source_files=9.0)]
         for change in changes:
             altered = copy.deepcopy(plan)
@@ -104,10 +136,26 @@ class AnalysisPlanTests(unittest.TestCase):
             with self.assertRaises(ContractError):
                 verify_analysis_plan(altered, inventory, coverage)
 
-    def test_unclassified_files_still_count_in_global_inventory(self):
-        plan, _, _ = synthetic_plan(0, 301, 60000)
-        self.assertEqual(plan['totals'], dict(subsystems=0, source_files=301, source_lines=60000))
+    def test_unclassified_files_receive_primary_assignments(self):
+        plan, inventory, coverage = synthetic_plan(0, 301, 60000)
+        self.assertEqual(plan['totals'], dict(subsystems=1, source_files=301, source_lines=60000))
         self.assertEqual(plan['required_sessions'], 2)
+        self.assertTrue(all(s['subsystem_ids'] == ['UNCLASSIFIED'] for s in plan['shards']))
+        self.assert_inventory_scheduled(plan, inventory, coverage)
+
+    def test_catalog_omissions_are_scheduled_in_single_and_multi_session_modes(self):
+        _, inventory, _ = synthetic_plan(1, 301, 301)
+        context = {'branch': 'main', 'source_commit': 'abc'}
+        catalog = dict(task='architecture_catalog', **context, completion_status='COMPLETE', limitations=[],
+            exclusions=[], subsystems=[dict(id='S-001', name='Known', purpose='Provisional', paths=['f0000.py'])])
+        inventory['entries'] += [dict(path='unknown.bin', type='file', source_lines=0),
+                                 dict(path='link', type='symlink', target='f0000.py')]
+        coverage = build_coverage_plan(catalog, inventory, context)
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                plan = build_analysis_plan(inventory, coverage, enabled)
+                self.assert_inventory_scheduled(plan, inventory, coverage)
+                self.assertIn('UNCLASSIFIED', {sid for s in plan['shards'] for sid in s['subsystem_ids']})
 
     def test_catalog_exclusions_change_membership_and_analysis_totals(self):
         _, inventory, _ = synthetic_plan(1, 301, 60000)
@@ -120,6 +168,10 @@ class AnalysisPlanTests(unittest.TestCase):
         self.assertEqual(plan['totals'], dict(subsystems=1, source_files=300, source_lines=59800))
         self.assertEqual(plan['subsystems'][0]['file_count'], 300)
         self.assertEqual(plan['subsystems'][0]['source_lines'], 59800)
+        self.assertEqual(coverage['counts']['excluded_files'], 1)
+        self.assertEqual(coverage['exclusions'][0]['file_paths'], ['f0000.py'])
+        self.assertEqual(coverage['exclusions'][0]['reason'], 'Excluded fixture content.')
+        self.assert_inventory_scheduled(plan, inventory, coverage)
 
     def test_excluded_artifacts_do_not_inflate_sessions_or_change_inventory(self):
         _, inventory, coverage = synthetic_plan(6, 23, 2096)

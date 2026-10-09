@@ -269,6 +269,26 @@ class CoveragePlanTests(unittest.TestCase):
         resolution = {'id': 'study:E-001', 'source_id': 'source-002', 'path': 'app.py', 'status': 'RESOLVED'}
         self.assertTrue(coverage_checks(study, context, [resolution])['policy_satisfied'])
 
+    def test_shard_coverage_requires_evidence_in_its_primary_file_scope(self):
+        self.context['submodules'] = [{'path': 'src', 'expected_commit': 'def'}]
+        plan = build_coverage_plan(self.catalog, self.inventory, self.context)
+        context = self.context | {'coverage_plan': plan, 'analysis_shard': {'primary_file_paths': ['src/lib.py']}}
+        study = {'coverage': [{'area_id': 'S-001', 'status': 'INSPECTED',
+                              'evidence_ids': ['study:E-001'], 'limitation': ''}]}
+        dependency = {'id': 'study:E-001', 'source_id': 'source-002', 'path': 'app.py', 'status': 'RESOLVED'}
+        checks = coverage_checks(study, context, [dependency], area_ids=['S-001'])
+        self.assertEqual(checks['unsupported_ids'], ['S-001'])
+        self.assertFalse(checks['policy_satisfied'])
+        primary = dependency | {'path': 'lib.py'}
+        checks = coverage_checks(study, context, [primary], area_ids=['S-001'])
+        self.assertTrue(checks['policy_satisfied'])
+        self.assertFalse(checks['completeness_measured'])
+        study['coverage'][0].update(status='PARTIALLY_INSPECTED', limitation='Implementation paths remain unchecked.')
+        checks = coverage_checks(study, context, [primary], area_ids=['S-001'])
+        self.assertEqual(checks['unfinished_ids'], ['S-001'])
+        self.assertFalse(checks['policy_satisfied'])
+        self.assertFalse(checks['completeness_measured'])
+
     def test_saved_catalog_and_study_plan_bind_decoding(self):
         context = self.context | {'_inventory': self.inventory}
         validate_result('catalog', self.catalog, context)
