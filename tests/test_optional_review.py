@@ -127,7 +127,7 @@ class OptionalReviewPipelineTests(PipelineMixin, FolderFixture):
                 self.assertEqual(manifest['metrics']['attempts'], 2)
                 report = (self.run_dir / 'FINAL_REPORT.md').read_text()
                 self.assertIn('Review is disabled by configuration', report)
-                self.assertNotIn('review: Result unavailable', report)
+                self.assertNotIn('review: Result n/a', report)
                 self.assertNotIn('Registry review has not completed', report)
                 self.assertNotIn('Policy checks not satisfied', report)
                 self.assertIn('Review disabled by configuration', self.messages)

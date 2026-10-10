@@ -229,7 +229,7 @@ class ExplainApp(App[int]):
         self.query_one('#configs', DataTable).add_columns('Config', 'Mode', 'Source / validation')
         table = self.query_one('#stages', DataTable)
         for name, width in (('Source', 20), ('Step/revision', 18), ('Status', 12), ('Elapsed', 8),
-                            ('Attempts', 8), ('Tokens', 22), ('Estimated cost', 22), ('Result', 55)):
+                            ('Attempts', 8), ('Tokens', 22), ('Cost', 22), ('Result', 55)):
             table.add_column(name, width=width)
         self.query_one('#summary', DataTable).add_columns('Item', 'Result')
         self.query_one('#run-tabs', TabbedContent).disable_tab('summary-tab')
@@ -470,10 +470,10 @@ class ExplainApp(App[int]):
         self.query_one('#run-status', Static).update(self.literal(self.selected.name + ' · ' + outcome))
         metrics = result.get('metrics', {})
         values = [('Outcome', outcome), ('Meaning', result.get('status_meaning', 'See diagnostics.')),
-                  ('Elapsed', duration(metrics['duration_seconds']) if metrics else 'unavailable'),
-                  ('Attempts', metrics.get('attempts', 'unavailable')),
+                  ('Elapsed', duration(metrics['duration_seconds']) if metrics else 'n/a'),
+                  ('Attempts', metrics.get('attempts', 'n/a')),
                   ('Tokens', metric_value(metrics.get('usage', {}), 'total_tokens')),
-                  ('Estimated cost', metric_value(metrics.get('usage', {}), 'cost_usd')),
+                  ('Cost', metric_value(metrics.get('usage', {}), 'cost_usd')),
                   ('Review', 'Not performed (setup check).' if payload.get('check_only') else
                    'Enabled; see review results.' if result.get('review_enabled') else 'Disabled; no separate review performed.'),
                   *payload.get('paths', [])]

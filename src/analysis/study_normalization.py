@@ -15,14 +15,15 @@ HASH_FORMAT = 'canonical-json-utf8'
 
 
 def normalize_evidence(stage, value, context, mode='git'):
-    if stage not in ('study', 'review'):
-        raise ValueError('Evidence normalization requires study or review')
+    if stage not in ('study', 'study-shard', 'review'):
+        raise ValueError('Evidence normalization requires study, study-shard or review')
     validate_wire_identity(stage, value, context, mode)
+    namespace = 'study' if stage == 'study-shard' else stage
     study_ids = {e['id'] for e in context['architecture_document'].get('evidence', [])} if stage == 'review' else set()
     definitions, seen, aliases = {}, set(), {}
     for i, evidence in enumerate(value['evidence']):
         original = evidence['id']
-        match = re.fullmatch(r'(?:' + stage + r':)?E-([0-9]+)', original)
+        match = re.fullmatch(r'(?:' + namespace + r':)?E-([0-9]+)', original)
         if not match:
             raise contract_violation('INVALID_RECORD_ID', f'$.evidence[{i}].id')
         identifier = 'E-' + match[1].zfill(3)
@@ -31,12 +32,12 @@ def normalize_evidence(stage, value, context, mode='git'):
             raise contract_violation(code, f'$.evidence[{i}].id')
         definitions[original] = identifier
         seen.add(identifier)
-        local = original.removeprefix(stage + ':')
-        aliases[stage + ':' + local] = stage + ':' + identifier
-        aliases[stage + ':' + identifier] = stage + ':' + identifier
+        local = original.removeprefix(namespace + ':')
+        aliases[namespace + ':' + local] = namespace + ':' + identifier
+        aliases[namespace + ':' + identifier] = namespace + ':' + identifier
         if identifier not in study_ids:
-            aliases[local] = stage + ':' + identifier
-            aliases[identifier] = stage + ':' + identifier
+            aliases[local] = namespace + ':' + identifier
+            aliases[identifier] = namespace + ':' + identifier
     # Bare review references must identify exactly one evidence namespace.
     for identifier in study_ids - seen:
         aliases[identifier] = 'study:' + identifier

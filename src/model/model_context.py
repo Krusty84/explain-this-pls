@@ -79,7 +79,7 @@ def project_model_context(stage, context):
         # All references already use global IDs; the combined registries are authoritative.
         result.pop('shard_id_mappings', None)
         for shard in result.get('validated_shards', []):
-            for field in ('evidence', 'claims', 'coverage'):
+            for field in ('evidence', 'claims', 'coverage', 'normalization_provenance'):
                 shard.pop(field, None)
     if stage == 'study-shard':
         # Scope is assigned locally. Do not expose other primary assignments,

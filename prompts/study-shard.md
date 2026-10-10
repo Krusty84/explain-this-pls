@@ -14,6 +14,8 @@ Respect the explicit catalog exclusions in coverage_plan.
 Keep files intact. oversized_file_paths identifies files above the session byte
 limit. The configured max_source_bytes_per_session (default 256 KiB) measures the
 total size of assigned source files, not bytes actually read by the LLM.
+It is not a read limit: inspect oversized files in chunks as needed. Coverage
+concerns only this shard's assigned files, not other files in the same area.
 Report any investigation you cannot finish as a concrete limitation.
 Scheduling a file does not mean it was inspected. Report missing checks and files
 as PARTIALLY_INSPECTED or NOT_INSPECTED; do not infer completeness from assignment.
@@ -43,20 +45,31 @@ Return the dedicated shard schema, not a complete global architecture report:
 - components, significant_flows, data_and_state, constraints: concise descriptions
   linked to registered claim_ids;
 - relationships: primary subsystem_id, related_path relative to the common source
-  root, description of an observed interface or dependency, and claim_ids;
+  root and verified to exist in the inventory, description of an observed
+  interface or dependency, and claim_ids. An import name is not a file path:
+  retain source prefixes such as src/. Describe absent, generated or external
+  targets in constraints/claims and limitations, citing the existing referring
+  file; do not place an absent target in relationships;
 - evidence: local E-001 IDs, source_id, path, 1-based inclusive line bounds and an
   optional exact contiguous quote within those lines (empty string is allowed).
   Prefer concise ranges;
 - claims: local C-001 IDs, precise statement and scope, epistemic_kind FACT,
   HYPOTHESIS or UNKNOWN, evidence_ids using study:E-001, and uncertainty;
 - coverage: exactly one entry per assigned area, with its area_id, status,
-  evidence_ids and limitation. INSPECTED requires evidence within that area's
+  evidence_ids using study:E-001 and limitation. INSPECTED requires evidence within that area's
   primary file scope. Evidence outside it can support dependency claims, but
   cannot establish primary coverage. A citation does not prove every file was read.
+  If the area's nonempty primary scope contains only empty regular files, report
+  INSPECTED with no line evidence and explain the empty files. The orchestrator
+  verifies their pinned metadata. Do not invent line 1 or an architectural role.
+  If all assigned files are empty, claims and observations may also be empty.
 
 For source quotes, only CRLF is normalized to LF; preserve spaces and case.
 A final newline is optional. For a two-line range "first()\nsecond()\n",
 quote may be "second()".
+Copy a quote exactly from the declared range, or use quote: "". Do not paraphrase
+source text inside quote. Use only fields in the supplied schema; put notes in
+the existing descriptions, uncertainty or limitations fields.
 
 FACT requires evidence. HYPOTHESIS and UNKNOWN require a concrete missing check
 in uncertainty. Every observation must reference a claim. Use canonical IDs and

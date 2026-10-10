@@ -126,8 +126,8 @@ def duration(seconds: float) -> str:
 def metric_value(measured, key):
     value = measured.get(key)
     if value is None:
-        return 'unavailable'
-    text = f'${value:.4f}' if key == 'cost_usd' else f'{value:,}'
+        return 'n/a'
+    text = f'${value:.2f}' if key == 'cost_usd' else f'{value:,}'
     notes = []
     if measured.get('coverage', {}).get(key) == 'partial':
         notes.append('partial')
@@ -301,7 +301,7 @@ class Reporter(NullReporter):
                 label = entry['backend'] + ': ' + model
             else:
                 requested = entry.get('model_requested')
-                label = entry['backend'] + ': ' + (requested + ' (requested)' if requested else 'model unavailable')
+                label = entry['backend'] + ': ' + (requested + ' (requested)' if requested else 'model n/a')
             if label not in labels:
                 labels.append(label)
         return self.display('; '.join(labels) or 'No model calls')

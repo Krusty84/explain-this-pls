@@ -64,7 +64,8 @@ def render_coverage(plan, reports=(), checks=None):
         out += ['', 'Symbolic links (targets were not followed): ' + cell(', '.join(sorted(links)))]
     out += ['', *('- ' + cell(x) for x in plan['limitations']), '',
             '## Area inspection — agent reports', '',
-            'INSPECTED requires a resolved source pointer in the area; it does not establish exhaustive investigation.', '',
+            'INSPECTED requires resolved source evidence or verified metadata for an empty-file scope; '
+            'it does not establish exhaustive investigation.', '',
             '| Area | Reported status | Evidence | Limitation |', '| --- | --- | --- | --- |']
     by_id = {r['area_id']: r for r in reports}
     for area in plan['areas']:
@@ -72,6 +73,9 @@ def render_coverage(plan, reports=(), checks=None):
         limitation = record.get('limitation', '')
         if area['id'] in (checks or {}).get('unsupported_ids', []):
             limitation += ' No resolved evidence within this area.'
+        empty_paths = set((checks or {}).get('metadata_verified_empty_paths', [])) & set(area['file_paths'])
+        if empty_paths:
+            limitation += ' Empty files verified from pinned metadata: ' + ', '.join(sorted(empty_paths)) + '.'
         out += ['| ' + ' | '.join(cell(x) for x in (area['id'], record.get('status', 'MISSING'),
                   ', '.join(record.get('evidence_ids', [])), limitation)) + ' |']
     return '\n'.join(out) + '\n'

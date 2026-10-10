@@ -12,6 +12,7 @@ from explain import AuditError, Folder, Runner
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
 from src.backends import opencode_cli as adapter
+from src.backends.json_response import json_object_response
 from src.contracts.contracts import ContractError
 from test_folder import FolderFixture
 
@@ -105,6 +106,50 @@ class OpenCodeCLITests(unittest.TestCase):
                     adapter.parse_output(output(events), exported=json.dumps(exported), agent_name='private-agent')
                 self.assertEqual(caught.exception.failure_kind, 'TRANSPORT_ERROR')
 
+    def test_introductory_text_preserves_exact_payload_offsets(self):
+        for text, kind in (
+                ('Готово.\r\n```JSON\r\n {"ok": true} \r\n```\r\n', 'markdown_json_fence'),
+                ('The verified result follows:\n{"ok": true}\n', 'leading_prose_json_object')):
+            for missing_finish in (False, True):
+                with self.subTest(text=text, missing_finish=missing_finish):
+                    events = transcript({})
+                    events[1]['part']['text'] = text
+                    if missing_finish: events.pop()
+                    raw = output(events)
+                    exported = session_export({})
+                    exported['messages'][0]['content'][0]['text'] = text
+                    data, meta = adapter.parse_output(raw, exported=json.dumps(exported), agent_name='private-agent')
+                    self.assertEqual(data, {'ok': True})
+                    provenance = meta['response_normalization']
+                    self.assertEqual(provenance['kind'], kind)
+                    self.assertEqual(json.loads(text[provenance['payload_start']:provenance['payload_end']]), data)
+                    self.assertEqual(output(events), raw)
+            # The shared parser's default remains strict for the XXX adapter.
+            with self.assertRaises(ContractError):
+                json_object_response(text)
+
+    def test_completed_response_keeps_export_usage_on_json_failure(self):
+        text = 'Result:\n```json\n{"ok":true,"ok":false}\n```'
+        events = transcript({})[:-1]
+        events[1]['part']['text'] = text
+        raw = output(events)
+        exported = session_export({})
+        exported['messages'][0]['content'][0]['text'] = text
+        completed_text, meta = adapter.completed_response(
+            raw, exported=json.dumps(exported), agent_name='private-agent')
+        self.assertEqual(completed_text, text)
+        self.assertEqual(meta['finish_reason'], 'stop')
+        self.assertEqual(meta['completion_source'], 'session_export')
+        self.assertEqual(adapter.collect_metrics(raw, completed=meta['exported_finish'])['usage']['total_tokens'], 120)
+        with self.assertRaises(ContractError) as caught:
+            adapter.parse_output(raw, exported=json.dumps(exported), agent_name='private-agent')
+        self.assertEqual(caught.exception.failure_kind, 'INVALID_JSON')
+        failed_meta = caught.exception.details['provider_metadata']
+        self.assertEqual(failed_meta['exported_finish'], meta['exported_finish'])
+        provenance = caught.exception.details['response_normalization']
+        self.assertEqual(provenance, failed_meta['response_normalization'])
+        self.assertEqual(text[provenance['payload_start']:provenance['payload_end']], '{"ok":true,"ok":false}')
+
     def test_permissions_preserve_v1_and_v2_profile_entries(self):
         original = {'providers': {'private': {'settings': {'baseURL': 'https://example.invalid'}}},
                     'model': 'private/model', 'agent': {'legacy': {'mode': 'primary'}},
@@ -147,7 +192,15 @@ class OpenCodeCLITests(unittest.TestCase):
         for text in ('```json\n{broken\n```', '{} trailing', '{"x":1,"x":2}', '[]',
                      '```json\n{"x":1,"x":2}\n```', '```json\n{"x":NaN}\n```',
                      '```json\n{"x":Infinity}\n```', '```json\n[]\n```',
-                     '```json\n{}\n```\n```json\n{}\n```'):
+                     '```json\n{}\n```\n```json\n{}\n```',
+                     'Result: {} and {}', 'Result: {"broken": {"ok": true}',
+                     'Result: {broken} then {"ok": true}', 'Result: [] then {}',
+                     'Result: {"x": 1, "x": 2}', 'Result: {"x": NaN}',
+                     'Result: ```json\n{}\n``` trailing',
+                     'Result: ````json\n{}\n```',
+                     'Result: {}\n```json\n{}\n```',
+                     'Result: ```json\n{}\n```\n```json\n{}\n```',
+                     'Result: ```text\nexample\n```\n```json\n{}\n```'):
             events = copy.deepcopy(valid)
             events[1]['part']['text'] = text
             cases.append((events, 'INVALID_JSON'))
@@ -194,6 +247,87 @@ class OpenCodeCLITests(unittest.TestCase):
 
 
 class OpenCodeAcceptanceTests(FolderFixture):
+    def test_invalid_json_preserves_verified_export_completion_and_usage(self):
+        for index, text in enumerate(('Result:\n{"ok":true,".",}',
+                                      'Result:\n```json\n{"ok":true,"ok":false}\n```')):
+            with self.subTest(text=text):
+                config = self.config() | {'result_policy': 'strict', 'execution': {
+                    'opencode_format_retries': 2, 'structured_output_repair_attempts': 2}}
+                agent = config['_agents']['study']
+                agent['backend'] = 'opencode'
+                runner = Runner(config, self.base / f'invalid-export-{index}')
+                runner.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
+                context = {'source_directory': str(self.source),
+                           'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
+                captured = {}
+                def process(command, cwd, env, payload=b'', **kwargs):
+                    if command[1:3] == ['session', 'export']:
+                        self.assertEqual(command[3:], ['--standalone', 'ses_fixture'])
+                        self.assertEqual(payload, b'')
+                        raw = json.dumps(captured['export']).encode()
+                    else:
+                        self.assertEqual(command[1], 'run')
+                        events = transcript({})[:-1]
+                        events[1]['part']['text'] = text
+                        raw = output(events).encode()
+                        exported = session_export({}, command[command.index('--agent') + 1])
+                        exported['messages'][0]['content'][0]['text'] = text
+                        captured.update(export=exported, raw=raw)
+                    (kwargs['log_dir'] / 'stdout.log').write_bytes(raw)
+                    return {'returncode': 0, 'stdout': raw, 'stderr': b''}
+                with patch('explain.process', side_effect=process) as mocked, self.assertRaises(ContractError) as caught:
+                    runner.invoke('study', context, runner.run_dir / 'study.logs')
+                self.assertEqual(caught.exception.failure_kind, 'INVALID_JSON')
+                self.assertEqual(mocked.call_count, 2)
+                attempt = runner.run_dir / 'study.logs/attempt-001'
+                meta = json.loads((attempt / 'invocation.json').read_text())
+                self.assertEqual(meta['status'], 'FAILED')
+                self.assertFalse(meta['publication_complete'])
+                self.assertFalse((runner.run_dir / 'study.json').exists())
+                self.assertFalse((attempt / 'extracted.json').exists())
+                self.assertEqual((attempt / 'stdout.log').read_bytes(), captured['raw'])
+                self.assertEqual(json.loads((attempt / 'session-export/stdout.log').read_bytes()), captured['export'])
+                for key, value in (('session_id', 'ses_fixture'), ('message_id', 'msg_fixture'), ('finish_reason', 'stop')):
+                    self.assertEqual(meta[key], value)
+                    self.assertEqual(meta['provider_metadata'][key], value)
+                provider = meta['provider_metadata']
+                self.assertEqual(provider['completion_source'], 'session_export')
+                provenance = provider['response_normalization']
+                expected_kind = 'markdown_json_fence' if index else 'leading_prose_json_object'
+                self.assertEqual(provenance['kind'], expected_kind)
+                self.assertEqual(provenance, caught.exception.details['response_normalization'])
+                self.assertEqual(meta['metrics']['usage']['total_tokens'], 120)
+                self.assertEqual(meta['metrics']['usage']['cost_usd'], 0.01)
+                self.assertEqual(meta['metrics']['usage']['coverage']['total_tokens'], 'complete')
+
+    def test_introductory_response_publishes_once_with_original_bytes(self):
+        for fenced in (False, True):
+            with self.subTest(fenced=fenced):
+                config = self.config() | {'result_policy': 'strict'}
+                agent = config['_agents']['study']
+                agent['backend'] = 'opencode'
+                runner = Runner(config, self.base / f'intro-{fenced}')
+                runner.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
+                context = {'source_directory': str(self.source),
+                           'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
+                captured = {}
+                def process(command, cwd, env, payload, **kwargs):
+                    wire = json.dumps(response(prompt_context(payload)))
+                    text = 'Готово.\r\n' + ('```json\r\n' + wire + '\r\n```' if fenced else wire)
+                    result = cli_result(command, text.encode())
+                    captured.update(text=text, raw=result['stdout'])
+                    (kwargs['log_dir'] / 'stdout.log').write_bytes(result['stdout'])
+                    return result
+                with patch('explain.process', side_effect=process) as mocked:
+                    data, meta = runner.invoke('study', context, runner.run_dir / 'study.logs')
+                self.assertEqual(mocked.call_count, 1)
+                self.assertTrue(meta['publication_complete'])
+                attempt = Path(meta['artifact_directory'])
+                self.assertEqual((attempt / 'stdout.log').read_bytes(), captured['raw'])
+                provenance = meta['provider_metadata']['response_normalization']
+                extracted = captured['text'][provenance['payload_start']:provenance['payload_end']]
+                self.assertEqual(json.loads(extracted), json.loads((attempt / 'extracted.json').read_bytes()))
+
     def test_failed_session_export_remains_incomplete_without_another_model_call(self):
         config = self.config()
         agent = config['_agents']['study']

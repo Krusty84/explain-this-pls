@@ -60,6 +60,139 @@ def usable_study(item):
     return bool(doc and doc.get('completion_status') != 'BLOCKED')
 
 
+def verified_shards(item):
+    """Published shard material; callers also check the pinned artifact bytes."""
+    from src.analysis.study_shards import empty_shard_result
+    from src.contracts.saved_contracts import SAVED_FOLDER_SCHEMAS, SAVED_SCHEMAS
+    if item.get('critical_failure'):
+        return []
+    planned = item.get('analysis_plan', {}).get('shards', [])
+    states = item.get('study_shards', [])
+    if (len({s['id'] for s in planned}) != len(planned)
+            or len({s['id'] for s in states}) != len(states)):
+        return []
+    by_id = {s['id']: s for s in states}
+    folder = 'source_directory' in item
+    identity = ('source_directory', 'source_fingerprint') if folder else ('branch', 'source_commit')
+    schema = (SAVED_FOLDER_SCHEMAS if folder else SAVED_SCHEMAS)['study-shard']
+    result = []
+    for shard in planned:
+        state = by_id.get(shard['id'], {})
+        data, meta = state.get('study-shard'), state.get('study-shard_invocation', {})
+        if (state.get('status') != 'SUCCEEDED' or meta.get('status') != 'SUCCEEDED'
+                or schema_diagnostics(data, schema, limit=0)['total_violations']):
+            continue
+        checks = data['program_checks']
+        if (data['shard_id'] != shard['id'] or data['assigned_subsystem_ids'] != shard['subsystem_ids']
+                or any(type(item.get(key)) is not str or data[key] != item[key] for key in identity)
+                or data['completion_status'] != 'COMPLETE'
+                or not all(meta.get(key) is True for key in
+                           ('local_validation', 'publication_complete', 'source_integrity_verified'))
+                or meta.get('source_check_status') != 'MATCHED_AT_BOUNDARIES'
+                or checks['source'] != 'MATCHED_AT_BOUNDARIES'
+                or checks['policy_satisfied'] is not True or checks['coverage']['policy_satisfied'] is not True
+                or any(e['status'] != 'RESOLVED' for e in checks['evidence'])):
+            continue
+        if meta.get('generated_by') == 'orchestrator':
+            if (meta.get('reason') != 'empty_subsystem_assignment' or shard['subsystem_ids']
+                    or shard.get('primary_file_paths')
+                    or {k: v for k, v in data.items() if k != 'program_checks'} != empty_shard_result(shard, item)):
+                continue
+        elif meta.get('backend_result_valid') is not True:
+            continue
+        result.append(state)
+    return result
+
+
+def shard_material(item, shards):
+    nonempty = {s['id'] for s in item.get('analysis_plan', {}).get('shards', []) if s['source_bytes'] > 0}
+    return [s for s in shards if s['id'] in nonempty and s['study-shard']['claims']]
+
+
+def has_usable_report_material(item):
+    return usable_study(item) or bool(shard_material(item, verified_shards(item)))
+
+
+def partial_shard_coverage(item, shards):
+    """An area is complete only when every planned contributor is verified."""
+    by_id = {s['id']: s['study-shard'] for s in shards}
+    records = []
+    for area in item.get('coverage_plan', {}).get('areas', []):
+        contributors = [s['id'] for s in item['analysis_plan']['shards'] if area['id'] in s['subsystem_ids']]
+        verified = [sid for sid in contributors if sid in by_id]
+        missing = [sid for sid in contributors if sid not in by_id]
+        coverage = [(sid, entry) for sid in verified for entry in by_id[sid]['coverage']
+                    if entry['area_id'] == area['id']]
+        complete = (bool(contributors) and not missing and len(coverage) == len(contributors)
+                    and all(record['status'] == 'INSPECTED' for _, record in coverage))
+        limits = list(dict.fromkeys(record['limitation'] for _, record in coverage if record['limitation']))
+        if missing:
+            limits.append('No verified result: ' + ', '.join(missing) + '.')
+        elif not contributors:
+            limits.append('No planned shard assigned.')
+        records.append(dict(area_id=area['id'], status='INSPECTED' if complete else
+                            'PARTIALLY_INSPECTED' if any(record['status'] != 'NOT_INSPECTED'
+                                                        for _, record in coverage) else 'NOT_INSPECTED',
+                            evidence_ids=[sid + '/' + eid for sid, record in coverage for eid in record['evidence_ids']],
+                            limitation=' '.join(limits)))
+    return records
+
+
+def render_partial_shards(item, shards, language):
+    from src.analysis.study_shards import OBSERVATION_FIELDS
+    from src.reports.presentation import cell, russian
+    ru = russian(language)
+    def t(r, e): return r if ru else e
+    verified = {s['id'] for s in shards}
+    states = {s['id']: s for s in item.get('study_shards', [])}
+    out = ['### ' + t('Частичный отчёт из проверенных частей', 'Partial report from verified shards'), '',
+           t('Сохранены только опубликованные части, прошедшие проверки. Полное исследование отсутствует; '
+             'сборник не используется для сравнения. Проверки не доказывают достоверность выводов.',
+             'Only published shards that passed checks are retained. No complete study is available; '
+             'this collection is not used for comparison. Checks do not establish factual correctness.'), '',
+           '| Shard | ' + t('Статус | Области | Файлы | Пробелы', 'Status | Areas | Files | Gaps') + ' |',
+           '| --- | --- | --- | --- | --- |']
+    for planned in item['analysis_plan']['shards']:
+        state = states.get(planned['id'], {})
+        status = 'VERIFIED' if planned['id'] in verified else state.get('status', 'PLANNED')
+        if status == 'SUCCEEDED':
+            status = 'UNVERIFIED'
+        gaps = '' if status == 'VERIFIED' else t('Проверенный результат отсутствует.', 'No verified result.')
+        if state.get('errors'):
+            gaps += ' ' + '; '.join(str(error) for error in state['errors'])
+        out += ['| ' + ' | '.join(cell(v) for v in (planned['id'], status,
+                  ', '.join(planned['subsystem_ids']), ', '.join(planned.get('primary_file_paths', [])), gaps)) + ' |']
+    titles = (t('Компоненты', 'Components'), t('Основные потоки', 'Significant flows'),
+              t('Данные и состояние', 'Data and state'), t('Ограничения', 'Constraints'), t('Связи', 'Relationships'))
+    for state in shard_material(item, shards):
+        data, sid = state['study-shard'], state['id']
+        def qualified(value): return sid + '/' + value
+        out += ['', '#### ' + sid, '']
+        for field, title in zip(OBSERVATION_FIELDS, titles):
+            if not data[field]:
+                continue
+            out += ['##### ' + title, '']
+            for record in data[field]:
+                relation = (record['subsystem_id'] + ' → ' + record['related_path'] + ': ') if field == 'relationships' else ''
+                out += ['- ' + cell(relation + record['description']) + ' (' +
+                        cell(', '.join(qualified(cid) for cid in record['claim_ids'])) + ')']
+            out += ['']
+        out += ['| ID | ' + t('Утверждение | Область | Тип | Доказательства | Неопределённость',
+                            'Statement | Scope | Kind | Evidence | Uncertainty') + ' |',
+                '| --- | --- | --- | --- | --- | --- |']
+        for claim in data['claims']:
+            out += ['| ' + ' | '.join(cell(v) for v in (qualified(claim['id']), claim['statement'], claim['scope'],
+                      claim['epistemic_kind'], ', '.join(qualified(eid) for eid in claim['evidence_ids']),
+                      claim['uncertainty'])) + ' |']
+        out += ['', '| ID | Source | ' + t('Путь : строки | Цитата | Проверка', 'Path : lines | Quote | Check') + ' |',
+                '| --- | --- | --- | --- | --- |']
+        for evidence in data['evidence']:
+            out += ['| ' + ' | '.join(cell(v) for v in (qualified('study:' + evidence['id']), evidence['source_id'],
+                      f"{evidence['path']}:{evidence['start_line']}-{evidence['end_line']}", evidence['quote'], 'RESOLVED')) + ' |']
+        out += ['', *('- ' + cell(issue) for issue in data['limitations']), '']
+    return '\n'.join(out)
+
+
 def report_entries(manifest, source, mode):
     if mode == 'folder':
         return [manifest]
@@ -98,7 +231,8 @@ def render_final_report(manifest, source, mode, language='Russian'):
     ru = russian(language)
     def t(r, e): return r if ru else e
     entries = report_entries(manifest, source, mode)
-    useful = any(usable_study(b) for b in entries)
+    useful = any(usable_study(b) or (not manifest.get('critical_failure')
+                 and shard_material(b, verified_shards(b))) for b in entries)
     review_enabled = manifest.get('review_enabled', True)
     out = ['# ' + (t('Сводка исследования и автоматизированного ревью', 'Study and automated review summary')
                   if review_enabled else t('Сводка исследования', 'Study summary')), '',
@@ -137,8 +271,14 @@ def render_final_report(manifest, source, mode, language='Russian'):
                 out += ['| ' + ' | '.join(cell(revision.get(k)) for k in
                           ('revision_id', 'study_status', 'review_status', 'review_complete', 'accepted', 'workflow_satisfied')) + ' |']
             out += ['']
+        shards = verified_shards(b) if not manifest.get('critical_failure') and not usable_study(b) else []
         if b.get('coverage_plan') and not b.get('study'):
-            out += [render_coverage(b['coverage_plan']), '']
+            coverage = partial_shard_coverage(b, shards) if b.get('analysis_plan') and b.get('study_shards') else ()
+            checks = {'metadata_verified_empty_paths': sorted({path for s in shards
+                for path in s['study-shard']['program_checks']['coverage'].get('metadata_verified_empty_paths', [])})}
+            out += [render_coverage(b['coverage_plan'], coverage, checks), '']
+        if shard_material(b, shards):
+            out += [render_partial_shards(b, shards, language), '']
         review = b.get('review')
         if review:
             out += [render_stage('review', review, language), '']
@@ -149,7 +289,7 @@ def render_final_report(manifest, source, mode, language='Russian'):
                 continue
             doc = stage_document(b, stage)
             if not doc:
-                out += [stage + ': ' + t('Результат отсутствует.', 'Result unavailable.'), '']
+                out += [stage + ': ' + t('Результат отсутствует.', 'Result n/a.'), '']
                 continue
             if not has_program_checks(doc) or doc.get('strict_valid') is False:
                 failure = doc.get('contract_failure')
@@ -157,7 +297,7 @@ def render_final_report(manifest, source, mode, language='Russian'):
                     out += ['> ' + cell(failure['message']) + ' ' +
                             t('Текст сохранён; проверки политики не завершены. Самооценка агента: ',
                               'Text retained; policy checks not completed. Agent self-assessment: ') +
-                            (doc.get('completion_status') or 'UNAVAILABLE') + '.', '']
+                            (doc.get('completion_status') or 'n/a') + '.', '']
                 if not failure or not failure.get('details', {}).get('code'):
                     out += ['> ' + t('Восстановленный текст с нарушениями контракта; проверки политики не завершены. '
                                       'Исходный текст не получает положительную приёмку.',
@@ -207,7 +347,7 @@ def render_final_report(manifest, source, mode, language='Russian'):
                         out += ['> ' + cell(failure['message']) + ' ' +
                                 t('Текст сохранён; проверки политики не завершены. Самооценка агента: ',
                                   'Text retained; policy checks not completed. Agent self-assessment: ') +
-                                (document.get('completion_status') or 'UNAVAILABLE') + '.', '']
+                                (document.get('completion_status') or 'n/a') + '.', '']
                     out += ['- ' + cell(issue) for issue in document.get('limitations', [])]
                     for group in document.get('validation_issues', {}).values():
                         for issue in group.get('violations', []):
@@ -221,7 +361,7 @@ def render_final_report(manifest, source, mode, language='Russian'):
                 '', comparison['report_markdown'], '']
     else:
         out += [t('Сравнение отсутствует; это не означает отсутствия различий. Для каталога и одной ветки оно не требуется.',
-                  'Comparison unavailable; this does not imply no differences. Folder and single-branch runs do not require it.'), '']
+                  'Comparison n/a; this does not imply no differences. Folder and single-branch runs do not require it.'), '']
     out += ['## ' + t('Диагностика запуска', 'Run diagnostics'), '']
     for d in manifest.get('diagnostics', []):
         out += ['- ' + cell(d.get('stage', '')) + ': ' + cell(d.get('failure_kind') or d.get('code')) + ' — ' + cell(d.get('message', ''))]

@@ -266,8 +266,8 @@ remains explicit opt-in and may incur provider cost; it is never part of --check
 OpenCode V2 runs `run --standalone --format json`, with prompts on stdin and a
 private agent allowing only read/glob/grep (no tools for comparison). Its final
 JSON comes from the last completed assistant step with finish reason `stop`;
-errors, incomplete output and invalid JSON are rejected. The same single JSON
-fence normalization applies after transport verification.
+errors, incomplete output and invalid JSON are rejected. JSON wrapper extraction
+applies only after transport verification.
 OpenCode 2.0.23 can omit the terminal event even after emitting the full answer.
 After a successful CLI exit with final text but no finish event, the runner makes
 one local `session export --standalone` call within the same stage budget. It
@@ -281,18 +281,26 @@ attempt and ignores the retained `opencode_format_retries` and
 apply. Session history uses OpenCode's standard local storage.
 
 XXX and OpenCode V2 first parse the complete final response with `strict_json()`.
-If parsing fails, they accept exactly one triple-backtick code block labelled
+The shared parser's default fallback accepts exactly one triple-backtick code block labelled
 `json` (case-insensitive), with opening and closing fences on separate lines.
 Surrounding spaces, tabs and blank lines, and LF, CRLF or CR line endings are allowed.
 The payload is sliced without content changes and parsed with `strict_json()`;
 the result must be an object. Prose outside the block, multiple or nested blocks,
 missing fences, other labels, arrays, scalars, malformed JSON, duplicate keys and
-non-finite numbers remain invalid. There is no substring search or JSON repair.
+non-finite numbers remain invalid. Payload contents are never repaired.
 
 This is transport compatibility, not relaxed contract validation. Schema, source
 identity, semantics, evidence and security checks remain authoritative. It does
 not change claims, acceptance policy or self-assessments, and adds no model call.
 Codex and Claude Code parsing is unchanged.
+
+OpenCode V2 also accepts introductory prose followed by one final JSON object or
+one JSON-labelled fence. The prefix must contain no earlier object, array or
+code-block opener. The payload must parse as one complete strict JSON object;
+trailing prose, competing candidates, malformed JSON and duplicate keys fail.
+No content inside the payload is repaired. This opt-in rule does not change XXX.
+Verified session/message/finish metadata and completed usage are retained before
+JSON parsing, including when parsing fails after a successful local export.
 
 Private `stdout.log` and session-export logs retain the original transport bytes,
 including the exact response text. `extracted.json` separately retains the parsed
@@ -300,6 +308,8 @@ wire object. Invocation `provider_metadata.response_normalization` records
 `kind: "markdown_json_fence"` and zero-based, end-exclusive character offsets
 `payload_start` / `payload_end` into the joined final response. These offsets
 recover the exact payload, including its whitespace, from the logged response.
+OpenCode's unfenced introductory-prose form uses `kind: "leading_prose_json_object"`
+with the same offsets. Fenced introductory prose uses `markdown_json_fence`.
 XXX also records the final `message_id` in this provenance, including when invalid
 final JSON uses the unchanged summary fallback. If payload parsing fails without
 a fallback, the same record is in the error details. Successful
@@ -462,7 +472,8 @@ task, matching pinned Git/folder identity and, for review, unchanged frozen
 context and exact target. The caller verifies transport before calling it.
 It never repairs the schema.
 The rule is `EVIDENCE_IDS` in both strict and compromise, shared by Codex,
-Claude Code, OpenCode and XXX after their transport checks.
+Claude Code, OpenCode and XXX after their transport checks. It also applies to
+study shards, which use the `study:` namespace for claims and coverage references.
 
 Evidence definitions may pad one/two numeric digits (`E-1`, `E-01` -> `E-001`)
 and remove the stage's own namespace (`study:E-001` in study or `review:E-001`
@@ -498,7 +509,7 @@ Live processing preserves the existing source/cleanup guards:
    bindings and write `expanded.json` and `binding.json`. An unknown, foreign or
    stale binding is an identity failure and cannot be repaired or recovered.
    Synthesis must pass its model schema before expansion copies frozen registries.
-   For study/review, check prerequisites on the expanded object, create the
+   For study/study-shard/review, check prerequisites on the expanded object, create the
    candidate, and write private `normalized.json` and `normalization.json`
    separately. These files are required even for zero edits.
 3. Fully validate the internal candidate, including the study block/claim graph.
@@ -506,7 +517,8 @@ Live processing preserves the existing source/cleanup guards:
    strictly check all computed links and hashes. A failure on a valid wire input
    is a program materialization defect, not a model line-counting error. `validation.json`
    identifies `validated_object` and includes the normalization provenance when
-   available. A successful normalization is the separate `study_normalized` / `review_normalized`
+   available. A successful normalization is the separate `study_normalized`,
+   `study-shard_normalized` or `review_normalized`
    event with its replacement count, never a schema/semantic failure or model
    repair request. A later failure retains the candidate and its actual error.
 4. Finish cleanup and source guards, resolve evidence against pinned bytes,
@@ -534,7 +546,7 @@ separators=(',', ':'), allow_nan=False)` and UTF-8 encoded, without BOM or trail
 newline. They do not hash the pretty-printed artifact file bytes. Unicode and
 array order are unchanged. With zero edits both hashes are identical.
 The same provenance summary is carried in invocation metadata and every new
-published study/review; direct library callers may omit that summary, but every
+published study/study-shard/review; direct library callers may omit that summary, but every
 new Runner publication requires the normalization artifacts.
 It is never requested from the model or admitted by the wire schema. Successful
 normalization does not change `completion_status`, establish content accuracy,
@@ -868,6 +880,13 @@ scope. Coverage for an area concerns its intersection with these paths, even whe
 other shards share the area ID. INSPECTED requires resolved evidence in that
 intersection. Other locations may be read to understand interfaces and support
 dependency claims, but cannot establish primary coverage.
+An empty-file scope may instead use pinned inventory metadata: the nonempty scope
+must contain only regular files with zero size and the empty-content hash.
+`program_checks.coverage.metadata_verified_empty_paths` records the paths without
+inventing line evidence or excluding files. This saved field is optional for older
+artifacts. A shard whose entire primary scope meets this check may have no claims.
+Mixed scopes still require source evidence, and an invalid line pointer still
+fails even when its file is empty. Source and inventory guards remain mandatory.
 Model scope changes are identity failures. No shard produces a global report.
 
 Each shard must pass backend completion, binding, schema, semantics, source
@@ -881,6 +900,19 @@ under both result policies. Integrity failures always stop the run. Multi-sessio
 analysis accepts AGENT, AGENT_SALVAGED and DIRECTORY_FALLBACK coverage plans after
 the same structural, inventory and frozen-plan verification. Catalog provenance
 does not relax any shard validation or evidence requirement.
+Shard `validation.json` separates structural `valid` from `policy_valid` and, on
+rejection, `policy_error`. Indexed relationship diagnostics distinguish an
+unassigned subsystem from a target path missing from the inventory.
+
+When no usable study exists, FINAL_REPORT.md locally displays published, verified
+shards, with shard-qualified claim/evidence IDs and explicit failed/planned scopes.
+An area is INSPECTED only if every planned contributor passed and reported INSPECTED.
+Successful empty-only assignments do not by themselves count as useful material.
+With compromise, useful verified shard material permits PARTIAL / exit 2;
+strict retains FAILED / exit 1. Critical failures prevent promotion and interrupted
+runs retain exit 130. Original shard errors and failed workflow checks remain.
+This local collection adds no model call, creates no canonical study, and cannot
+enter review or comparison. Full synthesis still requires every shard to succeed.
 
 Synthesis runs as a study invocation with prompt_variant=synthesis, a neutral
 working directory and the adapters' existing reports-only tool restrictions.

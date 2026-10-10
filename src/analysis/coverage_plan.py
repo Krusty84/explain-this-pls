@@ -69,7 +69,7 @@ def recover_catalog_paths(catalog, inventory, context):
     if not rejected:
         return catalog, None
     recovered['completion_status'] = 'PARTIAL'
-    recovered['limitations'].append('Unknown catalog paths were discarded; catalog acceptance is unavailable.')
+    recovered['limitations'].append('Unknown catalog paths were discarded; catalog acceptance is n/a.')
     provenance = {'origin': 'AGENT_SALVAGED' if recovered['subsystems'] else 'DIRECTORY_FALLBACK',
                   'hash_format': 'canonical-json-utf8', 'input_sha256': sha(canonical(catalog)),
                   'recovered_sha256': sha(canonical(recovered)),
@@ -85,7 +85,7 @@ def build_coverage_plan(catalog, inventory, context, fallback=False, *, salvaged
     files = {p for p, e in known.items() if e['type'] == 'file'}
     if not fallback or catalog is not None:
         if type(catalog) is not dict:
-            raise ContractError('Catalog is unavailable.')
+            raise ContractError('Catalog is n/a.')
         from src.contracts.contracts import validate_wire_identity, nonblank, unique_ids
         mode = 'folder' if context.get('source_mode') == 'folder' or 'source_directory' in context else 'git'
         validate_wire_identity('catalog', catalog, context, mode)
@@ -97,7 +97,7 @@ def build_coverage_plan(catalog, inventory, context, fallback=False, *, salvaged
         roots = sorted({p.split('/')[0] for p in leaves})
         catalog = {'completion_status': 'PARTIAL',
                    'limitations': copy.deepcopy((catalog or {}).get('limitations', [])) +
-                                  ['Directory fallback; usable agent catalog unavailable.'],
+                                  ['Directory fallback; usable agent catalog n/a.'],
                    'subsystems': [{'id': f'S-{i + 1:03d}', 'name': p,
                                    'purpose': 'Directory fallback grouping.', 'paths': [p]}
                                   for i, p in enumerate(roots)],
@@ -200,6 +200,7 @@ def coverage_checks(data, context, resolutions, *, area_ids=None):
     plan = context.get('coverage_plan')
     if plan is None:  # Direct library callers can validate a study without orchestration.
         return {'expected_ids': [], 'missing_ids': [], 'unfinished_ids': [], 'unsupported_ids': [],
+                'metadata_verified_empty_paths': [],
                 'reported_by': 'AGENT', 'completeness_measured': False, 'policy_satisfied': True}
     verify_coverage_plan(plan)
     areas = [a for a in plan['areas'] if area_ids is None or a['id'] in area_ids]
@@ -207,6 +208,22 @@ def coverage_checks(data, context, resolutions, *, area_ids=None):
     resolved = {e['id']: e for e in resolutions if e['status'] == 'RESOLVED'}
     sources = {s['id']: s for s in source_catalog(context)}
     primary = set(context['analysis_shard']['primary_file_paths']) if area_ids is not None else None
+    inventory = context.get('_inventory')
+    if inventory is not None and sha(canonical(inventory['entries'])) != plan['inventory_sha256']:
+        raise ContractError('Coverage and pinned source inventories differ.')
+    entries = {entry['path']: entry for entry in inventory['entries']} if inventory is not None else {}
+    metadata_paths = set()
+
+    def empty_scope(area):
+        paths = set(area['entry_paths'])
+        if primary is not None:
+            paths &= primary
+        if not paths or not all(entries.get(path, {}).get('type') == 'file'
+                and type(entries[path].get('size')) is int and entries[path]['size'] == 0
+                and entries[path].get('sha256') == sha(b'') for path in paths):
+            return False
+        metadata_paths.update(paths)
+        return True
 
     def within(evidence, area):
         source = sources.get(evidence['source_id'], {})
@@ -218,11 +235,13 @@ def coverage_checks(data, context, resolutions, *, area_ids=None):
     required = {a['id'] for a in areas if a['required']}
     unsupported = [a['id'] for a in areas if a['id'] in reports
                    and reports[a['id']]['status'] == 'INSPECTED'
+                   and not empty_scope(a)
                    and not any(ref in resolved and within(resolved[ref], a)
                                for ref in reports[a['id']]['evidence_ids'])]
     missing = [area for area in expected if area not in reports]
     unfinished = [area for area in expected if area in required and area in reports and reports[area]['status'] != 'INSPECTED']
     return {'expected_ids': expected, 'missing_ids': missing, 'unfinished_ids': unfinished,
-            'unsupported_ids': unsupported, 'reported_by': 'AGENT', 'completeness_measured': False,
+            'unsupported_ids': unsupported, 'metadata_verified_empty_paths': sorted(metadata_paths),
+            'reported_by': 'AGENT', 'completeness_measured': False,
             'policy_satisfied': (area_ids is not None or plan['policy_satisfied'])
                                 and not missing and not unfinished and not unsupported}

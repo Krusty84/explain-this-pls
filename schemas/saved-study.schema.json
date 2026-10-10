@@ -504,6 +504,12 @@
             },
             "policy_satisfied": {
               "type": "boolean"
+            },
+            "metadata_verified_empty_paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
           "required": [

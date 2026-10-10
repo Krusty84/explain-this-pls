@@ -39,8 +39,9 @@ from src.backends import codex
 from src.backends import claude_code
 from src.backends import opencode_cli
 from src.backends import xxx
+from src.backends.json_response import json_object_response
 from src.model.structured_output import blocked_comparison, required_unresolved, retry_policy
-from src.reports.final_report import recoverable_material, stage_document, usable_study, report_entries, comparison_possible, render_final_report
+from src.reports.final_report import recoverable_material, stage_document, usable_study, has_usable_report_material, report_entries, comparison_possible, render_final_report
 from src.analysis.ledger import prepare_result, review_context
 from src.analysis.study_normalization import normalize_evidence, normalization_provenance
 from src.reports.document_rendering import materialize_study, validate_materialized
@@ -604,7 +605,7 @@ class Repository:
             checked = self.git('cat-file', '--batch-check', input_data=('\n'.join(blobs) + '\n').encode())
             if len(checked.splitlines()) != len(blobs) or any(
                     len(line.split()) != 3 or line.split()[1] != b'blob' for line in checked.splitlines()):
-                raise AuditError('Required tree/blob objects are unavailable locally.')
+                raise AuditError('Required tree/blob objects are n/a locally.')
         links = {p: oid for p, (mode, kind, oid) in entries.items() if mode == '160000'}
         modules = {}
         if '.gitmodules' in entries:
@@ -1444,7 +1445,7 @@ class Runner:
                     meta['catalog_recovery'] = {k: v for k, v in recovery.items() if k != 'rejected_selectors'}
                     validation.update(validated_object='recovered.json', original_valid=False,
                                       catalog_recovery=meta['catalog_recovery'])
-            if stage in ('study', 'review'):
+            if stage in ('study', 'study-shard', 'review'):
                 candidate, changes = normalize_evidence(stage, expanded, context, self.mode)
                 provenance = normalization_provenance(expanded, candidate, changes)
                 # Required artifacts precede validation/publication; extracted.json
@@ -1537,7 +1538,7 @@ class Runner:
             self.reporter.emit('stage_recovered', level=30, **self.stage_context(stage, context),
                                message=material['contract_failure']['message'] +
                                ' Text retained; policy checks not completed. Agent self-assessment: ' +
-                               (material['completion_status'] or 'UNAVAILABLE') + '.')
+                               (material['completion_status'] or 'n/a') + '.')
         item[stage + '_usable'] = usable_study(item) if stage == 'study' else bool(stage_document(item, stage))
         if material is not None and not self.cfg['continue_on_error']:
             raise ContractError('Stopped after retaining unvalidated material (continue_on_error=false).')
@@ -1599,7 +1600,7 @@ class Runner:
             validate_result('study-shard', data, context, self.mode)
             meta['local_validation'] = True
             data = prepare_result('study-shard', data, context)
-            require_shard_policy(data)
+            require_shard_policy(data, context)
             guard(context)
             meta['source_integrity_verified'] = True
             meta['source_check_status'] = 'MATCHED_AT_BOUNDARIES'
@@ -1619,6 +1620,7 @@ class Runner:
         plan = item['analysis_plan']
         item['study_shards'] = [dict(id=s['id'], status='PLANNED', errors=[],
             directory=str((directory / 'study-shards' / s['id']).relative_to(self.run_dir))) for s in plan['shards']]
+        item['synthesis_status'] = 'SKIPPED'
         persist()
         self.assert_coverage_file(context)
         self.assert_analysis_file(context)
@@ -2116,27 +2118,39 @@ class Runner:
                                 code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='backend')
                         output = (codex.read_response(schema_path)
                                   if agent['backend'] == 'codex' else r['stdout'].decode('utf-8'))
-                        try:
-                            data, provider_meta = CLI_ADAPTERS[agent['backend']].parse_output(output)
-                        except ContractError as exc:
-                            if (agent['backend'] != 'opencode' or exc.failure_kind != 'INCOMPLETE_OUTPUT'
-                                    or not exc.details.get('session_id')):
-                                raise
-                            # V2 can exit before emitting step_finish; export confirms the same answer.
-                            export_dir = attempt / 'session-export'
-                            private_directory(export_dir)
-                            exported = process([agent['executable'], 'session', 'export', '--standalone',
-                                                exc.details['session_id']], cwd, env, reporter=self.reporter,
-                                               context=self.stage_context(stage, context), log_dir=export_dir,
-                                               clock=self.reporter.clock, budget=budget)
-                            if exported['returncode']:
-                                raise response_error('INCOMPLETE_OUTPUT', 'result',
-                                                     'OpenCode could not export the final session for verification.') from exc
-                            data, provider_meta = opencode_cli.parse_output(
-                                output, exported=exported['stdout'].decode('utf-8'),
-                                agent_name=cmd[cmd.index('--agent') + 1])
+                        if agent['backend'] == 'opencode':
+                            try:
+                                answer, provider_meta = opencode_cli.completed_response(output)
+                            except ContractError as exc:
+                                if exc.failure_kind != 'INCOMPLETE_OUTPUT' or not exc.details.get('session_id'):
+                                    raise
+                                # V2 can exit before emitting step_finish; export confirms the same answer.
+                                export_dir = attempt / 'session-export'
+                                private_directory(export_dir)
+                                exported = process([agent['executable'], 'session', 'export', '--standalone',
+                                                    exc.details['session_id']], cwd, env, reporter=self.reporter,
+                                                   context=self.stage_context(stage, context), log_dir=export_dir,
+                                                   clock=self.reporter.clock, budget=budget)
+                                if exported['returncode']:
+                                    raise response_error('INCOMPLETE_OUTPUT', 'result',
+                                                         'OpenCode could not export the final session for verification.') from exc
+                                answer, provider_meta = opencode_cli.completed_response(
+                                    output, exported=exported['stdout'].decode('utf-8'),
+                                    agent_name=cmd[cmd.index('--agent') + 1])
+                            # Completion and usage survive a later JSON or contract failure.
+                            meta['provider_metadata'] = provider_meta
+                            meta.update({key: provider_meta[key] for key in ('session_id', 'message_id', 'finish_reason')})
                             meta['metrics'] = opencode_cli.collect_metrics(
-                                output, agent.get('model'), completed=provider_meta['exported_finish'])
+                                output, agent.get('model'), completed=provider_meta.get('exported_finish'))
+                            try:
+                                data, response_meta = json_object_response(answer, allow_intro=True)
+                            except ContractError as exc:
+                                if 'response_normalization' in exc.details:
+                                    provider_meta['response_normalization'] = exc.details['response_normalization']
+                                raise
+                            provider_meta.update(response_meta)
+                        else:
+                            data, provider_meta = CLI_ADAPTERS[agent['backend']].parse_output(output)
                         meta['backend_result_valid'] = True
                         meta['provider_metadata'] = provider_meta
                         model_usage = provider_meta.get('modelUsage')
@@ -2162,11 +2176,19 @@ class Runner:
             try:
                 data = prepare_result(stage, data, context, evidence_pins, expected_metadata=evidence_metadata,
                                       catalog_recovery=meta.get('catalog_recovery'))
+                if stage in ('study', 'study-shard', 'review'):
+                    data['normalization_provenance'] = meta['normalization_provenance']
                 if stage == 'study-shard':
                     self.save_attempt_value(attempt, 'prepared.json', data, meta)
-                    require_shard_policy(data)
-                if stage in ('study', 'review'):
-                    data['normalization_provenance'] = meta['normalization_provenance']
+                    validation = self.read_attempt_value(attempt, 'validation.json', attempt_hashes)
+                    validation['policy_valid'] = meta['policy_valid'] = data['program_checks']['policy_satisfied']
+                    try:
+                        require_shard_policy(data, context)
+                    except ContractError as exc:
+                        validation['policy_error'] = asdict(diagnostic(exc))
+                        raise
+                    finally:
+                        self.save_attempt_value(attempt, 'validation.json', validation, meta)
             except SourceChanged as exc:
                 meta['source_integrity_verified'] = False
                 meta['source_check_status'] = 'CHANGED_DURING_EVIDENCE_RESOLUTION'
@@ -2227,8 +2249,15 @@ class Runner:
         manifest['critical_failure'] = self.critical_failure
         if not check_only:
             entries = report_entries(manifest, self.source, self.mode)
+            try:
+                for entry in entries:
+                    self.assert_revision_files(entry)
+            except (AuditError, ContractError, OSError) as exc:
+                self.critical_failure = True
+                self.record_error(manifest, exc, phase='integrity')
+            manifest['critical_failure'] = self.critical_failure
             if self.compromise and code != 130:
-                if self.critical_failure or not any(usable_study(b) for b in entries):
+                if self.critical_failure or not any(has_usable_report_material(b) for b in entries):
                     manifest['status'], code = 'FAILED', 1
                 elif (all(workflow_satisfied(b) for b in entries) and not manifest.get('diagnostics')
                       and (self.mode == 'folder' or len(self.source['branches']) == 1

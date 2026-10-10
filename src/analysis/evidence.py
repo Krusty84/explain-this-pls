@@ -152,7 +152,7 @@ def _read_confined(root, relative, limit, *, expected=None, pinned=None, read=Tr
     except (OSError, PointerError) as exc:
         if (expected is not None or pinned is not None) and not (
                 isinstance(exc, PointerError) and str(exc) == 'LIMIT_EXCEEDED'):
-            raise SourceChanged('Previously read source path became unavailable or unsafe.') from None
+            raise SourceChanged('Previously read source path became n/a or unsafe.') from None
         raise
     finally:
         for fd in reversed(fds):

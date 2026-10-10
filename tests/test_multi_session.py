@@ -235,14 +235,23 @@ class MultiSessionTests(FolderFixture):
                     else: raise AuditError('Synthetic backend failure.', code='CLI_FAILED', failure_layer='backend')
                 with self.subTest(kind=kind, policy=policy):
                     manifest, code = self.run_case(change=change, policy=policy)
-                    self.assertNotEqual(code, 0)
-                    self.assertNotEqual(manifest['status'], 'COMPLETE')
+                    self.assertEqual((manifest['status'], code),
+                                     ('PARTIAL', 2) if policy == 'compromise' else ('FAILED', 1))
+                    self.assertTrue(manifest['has_usable_material'])
+                    self.assertFalse(manifest['workflow_satisfied'])
+                    self.assertFalse(manifest['accepted'])
+                    self.assertIsNone(manifest['study'])
+                    self.assertEqual(len(self.calls), 4)
                     self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED', 'FAILED', 'SUCCEEDED'])
                     self.assertEqual(manifest['synthesis_status'], 'SKIPPED')
                     self.assertFalse(any(c['context'].get('prompt_variant') == 'synthesis' for c in self.calls))
                     self.assertFalse((self.runner.run_dir / 'ARCHITECTURE.md').exists())
                     for sid in ('R-001', 'R-003'):
                         self.assertTrue((self.runner.run_dir / 'study-shards' / sid / 'study-shard.json').exists())
+                    report = (self.runner.run_dir / 'FINAL_REPORT.md').read_text()
+                    self.assertIn('R-001/C-001', report)
+                    self.assertIn('R-003/study:E-001', report)
+                    self.assertIn('R-002', report)
                     name = 'invocation.json' if kind == 'backend' else 'validation.json'
                     self.assertTrue((self.runner.run_dir / 'study-shards/R-002/study-shard.logs/attempt-001' / name).exists())
                     if kind in ('partial_coverage', 'incomplete'):
@@ -267,7 +276,8 @@ class MultiSessionTests(FolderFixture):
                             data['evidence'][0]['quote'] = 'private invalid quote'
                     with self.subTest(backend=backend, policy=policy, valid=valid):
                         manifest, code = self.run_case(backend=backend, policy=policy, change=change, reporter=reporter)
-                        self.assertEqual(code, 0 if valid else 1, manifest.get('diagnostics'))
+                        self.assertEqual(code, 0 if valid else 2 if policy == 'compromise' else 1,
+                                         manifest.get('diagnostics'))
                         self.assertEqual(manifest['synthesis_status'], 'SUCCEEDED' if valid else 'SKIPPED')
                         if valid:
                             self.assertTrue(workflow_satisfied(manifest))
@@ -281,7 +291,10 @@ class MultiSessionTests(FolderFixture):
                         self.assertEqual(error['details']['evidence_counts']['QUOTE_MISMATCH'], 1)
                         self.assertNotIn('private invalid quote', json.dumps(error))
                         attempt = Path(invocation['artifact_directory'])
-                        self.assertTrue(json.loads((attempt / 'validation.json').read_text())['valid'])
+                        validation = json.loads((attempt / 'validation.json').read_text())
+                        self.assertTrue(validation['valid'])
+                        self.assertFalse(validation['policy_valid'])
+                        self.assertEqual(validation['policy_error'], error)
                         prepared = json.loads((attempt / 'prepared.json').read_text())
                         self.assertFalse(prepared['program_checks']['policy_satisfied'])
                         self.assertEqual(error['details']['coverage'], prepared['program_checks']['coverage'])
@@ -296,9 +309,86 @@ class MultiSessionTests(FolderFixture):
     def test_fail_fast_keeps_remaining_shards_planned(self):
         def change(runner, context, data):
             if context.get('analysis_shard', {}).get('id') == 'R-002': data.pop('components')
-        manifest, code = self.run_case(change=change, keep_going=False)
-        self.assertNotEqual(code, 0)
+        manifest, code = self.run_case(change=change, keep_going=False, policy='compromise')
+        self.assertEqual((manifest['status'], code), ('PARTIAL', 2))
+        self.assertEqual(manifest['synthesis_status'], 'SKIPPED')
         self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED', 'FAILED', 'PLANNED'])
+        report = (self.runner.run_dir / 'FINAL_REPORT.md').read_text()
+        self.assertIn('PLANNED', report)
+        self.assertIn('R-001/C-001', report)
+
+    def test_shard_normalization_keeps_original_and_qualifies_existing_references(self):
+        def change(runner, context, data):
+            if context['stage'] != 'study-shard': return
+            for field in ('claims', 'coverage'):
+                for record in data[field]:
+                    record['evidence_ids'] = [ref.removeprefix('study:') for ref in record['evidence_ids']]
+        manifest, code = self.run_case(change=change)
+        self.assertEqual(code, 0, manifest.get('diagnostics'))
+        self.assertEqual(len(self.calls), 5)
+        for state in manifest['study_shards']:
+            meta = state['study-shard_invocation']
+            attempt = Path(meta['artifact_directory'])
+            original = json.loads((attempt / 'extracted.json').read_text())
+            normalized = json.loads((attempt / 'normalized.json').read_text())
+            for field in ('claims', 'coverage'):
+                self.assertEqual(original[field][0]['evidence_ids'], ['E-001'])
+                self.assertEqual(normalized[field][0]['evidence_ids'], ['study:E-001'])
+            provenance = meta['normalization_provenance']
+            self.assertGreater(provenance['replacement_count'], 0)
+            self.assertEqual(provenance, state['study-shard']['normalization_provenance'])
+            self.assertTrue(json.loads((attempt / 'validation.json').read_text())['policy_valid'])
+        for shard in self.calls[-1]['context']['validated_shards']:
+            self.assertNotIn('normalization_provenance', shard)
+
+    def test_all_failed_shards_produce_no_usable_material(self):
+        def change(runner, context, data):
+            if context['stage'] == 'study-shard': data['claims'][0]['evidence_ids'] = ['study:E-999']
+        manifest, code = self.run_case(change=change, policy='compromise')
+        self.assertEqual((manifest['status'], code), ('FAILED', 1))
+        self.assertFalse(manifest['has_usable_material'])
+        self.assertEqual(len(self.calls), 4)
+
+    def test_empty_file_metadata_reaches_synthesis_and_source_guard(self):
+        empty = self.source / '.codex'
+        paths = ['.codex', 'app.py'] + [f'part{i}.py' for i in range(2, 10)]
+        for mutate in (False, True):
+            empty.write_bytes(b'')
+            def change(runner, context, data):
+                if context['stage'] == 'study-shard':
+                    empty_ids = {'study:' + e['id'] for e in data['evidence'] if e['path'] == '.codex'}
+                    removed = {c['id'] for c in data['claims'] if set(c['evidence_ids']) & empty_ids}
+                    data['evidence'] = [e for e in data['evidence'] if 'study:' + e['id'] not in empty_ids]
+                    data['claims'] = [c for c in data['claims'] if c['id'] not in removed]
+                    for field in OBSERVATION_FIELDS:
+                        data[field] = [r for r in data[field] if not set(r['claim_ids']) & removed]
+                    for area in data['coverage']:
+                        if set(area['evidence_ids']) & empty_ids:
+                            area.update(evidence_ids=[], limitation='Empty file; no source lines.')
+                elif mutate and context.get('prompt_variant') == 'synthesis':
+                    empty.write_text('changed after metadata verification\n')
+            with self.subTest(mutate=mutate):
+                manifest, code = self.run_case(change=change, catalog_paths=paths, policy='compromise')
+                if mutate:
+                    self.assertEqual((code, manifest['status'], manifest['critical_failure']), (1, 'FAILED', True))
+                    self.assertFalse(manifest['has_usable_material'])
+                else:
+                    self.assertEqual(code, 0, manifest.get('diagnostics'))
+                    coverage = manifest['study']['program_checks']['coverage']
+                    self.assertEqual(coverage['metadata_verified_empty_paths'], ['.codex'])
+                    self.assertEqual(manifest['analysis_plan']['totals']['source_files'], 10)
+                    self.assertIn('Empty files verified from pinned metadata: .codex',
+                                  (self.runner.run_dir / 'FINAL_REPORT.md').read_text())
+
+    def test_interrupted_run_preserves_exit_code_and_published_parts(self):
+        def change(runner, context, data):
+            if context.get('analysis_shard', {}).get('id') == 'R-002': raise KeyboardInterrupt()
+        manifest, code = self.run_case(change=change, policy='compromise')
+        self.assertEqual((manifest['status'], code), ('FAILED', 130))
+        self.assertFalse(manifest['workflow_satisfied'])
+        self.assertEqual(manifest['synthesis_status'], 'SKIPPED')
+        self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED', 'FAILED', 'PLANNED'])
+        self.assertTrue((self.runner.run_dir / 'study-shards/R-001/study-shard.json').is_file())
 
     def test_source_plan_and_published_shard_mutations_stop_the_run(self):
         for kind in ('source', 'plan', 'shard'):
@@ -442,7 +532,9 @@ class MultiSessionTests(FolderFixture):
                         path.write_bytes(path.read_bytes() + b'changed')
                 with self.subTest(origin=origin, kind=kind):
                     manifest, code = self.run_case(change=change, policy='compromise')
-                    self.assertEqual((code, manifest['status']), (1, 'FAILED'))
+                    recoverable = kind in ('schema', 'evidence', 'identity')
+                    self.assertEqual((code, manifest['status']), (2, 'PARTIAL') if recoverable else (1, 'FAILED'))
+                    self.assertEqual(manifest['has_usable_material'], recoverable)
                     self.assertFalse(any(c['context'].get('prompt_variant') == 'synthesis' for c in self.calls))
                     self.assertFalse((self.runner.run_dir / 'ARCHITECTURE.md').exists())
                     self.assertFalse(manifest['accepted'])
@@ -470,7 +562,9 @@ class MultiSessionTests(FolderFixture):
                     else: raise AuditError('Synthetic backend failure.', code='CLI_FAILED', failure_layer='backend')
                 with self.subTest(kind=kind, policy=policy):
                     manifest, code = self.run_case(change=change, policy=policy, review=True)
-                    self.assertEqual(code, 1)
+                    self.assertEqual((manifest['status'], code),
+                                     ('PARTIAL', 2) if policy == 'compromise' else ('FAILED', 1))
+                    self.assertTrue(manifest['has_usable_material'])
                     self.assertFalse(manifest['accepted'])
                     self.assertEqual(manifest['synthesis_status'], 'FAILED')
                     self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED'] * 3)
@@ -606,7 +700,7 @@ class MultiSessionTests(FolderFixture):
                         data['evidence'][0]['path'] = 'app.py'
                 with self.subTest(kind=kind, policy=policy), patch('src.analysis.analysis_plan.MAX_SOURCE_FILES_PER_SESSION', 3):
                     manifest, code = self.run_case(catalog_paths=['.'], change=change, policy=policy)
-                self.assertEqual(code, 1)
+                self.assertEqual(code, 2 if policy == 'compromise' else 1)
                 self.assertEqual(manifest['synthesis_status'], 'SKIPPED')
                 self.assertFalse(workflow_satisfied(manifest))
                 self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED', 'FAILED', 'SUCCEEDED'])
@@ -798,7 +892,8 @@ class MultiSessionGitTests(unittest.TestCase):
             inputs = synthesis_inputs(branch['analysis_plan'], branch['study_shards'])
             self.assertNotIn('shard_id_mappings', context)
             for shard, full in zip(context['validated_shards'], inputs['validated_shards']):
-                self.assertEqual(shard, {k: v for k, v in full.items() if k not in ('evidence', 'claims', 'coverage')})
+                self.assertEqual(shard, {k: v for k, v in full.items()
+                                         if k not in ('evidence', 'claims', 'coverage', 'normalization_provenance')})
             for field in ('evidence', 'claims', 'coverage'):
                 self.assertEqual(context['synthesis_' + field], inputs['synthesis_' + field])
         self.assertEqual(self.repo.symbolic(), 'master')

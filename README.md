@@ -417,10 +417,13 @@ By default, useful partial results are kept even if a stage fails
 (`result_policy: "compromise"`). Unreviewed material and missing inputs are labeled
 in the final report. If a revision is produced, the results identify the selected
 version and retain earlier material.
+When a multi-session study fails, the final report includes verified published
+shards and their coverage gaps. This local collection adds no model call and is
+not used as a complete study for review or branch comparison.
 
 - **COMPLETE:** checks for all enabled stages passed, review is required only when enabled.
 - **PARTIAL:** useful material is available, with unresolved issues or missing coverage.
-- **FAILED:** no usable study was produced, or a critical error prevented completion.
+- **FAILED:** no usable report material was produced, or a critical error prevented completion.
 
 Read the limitations and findings before relying on the reports. Source references
 and automated review help assess the explanations, but do not prove correctness or

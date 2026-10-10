@@ -39,13 +39,15 @@ def validate_shard(data, context):
     claims = {c['id'] for c in data['claims']}
     paths = {e['path'] for e in context['_inventory']['entries']}
     for field in OBSERVATION_FIELDS:
-        for record in data[field]:
+        for index, record in enumerate(data[field]):
             references(record['claim_ids'], claims, '$.' + field + '[].claim_ids')
             if not record['claim_ids']:
                 raise ContractError('Shard observations must link registered claims.')
             if field == 'relationships':
-                if record['subsystem_id'] not in assigned or record['related_path'] not in paths:
-                    raise ContractError('Relationships must link a primary subsystem to an inventoried path.')
+                if record['subsystem_id'] not in assigned:
+                    raise contract_violation('UNASSIGNED_RELATIONSHIP_SUBSYSTEM', f'$.relationships[{index}].subsystem_id')
+                if record['related_path'] not in paths:
+                    raise contract_violation('UNKNOWN_RELATIONSHIP_PATH', f'$.relationships[{index}].related_path')
     reported = [a['area_id'] for a in data['coverage']]
     if len(reported) != len(set(reported)) or set(reported) != set(assigned):
         raise ContractError('Shard coverage must match exactly its primary assignment.')
@@ -57,22 +59,27 @@ def validate_shard(data, context):
         raise ContractError('An empty shard has no source-audit responsibility.')
 
 
+def metadata_covers_primary(context, coverage):
+    primary = set((context or {}).get('analysis_shard', {}).get('primary_file_paths', []))
+    return bool(primary) and primary == set(coverage.get('metadata_verified_empty_paths', []))
+
+
 def shard_checks(data, context, checks):
     checks['coverage'] = coverage_checks(data, context, checks['evidence'], area_ids=data['assigned_subsystem_ids'])
     checks['policy_satisfied'] = bool(data['completion_status'] == 'COMPLETE'
-        and (data['claims'] or not data['assigned_subsystem_ids'])
+        and (data['claims'] or not data['assigned_subsystem_ids'] or metadata_covers_primary(context, checks['coverage']))
         and all(e['status'] == 'RESOLVED' for e in checks['evidence'])
         and checks['coverage']['policy_satisfied'])
 
 
-def require_shard_policy(data):
+def require_shard_policy(data, context=None):
     checks = data['program_checks']
     if checks['policy_satisfied']:
         return
     reasons = []
     if data['completion_status'] != 'COMPLETE':
         reasons.append('completion_status=' + data['completion_status'])
-    if data['assigned_subsystem_ids'] and not data['claims']:
+    if data['assigned_subsystem_ids'] and not data['claims'] and not metadata_covers_primary(context, checks['coverage']):
         reasons.append('claims=0')
     reasons.extend(f'{status}={count}' for status, count in sorted(checks['evidence_counts'].items())
                    if status != 'RESOLVED')

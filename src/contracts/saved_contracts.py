@@ -72,6 +72,7 @@ CHECKS = {
 }
 CHECKS['study-shard'] = obj(**BASE_CHECKS, evidence_counts=mapping(INTEGER),
                              coverage=CHECKS['study']['properties']['coverage'])
+CHECKS['study']['properties']['coverage']['properties']['metadata_verified_empty_paths'] = STRINGS
 
 
 def artifact_schemas(wire):
@@ -90,7 +91,7 @@ def artifact_schemas(wire):
         if stage == 'review':
             properties.update(claim_registry=array(MATERIALIZED_CLAIM), verdict=string('PASS', 'CHANGES_REQUIRED', 'INCONCLUSIVE'))
         result[stage] = obj(**properties)
-        if stage in ('study', 'review'):
+        if stage in ('study', 'study-shard', 'review'):
             # Optional for direct prepare_result callers;
             # every new Runner publication writes this orchestrator-only record.
             result[stage]['properties']['normalization_provenance'] = NORMALIZATION_PROVENANCE

@@ -242,7 +242,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'stage_started', 'context': context}))
             table = app.query_one('#stages', DataTable)
             self.assertEqual(table.get_row_at(1)[0].plain, '[red]main\\x1b[31m')
-            self.assertIn('unavailable', table.get_row_at(1)[5].plain)
+            self.assertIn('n/a', table.get_row_at(1)[5].plain)
             metrics = measured(context, 'PARTIAL')
             app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'stage_completed',
                 'context': dict(context, status='PARTIAL', elapsed_seconds=3, metrics=metrics, report_path='/tmp/[report].md')}))

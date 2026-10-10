@@ -109,7 +109,8 @@ def verified_export(raw, session, message, text, agent_name):
             'tokens': final.get('tokens'), 'cost': final.get('cost')}
 
 
-def parse_output(output: str, *, exported=None, agent_name=None) -> tuple[dict, dict]:
+def completed_response(output: str, *, exported=None, agent_name=None) -> tuple[str, dict]:
+    """Verify completion independently of the final answer's JSON syntax."""
     texts, finishes, seen = {}, {}, {}
     messages = set()
     latest = session = None
@@ -150,10 +151,22 @@ def parse_output(output: str, *, exported=None, agent_name=None) -> tuple[dict, 
         finishes[latest] = 'stop'
     if latest is None or finishes.get(latest) != 'stop' or latest not in texts:
         raise response_error('INCOMPLETE_OUTPUT', 'result', 'OpenCode did not return a completed final answer.')
-    data, response_meta = json_object_response(''.join(texts[latest]))
-    meta = {'session_id': session, 'message_id': latest, 'finish_reason': finishes[latest], **response_meta}
+    meta = {'session_id': session, 'message_id': latest, 'finish_reason': finishes[latest]}
     if recovered is not None:
         meta.update(completion_source='session_export', exported_finish=recovered)
+    return ''.join(texts[latest]), meta
+
+
+def parse_output(output: str, *, exported=None, agent_name=None) -> tuple[dict, dict]:
+    text, meta = completed_response(output, exported=exported, agent_name=agent_name)
+    try:
+        data, response_meta = json_object_response(text, allow_intro=True)
+    except ContractError as exc:
+        if 'response_normalization' in exc.details:
+            meta['response_normalization'] = exc.details['response_normalization']
+        exc.details['provider_metadata'] = meta
+        raise
+    meta.update(response_meta)
     return data, meta
 
 
