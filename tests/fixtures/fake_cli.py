@@ -86,7 +86,8 @@ if '--version' in args:
     print(os.environ.get('AUDIT_TEST_CLI_VERSION', 'fixture-cli 1.0'))
 elif '--help' in args:
     print('--ephemeral --output-schema --sandbox --json --output-last-message --skip-git-repo-check --no-session-persistence --json-schema '
-          '--tools --allowedTools --disallowedTools --permission-mode --format --model --agent --standalone')
+          '--tools --allowedTools --disallowedTools --permission-mode --format --model --agent --standalone '
+          '--output-format --verbose --include-partial-messages')
 else:
     prompt = sys.stdin.read()
     raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]
@@ -119,9 +120,10 @@ else:
         from cli_response import cli_result
         sys.stdout.buffer.write(cli_result(args, data)['stdout'])
     elif '--output-format' in args:
-        print(json.dumps({'is_error': False, 'structured_output': data, 'total_cost_usd': 0.01,
+        from cli_response import cli_result
+        sys.stdout.buffer.write(cli_result(args, {'is_error': False, 'structured_output': data, 'total_cost_usd': 0.01,
                           'modelUsage': {'fixture-model': {'inputTokens': 60, 'outputTokens': 20,
-                              'cacheReadInputTokens': 30, 'cacheCreationInputTokens': 10, 'costUSD': 0.01}}}))
+                              'cacheReadInputTokens': 30, 'cacheCreationInputTokens': 10, 'costUSD': 0.01}}})['stdout'])
     else:
         from cli_response import cli_result
         sys.stdout.buffer.write(cli_result(args, data)['stdout'])

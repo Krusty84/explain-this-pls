@@ -72,6 +72,8 @@ def project_model_context(stage, context):
     result.pop('_analysis_plan_path', None)
     result.pop('_synthesis_resolutions', None)
     result.pop('_shard_artifact_hashes', None)
+    if stage in ('compare', 'repair') or result.get('prompt_variant') in ('synthesis', 'repair'):
+        result.pop('source_context', None)
     if isinstance(result.get('catalog'), dict):
         result['catalog'].pop('coverage_plan', None)
         result['catalog'].pop('program_checks', None)

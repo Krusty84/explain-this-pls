@@ -522,6 +522,68 @@
             "policy_satisfied"
           ],
           "additionalProperties": false
+        },
+        "continuation_allowed": {
+          "type": "boolean"
+        },
+        "citation_warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "evidence_id": {
+                "type": "string"
+              },
+              "source_id": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "start_line": {
+                "type": "integer"
+              },
+              "end_line": {
+                "type": "integer"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "claim_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "UNRESOLVED",
+                  "CORRECTED"
+                ]
+              },
+              "original_start_line": {
+                "type": "integer"
+              },
+              "original_end_line": {
+                "type": "integer"
+              },
+              "branch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "evidence_id",
+              "source_id",
+              "path",
+              "start_line",
+              "end_line",
+              "reason",
+              "claim_ids",
+              "action"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "required": [

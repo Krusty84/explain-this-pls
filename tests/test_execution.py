@@ -16,14 +16,14 @@ from src.runtime.execution import Budget, execution_settings
 from explain import cli_env, process
 from unittest.mock import patch
 from src.contracts.contracts import response_error
-from explain import Runner
+from explain import AuditError, Runner
 import test_explain as fixtures
 
 
 class ExecutionTests(unittest.TestCase):
     def test_defaults_and_invalid_values(self):
         self.assertEqual(execution_settings(), {'stage_timeout_seconds': 3600,
-            'review_enabled': False,
+            'review_enabled': False, 'read_loop_guard': True,
             'idle_timeout_seconds': None, 'max_revision_rounds': 1, 'opencode_format_retries': 2,
             'structured_output_repair_attempts': 0, 'http_timeout_seconds': 5, 'api_doc_timeout_seconds': 30})
         for key in ('stage_timeout_seconds', 'idle_timeout_seconds', 'http_timeout_seconds', 'api_doc_timeout_seconds'):
@@ -96,6 +96,23 @@ class TimeoutRestorationTests(unittest.TestCase):
         self.assertEqual(self.repo.symbolic(), 'master')
         self.assertEqual(self.repo.head(), self.master)
         self.assertEqual(manifest['diagnostics'][0]['failure_kind'], 'STAGE_TIMEOUT')
+        self.repo.clean()
+
+    def test_git_restoration_runs_after_no_progress(self):
+        config = self.config()
+        config['git_mode']['branches'] = ['master']
+        config.update(continue_on_error=False)
+        runner = Runner(config, self.base / 'no-progress-run')
+        self.addCleanup(runner.repo.close)
+        stopped = AuditError('Fixture read loop.', code='NO_PROGRESS',
+                             failure_kind='NO_PROGRESS', failure_layer='execution')
+        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=stopped):
+            manifest, code = runner.run()
+        self.assertEqual(code, 1)
+        self.assertTrue(manifest['restoration']['restored'])
+        self.assertEqual(self.repo.symbolic(), 'master')
+        self.assertEqual(self.repo.head(), self.master)
+        self.assertEqual(manifest['diagnostics'][0]['code'], 'NO_PROGRESS')
         self.repo.clean()
 
 

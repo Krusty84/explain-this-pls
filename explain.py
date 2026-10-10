@@ -31,10 +31,11 @@ import time
 import uuid
 from typing import Any
 from urllib.parse import urlsplit
-from src.contracts.contracts import MODEL_FOLDER_SCHEMAS, MODEL_SCHEMAS, ContractError, accepted, workflow_satisfied, jsonc, strict_json, validate_result, schema_diagnostics, result_diagnostics
+from src.contracts.contracts import MODEL_FOLDER_SCHEMAS, MODEL_SCHEMAS, ContractError, accepted, workflow_satisfied, processing_satisfied, jsonc, strict_json, validate_result, schema_diagnostics, result_diagnostics
 from src.runtime.reporting import Diagnostic, NullReporter, Reporter, diagnostic, existing_file, output_mode
 from src.runtime.execution import Budget, execution_settings
 from src.runtime.metrics import RunMetrics, measurement, usage, FIELDS
+from src.runtime.tool_observer import ToolObserver
 from src.backends import codex
 from src.backends import claude_code
 from src.backends import opencode_cli
@@ -42,16 +43,18 @@ from src.backends import xxx
 from src.backends.json_response import json_object_response
 from src.model.structured_output import blocked_comparison, required_unresolved, retry_policy
 from src.reports.final_report import recoverable_material, stage_document, usable_study, has_usable_report_material, report_entries, comparison_possible, render_final_report
-from src.analysis.ledger import prepare_result, review_context
+from src.analysis.ledger import prepare_result, review_context, continuation_allowed
 from src.analysis.study_normalization import normalize_evidence, normalization_provenance
+from src.analysis.citation_repair import repair_citations
 from src.reports.document_rendering import materialize_study, validate_materialized
 from src.analysis.evidence import source_catalog, SourceChanged, open_source_directory, read_confined, stamp
 from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, validate_schema, response_error
 from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
-from src.reports.presentation import render_stage
+from src.reports.presentation import render_stage, render_architecture
 from src.model.model_context import CONTEXT_FORMAT
 from src.model.model_boundary import BindingRegistry
 from src.analysis.source_decoding import normalize_source_decoding
+from src.analysis.source_context import SourceContextBuilder, source_context_settings, serialize_source_context
 from src.analysis.source_filter import normalize_source_filter, excluded_root, gitignore_spec, gitignore_match
 from src.analysis.coverage_plan import build_coverage_plan, inventory_summary, verify_coverage_plan, recover_catalog_paths
 from src.analysis.revisions import revision_inputs, choose_revision, completed_pair
@@ -149,6 +152,12 @@ def atomic(path: Path, data: str | bytes) -> None:
 def save_json(path: Path, value: Any) -> None:
     atomic(path, json.dumps(value, ensure_ascii=False, indent=2) + '\n')
 
+
+def append_observation(path, event):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'a', encoding='utf-8') as stream:
+        stream.write(json.dumps(event, ensure_ascii=False) + '\n')
+
 def slug(branch: str) -> str:
     text = re.sub(r'[^A-Za-z0-9._-]+', '_', branch).strip('._-')[:55] or 'branch'
     return f'{text}--{digest(branch.encode())[:12]}'
@@ -160,7 +169,7 @@ def cli_env(cwd: Path) -> dict[str, str]:
 
 def process(command: list[str], cwd: Path, env: dict[str, str], input_data: bytes = b'',
             *, reporter=None, context: dict | None = None, log_dir: Path | None = None,
-            clock=time.monotonic, progress_interval: float = 30.0, budget=None) -> dict:
+            clock=time.monotonic, progress_interval: float = 30.0, budget=None, observer=None) -> dict:
     """Nonblocking pipe I/O; do not pass artifact FDs into the CLI child."""
     reporter = reporter or NullReporter()
     context = context or {}
@@ -174,11 +183,11 @@ def process(command: list[str], cwd: Path, env: dict[str, str], input_data: byte
                 os.fchmod(stream.fileno(), 0o600)
                 streams[name] = stream
         return _process(command, cwd, env, input_data, reporter,
-                        context, clock, progress_interval, streams, budget or Budget(3600, clock=clock))
+                        context, clock, progress_interval, streams, budget or Budget(3600, clock=clock), observer)
 
 
 def _process(command, cwd, env, input_data, reporter, context,
-             clock, progress_interval, logs, budget):
+             clock, progress_interval, logs, budget, observer=None):
     budget.check()
     start = clock()
     last_output = None
@@ -229,6 +238,9 @@ def _process(command, cwd, env, input_data, reporter, context,
                     if not block:
                         selector.unregister(stream)
                         stream.close()
+                        if name == 'stdout' and observer is not None:
+                            observer.finish()
+                            check_read_loop(observer)
                     else:
                         last_output = clock()
                         if managed_progress:
@@ -241,6 +253,9 @@ def _process(command, cwd, env, input_data, reporter, context,
                             while remaining:
                                 remaining = remaining[logs[name].write(remaining):]
                             logs[name].flush()
+                        if name == 'stdout' and observer is not None:
+                            observer.feed(block)
+                            check_read_loop(observer)
     except KeyboardInterrupt:
         reporter.stop_requested()
         raise
@@ -273,6 +288,13 @@ def _process(command, cwd, env, input_data, reporter, context,
             failure.cleanup_failed = True
     return {'stdout': bytes(out), 'stderr': bytes(err), 'returncode': p.returncode,
             'duration_seconds': round(clock() - start, 3)}
+
+
+def check_read_loop(observer):
+    if observer.triggered:
+        raise AuditError('Repeated tool results produced no new observable material.',
+                         code='NO_PROGRESS', failure_kind='NO_PROGRESS', failure_layer='execution',
+                         details=observer.diagnostic)
 
 class GitRuntime:
     """One PATH resolution and version check for the entire repository hierarchy."""
@@ -1042,13 +1064,16 @@ def load_config(path: Path) -> dict:
     allowed = {'reports_dir', 'agent', 'stage_agents',
         'output_language', 'priority_scenarios', 'continue_on_error', 'project_description', 'prompts',
         'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy', 'source_decoding', 'multi_session',
-        'max_source_bytes_per_session', 'source_filter'}
+        'max_source_bytes_per_session', 'source_filter', 'source_context'}
     if set(value) - allowed:
         raise AuditError(f'Unknown configuration keys: {set(value) - allowed}')
     try:
         if 'execution' in value and value['execution'] is None:
             raise ValueError('execution must be a JSON object.')
+        if 'source_context' in value and value['source_context'] is None:
+            raise ValueError('source_context must be a JSON object.')
         value['execution'] = execution_settings(value.get('execution'))
+        value['source_context'] = source_context_settings(value.get('source_context'))
         value['source_decoding'] = normalize_source_decoding(value.get('source_decoding'))
         value['source_filter'] = normalize_source_filter(value.get('source_filter', {}))
     except ValueError as exc:
@@ -1184,6 +1209,7 @@ class Runner:
                                reporter=self.reporter) if self.mode == 'git' else None
         self.schemas = MODEL_FOLDER_SCHEMAS if self.mode == 'folder' else MODEL_SCHEMAS
         self.bindings = BindingRegistry()
+        self.source_context = SourceContextBuilder(config.get('source_context'))
         self.analysis_inventories = {}
         self.versions: dict[str, str] = {}
 
@@ -1212,7 +1238,7 @@ class Runner:
     def record_error(self, manifest, exc, *, phase='run', **context):
         self.reporter.stop_progress()
         recoverable = isinstance(exc, ContractError) or (isinstance(exc, AuditError)
-            and exc.code == 'CLI_FAILED' and exc.failure_layer == 'backend')
+            and (exc.code == 'NO_PROGRESS' or exc.code == 'CLI_FAILED' and exc.failure_layer == 'backend'))
         if (not recoverable or phase in ('preflight', 'cleanup')
                 or getattr(exc, 'failure_layer', None) == 'cleanup' or getattr(exc, 'cleanup_failed', False)):
             self.critical_failure = True
@@ -1253,6 +1279,9 @@ class Runner:
             status = 'PARTIAL'
         if stage == 'compare' and status == 'COMPLETE' and not data.get('program_checks', {}).get('policy_satisfied'):
             status = 'PARTIAL'
+        checks = data.get('program_checks', {})
+        if checks.get('citation_warnings') and continuation_allowed(checks):
+            status = 'COMPLETE_WITH_WARNINGS'
         self.reporter.emit('stage_completed', **self.stage_context(stage, context), status=status,
                            elapsed_seconds=self.reporter.clock() - started,
                            metrics=self.metrics.finish_stage(self.stage_context(stage, context), status),
@@ -1264,6 +1293,8 @@ class Runner:
             measured = usage() if meta.get('prompt_sent') else usage({key: 0 for key in FIELDS}, source='not_sent')
             meta['metrics'] = measurement(meta['backend'], meta['model_requested'], meta['model_actual'], measured)
         meta['metrics'].update(duration_seconds=round(self.reporter.clock() - started, 3), attempts=1)
+        if 'tool_observation' in meta:
+            meta['metrics']['tool_observation'] = meta['tool_observation']
         models = list(dict.fromkeys(entry['model_actual'] for entry in meta['metrics']['by_model']
                                     if entry.get('model_actual')))
         if models:
@@ -1347,6 +1378,7 @@ class Runner:
         destination = destination.resolve()
         context = dict(context)
         context['stage'] = stage
+        context['result_policy'] = 'compromise' if self.compromise else 'strict'
         self.assert_coverage_file(context)
         self.assert_analysis_file(context)
         if stage != 'compare':
@@ -1369,6 +1401,16 @@ class Runner:
             if self.repo:
                 self.assert_source()
             evidence_pins = {e['path']: e['sha256'] for e in inventory['entries'] if e['type'] == 'file'}
+            context['_inventory'] = inventory
+        try:
+            prepared_context, preparation = self.source_context.prepare(
+                stage, context, evidence_pins, expected_metadata=evidence_metadata)
+        except SourceChanged as exc:
+            raise UnsafeRepository('Source changed during context preparation.', code='SOURCE_CHANGED',
+                                   failure_kind='SOURCE_CHANGED', failure_layer='integrity') from exc
+        context.pop('source_context', None)
+        if prepared_context is not None:
+            context['source_context'] = prepared_context
         binding = self.bindings.bind(stage, context, self.mode)
         binding_hashes = {}
         attempt_hashes = {}
@@ -1377,7 +1419,8 @@ class Runner:
         try:
             return self._invoke_once(stage, context, destination, budget=budget,
                                      evidence_pins=evidence_pins, evidence_metadata=evidence_metadata, binding=binding,
-                                     binding_hashes=binding_hashes, attempt_hashes=attempt_hashes)
+                                     binding_hashes=binding_hashes, attempt_hashes=attempt_hashes,
+                                     preparation=preparation)
         except ContractError as exc:
             self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
             if not (destination / 'invocation.json').is_file():
@@ -1423,7 +1466,8 @@ class Runner:
             save_json(destination / 'invocation.json', meta)
             return None, meta
 
-    def validate_attempt(self, stage, data, context, attempt, meta, binding):
+    def validate_attempt(self, stage, data, context, attempt, meta, binding, *,
+                         expected_files=None, expected_metadata=None):
         candidate = data
         validation = {'valid': False, 'validated_object': 'extracted.json'}
         try:
@@ -1446,8 +1490,28 @@ class Runner:
                     validation.update(validated_object='recovered.json', original_valid=False,
                                       catalog_recovery=meta['catalog_recovery'])
             if stage in ('study', 'study-shard', 'review'):
-                candidate, changes = normalize_evidence(stage, expanded, context, self.mode)
-                provenance = normalization_provenance(expanded, candidate, changes)
+                normalization_input = expanded
+                if self.compromise and context.get('prompt_variant') != 'synthesis':
+                    try:
+                        normalization_input, corrections = repair_citations(
+                            stage, expanded, context, expected_files, expected_metadata=expected_metadata)
+                    except SourceChanged as exc:
+                        raise UnsafeRepository('Source changed during citation correction.', code='SOURCE_CHANGED',
+                            failure_kind='SOURCE_CHANGED', failure_layer='integrity') from exc
+                    if corrections.get('diagnostics'):
+                        self.save_attempt_value(attempt, 'quote-diagnostics.json', corrections['diagnostics'], meta)
+                    if corrections['changes']:
+                        self.save_attempt_value(attempt, 'quote-corrected.json', normalization_input, meta)
+                        self.save_attempt_value(attempt, 'quote-corrections.json',
+                                                {k: v for k, v in corrections.items() if k != 'diagnostics'}, meta)
+                        meta['citation_corrections'] = [change | {
+                            key: {k: v for k, v in change[key].items() if k != 'quote'}
+                            for key in ('original', 'repaired')} for change in corrections['changes']]
+                        meta['citation_correction_provenance'] = {k: v for k, v in corrections.items()
+                                                                  if k not in ('changes', 'diagnostics')}
+                        validation['citation_corrections'] = meta['citation_correction_provenance']
+                candidate, changes = normalize_evidence(stage, normalization_input, context, self.mode)
+                provenance = normalization_provenance(normalization_input, candidate, changes)
                 # Required artifacts precede validation/publication; extracted.json
                 # remains the adapter's original object, including on failure.
                 self.save_attempt_value(attempt, 'normalized.json', candidate, meta)
@@ -1480,6 +1544,8 @@ class Runner:
             self.save_attempt_value(attempt, 'materialized.json', candidate, meta)
             self.save_attempt_value(attempt, 'provenance.json', {
                 'binding': binding.record(data, expanded),
+                **({'citation_correction': meta['citation_correction_provenance']}
+                   if meta.get('citation_correction_provenance') else {}),
                 'normalization': meta['normalization_provenance'],
                 'materialization': candidate['materialization_provenance']}, meta)
         return candidate
@@ -1633,7 +1699,8 @@ class Runner:
                     data = run_empty_shard(state, shard_context, self.run_dir / state['directory'])
                 else:
                     data = run_stage('study-shard', state, shard_context, self.run_dir / state['directory'])
-                state['status'] = 'SUCCEEDED' if data is not None and data['program_checks']['policy_satisfied'] else 'FAILED'
+                checks = (data or {}).get('program_checks', {})
+                state['status'] = 'SUCCEEDED' if data is not None and continuation_allowed(checks) else 'FAILED'
             finally:
                 if state['status'] == 'RUNNING':
                     state['status'] = 'FAILED'
@@ -1647,7 +1714,7 @@ class Runner:
 
     def select_source_revision(self, item, directory, *, publish):
         self.assert_revision_files(item)
-        selected = choose_revision(item.get('revisions', []))
+        selected = choose_revision(item.get('revisions', []), continuation=self.compromise)
         item['selected_revision'] = selected['revision_id'] if selected else None
         item['revision_history'] = [{
             'revision_id': revision['revision_id'], 'directory': revision['directory'],
@@ -1657,6 +1724,7 @@ class Runner:
             'review_enabled': revision.get('review_enabled', True),
             'review_skipped': revision.get('review_skipped'),
             'workflow_satisfied': workflow_satisfied(revision),
+            'processing_completed': processing_satisfied(revision),
             'review_complete': completed_pair(revision), 'accepted': accepted(revision),
             'errors': list(revision['errors'])} for revision in item.get('revisions', [])]
         for stage in ('study', 'review'):
@@ -1694,6 +1762,7 @@ class Runner:
                 item['selection_publication_complete'] = True
         item['accepted'] = accepted(item)
         item['workflow_satisfied'] = workflow_satisfied(item)
+        item['processing_completed'] = processing_satisfied(item)
 
     def assert_revision_files(self, item):
         states = list(item.get('revisions', []))
@@ -1937,7 +2006,7 @@ class Runner:
             verify_coverage_plan(data['coverage_plan'])
             return {'coverage.plan.json': encoded(data['coverage_plan']), 'catalog.json': encoded(data),
                     ARTIFACTS[stage]: render_stage(stage, data, self.cfg.get('output_language')).encode('utf-8')}
-        report = data['report_markdown'] if stage == 'study' else render_stage(stage, data, self.cfg.get('output_language'))
+        report = render_architecture(data, self.cfg.get('output_language')) if stage == 'study' else render_stage(stage, data, self.cfg.get('output_language'))
         contents = {ARTIFACTS[stage]: report.encode('utf-8'),
                     stage + '.original.md': data['report_markdown'].encode('utf-8'),
                     stage + '.json': encoded(data)}
@@ -1952,7 +2021,8 @@ class Runner:
         expected = {'claim.registry.json': (json.dumps(context['claim_registry'], ensure_ascii=False, indent=2) + '\n').encode(),
             'review.plan.json': (json.dumps(context['review_plan'], ensure_ascii=False, indent=2) + '\n').encode()}
         if context.get('document_strictly_valid'):
-            expected['ARCHITECTURE.md'] = context['architecture_document']['report_markdown'].encode('utf-8')
+            expected['ARCHITECTURE.md'] = render_architecture(
+                context['architecture_document'], self.cfg.get('output_language')).encode('utf-8')
         for name, content in expected.items():
             try:
                 actual = read_confined(self.run_dir, str((directory / name).relative_to(self.run_dir)), len(content))
@@ -2006,7 +2076,8 @@ class Runner:
             raise
 
     def _invoke_once(self, stage, context, destination, *, budget,
-                     evidence_pins=None, evidence_metadata=None, binding, binding_hashes, attempt_hashes):
+                     evidence_pins=None, evidence_metadata=None, binding, binding_hashes, attempt_hashes,
+                     preparation=None):
         attempt_started = self.reporter.clock()
         self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
         agent = self.cfg['_agents']['study' if stage == 'study-shard' else stage]
@@ -2018,7 +2089,14 @@ class Runner:
             if agent['backend'] in ('xxx', 'opencode') else
             'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.')
         # Assemble only this stage's inputs; the configured CLI profile remains available.
-        context_json = json.dumps(binding.project(context), ensure_ascii=False)
+        projected = binding.project(context)
+        context_json = json.dumps(projected, ensure_ascii=False)
+        if 'source_context' in projected:
+            transmitted = len(serialize_source_context(projected['source_context']).encode('utf-8'))
+            if transmitted > source_context_settings(self.cfg.get('source_context'))['max_bytes']:
+                raise AuditError('Projected source context exceeds its byte budget.', failure_layer='integrity')
+            if preparation is not None:
+                preparation = dict(preparation, transmitted_bytes=transmitted)
         schema = binding.schema
         schema_json = json.dumps(schema, ensure_ascii=False)
         prompt = (template + '\n\n# Backend output instruction\n' + output_instruction +
@@ -2065,6 +2143,13 @@ class Runner:
         atomic(attempt / 'input.prompt.txt', payload)
         save_json(attempt / 'schema.json', schema)
         save_json(attempt / 'validation.json', {'valid': False, 'status': 'not_run'})
+        if preparation is not None:
+            save_json(attempt / 'source-context.manifest.json', preparation)
+            meta['source_context_manifest'] = str(attempt / 'source-context.manifest.json')
+        observer = ToolObserver(agent['backend'], enabled=self.execution['read_loop_guard'],
+                                clock=self.reporter.clock, context=context, attempt_id=meta['invocation_id'],
+                                event_sink=lambda event: append_observation(attempt / 'tool-events.jsonl', event))
+        observer.seed_prompt(context.get('source_context', {}).get('fragments', []))
         try:
             self.save_binding(binding, None, None, attempt, meta)
             budget.check()
@@ -2087,14 +2172,15 @@ class Runner:
                     if agent['backend'] == 'xxx':
                         cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only, schema=schema)
                         data, provider_meta = xxx.invoke(cmd, cwd, env, payload, process=process,
-                            artifacts=attempt, budget=budget, meta=meta, process_options={
+                            artifacts=attempt, budget=budget, meta=meta, observer=observer, process_options={
                                 'reporter': self.reporter, 'context': self.stage_context(stage, context),
                                 'clock': self.reporter.clock, 'progress_interval': self.reporter.progress_interval})
                         meta['backend_result_valid'] = True
                         meta['provider_metadata'] = {k: v for k, v in provider_meta.items() if k != 'metrics'}
                         save_json(attempt / 'extracted.json', data)
                         self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
-                        data = self.validate_attempt(stage, data, context, attempt, meta, binding)
+                        data = self.validate_attempt(stage, data, context, attempt, meta, binding,
+                            expected_files=evidence_pins, expected_metadata=evidence_metadata)
                     else:
                         if agent['backend'] == 'opencode':
                             opencode_cli.verify_version(meta['cli_version'])
@@ -2105,7 +2191,7 @@ class Runner:
                             r = process(cmd, cwd, env, payload, reporter=self.reporter,
                                         context=self.stage_context(stage, context), log_dir=attempt,
                                         clock=self.reporter.clock, progress_interval=self.reporter.progress_interval,
-                                        budget=budget)
+                                        budget=budget, observer=observer)
                         finally:
                             # The private pipe log survives timeout/interruption even without a process result.
                             with contextlib.suppress(OSError):
@@ -2161,8 +2247,11 @@ class Runner:
                             meta['model_actual_source'] = 'backend modelUsage; may include multiple models'
                         save_json(attempt / 'extracted.json', data)
                         self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
-                        data = self.validate_attempt(stage, data, context, attempt, meta, binding)
+                        data = self.validate_attempt(stage, data, context, attempt, meta, binding,
+                            expected_files=evidence_pins, expected_metadata=evidence_metadata)
                 finally:
+                    observer.finish()
+                    meta['tool_observation'] = observer.snapshot()
                     self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
                     self.assert_coverage_file(context)
                     self.assert_analysis_file(context)
@@ -2175,7 +2264,11 @@ class Runner:
             # Publish after the CLI exits and temporary invocation files are removed.
             try:
                 data = prepare_result(stage, data, context, evidence_pins, expected_metadata=evidence_metadata,
-                                      catalog_recovery=meta.get('catalog_recovery'))
+                                      catalog_recovery=meta.get('catalog_recovery'),
+                                      citation_corrections=meta.get('citation_corrections'))
+                for warning in data.get('program_checks', {}).get('citation_warnings', []):
+                    self.reporter.emit('citation_warning', **(warning | self.stage_context(stage, context)),
+                                       evidence_branch=warning.get('branch'))
                 if stage in ('study', 'study-shard', 'review'):
                     data['normalization_provenance'] = meta['normalization_provenance']
                 if stage == 'study-shard':
@@ -2218,6 +2311,7 @@ class Runner:
             save_json(destination / 'invocation.json', meta)
             return data, meta
         except BaseException as exc:
+            meta['tool_observation'] = observer.snapshot()
             if getattr(exc, 'cleanup_failed', False):
                 self.critical_failure = True
                 meta.setdefault('cleanup_errors', []).append('process_cleanup_failed')
@@ -2259,11 +2353,14 @@ class Runner:
             if self.compromise and code != 130:
                 if self.critical_failure or not any(has_usable_report_material(b) for b in entries):
                     manifest['status'], code = 'FAILED', 1
-                elif (all(workflow_satisfied(b) for b in entries) and not manifest.get('diagnostics')
+                elif (all(processing_satisfied(b) for b in entries) and not manifest.get('diagnostics')
                       and (self.mode == 'folder' or len(self.source['branches']) == 1
-                           or (manifest.get('comparison', {}).get('program_checks', {}).get('policy_satisfied')
+                           or (continuation_allowed((manifest.get('comparison') or {}).get('program_checks', {}))
                                and manifest.get('comparison_invocation', {}).get('publication_complete')))):
-                    manifest['status'], code = 'COMPLETE', 0
+                    warned = any((b.get(stage) or {}).get('program_checks', {}).get('citation_warnings')
+                                 for b in entries for stage in ('study', 'review'))
+                    warned = warned or bool((manifest.get('comparison') or {}).get('program_checks', {}).get('citation_warnings'))
+                    manifest['status'], code = 'COMPLETE_WITH_WARNINGS' if warned else 'COMPLETE', 0
                 else:
                     manifest['status'], code = 'PARTIAL', 2
             elif self.critical_failure and code != 130:
@@ -2278,7 +2375,11 @@ class Runner:
                 self.record_error(manifest, exc, phase='publication')
                 manifest.update(status='FAILED', critical_failure=True)
                 code = 130 if code == 130 else 1
-        manifest['workflow_satisfied'] = not check_only and manifest['status'] == 'COMPLETE' and code == 0
+        manifest['processing_completed'] = not check_only and manifest['status'] in ('COMPLETE', 'COMPLETE_WITH_WARNINGS') and code == 0
+        manifest['workflow_satisfied'] = (manifest['processing_completed'] and
+            all(workflow_satisfied(b) for b in report_entries(manifest, self.source, self.mode)) and
+            (self.mode == 'folder' or len(self.source['branches']) == 1 or
+             (manifest.get('comparison') or {}).get('program_checks', {}).get('policy_satisfied') is True))
         manifest['exit_code'] = code
         # This last manifest write commits the run's publication record. Individual
         # file replacements above are atomic; the group is not a transaction.
@@ -2584,10 +2685,14 @@ def run_audit(args, reporter) -> int:
         header()
         manifest = getattr(runner, 'manifest', manifest)
         code = 130 if isinstance(exc, KeyboardInterrupt) or manifest.get('exit_code') == 130 else 1
-        manifest.update(run_id=run_id, status='FAILED', exit_code=code, finished_at=now(), publication_complete=False)
+        manifest.update(run_id=run_id, status='FAILED', exit_code=code, finished_at=now(), publication_complete=False,
+                        processing_completed=False, workflow_satisfied=False)
+        if 'accepted' in manifest:
+            manifest['accepted'] = False
         manifest.setdefault('errors', []).append(str(exc) or type(exc).__name__)
         if runner:
             runner.record_error(manifest, exc, phase='run' if runner.analysis_started else 'preflight')
+            manifest['critical_failure'] = runner.critical_failure
             manifest['metrics'] = runner.metrics.snapshot(finish=True)
         else:
             manifest.setdefault('diagnostics', []).append(reporter.error(exc, phase='preflight',
@@ -2604,8 +2709,16 @@ def run_audit(args, reporter) -> int:
                 runner.repo.close()
             except OSError as close_error:
                 reporter.error(close_error)
-                manifest['status'] = 'FAILED'
                 code = 130 if code == 130 else 1
+                manifest.update(status='FAILED', exit_code=code, publication_complete=False, critical_failure=True,
+                                processing_completed=False, workflow_satisfied=False)
+                if 'accepted' in manifest:
+                    manifest['accepted'] = False
+                if run_created:
+                    try:
+                        save_json(run_dir / 'manifest.json', manifest)
+                    except OSError as save_error:
+                        reporter.error(save_error)
         signal.signal(signal.SIGTERM, old_handler)
         os.umask(old_umask)
         manifest_path = run_dir / 'manifest.json' if run_dir else None
@@ -2617,10 +2730,13 @@ def run_audit(args, reporter) -> int:
         result['status_meaning'] = ('Local launch prerequisites checked. Source analysis was not performed; '
             'model availability and provider authorization were not tested.' if result['status'] == 'PREFLIGHT_OK' else
             'Enabled-stage policy checks satisfied; factual correctness is not established.' if result['status'] == 'COMPLETE' else
+            'Document processing completed with citation warnings; unresolved citations require human review.'
+                if result['status'] == 'COMPLETE_WITH_WARNINGS' else
             'Processing may be incomplete or evidence may be insufficient; consult limitations and diagnostics.')
         result['review_quality'] = 'NOT_MEASURED'
         result['review_enabled'] = manifest.get('review_enabled', (config or {}).get('execution', {}).get('review_enabled', False))
         result['workflow_satisfied'] = manifest.get('workflow_satisfied', False)
+        result['processing_completed'] = manifest.get('processing_completed', False)
         if 'metrics' in manifest:
             result['metrics'] = manifest['metrics']
         else:

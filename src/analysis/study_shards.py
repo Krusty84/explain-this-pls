@@ -65,16 +65,23 @@ def metadata_covers_primary(context, coverage):
 
 
 def shard_checks(data, context, checks):
+    from src.analysis.ledger import quote_tolerant_resolutions
     checks['coverage'] = coverage_checks(data, context, checks['evidence'], area_ids=data['assigned_subsystem_ids'])
-    checks['policy_satisfied'] = bool(data['completion_status'] == 'COMPLETE'
-        and (data['claims'] or not data['assigned_subsystem_ids'] or metadata_covers_primary(context, checks['coverage']))
+    conditions = bool(data['completion_status'] == 'COMPLETE'
+        and (data['claims'] or not data['assigned_subsystem_ids'] or metadata_covers_primary(context, checks['coverage'])))
+    checks['policy_satisfied'] = bool(conditions
         and all(e['status'] == 'RESOLVED' for e in checks['evidence'])
         and checks['coverage']['policy_satisfied'])
+    checks['continuation_allowed'] = checks['policy_satisfied'] or bool(context.get('result_policy') == 'compromise'
+        and conditions and all(e['status'] in ('RESOLVED', 'QUOTE_MISMATCH') for e in checks['evidence'])
+        and coverage_checks(data, context, quote_tolerant_resolutions(checks['evidence']),
+                            area_ids=data['assigned_subsystem_ids'])['policy_satisfied'])
 
 
 def require_shard_policy(data, context=None):
+    from src.analysis.ledger import continuation_allowed
     checks = data['program_checks']
-    if checks['policy_satisfied']:
+    if checks['policy_satisfied'] or (context or {}).get('result_policy') == 'compromise' and continuation_allowed(checks):
         return
     reasons = []
     if data['completion_status'] != 'COMPLETE':
@@ -98,11 +105,13 @@ def synthesis_inputs(plan, states):
     A synthesis supplies prose and blocks. Python copies these registries into
     the study and checks exact content and order before publication.
     """
+    from src.analysis.ledger import continuation_allowed
     expected = [s['id'] for s in plan['shards']]
     if [s['id'] for s in states] != expected or any(s['status'] != 'SUCCEEDED' for s in states):
         raise ContractError('Every planned shard must succeed before synthesis.')
     evidence, claims, coverage, shards, mappings, resolutions = [], [], [], [], [], []
     artifact_hashes = {}
+    warnings = []
     for planned, state in zip(plan['shards'], states):
         original = state['study-shard']
         if (original['shard_id'] != planned['id'] or original['assigned_subsystem_ids'] != planned['subsystem_ids']):
@@ -115,7 +124,8 @@ def synthesis_inputs(plan, states):
                     or {k: v for k, v in original.items() if k != 'program_checks'} != empty_shard_result(planned, original)):
                 raise ContractError('Only validated empty assignments may bypass backend invocation.')
         if ((not local and not meta.get('backend_result_valid')) or not meta.get('local_validation')
-                or not meta.get('publication_complete') or not original['program_checks']['policy_satisfied']):
+                or not meta.get('publication_complete') or not continuation_allowed(original['program_checks'])
+                or any(e['status'] not in ('RESOLVED', 'QUOTE_MISMATCH') for e in original['program_checks']['evidence'])):
             raise ContractError('Synthesis requires published, locally validated shard results.')
         for field in (('artifact_hashes',) if local else ('artifact_hashes', 'attempt_hashes', 'binding_hashes')):
             artifact_hashes.update({state['directory'] + '/' + name: pin for name, pin in meta[field].items()})
@@ -127,6 +137,10 @@ def synthesis_inputs(plan, states):
                    for i, c in enumerate(sorted(shard['claims'], key=lambda c: c['id']))}
         for resolved in original['program_checks']['evidence']:
             resolutions.append(copy.deepcopy(resolved) | {'id': 'study:' + eid_map[resolved['id'].removeprefix('study:')]})
+        for warning in original['program_checks'].get('citation_warnings', []):
+            warnings.append(copy.deepcopy(warning) | {
+                'evidence_id': 'study:' + eid_map[warning['evidence_id'].removeprefix('study:')],
+                'claim_ids': [cid_map[cid] for cid in warning['claim_ids']]})
         for e in shard['evidence']:
             e['id'] = eid_map[e['id']]
         for c in shard['claims']:
@@ -156,7 +170,8 @@ def synthesis_inputs(plan, states):
         previous['limitation'] = '\n'.join(dict.fromkeys(s for s in (previous['limitation'], area['limitation']) if s))
     return {'validated_shards': shards, 'synthesis_evidence': evidence, 'synthesis_claims': claims,
             'synthesis_coverage': [merged[sid] for sid in sorted(merged)], 'shard_id_mappings': mappings,
-            '_synthesis_resolutions': resolutions, '_shard_artifact_hashes': artifact_hashes}
+            '_synthesis_resolutions': resolutions, '_shard_artifact_hashes': artifact_hashes,
+            **({'citation_warnings': warnings} if warnings else {})}
 
 
 def validate_synthesis(data, context):

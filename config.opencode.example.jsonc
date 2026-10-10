@@ -90,7 +90,15 @@
     ],
   },
 
+  // Prompt budget includes the map, exact snippets, JSON and omission summary.
+  "source_context": {
+    "enabled": true,
+    "max_bytes": 65536
+  },
   "execution": {
+    // Stop only after 50 confirmed repeated tool results spanning 120 seconds.
+    // false keeps observation metrics and disables this stop.
+    "read_loop_guard": true,
     // Optional separate review. Omitted means false; set true for the reviewed workflow.
     "review_enabled": false,
     // Used only with review enabled: one revision and full review after material findings.

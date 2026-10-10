@@ -24,7 +24,8 @@ ADAPTERS = {'codex': codex, 'claude-code': claude_code}
 REQUIRED_FLAGS = {
     'codex': ['--ephemeral', '--output-schema', '--sandbox', '--json', '--output-last-message'],
     'claude-code': ['--no-session-persistence', '--json-schema', '--tools',
-                    '--allowedTools', '--disallowedTools', '--permission-mode'],
+                    '--allowedTools', '--disallowedTools', '--permission-mode', '--output-format',
+                    '--verbose', '--include-partial-messages'],
 }
 
 
@@ -60,7 +61,9 @@ class CLIAdapterTests(unittest.TestCase):
                             else:
                                 self.assertEqual(cmd[1], '-p')
                                 self.assertIn('--no-session-persistence', cmd)
-                                self.assertEqual(cmd[cmd.index('--output-format') + 1], 'json')
+                                self.assertEqual(cmd[cmd.index('--output-format') + 1], 'stream-json')
+                                self.assertIn('--verbose', cmd)
+                                self.assertIn('--include-partial-messages', cmd)
                                 self.assertEqual(json.loads(cmd[cmd.index('--json-schema') + 1]), schema)
                                 self.assertEqual(cmd[cmd.index('--permission-mode') + 1], 'dontAsk')
                                 self.assertEqual(cmd[cmd.index('--disallowedTools') + 1], 'mcp__*')
@@ -113,6 +116,43 @@ class CLIAdapterTests(unittest.TestCase):
                 ADAPTERS[backend].parse_output(output)
             self.assertEqual(caught.exception.failure_kind, kind)
             self.assertEqual(caught.exception.failure_layer, layer)
+
+    def test_claude_stream_preserves_final_schema_output_and_usage(self):
+        output = (ROOT / 'tests/fixtures/claude_stream.jsonl').read_text()
+        result, metadata = claude_code.parse_output(output)
+        self.assertEqual(result, {'completion_status': 'COMPLETE', 'report_markdown': '# Report'})
+        self.assertEqual(metadata['session_id'], 'fixture-session')
+        metrics = claude_code.collect_metrics(output, 'requested')
+        self.assertEqual(metrics['usage']['total_tokens'], 37)
+        self.assertEqual(metrics['usage']['cost_usd'], 0.1)
+        self.assertEqual(metrics['by_model'][0]['model_actual'], 'fixture-model')
+        self.assertEqual(metrics['usage']['coverage']['total_tokens'], 'complete')
+
+    def test_claude_stream_requires_unambiguous_complete_result(self):
+        result = {'type': 'result', 'is_error': False, 'structured_output': {'value': 1}}
+        prefix = json.dumps({'type': 'system', 'subtype': 'init'}) + '\n'
+        complete = prefix + json.dumps(result)
+        self.assertEqual(claude_code.parse_output(complete + '\n' + json.dumps(result))[0], {'value': 1})
+        for output, kind in (
+                (prefix, 'INCOMPLETE_OUTPUT'),
+                (complete + '\n{', 'TRANSPORT_ERROR'),
+                (complete + '\n' + json.dumps({**result, 'structured_output': {'value': 2}}), 'TRANSPORT_ERROR'),
+                (prefix + json.dumps({'type': 'result', 'is_error': True}), 'BACKEND_ERROR'),
+                (prefix + json.dumps({'type': 'result', 'is_error': False}), 'INCOMPLETE_OUTPUT')):
+            with self.subTest(output=output), self.assertRaises(ContractError) as caught:
+                claude_code.parse_output(output)
+            self.assertEqual(caught.exception.failure_kind, kind)
+
+    def test_claude_stream_error_retains_reported_usage(self):
+        envelope = {'type': 'result', 'subtype': 'error_during_execution', 'is_error': True,
+                    'total_cost_usd': 0.2, 'usage': {'input_tokens': 10, 'output_tokens': 4,
+                    'cache_read_input_tokens': 0, 'cache_creation_input_tokens': 0}}
+        output = '{"type":"system","subtype":"init"}\n' + json.dumps(envelope)
+        with self.assertRaises(ContractError):
+            claude_code.parse_output(output)
+        metrics = claude_code.collect_metrics(output)['usage']
+        self.assertEqual(metrics['total_tokens'], 14)
+        self.assertEqual(metrics['coverage']['total_tokens'], 'partial')
 
     def test_adapters_import_without_orchestrator_in_any_order(self):
         script = '''

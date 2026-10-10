@@ -5,7 +5,7 @@
 from __future__ import annotations
 import copy
 from collections import Counter
-from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, ContractError, contract_violation, has_ledger_structure, has_program_checks, is_recovered_material, review_verdict, workflow_satisfied, comparison_factual_sides
+from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, ContractError, contract_violation, has_ledger_structure, has_program_checks, is_recovered_material, review_verdict, workflow_satisfied, processing_satisfied, comparison_factual_sides
 from src.analysis.evidence import canonical, sha, source_catalog, resolve_evidence
 from src.analysis.coverage_plan import build_coverage_plan, verify_coverage_plan, coverage_checks
 from src.analysis.source_decoding import normalize_source_decoding
@@ -84,7 +84,66 @@ def verify_review_context(context):
         raise ContractError('Required frozen review plan is missing') from None
 
 
-def prepare_result(stage, data, context, expected_files=None, *, expected_metadata=None, catalog_recovery=None):
+def citation_warnings(stage, data, resolutions, corrections):
+    """Safe locator facts only; original quote text stays in private attempt files."""
+    namespace = 'study' if stage == 'study-shard' else stage
+    warnings = []
+    repaired = {change['evidence_index']: change for change in corrections or []}
+    for index, (pointer, resolution) in enumerate(zip(data['evidence'], resolutions)):
+        change = repaired.get(index)
+        if resolution['status'] != 'QUOTE_MISMATCH' and not (change and resolution['status'] == 'RESOLVED'):
+            continue
+        evidence_id = namespace + ':' + pointer['id']
+        claim_ids = {c['id'] for c in data['claims'] if evidence_id in c['evidence_ids']}
+        claim_ids.update(cid for finding in data.get('findings', []) if evidence_id in finding['evidence_ids']
+                         for cid in finding['claim_ids'])
+        warning = {key: pointer[key] for key in ('source_id', 'path', 'start_line', 'end_line')}
+        warning.update(evidence_id=evidence_id, reason='QUOTE_MISMATCH', action='UNRESOLVED',
+                       claim_ids=sorted(claim_ids))
+        if change is not None and resolution['status'] == 'RESOLVED':
+            warning.update(reason=change['reason'], action='CORRECTED',
+                           original_start_line=change['original']['start_line'],
+                           original_end_line=change['original']['end_line'])
+        warnings.append(warning)
+    return warnings
+
+
+def quote_tolerant_resolutions(resolutions):
+    """Counterfactual inputs for continuation only; never saved as evidence."""
+    return [dict(e, status='RESOLVED') if e['status'] == 'QUOTE_MISMATCH' else e for e in resolutions]
+
+
+def continuation_allowed(checks):
+    """Only recorded citation exceptions can relax the strict processing gate."""
+    if checks.get('policy_satisfied'):
+        return True
+    unresolved = {w['evidence_id'] for w in checks.get('citation_warnings', []) if w['action'] == 'UNRESOLVED'}
+    if not checks.get('continuation_allowed') or not unresolved:
+        return False
+    if ('registry_coverage' not in checks and checks.get('source') != 'NOT_INSPECTED_IN_COMPARISON'
+            and not any(e['status'] == 'QUOTE_MISMATCH' for e in checks.get('evidence', []))):
+        return False
+    if any(e['status'] not in ('RESOLVED', 'QUOTE_MISMATCH') or
+           e['status'] == 'QUOTE_MISMATCH' and e['id'] not in unresolved for e in checks.get('evidence', [])):
+        return False
+    for field, keys in (('coverage', ('missing_ids', 'unfinished_ids')),
+                        ('registry_coverage', ('missing_ids', 'not_checked_ids')),
+                        ('omission_coverage', ('missing_ids', 'unfinished_ids')),
+                        ('prior_finding_coverage', ('missing', 'unresolved'))):
+        if any(checks.get(field, {}).get(key) for key in keys):
+            return False
+    return all(outcome in ('SUPPORTED', 'CAVEAT_ACCEPTABLE') or not count
+               for outcome, count in checks.get('outcome_counts', {}).items())
+
+
+def finish_citation_checks(checks):
+    if not checks.get('citation_warnings'):
+        checks.pop('citation_warnings', None)
+        checks.pop('continuation_allowed', None)
+
+
+def prepare_result(stage, data, context, expected_files=None, *, expected_metadata=None, catalog_recovery=None,
+                   citation_corrections=None):
     """Caller must pass source/cleanup guards and validate its input first.
 
     Runner supplies materialized study (wire review/compare). Library callers may
@@ -128,21 +187,47 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
                       policy_satisfied=data['completion_status'] == 'COMPLETE' and not data['unresolved_branches']
                       and differences_ok and all(workflow_satisfied(entries.get(b, {}), review_enabled=review_enabled)
                                                  for b in context['requested_branches']))
+        warnings = []
+        for branch, entry in entries.items():
+            for name in ('study', 'review') if review_enabled else ('study',):
+                for warning in (entry.get(name) or {}).get('program_checks', {}).get('citation_warnings', []):
+                    record = dict(warning, branch=branch)
+                    if record not in warnings:
+                        warnings.append(record)
+        checks['citation_warnings'] = warnings
+        checks['continuation_allowed'] = checks['policy_satisfied'] or bool(
+            context.get('result_policy') == 'compromise' and any(w['action'] == 'UNRESOLVED' for w in warnings)
+            and data['completion_status'] == 'COMPLETE' and not data['unresolved_branches']
+            and all(processing_satisfied(entries.get(b, {}), review_enabled=review_enabled)
+                    for b in context['requested_branches'])
+            and all(d['classification'] == 'CONFIRMED_DIFFERENCE' or
+                    d['classification'] == 'REPORTED_UNVERIFIED' and
+                    comparison_factual_sides(d, context, allow_quote_mismatch=True)
+                    == {context['baseline_branch'], d['branch']} for d in data['differences']))
         if context.get('generated_by') == 'orchestrator':
             checks['completion_self_assessment'] = None
+        finish_citation_checks(checks)
         return result
     if stage == 'study' and context.get('prompt_variant') == 'synthesis':
         # Exact evidence/claim equality was validated before materialization.
         # Reuse the pinned resolutions: synthesis has no new source evidence.
         checks['evidence'] = copy.deepcopy(context['_synthesis_resolutions'])
+        checks['citation_warnings'] = copy.deepcopy(context.get('citation_warnings', []))
     else:
         checks['evidence'] = resolve_evidence('study' if stage == 'study-shard' else stage, data['evidence'], context, expected_files,
                                              expected_metadata=expected_metadata)
+        checks['citation_warnings'] = citation_warnings(stage, data, checks['evidence'], citation_corrections)
+    if stage == 'review':
+        checks['citation_warnings'] = (copy.deepcopy(context['architecture_document'].get('program_checks', {})
+            .get('citation_warnings', [])) + checks['citation_warnings'])
     checks['evidence_counts'] = dict(sorted(Counter(e['status'] for e in checks['evidence']).items()))
     evidence_ok = all(e['status'] == 'RESOLVED' for e in checks['evidence'])
+    citations_only = (context.get('result_policy') == 'compromise'
+                      and all(e['status'] in ('RESOLVED', 'QUOTE_MISMATCH') for e in checks['evidence']))
     if stage == 'study-shard':
         from src.analysis.study_shards import shard_checks
         shard_checks(data, context, checks)
+        finish_citation_checks(checks)
         return result
     if stage == 'study':
         result['revision_id'] = context.get('revision_id', '001')
@@ -155,10 +240,13 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
         checks['coverage'] = coverage_checks(data, context, checks['evidence'])
         checks['document_links'] = {'registered': len(data['claims']), 'matched': len(data['claims']),
                                    'scope': 'REGISTERED_CLAIMS_ONLY'}
-        checks['policy_satisfied'] = bool(data['claims'] and evidence_ok and data['completion_status'] == 'COMPLETE'
-            and all(c['evidence_ids'] or c['epistemic_kind'] != 'FACT' for c in data['claims'])
-            and checks['coverage']['policy_satisfied'])
+        study_conditions = bool(data['claims'] and data['completion_status'] == 'COMPLETE'
+            and all(c['evidence_ids'] or c['epistemic_kind'] != 'FACT' for c in data['claims']))
+        checks['policy_satisfied'] = bool(study_conditions and evidence_ok and checks['coverage']['policy_satisfied'])
+        checks['continuation_allowed'] = checks['policy_satisfied'] or bool(citations_only and study_conditions
+            and coverage_checks(data, context, quote_tolerant_resolutions(checks['evidence']))['policy_satisfied'])
         result['review_plan'] = freeze_plan(result, context)
+        finish_citation_checks(checks)
         return result
     verify_review_context(context)
     registry = context['claim_registry']
@@ -191,20 +279,29 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
     resolved |= {e['id'] for e in context['architecture_document'].get('program_checks', {}).get('evidence', [])
                  if e['status'] == 'RESOLVED'}
     refs_ok = all(set(r['evidence_ids']) <= resolved for r in data['claims'] + data['findings'])
-    checks['policy_satisfied'] = bool(expected and not missing and not unchecked and evidence_ok and refs_ok
-        and context['review_plan']['eligible_study'] and data['completion_status'] == 'COMPLETE'
+    review_conditions = bool(expected and not missing and not unchecked and data['completion_status'] == 'COMPLETE'
         and all(c['outcome'] in ('SUPPORTED', 'CAVEAT_ACCEPTABLE') for c in data['claims'])
         and not any(f['severity'] in ('HIGH', 'MEDIUM') for f in data['findings'])
         and not checks['omission_coverage']['missing_ids'] and not checks['omission_coverage']['unfinished_ids']
         and not checks['prior_finding_coverage']['missing'] and not checks['prior_finding_coverage']['unresolved'])
+    checks['policy_satisfied'] = bool(review_conditions and evidence_ok and refs_ok
+                                     and context['review_plan']['eligible_study'])
+    study_checks = context['architecture_document'].get('program_checks', {})
+    tolerated = resolved | {e['id'] for e in checks['evidence'] + study_checks.get('evidence', [])
+                           if e['status'] == 'QUOTE_MISMATCH'}
+    checks['continuation_allowed'] = checks['policy_satisfied'] or bool(citations_only and review_conditions
+        and continuation_allowed(study_checks)
+        and all(e['status'] in ('RESOLVED', 'QUOTE_MISMATCH') for e in study_checks.get('evidence', []))
+        and all(set(r['evidence_ids']) <= tolerated for r in data['claims'] + data['findings']))
     result['verdict'] = review_verdict(result)
     result['claim_registry'] = copy.deepcopy(registry)
     result['review_plan'] = copy.deepcopy(context['review_plan'])
     result['revision_id'] = context.get('revision_id', '001')
+    finish_citation_checks(checks)
     return result
 
 
-def completed_study(item):
+def completed_study(item, *, continuation=False):
     """A published, intact study meeting processing policy, independently of review."""
     doc = item.get('study')
     if not doc or item.get('critical_failure'):
@@ -221,8 +318,11 @@ def completed_study(item):
     if any(k in item and item[k] != doc.get(k) for k in ('branch', 'source_commit', 'source_directory', 'source_fingerprint', 'revision_id')):
         return False
     meta = item.get('study_invocation') or {}
+    checks = doc.get('program_checks', {})
+    satisfied = continuation_allowed(checks) if continuation else checks.get('policy_satisfied')
     if (meta.get('contract_id') != CONTRACT_ID or meta.get('artifact_format') != ARTIFACT_FORMAT or
-            not has_program_checks(doc) or not doc['program_checks']['policy_satisfied'] or
+            not has_program_checks(doc) or not satisfied or
+            continuation and any(e['status'] not in ('RESOLVED', 'QUOTE_MISMATCH') for e in checks['evidence']) or
             doc.get('completion_status') != 'COMPLETE' or not meta.get('publication_complete')):
         return False
     plan = doc.get('review_plan', {})
@@ -251,9 +351,9 @@ def completed_study(item):
         return False
 
 
-def accepted_pair(item):
+def accepted_pair(item, *, continuation=False):
     doc, rev = item.get('study'), item.get('review')
-    if not rev or not completed_study(item):
+    if not rev or not completed_study(item, continuation=continuation):
         return False
     try:
         from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
@@ -262,11 +362,16 @@ def accepted_pair(item):
         validate_schema(rev, schemas['review'])
         meta = item.get('review_invocation') or {}
         plan = doc['review_plan']
+        checks = rev.get('program_checks', {})
+        satisfied = continuation_allowed(checks) if continuation else checks.get('policy_satisfied')
         return bool(meta.get('contract_id') == CONTRACT_ID and meta.get('artifact_format') == ARTIFACT_FORMAT
-            and has_program_checks(rev) and rev['program_checks']['policy_satisfied']
+            and has_program_checks(rev) and satisfied
+            and (not continuation or all(e['status'] in ('RESOLVED', 'QUOTE_MISMATCH') for e in checks['evidence']))
+            and (not continuation or not any(f['severity'] in ('HIGH', 'MEDIUM') for f in rev['findings']))
             and rev.get('completion_status') == 'COMPLETE' and meta.get('publication_complete')
             and rev.get('target') == target(plan) and rev.get('review_plan') == plan
-            and rev['claim_registry'] == doc['claims'] and rev['verdict'] == 'PASS'
+            and rev['claim_registry'] == doc['claims']
+            and rev['verdict'] in (('PASS', 'INCONCLUSIVE') if continuation else ('PASS',))
             and rev.get('revision_id') == doc.get('revision_id')
             and all(doc.get(k) == rev.get(k) for k in ('branch', 'source_commit', 'source_directory', 'source_fingerprint')))
     except (ContractError, KeyError, TypeError, IndexError):

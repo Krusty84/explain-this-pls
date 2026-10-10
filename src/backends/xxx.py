@@ -414,7 +414,7 @@ def collect_metrics(output, requested=None):
     return measurement('xxx', requested, measured=sum_usage(steps) if steps else None)
 
 
-def invoke(command, cwd, env, payload, *, process, artifacts, budget, meta, process_options):
+def invoke(command, cwd, env, payload, *, process, artifacts, budget, meta, process_options, observer=None):
     """Run, export and clean up using the existing subprocess implementation."""
     name = command[command.index('--agent') + 1]
     requested = meta.get('model_requested')
@@ -428,7 +428,8 @@ def invoke(command, cwd, env, payload, *, process, artifacts, budget, meta, proc
 
     try:
         meta['prompt_sent'] = True
-        result = process(command, cwd, env, payload, log_dir=artifacts, budget=budget, **process_options)
+        result = process(command, cwd, env, payload, log_dir=artifacts, budget=budget,
+                         observer=observer, **process_options)
         output = decode_output(result['stdout'])
         meta.update(returncode=result['returncode'], output_bytes=len(result['stdout']))
         meta['metrics'] = collect_metrics(output, requested)

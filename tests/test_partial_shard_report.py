@@ -95,6 +95,27 @@ class PartialShardReportTests(FolderFixture):
         self.assertEqual([s['id'] for s in verified_shards(item)], ['R-003'])
         self.assertFalse(comparison_possible([item, dict(branch='other')], 'main'))
 
+    def test_warning_shard_retained_without_promoting_coverage_or_evidence(self):
+        manifest, _ = self.failed_middle()
+        data = manifest['study_shards'][0]['study-shard']
+        checks, evidence = data['program_checks'], data['program_checks']['evidence'][0]
+        evidence['status'] = 'QUOTE_MISMATCH'
+        checks.update(policy_satisfied=False, continuation_allowed=True, citation_warnings=[
+            {key: evidence[key] for key in ('source_id', 'path', 'start_line', 'end_line')} |
+            dict(evidence_id=evidence['id'], reason='QUOTE_MISMATCH', action='UNRESOLVED', claim_ids=['C-001'])])
+        checks['coverage'].update(policy_satisfied=False, unsupported_ids=[data['coverage'][0]['area_id']])
+        shards = verified_shards(manifest)
+        self.assertEqual([s['id'] for s in shards], ['R-001', 'R-003'])
+        report, useful = render_final_report(manifest, self.runner.source, 'folder', 'English')
+        self.assertTrue(useful)
+        self.assertIn('VERIFIED_WITH_WARNINGS', report)
+        self.assertIn('Citation warnings', report)
+        self.assertIn('QUOTE_MISMATCH', report)
+        self.assertIn('Citation support remains unresolved', report)
+        self.assertFalse(checks['policy_satisfied'])
+        evidence['status'] = 'READ_ERROR'
+        self.assertEqual([s['id'] for s in verified_shards(manifest)], ['R-003'])
+
     def test_shared_area_requires_all_planned_contributors(self):
         item = {'coverage_plan': {'areas': [{'id': 'S-001'}]}, 'analysis_plan': {'shards': [
             {'id': 'R-001', 'subsystem_ids': ['S-001']}, {'id': 'R-002', 'subsystem_ids': ['S-001']}]}}

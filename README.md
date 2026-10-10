@@ -175,17 +175,20 @@ original directory, including excluded paths. Native CLI permissions apply.
 
 #### Main settings
 
-| Field                          | Purpose                                                                                                           |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `mode`                         | Analyze Git branches (`"git"`) or a directory (`"folder"`).                                                       |
-| `git_mode`                     | Source repository, local branches and the baseline branch.                                                        |
-| `folder_mode.path`             | Source directory for folder mode.                                                                                 |
-| `reports_dir`                  | Destination for results; each run gets a separate subfolder.                                                      |
-| `project_description`          | Optional introduction to the system's purpose and history.                                                        |
-| `output_language`              | Report language; defaults to `"Russian"`.                                                                         |
-| `priority_scenarios`           | Optional workflows or areas to focus on.                                                                          |
-| `multi_session`                | Defaults to `true`; set `false` to force one study session. Multiple sessions run sequentially.                   |
-| `max_source_bytes_per_session` | Positive integer; defaults to `262144` (256 KiB) assigned source-file bytes per session. Applies to all backends. |
+| Field                          | Purpose                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                         | Analyze Git branches (`"git"`) or a directory (`"folder"`).                                                               |
+| `git_mode`                     | Source repository, local branches and the baseline branch.                                                                |
+| `folder_mode.path`             | Source directory for folder mode.                                                                                         |
+| `reports_dir`                  | Destination for results; each run gets a separate subfolder.                                                              |
+| `project_description`          | Optional introduction to the system's purpose and history.                                                                |
+| `output_language`              | Report language; defaults to `"Russian"`.                                                                                 |
+| `priority_scenarios`           | Optional workflows or areas to focus on.                                                                                  |
+| `multi_session`                | Defaults to `true`; set `false` to force one study session. Multiple sessions run sequentially.                           |
+| `max_source_bytes_per_session` | Positive integer; defaults to `262144` (256 KiB) assigned source-file bytes per session. Applies to all backends.         |
+| `source_context.enabled`       | Boolean; defaults to `true`. Prepare source maps and exact fragments before the model call.                               |
+| `source_context.max_bytes`     | Integer, at least `4096`; defaults to `65536`. Limits the serialized source context, including JSON and omission summary. |
+| `execution.read_loop_guard`    | Boolean; defaults to `true`. Stop sustained repeated tool results; `false` keeps observation metrics.                     |
 
 #### Agent settings
 
@@ -220,6 +223,43 @@ catalog areas share an existing session. Each shard has separate artifacts and a
 metrics under `study-shards/R-001/`, etc. All shards must pass local checks before
 synthesis. Review and revision, if enabled, use the resulting global study.
 Assignment is not proof of inspection. Incomplete investigation remains a limitation.
+
+**Prepared source context** uses the pinned, filtered inventory and existing decoding
+rules. Catalog receives a file/symbol map. Study receives that map and exact source
+fragments; a shard receives only its assigned primary files. Review and revision
+prioritize cited ranges. Synthesis, comparison and format repair receive no prepared
+source context. The prompt budget is separate from `max_source_bytes_per_session`.
+File order is deterministic; maps use at most one quarter of the budget and snippets
+contain at most 120 complete lines. Omitted data stays visible in a bounded summary.
+Each attempt saves a complete `source-context.manifest.json` with processing status,
+parser, ranges, omission reasons, sizes and preparation time.
+
+Python uses the standard `ast` parser. The pinned `ast-grep-py` package supplies
+JavaScript, TypeScript, JSX/TSX, Go, C/C++, Java, Rust and Swift grammars, including
+SwiftUI through Swift. No project code or parser configuration is executed.
+Other text formats and syntax errors retain text reading. A symbol map and delivery
+of text do not establish inspection or prove a behavioral claim.
+
+**Read-loop protection** observes completed tool results only. It stops the owned
+process group with `NO_PROGRESS` after at least 50 consecutive confirmed repeats
+spanning at least 120 seconds. New material, errors, incomplete or ambiguous results
+reset the streak. Model prose, reasoning and stderr do not affect it. The first tool
+read of a prepared fragment remains valid. No model retry or format repair follows
+this stop; existing source checks, cleanup and independent-part continuation apply.
+Stage and idle timeouts remain active.
+
+Attempt metrics separate delivered lines, tool-read lines, exact repeats, model
+requests and token usage. `tool-events.jsonl` records completed calls with monotonic
+observation times for replay. Missing measurements carry an availability reason;
+partial telemetry is not evidence of a loop. These private logs can contain source text.
+
+OpenCode V2 and XXX/OpenCode V1 observe completed native tools and supported numbered
+Read output. XXX retains its separate session ownership and deletion checks. Codex
+uses completed items and exact shell command/result comparisons; shell source-line
+coordinates and model request counts are unavailable. Claude Code uses
+`stream-json`, `--verbose` and `--include-partial-messages`, preserves the final
+`structured_output`, and counts model calls only from native message-start events.
+Unknown output formats retain conservative partial metrics.
 
 **Review is opt-in.** In any existing JSON or JSONC configuration, enable it with:
 
@@ -422,6 +462,7 @@ shards and their coverage gaps. This local collection adds no model call and is
 not used as a complete study for review or branch comparison.
 
 - **COMPLETE:** checks for all enabled stages passed, review is required only when enabled.
+- **COMPLETE_WITH_WARNINGS:** processing completed under `compromise` with citation warnings. Strict evidence quality and acceptance remain separate from permission to continue.
 - **PARTIAL:** useful material is available, with unresolved issues or missing coverage.
 - **FAILED:** no usable report material was produced, or a critical error prevented completion.
 
@@ -429,5 +470,113 @@ Read the limitations and findings before relying on the reports. Source referenc
 and automated review help assess the explanations, but do not prove correctness or
 exhaustive coverage. Project builds and tests are not run.
 
+Citation warnings identify the evidence ID, source, path, lines, reason and affected
+claims in CLI/TUI output and report tables. `UNRESOLVED` means the citation was not
+verified; `CORRECTED` records a repaired range or common leading indentation. The
+architecture report keeps the authored text and FACT labels unchanged, then adds
+a warning appendix. These labels do not turn an unresolved citation into proof.
+The `strict` policy still rejects unresolved citation failures.
+Under `compromise`, local repair searches only the same pinned file, within three
+lines of each original boundary, and requires a unique match. Internal whitespace,
+identifiers and values are never approximated. Original responses remain unchanged;
+private attempt files retain corrections and full diffs. No extra model call is made.
+
 For response formats, validation rules and artifact storage details, see
 [CONTRACTS.md](CONTRACTS.md).
+
+### Replay completed tool calls
+
+Replay selected attempts without starting a model:
+
+```sh
+python scripts/replay_tool_observation.py /path/to/logs \
+  --attempt study.logs/attempt-001 --backend opencode \
+  --output /path/to/replay
+```
+
+Repeat `--attempt` to select more attempts. The command prefers `tool-events.jsonl`
+and falls back to `stdout.log`. It writes JSON and Markdown with the possible stop
+time, call number, streak, metrics and observation limits. Optional `--context`
+accepts saved orchestration context for source ownership and prompt delivery.
+Recorded monotonic times reproduce the live rule. Native wall-clock timestamps
+provide weaker evidence; logs without timestamps cannot establish the time threshold.
+Tests use small fixtures and need no external report directory.
+
+### Compare source context and loop protection
+
+`compare_read_context.py` compares one study or selected shard using an existing
+`source.inventory.json`, `coverage.plan.json` and `analysis.plan.json`. Point
+`--baseline` at the directory containing these files. The tool reuses the frozen
+assignments; it does not call the catalog stage. It uses the normal study prompt,
+source checks, result validation, publication and Git restoration.
+
+First save significant facts with source references in a JSON file, for example:
+
+```json
+[
+  {
+    "id": "F-001",
+    "statement": "The parser rejects an empty request.",
+    "evidence": [
+      {
+        "id": "E-001",
+        "source_id": "source-001",
+        "path": "parser.py",
+        "start_line": 12,
+        "end_line": 15,
+        "quote": ""
+      }
+    ]
+  }
+]
+```
+
+Use actual source references. The tool checks them before the first model call.
+An empty quote checks the coordinates only. Fact support requires human assessment.
+
+```sh
+python compare_read_context.py --config config.jsonc \
+  --baseline /path/to/saved/source-report --facts /path/to/facts.json \
+  --output /path/to/new/comparison --repetitions 3
+```
+
+This command saves the experiment plan without calling a model. Add `--live` and
+choose a new output directory to run it. For a multi-session baseline, add
+`--shard` with an ID from its saved analysis plan. The experiment scope remains
+one study or shard, not the complete review and synthesis workflow.
+
+Each repetition runs three variants in sequence:
+
+| Variant   | Tool observation | Automatic stop | Prepared context |
+| --------- | ---------------- | -------------- | ---------------- |
+| `observe` | On               | Off            | Off              |
+| `guard`   | On               | On             | Off              |
+| `context` | On               | On             | On               |
+
+The source snapshot, assignments, configured model, prompt templates, validation
+settings and timeouts stay fixed. A source, template, CLI version or reported
+model change stops the comparison. CLI profile settings and an unreported actual
+model remain external limitations. No model calls run in ordinary tests.
+
+`comparison.json` and `comparison.md` separate successful, interrupted and failed
+attempts. An early stop measures prevented waste; it is not a faster successful
+study. Citation resolution counts do not establish factual correctness. Fact
+coverage remains `unavailable` until a human supplies an assessment for each fact:
+
+```json
+[
+  {
+    "variant": "context",
+    "repetition": 1,
+    "facts": [{ "id": "F-001", "status": "supported", "claim_ids": ["C-001"] }]
+  }
+]
+```
+
+Statuses are `supported`, `omitted`, `unsupported` or `unassessed`. Apply them
+without model calls:
+
+```sh
+python compare_read_context.py --summarize /path/to/comparison/comparison.json \
+  --assessments /path/to/assessments.json
+```

@@ -84,7 +84,15 @@
     // Optional exact output of this executable's --version, not its upstream version.
     "expected_version": null
   },
+  // Prompt budget includes the map, exact snippets, JSON and omission summary.
+  "source_context": {
+    "enabled": true,
+    "max_bytes": 65536
+  },
   "execution": {
+    // Stop only after 50 confirmed repeated tool results spanning 120 seconds.
+    // false keeps observation metrics and disables this stop.
+    "read_loop_guard": true,
     // Optional separate review. Omitted means false; revision rounds apply only when true.
     "review_enabled": false,
     // Automatic compaction stays inside the single CLI run for each stage.

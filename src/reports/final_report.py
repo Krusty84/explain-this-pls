@@ -5,7 +5,8 @@
 from __future__ import annotations
 
 import html
-from src.contracts.contracts import SCHEMAS, accepted, workflow_satisfied, has_program_checks, schema_diagnostics
+from src.contracts.contracts import (SCHEMAS, accepted, workflow_satisfied, processing_satisfied,
+                                     has_program_checks, schema_diagnostics)
 
 
 def recoverable_material(stage, data, context, mode, diagnostics):
@@ -62,6 +63,7 @@ def usable_study(item):
 
 def verified_shards(item):
     """Published shard material; callers also check the pinned artifact bytes."""
+    from src.analysis.ledger import continuation_allowed
     from src.analysis.study_shards import empty_shard_result
     from src.contracts.saved_contracts import SAVED_FOLDER_SCHEMAS, SAVED_SCHEMAS
     if item.get('critical_failure'):
@@ -83,6 +85,12 @@ def verified_shards(item):
                 or schema_diagnostics(data, schema, limit=0)['total_violations']):
             continue
         checks = data['program_checks']
+        continuation = continuation_allowed(checks)
+        strict_quality = (checks['policy_satisfied'] is True and checks['coverage']['policy_satisfied'] is True
+                          and all(e['status'] == 'RESOLVED' for e in checks['evidence']))
+        unresolved = {e['id'] for e in checks['evidence'] if e['status'] == 'QUOTE_MISMATCH'}
+        warned = {w['evidence_id'] for w in checks.get('citation_warnings', [])
+                  if w['action'] == 'UNRESOLVED' and w['reason'] == 'QUOTE_MISMATCH'}
         if (data['shard_id'] != shard['id'] or data['assigned_subsystem_ids'] != shard['subsystem_ids']
                 or any(type(item.get(key)) is not str or data[key] != item[key] for key in identity)
                 or data['completion_status'] != 'COMPLETE'
@@ -90,8 +98,9 @@ def verified_shards(item):
                            ('local_validation', 'publication_complete', 'source_integrity_verified'))
                 or meta.get('source_check_status') != 'MATCHED_AT_BOUNDARIES'
                 or checks['source'] != 'MATCHED_AT_BOUNDARIES'
-                or checks['policy_satisfied'] is not True or checks['coverage']['policy_satisfied'] is not True
-                or any(e['status'] != 'RESOLVED' for e in checks['evidence'])):
+                or not continuation or not strict_quality and (not unresolved or not unresolved <= warned)
+                or checks['coverage']['missing_ids'] or checks['coverage']['unfinished_ids']
+                or any(e['status'] not in ('RESOLVED', 'QUOTE_MISMATCH') for e in checks['evidence'])):
             continue
         if meta.get('generated_by') == 'orchestrator':
             if (meta.get('reason') != 'empty_subsystem_assignment' or shard['subsystem_ids']
@@ -126,6 +135,10 @@ def partial_shard_coverage(item, shards):
         complete = (bool(contributors) and not missing and len(coverage) == len(contributors)
                     and all(record['status'] == 'INSPECTED' for _, record in coverage))
         limits = list(dict.fromkeys(record['limitation'] for _, record in coverage if record['limitation']))
+        unsupported = [sid for sid in verified if area['id'] in by_id[sid].get('program_checks', {}).get('coverage', {}).get('unsupported_ids', [])]
+        if unsupported:
+            complete = False
+            limits.append('Citation support remains unresolved: ' + ', '.join(unsupported) + '.')
         if missing:
             limits.append('No verified result: ' + ', '.join(missing) + '.')
         elif not contributors:
@@ -140,7 +153,7 @@ def partial_shard_coverage(item, shards):
 
 def render_partial_shards(item, shards, language):
     from src.analysis.study_shards import OBSERVATION_FIELDS
-    from src.reports.presentation import cell, russian
+    from src.reports.presentation import cell, render_citation_warnings, russian
     ru = russian(language)
     def t(r, e): return r if ru else e
     verified = {s['id'] for s in shards}
@@ -150,18 +163,23 @@ def render_partial_shards(item, shards, language):
              'сборник не используется для сравнения. Проверки не доказывают достоверность выводов.',
              'Only published shards that passed checks are retained. No complete study is available; '
              'this collection is not used for comparison. Checks do not establish factual correctness.'), '',
-           '| Shard | ' + t('Статус | Области | Файлы | Пробелы', 'Status | Areas | Files | Gaps') + ' |',
-           '| --- | --- | --- | --- | --- |']
+           '| Shard | ' + t('Статус | Области | Файлы | Пробелы | Строгая проверка', 'Status | Areas | Files | Gaps | Strict policy') + ' |',
+           '| --- | --- | --- | --- | --- | --- |']
     for planned in item['analysis_plan']['shards']:
         state = states.get(planned['id'], {})
         status = 'VERIFIED' if planned['id'] in verified else state.get('status', 'PLANNED')
+        checks = state.get('study-shard', {}).get('program_checks', {})
+        if status == 'VERIFIED' and checks.get('citation_warnings'):
+            status = 'VERIFIED_WITH_WARNINGS'
         if status == 'SUCCEEDED':
             status = 'UNVERIFIED'
-        gaps = '' if status == 'VERIFIED' else t('Проверенный результат отсутствует.', 'No verified result.')
+        gaps = (t('Цитаты требуют проверки.', 'Citations require checking.') if status == 'VERIFIED_WITH_WARNINGS' else
+                '' if status == 'VERIFIED' else t('Проверенный результат отсутствует.', 'No verified result.'))
         if state.get('errors'):
             gaps += ' ' + '; '.join(str(error) for error in state['errors'])
         out += ['| ' + ' | '.join(cell(v) for v in (planned['id'], status,
-                  ', '.join(planned['subsystem_ids']), ', '.join(planned.get('primary_file_paths', [])), gaps)) + ' |']
+                  ', '.join(planned['subsystem_ids']), ', '.join(planned.get('primary_file_paths', [])), gaps,
+                  checks.get('policy_satisfied', '—'))) + ' |']
     titles = (t('Компоненты', 'Components'), t('Основные потоки', 'Significant flows'),
               t('Данные и состояние', 'Data and state'), t('Ограничения', 'Constraints'), t('Связи', 'Relationships'))
     for state in shard_material(item, shards):
@@ -186,9 +204,14 @@ def render_partial_shards(item, shards, language):
                       claim['uncertainty'])) + ' |']
         out += ['', '| ID | Source | ' + t('Путь : строки | Цитата | Проверка', 'Path : lines | Quote | Check') + ' |',
                 '| --- | --- | --- | --- | --- |']
+        resolutions = {e['id']: e['status'] for e in data['program_checks']['evidence']}
         for evidence in data['evidence']:
             out += ['| ' + ' | '.join(cell(v) for v in (qualified('study:' + evidence['id']), evidence['source_id'],
-                      f"{evidence['path']}:{evidence['start_line']}-{evidence['end_line']}", evidence['quote'], 'RESOLVED')) + ' |']
+                      f"{evidence['path']}:{evidence['start_line']}-{evidence['end_line']}", evidence['quote'],
+                      resolutions.get('study:' + evidence['id'], 'UNAVAILABLE'))) + ' |']
+        warnings = render_citation_warnings(data, language)
+        if warnings:
+            out += ['', warnings]
         out += ['', *('- ' + cell(issue) for issue in data['limitations']), '']
     return '\n'.join(out)
 
@@ -255,6 +278,9 @@ def render_final_report(manifest, source, mode, language='Russian'):
             t('Условия политики обработки и ревью выполнены.', 'Processing and review policy checks satisfied.') if accepted(b) else
             t('Условия включённых этапов выполнены; отдельное ревью не проводилось.',
               'Enabled-stage checks satisfied; no separate review was performed.') if workflow_satisfied(b, review_enabled=review_enabled) else
+            t('Обработка разрешена с предупреждениями о цитатах; строгая приёмка не пройдена.',
+              'Processing is allowed with citation warnings; strict acceptance has not passed.')
+            if processing_satisfied(b, review_enabled=review_enabled) else
             t('Условия политики не выполнены; причины указаны в диагностике.',
               'Policy checks not satisfied; see diagnostics for the reasons.'), '']
         if b.get('source_commit'):

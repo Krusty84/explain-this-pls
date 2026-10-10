@@ -9,6 +9,7 @@ File hashes cover original bytes and are reused from the pinned inventory.
 No source text is retained in the resolution result.
 """
 from __future__ import annotations
+import contextlib
 import errno
 import hashlib
 import json
@@ -74,14 +75,19 @@ def stamp(info):
 def open_source_directory(root):
     """Open an already canonical source root without following ancestor links."""
     fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    child = None
     try:
         for name in Path(root).parts[1:]:
             child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             os.close(fd)
-            fd = child
+            fd, child = child, None
         return fd
     except BaseException:
-        os.close(fd)
+        # A signal can arrive after close() but before ownership moves to child.
+        for owned in (child, fd):
+            if owned is not None:
+                with contextlib.suppress(OSError):
+                    os.close(owned)
         raise
 
 
@@ -160,6 +166,12 @@ def _read_confined(root, relative, limit, *, expected=None, pinned=None, read=Tr
 
 
 def resolve_evidence(stage, pointers, context, expected_files=None, *, expected_metadata=None):
+    return _resolve_with_sources(stage, pointers, context, expected_files,
+                                 expected_metadata=expected_metadata)[0]
+
+
+def _resolve_with_sources(stage, pointers, context, expected_files=None, *, expected_metadata=None):
+    """Private sidecar for local citation repair; public resolutions contain no text."""
     catalog = {s['id']: s for s in source_catalog(context)}
     if context.get('_inventory') is not None and expected_files is None:
         expected_files = {e['path']: e['sha256'] for e in context.get('_inventory', {}).get('entries', [])
@@ -243,4 +255,5 @@ def resolve_evidence(stage, pointers, context, expected_files=None, *, expected_
             result['status'] = ('ACCESS_DENIED' if exc.errno in (errno.EACCES, errno.EPERM) else
                                 'UNSAFE_PATH' if exc.errno in (errno.ELOOP, errno.ENOTDIR) else
                                 'NOT_FOUND' if exc.errno == errno.ENOENT else 'READ_ERROR')
-    return results
+    return results, {path: {'lines': value[0], 'sha256': value[1], 'encoding': value[2],
+                            'identity': read_paths[path]} for path, value in cache.items()}

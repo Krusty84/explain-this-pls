@@ -421,7 +421,7 @@ class ExplainApp(App[int]):
                       row['status'], duration(self.state.elapsed(row)), metrics.get('attempts', '—'),
                       metric_value(usage, 'total_tokens'), metric_value(usage, 'cost_usd'), row['result']]
             cells = [self.literal(value) for value in values]
-            cells[2].stylize({'COMPLETE': 'green', 'FAILED': 'red', 'PARTIAL': 'yellow', 'BLOCKED': 'yellow',
+            cells[2].stylize({'COMPLETE': 'green', 'COMPLETE_WITH_WARNINGS': 'yellow', 'FAILED': 'red', 'PARTIAL': 'yellow', 'BLOCKED': 'yellow',
                               'INTERRUPTED': 'yellow', 'SKIPPED': 'dim', 'RUNNING': 'cyan'}.get(row['status'], ''))
             key = str(index)
             if index >= table.row_count:

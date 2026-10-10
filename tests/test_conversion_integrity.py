@@ -39,9 +39,9 @@ class PrivateChainRecoveryTests(FolderFixture):
                     # semantically invalid, so compromise would retain the prose.
                     wire['claims'][0]['evidence_ids'] = ['study:E-999']
                     return cli_result(command, wire)
-                def validate(stage, data, current, attempt, meta, binding):
+                def validate(stage, data, current, attempt, meta, binding, **kwargs):
                     try:
-                        return original(stage, data, current, attempt, meta, binding)
+                        return original(stage, data, current, attempt, meta, binding, **kwargs)
                     except ContractError:
                         target = attempt / filename
                         corrupt_json(target)

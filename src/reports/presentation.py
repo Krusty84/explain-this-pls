@@ -38,6 +38,42 @@ def label(value, language='English'):
     return LABELS.get(value, value)
 
 
+def render_citation_warnings(data, language='English'):
+    warnings = data.get('program_checks', {}).get('citation_warnings', [])
+    if not warnings:
+        return ''
+    ru = russian(language)
+    out = ['## ' + ('Предупреждения о цитатах — проверка программы' if ru else 'Citation warnings — program checks'), '',
+           ('Указанные утверждения требуют проверки цитат. Исходные метки FACT сохранены; '
+            'они не означают, что эти цитаты подтверждают утверждения.' if ru else
+            'The listed claims require citation checks. Original FACT labels remain unchanged; '
+            'they do not mean that these citations establish the claims.'), '',
+           '| ' + ('Доказательство | Источник | Путь : строки | Исходные строки | Причина | Действие | Затронутые утверждения' if ru else
+                    'Evidence | Source | Path : lines | Original lines | Reason | Action | Affected claims') + ' |',
+           '| --- | --- | --- | --- | --- | --- | --- |']
+    for warning in sorted(warnings, key=lambda w: (w.get('branch', ''), w['evidence_id'], w['source_id'], w['path'],
+                                                   w['start_line'], w['end_line'], w['reason'], w['action'],
+                                                   tuple(sorted(w['claim_ids'])), w.get('original_start_line', 0),
+                                                   w.get('original_end_line', 0))):
+        original = (f"{warning['original_start_line']}-{warning['original_end_line']}"
+                    if 'original_start_line' in warning and 'original_end_line' in warning else '—')
+        out.append('| ' + ' | '.join(cell(value) for value in (
+            warning['evidence_id'], (warning['branch'] + ' / ' if warning.get('branch') else '') + warning['source_id'],
+            f"{warning['path']}:{warning['start_line']}-{warning['end_line']}", original,
+            warning['reason'], warning['action'], ', '.join(sorted(warning['claim_ids'])) or '—')) + ' |')
+    out += ['', ('UNRESOLVED: цитата не подтверждена. CORRECTED: диапазон или общий отступ исправлен; '
+                 'исходная ошибка сохранена в предупреждении. Продолжение обработки не означает строгую приёмку.' if ru else
+                 'UNRESOLVED: the citation was not verified. CORRECTED: the range or common indentation was repaired; '
+                 'the original error remains recorded. Continued processing does not imply strict acceptance.')]
+    return '\n'.join(out) + '\n'
+
+
+def render_architecture(data, language='English'):
+    """Append checks without changing authored bytes or existing line coordinates."""
+    appendix = render_citation_warnings(data, language)
+    return data['report_markdown'] + ('\n\n' + appendix if appendix else '')
+
+
 def render_coverage(plan, reports=(), checks=None):
     if not plan:
         return ''
@@ -116,6 +152,9 @@ def render_stage(stage, data, language='English'):
         'Policy checks not satisfied. Review may be incomplete or have limitations/issues.', '',
         'Semantic review quality is not measured. Resolving a locator does not validate the conclusion.', '']
     out += ['- ' + cell(x) for x in data.get('limitations', [])]
+    if checks.get('citation_warnings'):
+        out += ['Continued processing allowed: ' + str(checks.get('continuation_allowed', checks['policy_satisfied'])) +
+                '; strict policy checks satisfied: ' + str(checks['policy_satisfied']) + '.', '']
     if stage == 'study':
         out += ['Study completion reported by the agent: ' + data['completion_status'], '']
         out += [render_coverage(data.get('review_plan', {}).get('coverage_plan'), data.get('coverage', []),
@@ -148,6 +187,10 @@ def render_stage(stage, data, language='English'):
             reply = replies.get(claim['id'], {})
             linked = checks.get('finding_ids_by_claim', {}).get(claim['id'], [])
             issues = '; '.join(fid + ': ' + findings[fid]['impact'] for fid in linked)
+            warned = [w['evidence_id'] + ' (' + w['action'] + ')' for w in checks.get('citation_warnings', [])
+                      if claim['id'] in w['claim_ids']]
+            if warned:
+                issues += ' Citation checks required: ' + ', '.join(sorted(warned)) + '.'
             locations = claim['document_locators']
             evidence_refs = claim['evidence_ids'] + reply.get('evidence_ids', [])
             out.append('| ' + ' | '.join(cell(v) for v in (claim['id'],
@@ -184,4 +227,7 @@ def render_stage(stage, data, language='English'):
                     reply = replies.get(key, {})
                     out += ['| ' + ' | '.join(cell(x) for x in (' / '.join(key), reply.get('status', 'MISSING'),
                               reply.get('explanation', 'Required response missing.'))) + ' |']
+    warnings = render_citation_warnings(data, language)
+    if warnings:
+        out += ['', warnings]
     return '\n'.join(out).rstrip() + '\n'

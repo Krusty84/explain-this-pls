@@ -362,18 +362,30 @@ def workflow_satisfied(item, *, review_enabled=None):
     return completed_study(item)
 
 
-def comparison_factual_sides(diff, context):
+def processing_satisfied(item, *, review_enabled=None):
+    """Published processing may continue with citation warnings, without acceptance."""
+    if review_enabled is None:
+        review_enabled = item.get('review_enabled', True)
+    from src.analysis.ledger import accepted_pair, completed_study
+    return (accepted_pair(item, continuation=True) if review_enabled is not False
+            else completed_study(item, continuation=True))
+
+
+def comparison_factual_sides(diff, context, *, allow_quote_mismatch=False):
     """Author-reported FACTs with resolved source evidence, without implying review."""
     entries = {b['branch']: b for b in context['branches']}
     sides = set()
     for ref in diff['evidence_refs']:
         entry = entries.get(ref['branch'], {})
-        if ref['artifact'] != 'study' or not workflow_satisfied(entry, review_enabled=False):
+        eligible = processing_satisfied if allow_quote_mismatch else workflow_satisfied
+        if (ref['artifact'] != 'study' and not (allow_quote_mismatch and context.get('review_enabled', True))
+                or not eligible(entry, review_enabled=False)):
             continue
         doc = entry['study']
         plan = doc['review_plan']
         claim = next((c for c in doc['claims'] if c['id'] == ref['claim_id']), None)
-        resolved = {e['id'] for e in doc['program_checks']['evidence'] if e['status'] == 'RESOLVED'}
+        statuses = {'RESOLVED', 'QUOTE_MISMATCH'} if allow_quote_mismatch else {'RESOLVED'}
+        resolved = {e['id'] for e in doc['program_checks']['evidence'] if e['status'] in statuses}
         if (ref['revision_id'] == doc['revision_id'] == entry.get('selected_revision', doc['revision_id'])
                 and ref['document_sha256'] == plan['document_sha256']
                 and ref['registry_sha256'] == plan['registry_sha256']
@@ -536,8 +548,11 @@ def validate_result(stage, value, context, mode='git'):
         references(value['unresolved_branches'], set(context['requested_branches']), '$.unresolved_branches')
         entries = {b['branch']: b for b in context['branches']}
         review_enabled = context.get('review_enabled', True)
+        eligible = processing_satisfied if context.get('result_policy') == 'compromise' else workflow_satisfied
         missing = {b for b in context['requested_branches']
-                   if not workflow_satisfied(entries.get(b, {}), review_enabled=review_enabled)}
+                   if not eligible(entries.get(b, {}), review_enabled=review_enabled)}
+        strict_missing = {b for b in context['requested_branches']
+                          if not workflow_satisfied(entries.get(b, {}), review_enabled=review_enabled)}
         if not missing <= set(value['unresolved_branches']):
             raise ContractError('Comparison conceals inputs failing enabled-stage checks')
         if value['completion_status'] == 'COMPLETE' and value['unresolved_branches']:
@@ -569,7 +584,7 @@ def validate_result(stage, value, context, mode='git'):
                     fact_sides.add(ref['branch'])
             if diff['classification'] == 'CONFIRMED_DIFFERENCE':
                 if (not review_enabled or sides != {context['baseline_branch'], diff['branch']}
-                        or sides & missing or fact_sides != sides):
+                        or sides & strict_missing or fact_sides != sides):
                     raise ContractError('Strong contrast requires supported factual references and accepted inputs on both sides')
 
 

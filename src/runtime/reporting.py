@@ -24,7 +24,7 @@ from src.contracts.contracts import ContractError, json_error_details
 
 LABEL_COLORS = {'[WARN]': '\x1b[33m', '[RUN]': '\x1b[36m', '[OK]': '\x1b[32m',
                 '[FAIL]': '\x1b[31m', '[SKIP]': '\x1b[90m'}
-STATUS_COLORS = {'Complete': '\x1b[32m', 'Failed': '\x1b[31m',
+STATUS_COLORS = {'Complete': '\x1b[32m', 'Complete with warnings': '\x1b[33m', 'Failed': '\x1b[31m',
                  'May be incomplete': '\x1b[33m', 'Not started': '\x1b[90m'}
 STAGE_MESSAGES = {
     'catalog': ('Cataloging subsystems…', 'Subsystem catalog', 'Subsystem catalog created.'),
@@ -150,6 +150,18 @@ def safe_text(value: Any) -> str:
         else:
             result.append(char)
     return ''.join(result)
+
+
+def citation_warning_message(warning):
+    """Locator metadata only; source text must never enter warning output."""
+    source = (str(warning['evidence_branch']) + ' / ' if warning.get('evidence_branch') else '') + str(warning.get('source_id', ''))
+    message = (f"Citation {warning.get('evidence_id', '')}: {source} / {warning.get('path', '')}:"
+               f"{warning.get('start_line', '?')}-{warning.get('end_line', '?')}; "
+               f"{warning.get('reason', '')}; {warning.get('action', '')}; affected claims: " +
+               ', '.join(str(value) for value in warning.get('claim_ids', [])))
+    if 'original_start_line' in warning and 'original_end_line' in warning:
+        message += f"; original lines: {warning['original_start_line']}-{warning['original_end_line']}"
+    return message + '. Check citation support for these claims.'
 
 
 def existing_file(path: Path | None) -> bool:
@@ -501,8 +513,13 @@ class Reporter(NullReporter):
             self._emit(event, level, exception=exception, _started=_started, **context)
 
     def _emit(self, event, level, *, exception, _started, **context):
-        if event in ('root_warning', 'description_missing', 'stop_requested'):
+        if event in ('root_warning', 'description_missing', 'stop_requested', 'citation_warning'):
             level = logging.WARNING
+        if event == 'citation_warning':
+            fields = ('branch', 'source_name', 'commit', 'stage', 'revision_id', 'shard_id', 'generated_by', 'backend',
+                      'evidence_id', 'evidence_branch', 'source_id', 'path', 'start_line', 'end_line', 'reason',
+                      'claim_ids', 'action', 'original_start_line', 'original_end_line')
+            context = {key: context[key] for key in fields if key in context}
         item = Event(event, level, dt.datetime.now(dt.timezone.utc).isoformat(), self.run_id,
                      self.clean(context), exception)
         self.log(item)
@@ -563,6 +580,8 @@ class Reporter(NullReporter):
             return ['[WARN] Running with administrator privileges.']
         if name == 'description_missing':
             return ['[WARN] Project description is missing. Set project_description to describe the system purpose and history.']
+        if name == 'citation_warning':
+            return ['[WARN] ' + self.stage_message(c, citation_warning_message(c))]
         if name == 'stage_started':
             if self._progress and self._progress_line(self._progress) is not None:
                 return []
@@ -579,8 +598,9 @@ class Reporter(NullReporter):
         if name == 'stage_completed':
             status = c['status']
             label = '[OK] ' if status == 'COMPLETE' else '[FAIL] ' if status == 'FAILED' else '[WARN] '
-            meaning = complete if status == 'COMPLETE' else title + (
-                ' failed. See details below.' if status == 'FAILED' else ' may be incomplete. See details below.')
+            meaning = (complete if status == 'COMPLETE' else
+                       title + ' complete with citation warnings. See affected claims.' if status == 'COMPLETE_WITH_WARNINGS' else
+                       title + (' failed. See details below.' if status == 'FAILED' else ' may be incomplete. See details below.'))
             return [label + self.stage_message(c, meaning) +
                     ' | Elapsed: ' + duration(c['elapsed_seconds']),
                     *(['      Report: ' + s(c['report_path'])] if c.get('report_path') else []),
@@ -663,6 +683,7 @@ class Reporter(NullReporter):
         meaning = ('[WARN] Analysis interrupted.' if result['exit_code'] == 130 else
                    '[OK] Local setup checked. Analysis has not started.' if result['status'] == 'PREFLIGHT_OK' else
                    '[OK] Analysis complete. Reports may still contain errors.' if result['status'] == 'COMPLETE' else
+                   '[WARN] Analysis complete with citation warnings. Check affected claims and the recorded acceptance result.' if result['status'] == 'COMPLETE_WITH_WARNINGS' else
                    '[WARN] Analysis may be incomplete. See available results and limitations below.' if result['status'] == 'PARTIAL' else
                    '[FAIL] Analysis failed.')
         lines = [meaning, 'Elapsed: ' + duration(elapsed)]
@@ -693,8 +714,11 @@ class Reporter(NullReporter):
         elif not check_only:
             for branch in manifest.get('branches', []):
                 partial_material = manifest.get('result_policy') == 'compromise' and branch.get('study_usable')
+                warned = any((branch.get(stage) or {}).get('program_checks', {}).get('citation_warnings')
+                             for stage in ('study', 'review'))
                 lines += ['Branch ' + s(branch['branch']) + ': ' +
-                          status('Complete' if branch.get('workflow_satisfied', branch.get('accepted')) else 'May be incomplete' if partial_material
+                          status('Complete with warnings' if warned and branch.get('processing_completed') else
+                                 'Complete' if branch.get('workflow_satisfied', branch.get('accepted')) else 'May be incomplete' if partial_material
                                  else 'Failed' if branch['errors'] else 'May be incomplete')]
             analyzed = {branch['branch'] for branch in manifest.get('branches', [])}
             for branch in manifest.get('pins', {}):

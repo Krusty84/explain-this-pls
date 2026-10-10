@@ -5,7 +5,7 @@
 import time
 
 from src.runtime.metrics import RunMetrics
-from src.runtime.reporting import STAGE_MESSAGES
+from src.runtime.reporting import STAGE_MESSAGES, citation_warning_message
 
 
 class RunState:
@@ -49,13 +49,20 @@ class RunState:
             elif name == 'stage_completed':
                 row['duration_seconds'] = context.get('elapsed_seconds', self.elapsed(row))
                 row['result'] = (STAGE_MESSAGES.get(context['stage'], STAGE_MESSAGES['study'])[2]
-                                 if row['status'] == 'COMPLETE' else 'See limitations and diagnostics.')
+                                 if row['status'] == 'COMPLETE' else
+                                 'Completed with citation warnings. See affected claims.' if row['status'] == 'COMPLETE_WITH_WARNINGS' else
+                                 'See limitations and diagnostics.')
             elif name == 'stage_skipped':
                 row.update(status='SKIPPED', duration_seconds=0,
                            result='Review disabled by configuration.' if context.get('reason') == 'disabled_by_config'
                            else 'No architecture report available.')
             else:
                 row['result'] = 'Report text recovered; some checks did not pass.'
+        elif name == 'citation_warning':
+            warning = dict(context, message=citation_warning_message(context))
+            row = self.row(context) if context.get('stage') else self.preparation
+            row['diagnostics'].append(warning)
+            self.diagnostics.append(warning)
         elif name == 'error':
             self.diagnostics.append(context)
             row = self.row(context) if context.get('stage') else self.preparation

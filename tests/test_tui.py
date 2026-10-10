@@ -270,6 +270,29 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             await pilot.click('#back')
             self.assertTrue(app.query_one('#picker').display)
 
+    async def test_completed_warning_status_and_citation_details_are_visible(self):
+        app = self.app(self.path, no_progress=True)
+        async with app.run_test(size=(100, 32)) as pilot:
+            app.state = RunState()
+            app.query_one('#picker').display = False
+            app.query_one('#dashboard').display = True
+            context = dict(branch='unit', stage='study', revision_id='001')
+            app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'stage_started', 'context': context}))
+            warning = dict(evidence_id='study:E-001', source_id='source-001', path='app.py', start_line=1,
+                           end_line=2, reason='QUOTE_MISMATCH', action='UNRESOLVED', claim_ids=['C-001'])
+            app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'citation_warning', 'context': context | warning}))
+            app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'stage_completed',
+                'context': context | {'status': 'COMPLETE_WITH_WARNINGS', 'elapsed_seconds': 1}}))
+            app.complete({'result': {'status': 'COMPLETE_WITH_WARNINGS', 'exit_code': 0, 'review_enabled': False},
+                          'diagnostics': []})
+            await pilot.pause()
+            self.assertEqual(app.last_exit_code, 0)
+            self.assertEqual(app.query_one('#stages', DataTable).get_row_at(1)[2].plain, 'COMPLETE_WITH_WARNINGS')
+            summary = ' '.join(cell.plain for row in app.query_one('#summary', DataTable).rows
+                               for cell in app.query_one('#summary', DataTable).get_row(row))
+            for text in ('COMPLETE_WITH_WARNINGS', 'source-001 / app.py:1-2', 'C-001', 'QUOTE_MISMATCH'):
+                self.assertIn(text, summary)
+
     async def test_no_progress_keeps_elapsed_frozen_between_events_and_worker_crash_finishes(self):
         app = self.app(self.path, no_progress=True)
         async with app.run_test() as pilot:
@@ -307,12 +330,14 @@ class LiveTuiTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, self.env, clear=True):
             async with app.run_test(size=(80, 24)) as pilot:
                 await pilot.click('#check')
-                await self.wait_for(pilot, lambda: not app.running)
+                await self.wait_for(pilot, lambda: not app.running and
+                                    app.query_one('#run-tabs', TabbedContent).active == 'summary-tab')
                 self.assertEqual(app.pending_result['result']['status'], 'PREFLIGHT_OK')
                 self.assertEqual(app.pending_result['result']['metrics']['attempts'], 0)
                 await pilot.click('#back')
                 await pilot.click('#run')
-                await self.wait_for(pilot, lambda: not app.running)
+                await self.wait_for(pilot, lambda: not app.running and
+                                    app.query_one('#run-tabs', TabbedContent).active == 'summary-tab')
                 self.assertEqual(app.pending_result['result']['status'], 'COMPLETE')
                 self.assertGreater(app.query_one('#stages', DataTable).row_count, 2)
                 self.assertEqual(app.query_one('#run-tabs', TabbedContent).active, 'summary-tab')
@@ -332,7 +357,8 @@ class LiveTuiTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press('tab')
                 await pilot.resize_terminal(100, 30)
                 await pilot.press('ctrl+c')
-                await self.wait_for(pilot, lambda: not app.running)
+                await self.wait_for(pilot, lambda: not app.running and
+                                    app.query_one('#run-tabs', TabbedContent).active == 'summary-tab')
                 self.assertEqual(app.last_exit_code, 130)
                 with self.assertRaises(ProcessLookupError):
                     os.kill(child['pid'], 0)

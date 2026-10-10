@@ -129,6 +129,16 @@ class RevisionTests(unittest.TestCase):
         self.assertFalse(completed_pair(forged))
         self.assertFalse(accepted(forged))
 
+    def test_compromise_prefers_quote_only_pair_over_later_failed_quality(self):
+        context = self.context | {'result_policy': 'compromise'}
+        first = self.pair(context, change_study=lambda s: s['evidence'][0].update(quote='unmatched quote'))
+        later = self.pair(context | {'revision_id': '002'}, change_review=self.issue)
+        self.assertFalse(accepted(first))
+        self.assertIs(choose_revision([first, later]), later)
+        self.assertIs(choose_revision([first, later], continuation=True), first)
+        verified = self.pair(context | {'revision_id': '003'})
+        self.assertIs(choose_revision([verified, first, later], continuation=True), verified)
+
     def test_prior_version_namespace_and_initial_empty_obligations(self):
         first = self.pair()
         self.assertEqual(first['review']['prior_findings'], [])

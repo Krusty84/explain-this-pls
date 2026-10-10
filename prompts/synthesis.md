@@ -15,6 +15,11 @@ source evidence or change the meaning of any registered claim.
 Preserve contradictions and limitations. Organize and connect only observations
 supported by these records. Project description is user context, not source proof.
 
+Supplied citation_warnings identify corrected or unverified source quotes. Preserve
+their affected claim IDs and explicitly mark claims with UNRESOLVED warnings as
+requiring manual source verification. They may be included with that limitation;
+continuation permission does not resolve evidence or confirm inspection coverage.
+
 Return only task=architecture_documentation, the exact supplied source identity
 (including source_snapshot_id in folder mode), completion_status, limitations and
 report_sections. Generate only the report structure and narrative. Return report_sections

@@ -235,6 +235,14 @@ class MultiSessionTests(FolderFixture):
                     else: raise AuditError('Synthetic backend failure.', code='CLI_FAILED', failure_layer='backend')
                 with self.subTest(kind=kind, policy=policy):
                     manifest, code = self.run_case(change=change, policy=policy)
+                    if kind == 'evidence' and policy == 'compromise':
+                        self.assertEqual((manifest['status'], code), ('COMPLETE_WITH_WARNINGS', 0))
+                        self.assertFalse(manifest['workflow_satisfied'])
+                        self.assertFalse(manifest['accepted'])
+                        self.assertEqual(manifest['synthesis_status'], 'SUCCEEDED')
+                        self.assertTrue(manifest['study']['program_checks']['continuation_allowed'])
+                        self.assertEqual(manifest['study']['program_checks']['evidence_counts']['QUOTE_MISMATCH'], 1)
+                        continue
                     self.assertEqual((manifest['status'], code),
                                      ('PARTIAL', 2) if policy == 'compromise' else ('FAILED', 1))
                     self.assertTrue(manifest['has_usable_material'])
@@ -276,11 +284,22 @@ class MultiSessionTests(FolderFixture):
                             data['evidence'][0]['quote'] = 'private invalid quote'
                     with self.subTest(backend=backend, policy=policy, valid=valid):
                         manifest, code = self.run_case(backend=backend, policy=policy, change=change, reporter=reporter)
-                        self.assertEqual(code, 0 if valid else 2 if policy == 'compromise' else 1,
+                        continued = valid or policy == 'compromise'
+                        self.assertEqual(code, 0 if continued else 1,
                                          manifest.get('diagnostics'))
-                        self.assertEqual(manifest['synthesis_status'], 'SUCCEEDED' if valid else 'SKIPPED')
+                        self.assertEqual(manifest['synthesis_status'], 'SUCCEEDED' if continued else 'SKIPPED')
                         if valid:
                             self.assertTrue(workflow_satisfied(manifest))
+                            self.assertTrue((self.runner.run_dir / 'ARCHITECTURE.md').exists())
+                            continue
+                        if policy == 'compromise':
+                            self.assertEqual(manifest['status'], 'COMPLETE_WITH_WARNINGS')
+                            self.assertFalse(workflow_satisfied(manifest))
+                            self.assertFalse(manifest['accepted'])
+                            checks = manifest['study_shards'][1]['study-shard']['program_checks']
+                            self.assertFalse(checks['policy_satisfied'])
+                            self.assertTrue(checks['continuation_allowed'])
+                            self.assertEqual(checks['evidence_counts']['QUOTE_MISMATCH'], 1)
                             self.assertTrue((self.runner.run_dir / 'ARCHITECTURE.md').exists())
                             continue
                         invocation = manifest['study_shards'][1]['study-shard_invocation']
@@ -535,9 +554,14 @@ class MultiSessionTests(FolderFixture):
                     recoverable = kind in ('schema', 'evidence', 'identity')
                     self.assertEqual((code, manifest['status']), (2, 'PARTIAL') if recoverable else (1, 'FAILED'))
                     self.assertEqual(manifest['has_usable_material'], recoverable)
-                    self.assertFalse(any(c['context'].get('prompt_variant') == 'synthesis' for c in self.calls))
-                    self.assertFalse((self.runner.run_dir / 'ARCHITECTURE.md').exists())
+                    self.assertEqual(any(c['context'].get('prompt_variant') == 'synthesis' for c in self.calls),
+                                     kind == 'evidence')
+                    self.assertEqual((self.runner.run_dir / 'ARCHITECTURE.md').exists(), kind == 'evidence')
                     self.assertFalse(manifest['accepted'])
+                    if kind == 'evidence':
+                        self.assertFalse(manifest['coverage_plan']['policy_satisfied'])
+                        self.assertFalse(manifest['study']['program_checks']['policy_satisfied'])
+                        self.assertFalse(manifest['study']['program_checks']['continuation_allowed'])
                     if kind not in ('schema', 'evidence', 'identity'):
                         self.assertTrue(manifest['critical_failure'])
 

@@ -4,7 +4,7 @@
 """Shared orchestrator policy. Native runtime retries are a separate capability."""
 import json
 
-from src.contracts.contracts import workflow_satisfied
+from src.contracts.contracts import workflow_satisfied, processing_satisfied
 
 
 def retry_policy(configured=0, performed=0, native=0):
@@ -17,8 +17,9 @@ def retry_policy(configured=0, performed=0, native=0):
 
 def required_unresolved(context):
     entries = {item['branch']: item for item in context['branches']}
+    eligible = processing_satisfied if context.get('result_policy') == 'compromise' else workflow_satisfied
     return [branch for branch in context['requested_branches']
-            if not workflow_satisfied(entries.get(branch, {}), review_enabled=context.get('review_enabled', True))]
+            if not eligible(entries.get(branch, {}), review_enabled=context.get('review_enabled', True))]
 
 
 def blocked_comparison(context):

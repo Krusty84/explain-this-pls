@@ -15,13 +15,15 @@ def help_command(executable: str) -> list[str]:
 
 def required_flags(mode: str) -> list[str]:
     return ['--no-session-persistence', '--json-schema', '--tools', '--allowedTools',
-            '--disallowedTools', '--permission-mode']
+            '--disallowedTools', '--permission-mode', '--output-format', '--verbose',
+            '--include-partial-messages']
 
 
 def build_command(agent: dict, stage: str, mode: str, schema: dict,
                   schema_path: Path) -> list[str]:
     tools = '' if stage == 'compare' else 'Read,Glob,Grep'
-    cmd = [agent['executable'], '-p', '--no-session-persistence', '--output-format', 'json',
+    cmd = [agent['executable'], '-p', '--no-session-persistence', '--output-format', 'stream-json',
+        '--verbose', '--include-partial-messages',
         '--json-schema', json.dumps(schema), '--permission-mode', 'dontAsk',
         '--tools', tools, '--disallowedTools', 'mcp__*']
     if tools:
@@ -31,8 +33,32 @@ def build_command(agent: dict, stage: str, mode: str, schema: dict,
     return cmd
 
 
+def result_envelope(output: str) -> dict:
+    """Read the final streaming result, retaining legacy JSON report compatibility."""
+    try:
+        value = transport_json(output.strip())
+    except ContractError:
+        value = None
+    if type(value) is dict and 'is_error' in value:
+        return value
+    result = None
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        event = transport_json(line)
+        if type(event) is not dict or type(event.get('type')) is not str:
+            raise response_error('TRANSPORT_ERROR', 'transport', 'Invalid Claude Code stream event.')
+        if event['type'] == 'result':
+            if result is not None and result != event:
+                raise response_error('TRANSPORT_ERROR', 'transport', 'Conflicting Claude Code results.')
+            result = event
+    if result is None:
+        raise response_error('INCOMPLETE_OUTPUT', 'result', 'Claude Code did not return a final result.')
+    return result
+
+
 def parse_output(output: str) -> tuple[dict, dict]:
-    transport = transport_json(output.strip())
+    transport = result_envelope(output)
     if type(transport) is not dict or type(transport.get('is_error')) is not bool:
         raise response_error('TRANSPORT_ERROR', 'transport', 'Invalid Claude Code result envelope.')
     if transport['is_error']:
@@ -45,7 +71,7 @@ def parse_output(output: str) -> tuple[dict, dict]:
 
 def collect_metrics(output: str, requested=None) -> dict:
     try:
-        envelope = transport_json(output.strip())
+        envelope = result_envelope(output)
     except ContractError:
         envelope = None
     return claude_usage(envelope, requested)

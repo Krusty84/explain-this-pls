@@ -26,6 +26,13 @@ review because a study exists, or narrow the requested branch list. You may add
 other unresolved branches and explain additional limitations. Keep Markdown and
 completion_status consistent with these required unresolved inputs.
 
+In compromise mode, citation_warnings can permit processing to finish while strict
+workflow_satisfied and accepted remain false. Preserve these warnings and explicitly
+mark affected assertions for manual source verification. A QUOTE_MISMATCH never
+confirms inspection coverage or a difference. Such references can accompany only
+REPORTED_UNVERIFIED comparisons, subject to the supplied processing checks. This
+quote-only exception does not excuse other missing or failed inputs.
+
 In compromise mode, study_material/review_material may contain retained text
 that failed its output contract. Treat it as unvalidated source material with
 explicit caveats; validation_issues are orchestrator diagnostics. The original
@@ -39,9 +46,10 @@ When review_enabled is false, absence of review is intentional and does not by
 itself make a branch unresolved or the comparison PARTIAL. Explicitly disclose
 that no separate review was performed. Use REPORTED_UNVERIFIED for reported
 differences, never CONFIRMED_DIFFERENCE. A COMPLETE comparison in this mode still
-requires all requested studies to satisfy workflow checks and every reported
-difference to cite a FACT with resolved source evidence in each side's selected
-study. Reference artifact "study" only. If a side lacks factual support, mark the
+requires all requested studies to satisfy processing checks and every reported
+difference to cite a FACT in each side's selected study. Source evidence must be
+resolved except for the explicit quote-only compromise exception above.
+Reference artifact "study" only. If a side lacks factual support, mark the
 affected branches unresolved and return PARTIAL/BLOCKED. INSUFFICIENT_EVIDENCE
 cannot satisfy processing policy. Hypotheses and missing descriptions cannot
 establish a factual contrast. Successful processing does not verify a difference.

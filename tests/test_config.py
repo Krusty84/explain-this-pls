@@ -10,6 +10,34 @@ from test_folder import FolderFixture
 
 
 class ConfigTests(FolderFixture):
+    def test_source_context_and_read_guard_defaults_and_disable(self):
+        config = self.config()
+        self.assertEqual(config['source_context'], {'enabled': True, 'max_bytes': 65536})
+        self.assertTrue(config['execution']['read_loop_guard'])
+        self.value['source_context'] = {'enabled': False, 'max_bytes': 4096}
+        self.value['execution']['read_loop_guard'] = False
+        config = self.config()
+        self.assertEqual(config['source_context'], {'enabled': False, 'max_bytes': 4096})
+        self.assertFalse(config['execution']['read_loop_guard'])
+
+    def test_invalid_source_context_and_read_guard_before_backend_lookup(self):
+        original = copy.deepcopy(self.value)
+        invalid = [None, False, [], {'other': 1}, {'enabled': 1}, {'enabled': 'true'},
+                   {'enabled': None}, {'max_bytes': True}, {'max_bytes': 4095},
+                   {'max_bytes': 4096.0}, {'max_bytes': '65536'}, {'max_bytes': None}]
+        for value in invalid:
+            self.value = copy.deepcopy(original) | {'source_context': value}
+            with self.subTest(value=value), patch('explain.shutil.which') as which:
+                with self.assertRaises(AuditError):
+                    self.config()
+                which.assert_not_called()
+        for value in (None, 0, 1, 'true', [], {}):
+            self.value = copy.deepcopy(original) | {'execution': {'read_loop_guard': value}}
+            with self.subTest(read_loop_guard=value), patch('explain.shutil.which') as which:
+                with self.assertRaises(AuditError):
+                    self.config()
+                which.assert_not_called()
+
     def test_source_byte_limit_defaults_and_custom_values_for_all_backends_and_modes(self):
         self.value['git_mode'] = {'repository': './source', 'branches': ['main'], 'baseline_branch': 'main'}
         for mode in ('git', 'folder'):

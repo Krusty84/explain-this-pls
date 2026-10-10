@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from src.contracts.contracts import ContractError, validate_result, SCHEMAS, validate_schema, accepted
-from src.analysis.evidence import resolve_evidence, SourceChanged, MAX_FILE_BYTES
+from src.analysis.evidence import resolve_evidence, SourceChanged, MAX_FILE_BYTES, open_source_directory
 from src.analysis.ledger import freeze_plan, prepare_result, review_context, CONTRACT_ID, ARTIFACT_FORMAT
 from src.reports.presentation import render_stage, label
 from src.reports.final_report import render_final_report, recoverable_material
@@ -52,6 +52,41 @@ class LedgerTests(unittest.TestCase):
 
     def resolved(self, pointer=None):
         return resolve_evidence('study', [pointer or study(self.context)['evidence'][0]], self.context)[0]
+
+    def test_directory_open_interruption_preserves_cancel_and_closes_both_descriptors(self):
+        real_open, real_close = os.open, os.close
+        for after_close in (False, True):
+            with self.subTest(after_close=after_close):
+                descriptors, interrupted = [], []
+
+                def open_recorded(*args, **kwargs):
+                    fd = real_open(*args, **kwargs)
+                    descriptors.append(fd)
+                    return fd
+
+                def close_interrupted(fd):
+                    if not interrupted:
+                        interrupted.append(True)
+                        if after_close:
+                            real_close(fd)
+                        raise KeyboardInterrupt('Cancelled during descriptor ownership transfer')
+                    real_close(fd)
+
+                try:
+                    with patch('src.analysis.evidence.os.open', side_effect=open_recorded), \
+                            patch('src.analysis.evidence.os.close', side_effect=close_interrupted):
+                        with self.assertRaises(KeyboardInterrupt):
+                            open_source_directory(self.root)
+                    self.assertEqual(len(descriptors), 2)
+                    for fd in descriptors:
+                        with self.assertRaises(OSError):
+                            os.fstat(fd)
+                finally:
+                    for fd in descriptors:
+                        try:
+                            real_close(fd)
+                        except OSError:
+                            pass
 
     def test_real_bytes_and_no_semantic_promotion(self):
         result = self.resolved()

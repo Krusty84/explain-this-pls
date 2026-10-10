@@ -50,6 +50,11 @@ RESOLUTION['required'].remove('fragment_bytes')
 RESOLUTION['required'].remove('encoding')
 # Older saved reports may carry this field; new resolutions do not hash snippets.
 RESOLUTION['required'].remove('fragment_sha256')
+CITATION_WARNING = obj(evidence_id=string(), source_id=string(), path=string(),
+    start_line={'type': 'integer'}, end_line={'type': 'integer'}, reason=string(),
+    claim_ids=STRINGS, action=string('UNRESOLVED', 'CORRECTED'))
+CITATION_WARNING['properties'].update(original_start_line={'type': 'integer'},
+                                      original_end_line={'type': 'integer'}, branch=string())
 DOCUMENT_LINKS = obj(registered=INTEGER, matched=INTEGER, scope=string('REGISTERED_CLAIMS_ONLY'))
 BASE_CHECKS = dict(execution=string('COMPLETED'), contract=string('VALID'), source=string('MATCHED_AT_BOUNDARIES',
     'NOT_INSPECTED_IN_COMPARISON'), evidence=array(RESOLUTION), policy_satisfied={'type': 'boolean'},
@@ -72,6 +77,10 @@ CHECKS = {
 }
 CHECKS['study-shard'] = obj(**BASE_CHECKS, evidence_counts=mapping(INTEGER),
                              coverage=CHECKS['study']['properties']['coverage'])
+for stage in ('study', 'study-shard', 'review', 'compare'):
+    # Optional saved-only fields keep earlier reports readable.
+    CHECKS[stage]['properties'].update(continuation_allowed={'type': 'boolean'},
+                                     citation_warnings=array(CITATION_WARNING))
 CHECKS['study']['properties']['coverage']['properties']['metadata_verified_empty_paths'] = STRINGS
 
 

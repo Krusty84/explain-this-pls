@@ -100,8 +100,11 @@ successful result. Source guards compare state at prescribed boundaries; they
 are not a continuous immutability guarantee. Orchestrator reads do not establish
 which files the agent read.
 
-`ARCHITECTURE.md` contains exactly the UTF-8 bytes of materialized study
-`report_markdown`. The pure serializer normalizes CRLF to LF in authored blocks,
+`ARCHITECTURE.md` starts with the exact UTF-8 bytes of materialized study
+`report_markdown`. When citation warnings exist, a deterministic program appendix
+follows the authored text. Publication hashes include the appendix; authored
+document hashes and locator line numbers remain unchanged.
+The pure serializer normalizes CRLF to LF in authored blocks,
 preserving internal spaces, tabs, bare CR and Unicode without NFC/NFKC. It writes
 `## N. title` followed by two LF, then each block with a final LF if absent and
 one additional separator LF. Existing blank lines are preserved. Coordinates are
@@ -540,7 +543,8 @@ The private journal is a provenance object plus `changes`, for example:
 Each change has the above shape. The provenance object contains `rule`,
 `hash_format: "canonical-json-utf8"`, `replacement_count`, `input_sha256`
 and `normalized_sha256`. The input is `expanded.json`, after verified identity
-expansion. Both SHA-256 hashes cover the respective **entire internal objects**,
+expansion, or `quote-corrected.json` when local citation repair changed it.
+Both SHA-256 hashes cover the respective **entire internal objects**,
 serialized with Python `json.dumps(ensure_ascii=False, sort_keys=True,
 separators=(',', ':'), allow_nan=False)` and UTF-8 encoded, without BOM or trailing
 newline. They do not hash the pretty-printed artifact file bytes. Unicode and
@@ -551,6 +555,40 @@ new Runner publication requires the normalization artifacts.
 It is never requested from the model or admitted by the wire schema. Successful
 normalization does not change `completion_status`, establish content accuracy,
 satisfy policy, or imply publication.
+
+### Quote-only continuation
+
+Only `result_policy: "compromise"` permits local citation repair. Exact existing
+resolution runs first. For QUOTE_MISMATCH, search the same pinned file with each
+range boundary allowed to change by at most three lines. Prefer a unique exact
+quote; otherwise permit only a unique replacement of the common leading indent.
+Relative indentation, internal whitespace, code values and identifiers stay exact.
+Revalidate every proposed correction with the ordinary resolver. Ambiguous matches
+remain unresolved. No project-wide search, fuzzy match, quote removal or model
+retry is used. `strict` keeps its previous evidence rules.
+
+`extracted.json` and `expanded.json` remain unchanged. Corrections are recorded in
+private `quote-corrected.json` and `quote-corrections.json`; `quote-diagnostics.json`
+retains full quote/source diffs, including unresolved mismatches. These files join
+the existing attempt hashes. The provenance chain is expanded response, optional
+quote correction, evidence-ID normalization, then materialization. Only safe IDs,
+source paths, ranges, reasons, actions and affected claims enter ordinary logs.
+
+Optional saved `program_checks.citation_warnings` and `continuation_allowed`
+separate permission to continue from strict `policy_satisfied`. Unresolved quotes
+remain QUOTE_MISMATCH, cannot confirm coverage or differences, and prevent strict
+acceptance. Continuation permits only quote mismatches and coverage unsupported
+solely by those quotes; all identity, schema, assignment, source, publication,
+timeout, NO_PROGRESS and cleanup checks remain in force. Saved reports without
+these fields retain their previous meaning and are not rewritten.
+
+Warning-only shards can succeed and enter synthesis. Warnings follow remapped
+claim/evidence IDs into synthesis and review; affected claims require manual
+verification. Comparison can use such inputs only as REPORTED_UNVERIFIED, never
+as proof of CONFIRMED_DIFFERENCE. Otherwise completed runs exit 0 with
+COMPLETE_WITH_WARNINGS and processing_completed=true. Strict workflow_satisfied
+and accepted remain separate; an unresolved quote cannot make either true.
+CLI/TUI, FINAL_REPORT.md and annotated reports display citation warnings.
 
 Contract failures retain their broad `failure_kind` (`SCHEMA_ERROR`,
 `SEMANTIC_ERROR`, or `IDENTITY_MISMATCH`) for existing control flow. Specific,
@@ -895,7 +933,9 @@ revision or compromise promotion. Validated results, logs and per-attempt metric
 are preserved in `study-shards/R-NNN/`. Manifest `study_shards` records PLANNED,
 RUNNING, SUCCEEDED or FAILED, each with its own invocation metadata. With
 continue_on_error=true, recoverable failure permits later planned shards to run;
-false stops them, leaving their state PLANNED. Any failed shard blocks synthesis
+false stops them, leaving their state PLANNED. Quote-only continuation under
+compromise counts as processing success without strict policy acceptance.
+Any failed shard blocks synthesis
 under both result policies. Integrity failures always stop the run. Multi-session
 analysis accepts AGENT, AGENT_SALVAGED and DIRECTORY_FALLBACK coverage plans after
 the same structural, inventory and frozen-plan verification. Catalog provenance
@@ -981,7 +1021,8 @@ an erroneous statement; deleting necessary explanation leaves an issue or omissi
 The loop ends after the second review regardless of its result.
 
 revisions/001 and revisions/002 hold separate immutable study/review states and
-artifacts. Selection prefers an accepted pair; otherwise it uses the latest
+artifacts. Selection prefers an accepted pair. In compromise it next prefers a
+pair satisfying quote-only continuation. Otherwise it uses the latest
 published pair whose review has completion_status COMPLETE; PARTIAL does not count
 as completed. An incomplete new review keeps the previous
 completed pair selected and exposes the newer study separately as unverified.

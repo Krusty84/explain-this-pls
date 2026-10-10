@@ -5,7 +5,7 @@
 from __future__ import annotations
 import copy
 
-from src.contracts.contracts import accepted, contract_violation, has_program_checks, CONTRACT_ID, ARTIFACT_FORMAT, ContractError
+from src.contracts.contracts import accepted, processing_satisfied, contract_violation, has_program_checks, CONTRACT_ID, ARTIFACT_FORMAT, ContractError
 from src.analysis.evidence import canonical, sha
 
 
@@ -72,11 +72,15 @@ def completed_pair(revision):
         return False
 
 
-def choose_revision(revisions):
+def choose_revision(revisions, *, continuation=False):
     ordered = list(reversed(revisions))
     for revision in ordered:
         if accepted(revision):
             return revision
+    if continuation:
+        for revision in ordered:
+            if processing_satisfied(revision):
+                return revision
     for revision in ordered:
         if completed_pair(revision):
             return revision
