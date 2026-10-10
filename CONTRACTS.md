@@ -801,6 +801,14 @@ The resulting coverage.plan.json is immutable for the snapshot and
 shared by all document revisions. Large sources can use multiple study sessions
 before the first global document is assembled.
 
+In both strict and compromise modes, catalog selectors may have one trailing `/`
+when the path without it is a valid directory in the frozen inventory. Subsystem
+paths and exclusions use the same rule. The response keeps its original spelling;
+the coverage plan uses canonical paths and detects duplicates after resolving these
+aliases. This does not change completion status or coverage origin. Files, symlinks,
+unknown directories and unsafe paths do not gain this alias; source evidence paths
+remain strict.
+
 In compromise mode, catalog recovery first checks response structure, pinned source
 identity, IDs, selector syntax and exclusion rules. Only UNKNOWN_CATALOG_PATH is
 recoverable: selectors absent from the frozen inventory are removed without replacement.

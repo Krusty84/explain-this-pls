@@ -10,7 +10,11 @@ from src.contracts.contracts import CONTRACT_ID, ContractError, contract_violati
 from src.analysis.evidence import canonical, sha, source_catalog, valid_path
 
 
-def checked_path(path):
+def checked_path(path, *, directories=None):
+    """Validate syntax; supplied inventory directories constrain suffix aliases."""
+    if (type(path) is str and path.endswith('/') and valid_path(path[:-1])
+            and (directories is None or path[:-1] in directories)):
+        path = path[:-1]
     if path != '.' and not valid_path(path):
         raise contract_violation('UNSAFE_CATALOG_PATH', '$.paths')
     return path
@@ -47,14 +51,15 @@ def recover_catalog_paths(catalog, inventory, context):
     from src.contracts.contracts import validate_result
     mode = 'folder' if context.get('source_mode') == 'folder' or 'source_directory' in context else 'git'
     validate_result('catalog', catalog, {k: v for k, v in context.items() if k != '_inventory'}, mode)
-    exclusions = [e['path'] for e in catalog['exclusions']]
+    directories = {e['path'] for e in inventory['entries'] if e['type'] == 'directory'}
+    exclusions = [checked_path(e['path'], directories=directories) for e in catalog['exclusions']]
     if len(exclusions) != len(set(exclusions)):
         raise contract_violation('INVALID_CATALOG_EXCLUSION', '$.exclusions')
     known = {e['path'] for e in inventory['entries']}
     rejected = []
 
     def keep(selector, location):
-        if selector in known:
+        if checked_path(selector, directories=directories) in known:
             return True
         rejected.append({'code': 'UNKNOWN_CATALOG_PATH', 'path': location, 'selector': selector})
         return False
@@ -81,6 +86,7 @@ def recover_catalog_paths(catalog, inventory, context):
 def build_coverage_plan(catalog, inventory, context, fallback=False, *, salvaged=False):
     entries = inventory['entries']
     known = {e['path']: e for e in entries}
+    directories = {p for p, e in known.items() if e['type'] == 'directory'}
     leaves = {p for p, e in known.items() if e['type'] in ('file', 'symlink')}
     files = {p for p, e in known.items() if e['type'] == 'file'}
     if not fallback or catalog is not None:
@@ -108,28 +114,30 @@ def build_coverage_plan(catalog, inventory, context, fallback=False, *, salvaged
         raise contract_violation('DUPLICATE_CATALOG_AREA', '$.subsystems')
 
     def members(paths):
+        paths = [checked_path(path, directories=directories) for path in paths]
         if len(paths) != len(set(paths)) or not paths:
             raise contract_violation('INVALID_CATALOG_PATHS', '$.paths')
         for path in paths:
-            checked_path(path)
             if path not in known:
                 raise contract_violation('UNKNOWN_CATALOG_PATH', '$.paths')
-        return {p for p in leaves if any(matches(p, root) for root in paths)}
+        return paths, {p for p in leaves if any(matches(p, root) for root in paths)}
 
     exclusions, excluded = [], set()
     seen_exclusions = set()
     for exclusion in catalog['exclusions']:
-        if exclusion['path'] in seen_exclusions or not exclusion['reason'].strip():
+        path = checked_path(exclusion['path'], directories=directories)
+        if path in seen_exclusions or not exclusion['reason'].strip():
             raise contract_violation('INVALID_CATALOG_EXCLUSION', '$.exclusions')
-        seen_exclusions.add(exclusion['path'])
-        selected = members([exclusion['path']])
+        seen_exclusions.add(path)
+        _, selected = members([path])
         excluded |= selected
-        exclusions.append(dict(exclusion, entry_paths=sorted(selected), file_paths=sorted(selected & files)))
+        exclusions.append(dict(exclusion, path=path, entry_paths=sorted(selected), file_paths=sorted(selected & files)))
     areas, assigned = [], set()
     for subsystem in subsystems:
-        selected = members(subsystem['paths']) - excluded
+        paths, selected = members(subsystem['paths'])
+        selected -= excluded
         assigned |= selected
-        areas.append(dict(copy.deepcopy(subsystem), entry_paths=sorted(selected),
+        areas.append(dict(copy.deepcopy(subsystem), paths=paths, entry_paths=sorted(selected),
                           file_paths=sorted(selected & files), required=bool(selected)))
     unclassified = leaves - assigned - excluded
     if unclassified:
@@ -168,7 +176,7 @@ def verify_coverage_plan(plan):
     assigned, excluded, files = set(), set(), set()
     for record in plan['areas'] + plan['exclusions']:
         for path in record['entry_paths'] + record['file_paths']:
-            checked_path(path)
+            checked_path(path, directories=())
         entries = set(record['entry_paths'])
         if len(entries) != len(record['entry_paths']) or not set(record['file_paths']) <= entries:
             raise ContractError('Coverage plan membership is inconsistent.')

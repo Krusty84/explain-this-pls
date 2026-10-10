@@ -11,7 +11,7 @@ from src.analysis.coverage_plan import build_coverage_plan, coverage_checks, inv
 from src.analysis.ledger import prepare_result, review_context
 from src.reports.presentation import render_stage
 from src.contracts.saved_contracts import SAVED_SCHEMAS
-from src.analysis.evidence import canonical, sha
+from src.analysis.evidence import canonical, sha, valid_path
 from fixtures.ledger_response import response
 
 
@@ -92,6 +92,75 @@ class CoveragePlanTests(unittest.TestCase):
                     build_coverage_plan(catalog, self.inventory, self.context)
         plan = build_coverage_plan(self.catalog, self.inventory, self.context)
         plan['areas'][0]['name'] = 'Changed'
+        with self.assertRaises(ContractError):
+            verify_coverage_plan(plan)
+
+    def test_directory_suffix_preserves_assignments_exclusions_and_original_response(self):
+        self.inventory['entries'] += [
+            {'path': 'src/generated', 'type': 'directory'},
+            {'path': 'src/generated/data.py', 'type': 'file', 'sha256': '4'}]
+        self.catalog['exclusions'].append(dict(path='src/generated', reason='Generated fixture.'))
+        expected = build_coverage_plan(self.catalog, self.inventory, self.context)
+        self.catalog['subsystems'][0]['paths'] = ['src/']
+        self.catalog['exclusions'][-1]['path'] = 'src/generated/'
+        original = copy.deepcopy(self.catalog)
+        validate_result('catalog', self.catalog, self.context | {'_inventory': self.inventory})
+        saved, provenance = self.recover(self.catalog)
+        self.assertEqual(saved['coverage_plan'], expected)
+        self.assertEqual(saved['subsystems'], original['subsystems'])
+        self.assertEqual(saved['exclusions'], original['exclusions'])
+        self.assertEqual(saved['completion_status'], 'COMPLETE')
+        self.assertIsNone(provenance)
+        self.assertEqual(self.catalog, original)
+        self.assertFalse(valid_path('src/'))
+
+    def test_directory_suffix_cannot_hide_unsafe_unknown_or_non_directory_paths(self):
+        for path in ('src//', '/src/', '../src/', 'src/../src/', 'src\\generated/',
+                     './', '/', 'src/\x00', 'missing/', 'README.md/', 'linked/'):
+            for location in ('subsystem', 'exclusion'):
+                catalog = copy.deepcopy(self.catalog)
+                if location == 'subsystem': catalog['subsystems'][0]['paths'] = [path]
+                else: catalog['exclusions'].append(dict(path=path, reason='Invalid selector.'))
+                checks = {
+                    'validate': lambda: validate_result('catalog', catalog, self.context | {'_inventory': self.inventory}),
+                    'plan': lambda: build_coverage_plan(catalog, self.inventory, self.context),
+                    'recover': lambda: recover_catalog_paths(catalog, self.inventory, self.context)}
+                for name, check in checks.items():
+                    with self.subTest(path=path, location=location, check=name), self.assertRaises(ContractError):
+                        check()
+
+    def test_directory_suffix_cannot_hide_duplicate_selectors(self):
+        for location in ('subsystem', 'exclusion'):
+            catalog = copy.deepcopy(self.catalog)
+            if location == 'subsystem':
+                catalog['subsystems'][0]['paths'] = ['src', 'src/']
+            else:
+                catalog['exclusions'] += [dict(path=p, reason='Duplicate directory.') for p in ('src', 'src/')]
+            for check in (lambda: validate_result('catalog', catalog, self.context | {'_inventory': self.inventory}),
+                          lambda: build_coverage_plan(catalog, self.inventory, self.context),
+                          lambda: recover_catalog_paths(catalog, self.inventory, self.context)):
+                with self.subTest(location=location), self.assertRaises(ContractError):
+                    check()
+
+    def test_directory_suffix_keeps_known_subsystems_during_unknown_path_recovery(self):
+        self.catalog['subsystems'][0]['paths'] = ['src/']
+        self.catalog['exclusions'].append(dict(path='.git', reason='Git metadata.'))
+        original = copy.deepcopy(self.catalog)
+        saved, provenance = self.recover(self.catalog)
+        self.assertEqual(saved['coverage_plan']['origin'], 'AGENT_SALVAGED')
+        self.assertEqual(saved['coverage_plan']['areas'][0]['paths'], ['src'])
+        self.assertEqual(saved['coverage_plan']['areas'][0]['file_paths'], ['src/app.py', 'src/lib.py'])
+        self.assertEqual(saved['completion_status'], 'PARTIAL')
+        self.assertEqual(provenance['rejected_selectors'], [
+            {'code': 'UNKNOWN_CATALOG_PATH', 'path': '$.exclusions[2].path', 'selector': '.git'}])
+        self.assertEqual(provenance['input_sha256'], sha(canonical(original)))
+        self.assertEqual(self.catalog, original)
+
+    def test_directory_suffix_is_not_allowed_in_frozen_file_membership(self):
+        plan = build_coverage_plan(self.catalog, self.inventory, self.context)
+        for field in ('entry_paths', 'file_paths'):
+            plan['areas'][0][field] = [path + '/' for path in plan['areas'][0][field]]
+        plan['plan_sha256'] = sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))
         with self.assertRaises(ContractError):
             verify_coverage_plan(plan)
 

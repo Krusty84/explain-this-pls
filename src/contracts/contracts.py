@@ -454,10 +454,9 @@ def validate_result(stage, value, context, mode='git'):
         from src.analysis.coverage_plan import checked_path, build_coverage_plan
         unique_ids(value['subsystems'], r'S-[0-9]{3,}', '$.subsystems')
         for subsystem in value['subsystems']:
-            if not subsystem['paths'] or len(subsystem['paths']) != len(set(subsystem['paths'])):
+            paths = [checked_path(path) for path in subsystem['paths']]
+            if not paths or len(paths) != len(set(paths)):
                 raise contract_violation('INVALID_CATALOG_PATHS', '$.subsystems')
-            for path in subsystem['paths']:
-                checked_path(path)
         for exclusion in value['exclusions']:
             checked_path(exclusion['path'])
         if '_inventory' in context:
