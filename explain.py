@@ -1343,6 +1343,7 @@ class Runner:
                          code='BACKEND_INCOMPATIBLE')
 
     def invoke(self, stage: str, context: dict, destination: Path) -> tuple[dict | None, dict]:
+        destination = destination.resolve()
         context = dict(context)
         context['stage'] = stage
         self.assert_coverage_file(context)

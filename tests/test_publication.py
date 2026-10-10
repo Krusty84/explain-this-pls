@@ -62,6 +62,66 @@ class PublicationTests(FolderFixture):
             return self.result(command, model_wire(data, prompt_context(payload), context))
         return process
 
+    def test_invocation_through_parent_symlink_preserves_results_and_recovery(self):
+        alias = self.base / 'alias'
+        alias.symlink_to(self.base, target_is_directory=True)
+        for policy in ('strict', 'compromise'):
+            with self.subTest(policy=policy):
+                self.value['result_policy'] = policy
+                runner = Runner(self.config(), self.base / policy)
+                context = {'source_directory': str(self.source),
+                           'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
+                data = response(context)
+                if policy == 'compromise':
+                    data['claims'] = 'invalid'
+                destination = alias / policy / 'study.logs'
+                with patch('explain.process', side_effect=self.process_for(data, context)):
+                    saved, meta = runner.invoke('study', context, destination)
+                attempt = runner.run_dir / 'study.logs/attempt-001'
+                self.assertEqual(meta['artifact_directory'], str(attempt))
+                self.assertTrue((destination / 'attempt-001').samefile(attempt))
+                summary = json.loads((destination / 'invocation.json').read_text())
+                self.assertEqual(summary['artifact_directory'], str(attempt))
+                self.assertFalse(runner.critical_failure)
+                if policy == 'compromise':
+                    self.assertIsNone(saved)
+                    self.assertEqual(meta['status'], 'PARTIAL')
+                    self.assertTrue(meta['material_retained'])
+                    self.assertEqual(meta['recovery_source_attempt'], str(attempt))
+                    material = json.loads((runner.run_dir / 'study.material.json').read_text())
+                    self.assertEqual(material, meta['usable_material'])
+                    self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
+                else:
+                    self.assertIsNotNone(saved)
+                    self.assertEqual(meta['status'], 'SUCCEEDED')
+                    self.assertTrue(meta['publication_complete'])
+                    self.assertEqual((runner.run_dir / 'ARCHITECTURE.md').read_text(), saved['report_markdown'])
+
+    def test_invocation_through_parent_symlink_detects_binding_changes(self):
+        alias = self.base / 'alias'
+        alias.symlink_to(self.base, target_is_directory=True)
+        for change in ('content', 'symlink'):
+            with self.subTest(change=change):
+                runner = Runner(self.config(), self.base / change)
+                context = {'source_directory': str(self.source),
+                           'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
+                def process(command, cwd, env, payload, **kwargs):
+                    binding = kwargs['log_dir'] / 'binding.json'
+                    if change == 'content':
+                        binding.write_bytes(binding.read_bytes() + b'\nchanged\n')
+                    else:
+                        original = binding.with_name('binding-original.json')
+                        binding.rename(original)
+                        binding.symlink_to(original)
+                    return self.result(command, response(prompt_context(payload)))
+                with patch('explain.process', side_effect=process) as invoked:
+                    with self.assertRaises(AuditError) as caught:
+                        runner.invoke('study', context, alias / change / 'study.logs')
+                invoked.assert_called_once()
+                self.assertEqual(caught.exception.code, 'MODEL_BINDING_CHANGED')
+                self.assertTrue(runner.critical_failure)
+                self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
+
     def test_attempts_are_immutable_and_validation_precedes_publication(self):
         runner, context, data = self.prepare()
         destination = runner.run_dir / 'study.logs'
