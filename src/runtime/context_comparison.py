@@ -1,29 +1,30 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Explicit, sequential study experiments using existing frozen assignments."""
+"""Explicit, sequential study experiments using an existing frozen scope."""
 import copy
 from collections import Counter
 from contextlib import nullcontext
 import json
 from pathlib import Path
 
-from src.analysis.analysis_plan import verify_analysis_plan, DEFAULT_MAX_SOURCE_BYTES_PER_SESSION
+from src.analysis.coverage_plan import verify_coverage_plan
 from src.analysis.evidence import canonical, resolve_evidence, sha, source_catalog
 from src.contracts.contracts import strict_json
 
 VARIANTS = (('observe', False, False), ('guard', False, True), ('context', True, True))
-FROZEN_FILES = ('source.inventory.json', 'coverage.plan.json', 'analysis.plan.json')
+FROZEN_FILES = ('source.inventory.json', 'coverage.plan.json')
 
 
 def read_json(path):
     return strict_json(Path(path).read_text(encoding='utf-8'))
 
 
-def frozen_inputs(baseline, config, shard_id=None):
-    inventory, coverage, analysis = [read_json(Path(baseline) / name) for name in FROZEN_FILES]
-    verify_analysis_plan(analysis, inventory, coverage,
-        max_source_bytes_per_session=config.get('max_source_bytes_per_session', DEFAULT_MAX_SOURCE_BYTES_PER_SESSION))
+def frozen_inputs(baseline, config):
+    inventory, coverage = [read_json(Path(baseline) / name) for name in FROZEN_FILES]
+    verify_coverage_plan(coverage)
+    if coverage['inventory_sha256'] != sha(canonical(inventory['entries'])):
+        raise ValueError('Coverage and source inventories differ.')
     source = coverage['sources'][0]['identity']
     if source['mode'] != config['mode']:
         raise ValueError('Baseline source mode differs from the experiment config.')
@@ -34,7 +35,7 @@ def frozen_inputs(baseline, config, shard_id=None):
         source_decoding=config.get('source_decoding', {'rules': []}),
         source_decoding_access='Decoding rules apply to program evidence checks only; agent reading depends on its CLI.',
         review_enabled=config['execution']['review_enabled'],
-        coverage_plan=coverage, analysis_plan=analysis, _inventory=inventory)
+        coverage_plan=coverage, _inventory=inventory)
     if source['mode'] == 'folder':
         context.update(source_directory=source['directory'], source_fingerprint=source['fingerprint'])
         expected_path = source['directory']
@@ -49,16 +50,8 @@ def frozen_inputs(baseline, config, shard_id=None):
         raise ValueError('Baseline source directory differs from the experiment config.')
     if source_catalog(context) != coverage['sources']:
         raise ValueError('Baseline source identities are inconsistent.')
-    if shard_id is None:
-        if analysis['required_sessions'] != 1:
-            raise ValueError('Select --shard from the frozen plan for a multi-session experiment.')
-        context['revision_id'] = '001'
-        return 'study', context
-    shards = [s for s in analysis['shards'] if s['id'] == shard_id]
-    if len(shards) != 1 or not shards[0]['subsystem_ids']:
-        raise ValueError('Select a nonempty shard from the frozen plan.')
-    context['analysis_shard'] = shards[0]
-    return 'study-shard', context
+    context['revision_id'] = '001'
+    return 'study', context
 
 
 def check_facts(facts, context, metadata):
@@ -81,7 +74,7 @@ def check_facts(facts, context, metadata):
 
 
 def markdown(report):
-    lines = ['# Source context comparison', '', 'Scope: one frozen study or shard per attempt.', '',
+    lines = ['# Source context comparison', '', 'Scope: one frozen study per attempt.', '',
              'An interrupted attempt measures prevented waste, not a faster successful study.', '',
              '| Variant | Repeat | Outcome | Seconds | Resolved citations | Supported / omitted / unsupported facts | Fact assessment |',
              '|---|---:|---|---:|---|---|---|']
@@ -109,34 +102,32 @@ def save_report(output, report):
     atomic(output / 'comparison.md', markdown(report).encode('utf-8'))
 
 
-def run_comparison(config, baseline, facts, output, *, repetitions=1, shard_id=None, live=False):
+def run_comparison(config, baseline, facts, output, *, repetitions=1, live=False):
     """No model subprocess is launched unless live=True is explicitly supplied."""
     from explain import AuditError, Runner, overlap, repository_lock, save_json
     if type(repetitions) is not int or repetitions < 1:
         raise ValueError('Repetitions must be a positive integer.')
-    stage, context = frozen_inputs(baseline, config, shard_id)
+    stage, context = frozen_inputs(baseline, config)
     output = Path(output).resolve()
     source_path = Path(config[config['mode'] + '_mode']['path' if config['mode'] == 'folder' else 'repository'])
     if overlap(source_path, output) or overlap(Path(baseline).resolve(), output):
         raise ValueError('Experiment output must be disjoint from sources and the baseline.')
     output.mkdir(parents=True, exist_ok=False)
     config = copy.deepcopy(config)
-    report = {'status': 'planned', 'live': live, 'stage': stage, 'shard_id': shard_id,
+    report = {'status': 'planned', 'live': live, 'stage': stage,
               'repetitions': repetitions, 'facts': copy.deepcopy(facts), 'attempts': [],
               'invariants': {'config_sha256': sha(canonical(config)),
                   'inventory_sha256': sha(canonical(context['_inventory'])),
                   'coverage_plan_sha256': sha(canonical(context['coverage_plan'])),
-                  'analysis_plan_sha256': sha(canonical(context['analysis_plan'])),
                   'facts_sha256': sha(canonical(facts))}}
     save_json(output / 'config.snapshot.json', {k: v for k, v in config.items() if not k.startswith('_')})
     save_json(output / 'facts.json', facts)
-    for name, key in zip(FROZEN_FILES, ('_inventory', 'coverage_plan', 'analysis_plan')):
+    for name, key in zip(FROZEN_FILES, ('_inventory', 'coverage_plan')):
         save_json(output / name, context[key])
     sealed_files = {name: sha((output / name).read_bytes()) for name in
                     (*FROZEN_FILES, 'config.snapshot.json', 'facts.json')}
     report['invariants']['frozen_files'] = sealed_files
     context['_coverage_plan_path'] = str(output / 'coverage.plan.json')
-    context['_analysis_plan_path'] = str(output / 'analysis.plan.json')
     save_report(output, report)
     if not live:
         return report
@@ -144,8 +135,6 @@ def run_comparison(config, baseline, facts, output, *, repetitions=1, shard_id=N
     baseline_versions, model_actual = None, None
     baseline_config = copy.deepcopy(config)
     templates = {path: sha(Path(path).read_bytes()) for path in config['_prompt_paths'].values()}
-    templates[str(Path(__file__).resolve().parents[2] / 'prompts' / 'study-shard.md')] = sha(
-        (Path(__file__).resolve().parents[2] / 'prompts' / 'study-shard.md').read_bytes())
     report['invariants']['prompt_files'] = templates
     context_seal = sha(canonical(context))
     report['status'] = 'running'
@@ -174,7 +163,6 @@ def run_comparison(config, baseline, facts, output, *, repetitions=1, shard_id=N
                         if current != inventory or sha(canonical(context)) != context_seal:
                             raise ValueError('Frozen experiment input changed.')
                         runner.assert_coverage_file(context)
-                        runner.assert_analysis_file(context)
                         if any(sha((output / name).read_bytes()) != expected for name, expected in sealed_files.items()):
                             raise ValueError('Frozen experiment file changed.')
                         if any(sha(Path(path).read_bytes()) != expected for path, expected in templates.items()):

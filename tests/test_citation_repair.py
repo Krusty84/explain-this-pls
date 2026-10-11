@@ -35,7 +35,7 @@ class CitationRepairTests(unittest.TestCase):
         value = {'evidence': [pointer], 'claims': [{'id': 'original-claim', 'statement': 'Unchanged.'}]}
         value.update(extra or {})
         original, original_source = copy.deepcopy(value), self.path.read_bytes()
-        candidate, journal = repair_citations('study-shard', value, context or self.context, self.pins,
+        candidate, journal = repair_citations('study', value, context or self.context, self.pins,
                                               expected_metadata=self.metadata)
         self.assertEqual(value, original)
         self.assertEqual(self.path.read_bytes(), original_source)
@@ -284,13 +284,12 @@ class CitationRepairTests(unittest.TestCase):
         with patch('src.analysis.citation_repair.resolve_evidence', side_effect=mutate), self.assertRaises(SourceChanged):
             repair_citations('study', {'evidence': [self.pointer(1, 1, '        target')]}, self.context)
 
-    def test_compare_and_synthesis_do_not_read_sources(self):
+    def test_compare_does_not_read_sources(self):
         value = {'evidence': [self.pointer(1, 1, 'quote')]}
         with patch('src.analysis.evidence._read_confined', side_effect=AssertionError('Unexpected source read')):
-            for stage, context in [('compare', {}), ('study', {'prompt_variant': 'synthesis'})]:
-                candidate, journal = repair_citations(stage, value, context)
-                self.assertEqual(candidate, value)
-                self.assertFalse(journal['changes'])
+            candidate, journal = repair_citations('compare', value, {})
+            self.assertEqual(candidate, value)
+            self.assertFalse(journal['changes'])
 
 
 if __name__ == '__main__':

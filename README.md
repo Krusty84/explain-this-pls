@@ -87,7 +87,6 @@ This example analyzes two branches and writes reports in English:
 ```json
 {
   "project_description": "An ERP system originally developed in 1995",
-  "multi_session": true,
   "mode": "git",
   "git_mode": {
     "repository": "../legacy-erp",
@@ -183,8 +182,6 @@ original directory, including excluded paths. Native CLI permissions apply.
 | `project_description`          | Optional introduction to the system's purpose and history.                                                                |
 | `output_language`              | Report language; defaults to `"Russian"`.                                                                                 |
 | `priority_scenarios`           | Optional workflows or areas to focus on.                                                                                  |
-| `multi_session`                | Defaults to `true`; set `false` to force one study session. Multiple sessions run sequentially.                           |
-| `max_source_bytes_per_session` | Positive integer; defaults to `262144` (256 KiB) assigned source-file bytes per session. Applies to all backends.         |
 | `source_context.enabled`       | Boolean; defaults to `true`. Prepare source maps and exact fragments before the model call.                               |
 | `source_context.max_bytes`     | Integer, at least `4096`; defaults to `65536`. Limits the serialized source context, including JSON and omission summary. |
 | `execution.read_loop_guard`    | Boolean; defaults to `true`. Stop sustained repeated tool results; `false` keeps observation metrics.                     |
@@ -202,32 +199,16 @@ in this configuration.
 
 #### Optional settings
 
-**Multi-session study is enabled by default.** Catalog remains one model call.
-The frozen inventory determines study scope. Catalog areas are provisional grouping
-hints. Every nonexcluded regular file, including unclassified files, receives a
-primary assignment. Large groups split into deterministic batches of at most 300
-files and `max_source_bytes_per_session` bytes (default 256 KiB), keeping each file intact.
-The byte limit measures the total size of assigned source files, not bytes actually
-read by the LLM. Catalog exclusions stay visible in coverage accounting;
-overlapping files count once in global totals.
-The full inventory remains available for source integrity checks.
-When one session suffices, the ordinary study runs. Larger sources use
-sequential file-batch studies, then one synthesis call with source tools
-disabled. Set `"multi_session": false` to keep
-the legacy single-study path, regardless of source size.
-
-`analysis.plan.json` records metrics, primary file paths and oversized individual
-files. Such files can exceed the byte limit. Empty sessions are removed; empty
-catalog areas share an existing session. Each shard has separate artifacts and attempt
-metrics under `study-shards/R-001/`, etc. All shards must pass local checks before
-synthesis. Review and revision, if enabled, use the resulting global study.
-Assignment is not proof of inspection. Incomplete investigation remains a limitation.
+**Initial study** runs once per folder or selected Git branch, with source tools enabled.
+The pinned inventory and immutable coverage plan define its scope. Catalog areas
+are provisional navigation hints. Investigate every nonexcluded regular file,
+including unclassified files, and report unfinished investigation as a limitation.
+Review and revision, when enabled, use the resulting study.
 
 **Prepared source context** uses the pinned, filtered inventory and existing decoding
 rules. Catalog receives a file/symbol map. Study receives that map and exact source
-fragments; a shard receives only its assigned primary files. Review and revision
-prioritize cited ranges. Synthesis, comparison and format repair receive no prepared
-source context. The prompt budget is separate from `max_source_bytes_per_session`.
+fragments. Review and revision prioritize cited ranges. Comparison and format
+repair receive no prepared source context.
 File order is deterministic; maps use at most one quarter of the budget and snippets
 contain at most 120 complete lines. Omitted data stays visible in a bounded summary.
 Each attempt saves a complete `source-context.manifest.json` with processing status,
@@ -454,9 +435,6 @@ By default, useful partial results are kept even if a stage fails
 (`result_policy: "compromise"`). Unreviewed material and missing inputs are labeled
 in the final report. If a revision is produced, the results identify the selected
 version and retain earlier material.
-When a multi-session study fails, the final report includes verified published
-shards and their coverage gaps. This local collection adds no model call and is
-not used as a complete study for review or branch comparison.
 
 - **COMPLETE:** checks for all enabled stages passed, review is required only when enabled.
 - **COMPLETE_WITH_WARNINGS:** processing completed under `compromise` with citation warnings. Strict evidence quality and acceptance remain separate from permission to continue.
@@ -501,10 +479,10 @@ Tests use small fixtures and need no external report directory.
 
 ### Compare source context and loop protection
 
-`compare_read_context.py` compares one study or selected shard using an existing
-`source.inventory.json`, `coverage.plan.json` and `analysis.plan.json`. Point
+`compare_read_context.py` compares one study using an existing
+`source.inventory.json` and `coverage.plan.json`. Point
 `--baseline` at the directory containing these files. The tool reuses the frozen
-assignments; it does not call the catalog stage. It uses the normal study prompt,
+scope; it does not call the catalog stage. It uses the normal study prompt,
 source checks, result validation, publication and Git restoration.
 
 First save significant facts with source references in a JSON file, for example:
@@ -538,9 +516,8 @@ python compare_read_context.py --config config.jsonc \
 ```
 
 This command saves the experiment plan without calling a model. Add `--live` and
-choose a new output directory to run it. For a multi-session baseline, add
-`--shard` with an ID from its saved analysis plan. The experiment scope remains
-one study or shard, not the complete review and synthesis workflow.
+choose a new output directory to run it. Each attempt runs one study. Review and
+revision are outside the experiment scope.
 
 Each repetition runs three variants in sequence:
 

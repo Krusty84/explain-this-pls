@@ -218,14 +218,11 @@ counts in Markdown; Python renders them from the single structured record.
 
 The supplied immutable coverage_plan identifies required source areas and explicit
 exclusions. Catalog classifications are provisional navigation hints. The
-analysis_plan assigns every non-excluded regular file, including UNCLASSIFIED,
-through primary_file_paths. Investigate that scope even when the catalog omits
-or misclassifies files. oversized_file_paths marks intact files above the session
-byte limit. The configured max_source_bytes_per_session (default 256 KiB) measures
-the total size of assigned source files, not bytes actually read by the LLM.
-Assignment is not evidence of inspection; report unfinished
-investigation as a limitation. Preserve the plan; this remains one shared study, not separate subsystem
-studies. Return one structured coverage entry per area: area_id, status INSPECTED,
+pinned inventory defines the full source scope. Investigate every non-excluded
+regular file, including UNCLASSIFIED, even when the catalog omits or misclassifies
+files. Scope is not evidence of inspection; report unfinished investigation as a
+limitation. Preserve the coverage plan and produce one shared study. Return one
+structured coverage entry per area: area_id, status INSPECTED,
 PARTIALLY_INSPECTED or NOT_INSPECTED, evidence_ids, limitation. INSPECTED requires
 source evidence within the area; an actual citation is support, not proof that all
 its code was examined. Partial/uninspected areas need concrete limitations.

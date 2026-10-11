@@ -15,10 +15,10 @@ HASH_FORMAT = 'canonical-json-utf8'
 
 
 def normalize_evidence(stage, value, context, mode='git'):
-    if stage not in ('study', 'study-shard', 'review'):
-        raise ValueError('Evidence normalization requires study, study-shard or review')
+    if stage not in ('study', 'review'):
+        raise ValueError('Evidence normalization requires study or review')
     validate_wire_identity(stage, value, context, mode)
-    namespace = 'study' if stage == 'study-shard' else stage
+    namespace = stage
     study_ids = {e['id'] for e in context['architecture_document'].get('evidence', [])} if stage == 'review' else set()
     definitions, seen, aliases = {}, set(), {}
     for i, evidence in enumerate(value['evidence']):

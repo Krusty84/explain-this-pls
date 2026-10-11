@@ -13,24 +13,25 @@ from explain import AuditError, Runner
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
 from src.analysis.evidence import canonical, sha
+from src.analysis.ledger import continuation_allowed
 from src.contracts.contracts import accepted, processing_satisfied, workflow_satisfied
 from src.reports.document_rendering import validate_materialized
 from src.runtime.reporting import Reporter
 from src.runtime.execution import response_error
 import test_folder
-import test_multi_session
+from fixtures.study_runner import run_case
 import test_explain as git_fixtures
 
 
 class CitationPipelineTests(test_folder.FolderFixture):
-    run_case = test_multi_session.MultiSessionTests.run_case
+    run_case = run_case
 
     @staticmethod
     def mismatch(runner, context, data):
-        if context.get('analysis_shard', {}).get('id') == 'R-002':
+        if context['stage'] == 'study':
             data['evidence'][0]['quote'] = 'private unmatched source text'
 
-    def test_all_backends_continue_shards_synthesis_and_review_with_warnings(self):
+    def test_all_backends_continue_study_and_review_with_warnings(self):
         for backend in ('codex', 'opencode', 'xxx'):
             with self.subTest(backend=backend):
                 reporter = Reporter(stdout=io.StringIO(), stderr=io.StringIO(), progress=False)
@@ -39,9 +40,8 @@ class CitationPipelineTests(test_folder.FolderFixture):
                                              change=self.mismatch, reporter=reporter)
                 self.assertEqual(code, 0, manifest.get('diagnostics'))
                 self.assertEqual(manifest['status'], 'COMPLETE_WITH_WARNINGS')
-                self.assertEqual(manifest['synthesis_status'], 'SUCCEEDED')
                 self.assertEqual([c['context']['stage'] for c in self.calls],
-                                 ['catalog', 'study-shard', 'study-shard', 'study-shard', 'study', 'review'])
+                                 ['catalog', 'study', 'review'])
                 self.assertTrue(processing_satisfied(manifest))
                 self.assertFalse(workflow_satisfied(manifest))
                 self.assertFalse(accepted(manifest))
@@ -52,7 +52,7 @@ class CitationPipelineTests(test_folder.FolderFixture):
                 warnings = checks['citation_warnings']
                 self.assertEqual(len(warnings), 1)
                 self.assertTrue(warnings[0]['claim_ids'])
-                self.assertEqual(self.calls[-2]['context']['citation_warnings'], warnings)
+                self.assertEqual(self.calls[-1]['context']['architecture_document']['program_checks']['citation_warnings'], warnings)
                 document = manifest['study']
                 validate_materialized(document)
                 architecture = (self.runner.run_dir / 'ARCHITECTURE.md').read_text()
@@ -61,18 +61,21 @@ class CitationPipelineTests(test_folder.FolderFixture):
                 self.assertIn(warnings[0]['evidence_id'], architecture)
                 self.assertNotIn('private unmatched source text', reporter.stderr.getvalue())
 
-    def test_strict_still_rejects_unmatched_quotes(self):
+    def test_strict_keeps_unmatched_quotes_without_allowing_continuation(self):
         manifest, code = self.run_case(policy='strict', change=self.mismatch)
         self.assertNotEqual(code, 0)
-        self.assertEqual(manifest['synthesis_status'], 'SKIPPED')
-        self.assertFalse((self.runner.run_dir / 'ARCHITECTURE.md').exists())
+        self.assertFalse(manifest['processing_completed'])
+        checks = manifest['study']['program_checks']
+        self.assertFalse(checks['policy_satisfied'])
+        self.assertFalse(continuation_allowed(checks))
+        self.assertEqual(checks['evidence_counts']['QUOTE_MISMATCH'], 1)
 
     def test_warning_does_not_hide_bad_range_or_missing_coverage(self):
         for kind in ('range', 'coverage'):
             with self.subTest(kind=kind):
                 def change(runner, context, data):
                     self.mismatch(runner, context, data)
-                    if context.get('analysis_shard', {}).get('id') != 'R-002':
+                    if context['stage'] != 'study':
                         return
                     if kind == 'range':
                         data['evidence'][1]['end_line'] = 999
@@ -80,7 +83,7 @@ class CitationPipelineTests(test_folder.FolderFixture):
                         data['coverage'][1].update(status='NOT_INSPECTED', limitation='Independent missing inspection.')
                 manifest, code = self.run_case(policy='compromise', change=change)
                 self.assertNotEqual(code, 0)
-                self.assertEqual(manifest['synthesis_status'], 'SKIPPED')
+                self.assertFalse(manifest['processing_completed'])
 
     def test_direct_study_with_quote_warning_still_publishes(self):
         def change(runner, context, data):
@@ -103,7 +106,7 @@ class CitationPipelineTests(test_folder.FolderFixture):
             with self.subTest(kind=kind):
                 def change(runner, context, data):
                     self.mismatch(runner, context, data)
-                    if context.get('analysis_shard', {}).get('id') == 'R-003':
+                    if context['stage'] == 'study':
                         if kind == 'NO_PROGRESS':
                             raise AuditError('Confirmed loop.', code=kind, failure_kind=kind, failure_layer='execution')
                         if kind == 'STAGE_TIMEOUT':
@@ -111,10 +114,10 @@ class CitationPipelineTests(test_folder.FolderFixture):
                         raise AuditError('Cleanup failed.', failure_layer='cleanup')
                 manifest, code = self.run_case(policy='compromise', change=change)
                 self.assertNotEqual(code, 0)
-                self.assertEqual(manifest['synthesis_status'], 'SKIPPED')
+                self.assertFalse(manifest['processing_completed'])
                 self.assertFalse(manifest['processing_completed'])
                 self.assertEqual([c['context']['stage'] for c in self.calls],
-                                 ['catalog', 'study-shard', 'study-shard', 'study-shard'])
+                                 ['catalog', 'study'])
 
     def test_correction_preserves_original_and_materialization_chain(self):
         (self.source / 'app.py').write_text('def main():\n    return 42\n# end\n')

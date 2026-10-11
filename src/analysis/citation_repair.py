@@ -112,7 +112,7 @@ def repair_citations(stage, value, context, expected_files=None, *, expected_met
     candidate = copy.deepcopy(value)
     journal = dict(rule=RULE, input_sha256=sha(canonical(value)), output_sha256=None, changes=[], diagnostics=[])
     pointers = value.get('evidence', []) if isinstance(value, dict) else []
-    if (stage == 'compare' or context.get('prompt_variant') == 'synthesis' or
+    if (stage == 'compare' or
             not isinstance(pointers, list) or not all(isinstance(p, dict) for p in pointers)):
         journal['output_sha256'] = journal['input_sha256']
         return candidate, journal

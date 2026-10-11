@@ -2,17 +2,14 @@
 # SPDX-License-Identifier: MIT
 
 """Citation-only continuation never changes strict evidence or acceptance."""
-import copy
 import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
 
 from src.analysis.coverage_plan import build_coverage_plan
 from src.analysis.evidence import sha
 from src.analysis.ledger import prepare_result, review_context, continuation_allowed
-from src.analysis.study_shards import OBSERVATION_FIELDS, require_shard_policy, synthesis_inputs
 from src.contracts.contracts import (CONTRACT_ID, ARTIFACT_FORMAT, ContractError, accepted,
     processing_satisfied, workflow_satisfied, validate_result, validate_schema)
 from src.contracts.saved_contracts import SAVED_SCHEMAS
@@ -38,50 +35,40 @@ class CitationPolicyTests(unittest.TestCase):
             completion_status='COMPLETE', limitations=[], exclusions=[],
             subsystems=[dict(id='S-001', name='App', purpose='Entry.', paths=['app.py'])])
         context['coverage_plan'] = build_coverage_plan(catalog, context['_inventory'], context)
-        context['analysis_shard'] = dict(id='R-001', subsystem_ids=['S-001'], primary_file_paths=['app.py'])
         return context
 
-    def wire(self, context=None, *, mismatch=True, shard=False):
+    def wire(self, context=None, *, mismatch=True):
         context = context or self.context
         data = study(context)
         data['evidence'][0]['quote'] = 'private invented quote' if mismatch else 'print(1)'
         data['coverage'] = [dict(area_id='S-001', status='INSPECTED',
                                  evidence_ids=['study:E-001'], limitation='')]
-        if shard:
-            data.pop('report_sections')
-            data.update(task='architecture_study_shard', shard_id='R-001', assigned_subsystem_ids=['S-001'],
-                        **{field: [] for field in OBSERVATION_FIELDS})
         return data
 
     def saved(self, context=None, **options):
         context = context or self.context
         data = self.wire(context, **options)
-        return prepare_result('study-shard' if options.get('shard') else 'study', data, context)
+        return prepare_result('study', data, context)
 
     def item(self, doc):
         meta = dict(contract_id=CONTRACT_ID, artifact_format=ARTIFACT_FORMAT, publication_complete=True)
         return dict(branch=doc['branch'], study=doc, study_invocation=meta, review_enabled=False)
 
     def test_compromise_retains_mismatch_and_unsupported_coverage(self):
-        for shard in (False, True):
-            with self.subTest(shard=shard):
-                data = self.saved(shard=shard)
-                checks = data['program_checks']
-                self.assertFalse(checks['policy_satisfied'])
-                self.assertTrue(continuation_allowed(checks))
-                self.assertEqual(checks['evidence'][0]['status'], 'QUOTE_MISMATCH')
-                self.assertEqual(checks['coverage']['unsupported_ids'], ['S-001'])
-                warning = checks['citation_warnings'][0]
-                self.assertEqual((warning['evidence_id'], warning['claim_ids'], warning['action']),
-                                 ('study:E-001', ['C-001'], 'UNRESOLVED'))
-                self.assertNotIn('private invented quote', json.dumps(checks))
-                validate_schema(data, SAVED_SCHEMAS['study-shard' if shard else 'study'])
-                if shard:
-                    require_shard_policy(data, self.context)
-                else:
-                    self.assertTrue(processing_satisfied(self.item(data)))
-                    self.assertFalse(workflow_satisfied(self.item(data)))
-                    self.assertFalse(accepted(self.item(data)))
+        data = self.saved()
+        checks = data['program_checks']
+        self.assertFalse(checks['policy_satisfied'])
+        self.assertTrue(continuation_allowed(checks))
+        self.assertEqual(checks['evidence'][0]['status'], 'QUOTE_MISMATCH')
+        self.assertEqual(checks['coverage']['unsupported_ids'], ['S-001'])
+        warning = checks['citation_warnings'][0]
+        self.assertEqual((warning['evidence_id'], warning['claim_ids'], warning['action']),
+                         ('study:E-001', ['C-001'], 'UNRESOLVED'))
+        self.assertNotIn('private invented quote', json.dumps(checks))
+        validate_schema(data, SAVED_SCHEMAS['study'])
+        self.assertTrue(processing_satisfied(self.item(data)))
+        self.assertFalse(workflow_satisfied(self.item(data)))
+        self.assertFalse(accepted(self.item(data)))
 
     def test_absent_policy_and_strict_do_not_allow_continuation(self):
         for policy in (None, 'strict'):
@@ -89,12 +76,8 @@ class CitationPolicyTests(unittest.TestCase):
             context.pop('result_policy')
             if policy:
                 context['result_policy'] = policy
-            for shard in (False, True):
-                data = self.saved(context, shard=shard)
-                self.assertFalse(continuation_allowed(data['program_checks']))
-                if shard:
-                    with self.assertRaises(ContractError):
-                        require_shard_policy(data, context)
+            data = self.saved(context)
+            self.assertFalse(continuation_allowed(data['program_checks']))
 
     def test_independent_coverage_completion_and_unsafe_failures_still_block(self):
         changes = [lambda d: d.update(coverage=[]),
@@ -103,13 +86,12 @@ class CitationPolicyTests(unittest.TestCase):
                    lambda d: d.update(completion_status='PARTIAL', limitations=['Missing.']),
                    lambda d: d['evidence'][0].update(path='missing.py'),
                    lambda d: d['evidence'][0].update(source_id='unknown')]
-        for shard in (False, True):
-            for change in changes:
-                with self.subTest(shard=shard, change=change):
-                    data = self.wire(shard=shard)
-                    change(data)
-                    saved = prepare_result('study-shard' if shard else 'study', data, self.context)
-                    self.assertFalse(continuation_allowed(saved['program_checks']))
+        for change in changes:
+            with self.subTest(change=change):
+                data = self.wire()
+                change(data)
+                saved = prepare_result('study', data, self.context)
+                self.assertFalse(continuation_allowed(saved['program_checks']))
 
     def test_clean_outputs_keep_old_shape_and_stale_flags_cannot_relax_failures(self):
         saved = self.saved(mismatch=False)
@@ -186,52 +168,6 @@ class CitationPolicyTests(unittest.TestCase):
         saved['findings'] = [dict(id='F-001', severity='HIGH', type='FACTUAL_ERROR', claim_ids=['C-001'],
             location='Source.', evidence_ids=['review:E-001'], impact='Independent issue.', proposed_correction='Check.')]
         self.assertFalse(processing_satisfied(item))
-
-    def test_synthesis_rejects_unpublished_unsafe_or_independently_incomplete_shards(self):
-        original = self.saved(shard=True)
-        meta = dict(backend_result_valid=True, local_validation=True, publication_complete=True,
-                    artifact_hashes={}, attempt_hashes={}, binding_hashes={})
-        for kind in ('unpublished', 'unsafe', 'missing_coverage', 'missing_warning'):
-            with self.subTest(kind=kind):
-                saved, invocation = copy.deepcopy(original), meta.copy()
-                if kind == 'unpublished':
-                    invocation['publication_complete'] = False
-                elif kind == 'unsafe':
-                    saved['program_checks']['evidence'][0]['status'] = 'UNSAFE_PATH'
-                elif kind == 'missing_coverage':
-                    saved['program_checks']['coverage']['missing_ids'] = ['S-002']
-                else:
-                    saved['program_checks'].pop('citation_warnings')
-                states = [dict(id='R-001', status='SUCCEEDED', directory='one',
-                               **{'study-shard': saved, 'study-shard_invocation': invocation})]
-                with self.assertRaises(ContractError):
-                    synthesis_inputs({'shards': [self.context['analysis_shard']]}, states)
-
-    def test_synthesis_remaps_warnings_without_source_reads(self):
-        saved = self.saved(shard=True)
-        planned = self.context['analysis_shard']
-        meta = dict(backend_result_valid=True, local_validation=True, publication_complete=True,
-                    artifact_hashes={}, attempt_hashes={}, binding_hashes={})
-        states = [dict(id='R-001', status='SUCCEEDED', directory='one',
-                       **{'study-shard': saved, 'study-shard_invocation': meta})]
-        second = copy.deepcopy(states[0])
-        second.update(id='R-002', directory='two')
-        second['study-shard']['shard_id'] = 'R-002'
-        combined = synthesis_inputs({'shards': [planned, planned | {'id': 'R-002'}]}, states + [second])
-        self.assertEqual(combined['citation_warnings'][1]['evidence_id'], 'study:E-002')
-        self.assertEqual(combined['citation_warnings'][1]['claim_ids'], ['C-002'])
-        context = self.context | combined | {'prompt_variant': 'synthesis'}
-        data = self.wire()
-        for key in ('evidence', 'claims', 'coverage'):
-            data[key] = combined['synthesis_' + key]
-        data['report_sections'][0]['blocks'][0]['claim_ids'] = ['C-001', 'C-002']
-        with patch('src.analysis.ledger.resolve_evidence', side_effect=AssertionError('source read')):
-            result = prepare_result('study', data, context)
-        self.assertTrue(continuation_allowed(result['program_checks']))
-        self.assertEqual(result['program_checks']['evidence'][1]['status'], 'QUOTE_MISMATCH')
-        projected = project_model_context('study', context)
-        self.assertEqual(projected['citation_warnings'], combined['citation_warnings'])
-        self.assertNotIn('_synthesis_resolutions', projected)
 
     def test_compare_warned_inputs_are_eligible_but_cannot_confirm_differences(self):
         main, other = self.saved(), self.saved(self.make_context('feature'), mismatch=False)

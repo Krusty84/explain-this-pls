@@ -41,7 +41,7 @@ from src.backends import opencode_cli
 from src.backends import xxx
 from src.backends.json_response import json_object_response
 from src.model.structured_output import blocked_comparison, required_unresolved, retry_policy
-from src.reports.final_report import recoverable_material, stage_document, usable_study, has_usable_report_material, report_entries, comparison_possible, render_final_report
+from src.reports.final_report import recoverable_material, stage_document, usable_study, report_entries, comparison_possible, render_final_report
 from src.analysis.ledger import prepare_result, review_context, continuation_allowed
 from src.analysis.study_normalization import normalize_evidence, normalization_provenance
 from src.analysis.citation_repair import repair_citations
@@ -59,8 +59,6 @@ from src.analysis.coverage_plan import build_coverage_plan, inventory_summary, v
 from src.analysis.revisions import revision_inputs, choose_revision, completed_pair
 from src.analysis.git_sources import ignore_path, tracked_paths, ignored_paths, inventory_delta
 from src.analysis.source_metrics import PhysicalLines
-from src.analysis.analysis_plan import DEFAULT_MAX_SOURCE_BYTES_PER_SESSION, build_analysis_plan, verify_analysis_plan
-from src.analysis.study_shards import empty_shard_result, require_shard_policy, synthesis_inputs
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ('catalog', 'study', 'review', 'compare')
@@ -1062,8 +1060,8 @@ def load_config(path: Path) -> dict:
         raise AuditError('Configuration must be a JSON object.')
     allowed = {'reports_dir', 'agent', 'stage_agents',
         'output_language', 'priority_scenarios', 'continue_on_error', 'project_description', 'prompts',
-        'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy', 'source_decoding', 'multi_session',
-        'max_source_bytes_per_session', 'source_filter', 'source_context'}
+        'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy', 'source_decoding',
+        'source_filter', 'source_context'}
     if set(value) - allowed:
         raise AuditError(f'Unknown configuration keys: {set(value) - allowed}')
     try:
@@ -1112,8 +1110,7 @@ def load_config(path: Path) -> dict:
         if len(set(branches)) != len(branches) or source['baseline_branch'] not in branches:
             raise AuditError('Branches must be unique and include baseline_branch.')
     defaults = {'output_language': 'Russian', 'project_description': '', 'priority_scenarios': [],
-        'continue_on_error': True, 'stage_agents': {}, 'prompts': {}, 'result_policy': 'compromise', 'multi_session': True,
-        'max_source_bytes_per_session': DEFAULT_MAX_SOURCE_BYTES_PER_SESSION}
+        'continue_on_error': True, 'stage_agents': {}, 'prompts': {}, 'result_policy': 'compromise'}
     for key, default in defaults.items():
         value.setdefault(key, default)
     if not isinstance(value['project_description'], str):
@@ -1124,10 +1121,6 @@ def load_config(path: Path) -> dict:
             raise AuditError(f'{key} must be a JSON object.')
     if type(value['continue_on_error']) is not bool:
         raise AuditError('continue_on_error must be boolean.')
-    if type(value['multi_session']) is not bool:
-        raise AuditError('multi_session must be boolean.')
-    if type(value['max_source_bytes_per_session']) is not int or value['max_source_bytes_per_session'] <= 0:
-        raise AuditError('max_source_bytes_per_session must be a positive integer.', code='INVALID_CONFIG')
     if value['result_policy'] not in ('compromise', 'strict'):
         raise AuditError('result_policy must be compromise or strict.')
     if not isinstance(value['priority_scenarios'], list) or any(not isinstance(s, str) for s in value['priority_scenarios']):
@@ -1209,7 +1202,6 @@ class Runner:
         self.schemas = MODEL_FOLDER_SCHEMAS if self.mode == 'folder' else MODEL_SCHEMAS
         self.bindings = BindingRegistry()
         self.source_context = SourceContextBuilder(config.get('source_context'))
-        self.analysis_inventories = {}
         self.versions: dict[str, str] = {}
 
     def assert_source(self):
@@ -1260,10 +1252,9 @@ class Runner:
                 'commit': context.get('source_commit'),
                 'stage': context.get('prompt_variant', stage) if stage == 'study' else stage,
                 'revision_id': context.get('revision_id'),
-                **({'shard_id': context['analysis_shard']['id']} if 'analysis_shard' in context else {}),
                 **({'generated_by': context['generated_by']} if context.get('generated_by') else {}),
                 'backend': None if context.get('generated_by') == 'orchestrator' else
-                    self.cfg['_agents'].get('study' if stage == 'study-shard' else stage, {}).get('backend')}
+                    self.cfg['_agents'].get(stage, {}).get('backend')}
 
     def stage_started(self, stage, context):
         started = self.reporter.clock()
@@ -1379,7 +1370,6 @@ class Runner:
         context['stage'] = stage
         context['result_policy'] = 'compromise' if self.compromise else 'strict'
         self.assert_coverage_file(context)
-        self.assert_analysis_file(context)
         if stage != 'compare':
             context['sources'] = source_catalog(context)
         budget = Budget(self.execution['stage_timeout_seconds'], self.execution['idle_timeout_seconds'])
@@ -1430,7 +1420,7 @@ class Runner:
                 raise
             attempt = Path(meta['artifact_directory'])
             # Retain only the verified original response under the compromise policy.
-            if (self.compromise and stage != 'study-shard' and context.get('prompt_variant') != 'synthesis'
+            if (self.compromise
                     and meta.get('source_integrity_verified')
                     and meta.get('validation_failed') and meta.get('backend_result_valid')
                     and meta.get('model_identity_verified')
@@ -1488,9 +1478,9 @@ class Runner:
                     meta['catalog_recovery'] = {k: v for k, v in recovery.items() if k != 'rejected_selectors'}
                     validation.update(validated_object='recovered.json', original_valid=False,
                                       catalog_recovery=meta['catalog_recovery'])
-            if stage in ('study', 'study-shard', 'review'):
+            if stage in ('study', 'review'):
                 normalization_input = expanded
-                if self.compromise and context.get('prompt_variant') != 'synthesis':
+                if self.compromise:
                     try:
                         normalization_input, corrections = repair_citations(
                             stage, expanded, context, expected_files, expected_metadata=expected_metadata)
@@ -1631,86 +1621,6 @@ class Runner:
         except (OSError, ValueError, SourceChanged) as exc:
             raise AuditError('Frozen coverage plan changed.', code='COVERAGE_PLAN_CHANGED', failure_layer='integrity') from exc
 
-    def assert_analysis_file(self, context):
-        if not context.get('_analysis_plan_path'):
-            return
-        try:
-            inventory = context.get('_inventory') or self.analysis_inventories[context['analysis_plan']['inventory_sha256']]
-            plan = verify_analysis_plan(context['analysis_plan'], inventory, context['coverage_plan'],
-                max_source_bytes_per_session=self.cfg.get('max_source_bytes_per_session', DEFAULT_MAX_SOURCE_BYTES_PER_SESSION))
-            expected = (json.dumps(plan, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
-            relative = str(Path(context['_analysis_plan_path']).relative_to(self.run_dir))
-            if read_confined(self.run_dir, relative, len(expected)) != expected:
-                raise ValueError('changed')
-        except (OSError, ValueError, SourceChanged) as exc:
-            self.critical_failure = True
-            raise AuditError('Frozen analysis plan changed.', code='ANALYSIS_PLAN_CHANGED', failure_layer='integrity') from exc
-        for relative, pin in context.get('_shard_artifact_hashes', {}).items():
-            try:
-                content = read_confined(self.run_dir, relative, pin['bytes'])
-                if len(content) != pin['bytes'] or digest(content) != pin['sha256']:
-                    raise ValueError('changed')
-            except (OSError, ValueError, SourceChanged) as exc:
-                self.critical_failure = True
-                raise AuditError('Validated shard artifact changed.', code='STUDY_SHARD_CHANGED', failure_layer='integrity') from exc
-
-    def complete_empty_shard(self, context, destination, guard):
-        meta = {'stage': 'study-shard', 'generated_by': 'orchestrator', 'reason': 'empty_subsystem_assignment',
-                'started_at': now(), 'status': 'RUNNING',
-                'metrics': {'attempts': 0, 'by_model': [],
-                            'usage': usage({key: 0 for key in FIELDS}, source='not_sent')}}
-        private_directory(destination)
-        try:
-            data = empty_shard_result(context['analysis_shard'], context)
-            validate_result('study-shard', data, context, self.mode)
-            meta['local_validation'] = True
-            data = prepare_result('study-shard', data, context)
-            require_shard_policy(data, context)
-            guard(context)
-            meta['source_integrity_verified'] = True
-            meta['source_check_status'] = 'MATCHED_AT_BOUNDARIES'
-            meta['report_sha256'] = self.publish_result('study-shard', data, destination)
-            meta['artifact_hashes'] = {name: {'sha256': digest(blob), 'bytes': len(blob)}
-                                      for name, blob in self.artifact_contents('study-shard', data).items()}
-            meta.update(status='SUCCEEDED', finished_at=now(), publication_complete=True)
-            save_json(destination / 'invocation.json', meta)
-            return data, meta
-        except BaseException as exc:
-            meta.update(status='FAILED', error=asdict(diagnostic(exc)), finished_at=now(), publication_complete=False)
-            with contextlib.suppress(OSError):
-                save_json(destination / 'invocation.json', meta)
-            raise
-
-    def run_study_shards(self, item, context, directory, run_stage, run_empty_shard, persist):
-        plan = item['analysis_plan']
-        item['study_shards'] = [dict(id=s['id'], status='PLANNED', errors=[],
-            directory=str((directory / 'study-shards' / s['id']).relative_to(self.run_dir))) for s in plan['shards']]
-        item['synthesis_status'] = 'SKIPPED'
-        persist()
-        self.assert_coverage_file(context)
-        self.assert_analysis_file(context)
-        for shard, state in zip(plan['shards'], item['study_shards']):
-            state['status'] = 'RUNNING'
-            persist()
-            try:
-                shard_context = context | {'analysis_shard': shard}
-                if not shard['subsystem_ids']:
-                    data = run_empty_shard(state, shard_context, self.run_dir / state['directory'])
-                else:
-                    data = run_stage('study-shard', state, shard_context, self.run_dir / state['directory'])
-                checks = (data or {}).get('program_checks', {})
-                state['status'] = 'SUCCEEDED' if data is not None and continuation_allowed(checks) else 'FAILED'
-            finally:
-                if state['status'] == 'RUNNING':
-                    state['status'] = 'FAILED'
-                persist()
-        if any(s['status'] != 'SUCCEEDED' for s in item['study_shards']):
-            item['errors'].append('Study synthesis skipped: not all planned shards succeeded.')
-            item['synthesis_status'] = 'SKIPPED'
-            return None
-        self.assert_revision_files(item)
-        return synthesis_inputs(plan, item['study_shards'])
-
     def select_source_revision(self, item, directory, *, publish):
         self.assert_revision_files(item)
         selected = choose_revision(item.get('revisions', []), continuation=self.compromise)
@@ -1765,19 +1675,15 @@ class Runner:
 
     def assert_revision_files(self, item):
         states = list(item.get('revisions', []))
-        states.extend(item.get('study_shards', []))
         directory = item.get('directory', '.')
         if item.get('coverage_plan'):
             self.assert_coverage_file({'coverage_plan': item['coverage_plan'],
                                        '_coverage_plan_path': str(self.run_dir / directory / 'coverage.plan.json')})
-        if item.get('analysis_plan'):
-            self.assert_analysis_file({'analysis_plan': item['analysis_plan'], 'coverage_plan': item['coverage_plan'],
-                '_analysis_plan_path': str(self.run_dir / directory / 'analysis.plan.json')})
         states.append({'directory': directory, 'catalog_invocation': item.get('catalog_invocation')})
         if item.get('selection_publication_complete'):
             states.append(item | {'directory': directory, 'selected_aliases': True})
         for revision in states:
-            for stage in ('catalog', 'study', 'study-shard', 'review'):
+            for stage in ('catalog', 'study', 'review'):
                 meta = revision.get(stage + '_invocation') or {}
                 hashes = dict(meta.get('artifact_hashes', {})) if meta.get('publication_complete') else {}
                 if meta.get('material_retained'):
@@ -1813,16 +1719,14 @@ class Runner:
             else:
                 self.assert_source()
             self.assert_coverage_file(stage_context)
-            self.assert_analysis_file(stage_context)
             self.assert_revision_files(item)
 
-        def execute_stage(stage, state, stage_context, stage_dir, *, local=False):
+        def run_stage(stage, state, stage_context, stage_dir):
             started = self.stage_started(stage, stage_context)
             destination = stage_dir / (stage + '.logs')
             try:
                 guard(stage_context)
-                data, meta = (self.complete_empty_shard(stage_context, destination, guard) if local else
-                              self.invoke(stage, stage_context, destination))
+                data, meta = self.invoke(stage, stage_context, destination)
                 self.store_stage(state, stage, data, meta, stage_context)
                 if data is not None:
                     self.stage_finished(stage, stage_context, data, started,
@@ -1858,13 +1762,6 @@ class Runner:
                 finally:
                     persist()
 
-        def run_stage(stage, state, stage_context, stage_dir):
-            return execute_stage(stage, state, stage_context, stage_dir)
-
-        def run_empty_shard(state, stage_context, stage_dir):
-            return execute_stage('study-shard', state, stage_context | {'generated_by': 'orchestrator'},
-                                 stage_dir, local=True)
-
         try:
             guard(context)
             inventory, _ = self.source_inventory()
@@ -1884,26 +1781,6 @@ class Runner:
             item['coverage_plan'] = plan
             context.update(coverage_plan=plan, _coverage_plan_path=str(directory / 'coverage.plan.json'))
             context.pop('inventory_summary', None)
-            byte_limit = self.cfg.get('max_source_bytes_per_session', DEFAULT_MAX_SOURCE_BYTES_PER_SESSION)
-            analysis = build_analysis_plan(inventory, plan, self.cfg.get('multi_session', True),
-                                           max_source_bytes_per_session=byte_limit)
-            verify_analysis_plan(analysis, inventory, plan, max_source_bytes_per_session=byte_limit)
-            self.analysis_inventories[analysis['inventory_sha256']] = inventory
-            context.update(analysis_plan=analysis, _analysis_plan_path=str(directory / 'analysis.plan.json'))
-            path = Path(context['_analysis_plan_path'])
-            if path.exists() or path.is_symlink():
-                self.assert_analysis_file(context)
-            else:
-                save_json(path, analysis)
-            item.update(analysis_plan=analysis, analysis_plan_path=str(path.relative_to(self.run_dir)),
-                        multi_session=analysis['multi_session'], required_sessions=analysis['required_sessions'],
-                        source_metrics=analysis['totals'], study_shards=[],
-                        study_origin='multi_session_synthesis' if analysis['required_sessions'] > 1 else 'direct_single_session')
-            synthesis = None
-            if analysis['required_sessions'] > 1:
-                synthesis = self.run_study_shards(item, context, directory, run_stage, run_empty_shard, persist)
-                if synthesis is None:
-                    return
             previous = None
             revision_rounds = self.execution['max_revision_rounds'] if review_enabled else 0
             for number in range(1, revision_rounds + 2):
@@ -1919,19 +1796,7 @@ class Runner:
                 if previous:
                     current.update(revision_inputs(previous))
                     current['prompt_variant'] = 'revise'
-                elif synthesis is not None:
-                    current.update(synthesis, catalog=catalog, prompt_variant='synthesis',
-                                   source_access='Validated structured inputs only; all source-inspection tools are disabled.')
-                try:
-                    if current.get('prompt_variant') == 'synthesis':
-                        item['synthesis_status'] = 'RUNNING'
-                        persist()
-                    run_stage('study', revision, current, revision_dir)
-                finally:
-                    if current.get('prompt_variant') == 'synthesis':
-                        item['synthesis_invocation'] = revision.get('study_invocation')
-                        item['synthesis_status'] = 'SUCCEEDED' if revision.get('study') is not None else 'FAILED'
-                        current = context | {'revision_id': revision_id}
+                run_stage('study', revision, current, revision_dir)
                 if not review_enabled:
                     skip_context = self.stage_context('review', current)
                     self.reporter.emit('stage_skipped', **skip_context, reason='disabled_by_config',
@@ -1994,13 +1859,11 @@ class Runner:
             path = destination.parent / name
             if not path.exists():
                 atomic(path, content)
-        return digest(contents[stage + '.json' if stage in ('catalog', 'study-shard') else ARTIFACTS[stage]])
+        return digest(contents[stage + '.json' if stage == 'catalog' else ARTIFACTS[stage]])
 
     def artifact_contents(self, stage, data):
         def encoded(value):
             return (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
-        if stage == 'study-shard':
-            return {'study-shard.json': encoded(data)}
         if stage == 'catalog':
             verify_coverage_plan(data['coverage_plan'])
             return {'coverage.plan.json': encoded(data['coverage_plan']), 'catalog.json': encoded(data),
@@ -2079,11 +1942,10 @@ class Runner:
                      preparation=None):
         attempt_started = self.reporter.clock()
         self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
-        agent = self.cfg['_agents']['study' if stage == 'study-shard' else stage]
+        agent = self.cfg['_agents'][stage]
         variant = context.get('prompt_variant', stage)
-        template = Path(ROOT / 'prompts' / (variant + '.md') if variant in ('study-shard', 'synthesis')
-                        else self.cfg['_prompt_paths'][variant]).read_text()
-        reports_only = stage == 'compare' or variant == 'synthesis'
+        template = Path(self.cfg['_prompt_paths'][variant]).read_text()
+        reports_only = stage == 'compare'
         output_instruction = ('Return exactly one JSON object matching the supplied schema as your final answer; no fences or surrounding prose.'
             if agent['backend'] in ('xxx', 'opencode') else
             'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.')
@@ -2131,7 +1993,7 @@ class Runner:
                     revision_id=context.get('revision_id'), prompt_variant=context.get('prompt_variant', stage),
                     model_actual_source='unknown: backend has not reported model identity',
                     review_quality='NOT_MEASURED', publication_complete=False)
-        meta.update(source_tools_enabled=not reports_only, shard_id=context.get('analysis_shard', {}).get('id'))
+        meta.update(source_tools_enabled=not reports_only)
         if agent['backend'] == 'xxx':
             meta['retry_policy'] = retry_policy(0, 0, None)
             meta['compatibility_profile'] = xxx.PROFILE
@@ -2253,7 +2115,6 @@ class Runner:
                     meta['tool_observation'] = observer.snapshot()
                     self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
                     self.assert_coverage_file(context)
-                    self.assert_analysis_file(context)
                     if self.folder:
                         self.folder.assert_snapshot(context['source_fingerprint'])
                     else:
@@ -2268,19 +2129,8 @@ class Runner:
                 for warning in data.get('program_checks', {}).get('citation_warnings', []):
                     self.reporter.emit('citation_warning', **(warning | self.stage_context(stage, context)),
                                        evidence_branch=warning.get('branch'))
-                if stage in ('study', 'study-shard', 'review'):
+                if stage in ('study', 'review'):
                     data['normalization_provenance'] = meta['normalization_provenance']
-                if stage == 'study-shard':
-                    self.save_attempt_value(attempt, 'prepared.json', data, meta)
-                    validation = self.read_attempt_value(attempt, 'validation.json', attempt_hashes)
-                    validation['policy_valid'] = meta['policy_valid'] = data['program_checks']['policy_satisfied']
-                    try:
-                        require_shard_policy(data, context)
-                    except ContractError as exc:
-                        validation['policy_error'] = asdict(diagnostic(exc))
-                        raise
-                    finally:
-                        self.save_attempt_value(attempt, 'validation.json', validation, meta)
             except SourceChanged as exc:
                 meta['source_integrity_verified'] = False
                 meta['source_check_status'] = 'CHANGED_DURING_EVIDENCE_RESOLUTION'
@@ -2297,7 +2147,6 @@ class Runner:
             if stage == 'review':
                 self.assert_review_files(context, destination.parent)
             self.assert_coverage_file(context)
-            self.assert_analysis_file(context)
             self.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
             report_hash = self.publish_result(stage, data, destination)
             artifact_hashes = {name: {'sha256': digest(blob), 'bytes': len(blob)}
@@ -2350,7 +2199,7 @@ class Runner:
                 self.record_error(manifest, exc, phase='integrity')
             manifest['critical_failure'] = self.critical_failure
             if self.compromise and code != 130:
-                if self.critical_failure or not any(has_usable_report_material(b) for b in entries):
+                if self.critical_failure or not any(usable_study(b) for b in entries):
                     manifest['status'], code = 'FAILED', 1
                 elif (all(processing_satisfied(b) for b in entries) and not manifest.get('diagnostics')
                       and (self.mode == 'folder' or len(self.source['branches']) == 1

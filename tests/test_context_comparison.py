@@ -12,7 +12,6 @@ from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
 
 from explain import AuditError, Folder, Runner, save_json, process as real_process
-from src.analysis.analysis_plan import build_analysis_plan
 from src.analysis.coverage_plan import build_coverage_plan
 from src.runtime.context_comparison import apply_assessments, frozen_inputs, run_comparison
 from test_folder import FolderFixture
@@ -30,11 +29,9 @@ class ContextComparisonTests(FolderFixture):
         catalog = {**context, 'task': 'architecture_catalog', 'completion_status': 'COMPLETE', 'limitations': [], 'exclusions': [],
                    'subsystems': [{'id': 'S-001', 'name': 'Unit', 'purpose': 'A test unit.', 'paths': ['.']}]}
         coverage = build_coverage_plan(catalog, inventory, context)
-        analysis = build_analysis_plan(inventory, coverage)
         baseline = self.base / 'baseline'
         baseline.mkdir()
-        for name, value in [('source.inventory.json', inventory), ('coverage.plan.json', coverage),
-                            ('analysis.plan.json', analysis)]:
+        for name, value in [('source.inventory.json', inventory), ('coverage.plan.json', coverage)]:
             save_json(baseline / name, value)
         facts = [{'id': 'F-001', 'statement': 'The function returns 42.', 'evidence': [
             {'id': 'E-001', 'source_id': 'source-001', 'path': 'app.py', 'start_line': 1, 'end_line': 1,
@@ -66,8 +63,8 @@ class ContextComparisonTests(FolderFixture):
         self.assertEqual(len(report['fact_source_checks']), 1)
         self.assertEqual([r['outcome'] for r in report['attempts']], ['successful'] * 6)
         self.assertEqual(report['attempts'][0]['fact_assessment']['status'], 'unavailable')
-        self.assertEqual(json.loads((self.base / 'live/analysis.plan.json').read_text()),
-                         json.loads((baseline / 'analysis.plan.json').read_text()))
+        self.assertEqual(json.loads((self.base / 'live/coverage.plan.json').read_text()),
+                         json.loads((baseline / 'coverage.plan.json').read_text()))
 
     def test_comparison_runs_normal_prompt_validation_and_publication(self):
         config, baseline, facts = self.baseline()
@@ -83,19 +80,6 @@ class ContextComparisonTests(FolderFixture):
         self.assertEqual(['source_context' in p for p in prompts], [False, False, True])
         self.assertEqual([r['outcome'] for r in report['attempts']], ['successful'] * 3)
         self.assertTrue(all(Path(r['result_path']).is_file() for r in report['attempts']))
-
-    def test_comparison_runs_selected_frozen_shard(self):
-        config, baseline, facts = self.baseline()
-        shard_id = json.loads((baseline / 'analysis.plan.json').read_text())['shards'][0]['id']
-        def process(command, cwd, env, payload, **kwargs):
-            context = prompt_context(payload)
-            self.assertEqual(context['stage'], 'study-shard')
-            self.assertEqual(context['analysis_shard']['id'], shard_id)
-            return cli_result(command, response(context))
-        with patch.object(Runner, 'check_cli', return_value={'version': '1'}), \
-                patch('explain.process', side_effect=process):
-            report = run_comparison(config, baseline, facts, self.base / 'shard', live=True, shard_id=shard_id)
-        self.assertEqual([r['outcome'] for r in report['attempts']], ['successful'] * 3)
 
     def test_changed_source_aborts_before_model(self):
         config, baseline, facts = self.baseline()
@@ -144,14 +128,20 @@ class ContextComparisonTests(FolderFixture):
         self.assertEqual(len(calls), 3)
         self.assertEqual([r['outcome'] for r in report['attempts']], ['interrupted'] * 3)
 
-    def test_invalid_shard_and_assignment_changes_are_rejected(self):
+    def test_changed_coverage_and_inventory_are_rejected(self):
         config, baseline, _ = self.baseline()
-        with self.assertRaisesRegex(ValueError, 'nonempty shard'):
-            frozen_inputs(baseline, config, 'missing')
-        analysis = json.loads((baseline / 'analysis.plan.json').read_text())
-        analysis['shards'][0]['primary_file_paths'] = []
-        save_json(baseline / 'analysis.plan.json', analysis)
+        coverage = json.loads((baseline / 'coverage.plan.json').read_text())
+        coverage['areas'][0]['file_paths'] = []
+        save_json(baseline / 'coverage.plan.json', coverage)
         with self.assertRaises(ValueError):
+            frozen_inputs(baseline, config)
+
+    def test_inventory_must_match_frozen_coverage(self):
+        config, baseline, _ = self.baseline()
+        inventory = json.loads((baseline / 'source.inventory.json').read_text())
+        inventory['entries'][1]['size'] += 1
+        save_json(baseline / 'source.inventory.json', inventory)
+        with self.assertRaisesRegex(ValueError, 'inventories differ'):
             frozen_inputs(baseline, config)
 
     def test_fact_assessment_is_explicit_and_covers_every_fact(self):
@@ -185,8 +175,7 @@ class GitContextComparisonTests(unittest.TestCase):
                 'task': 'architecture_catalog', 'completion_status': 'COMPLETE', 'limitations': [], 'exclusions': [],
                 'subsystems': [{'id': 'S-001', 'name': 'Unit', 'purpose': 'A test unit.', 'paths': ['.']}]}
             coverage = build_coverage_plan(catalog, inventory, context)
-            for name, value in [('source.inventory.json', inventory), ('coverage.plan.json', coverage),
-                                ('analysis.plan.json', build_analysis_plan(inventory, coverage))]:
+            for name, value in [('source.inventory.json', inventory), ('coverage.plan.json', coverage)]:
                 save_json(baseline / name, value)
         finally:
             setup.repo.restore()

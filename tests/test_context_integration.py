@@ -18,7 +18,7 @@ from src.model.model_context import project_model_context
 from src.runtime.execution import Budget
 from src.runtime.tool_observer import ToolObserver
 from test_folder import FolderFixture
-import test_multi_session
+from fixtures.study_runner import run_case
 
 
 def command_event(index):
@@ -28,19 +28,18 @@ def command_event(index):
 
 
 class PreparedContextTests(FolderFixture):
-    run_case = test_multi_session.MultiSessionTests.run_case
+    run_case = run_case
 
-    def test_same_preparation_all_backends_shard_scope_and_synthesis_exclusion(self):
+    def test_same_preparation_all_backends_and_source_scope(self):
         contexts = []
         for backend in ('codex', 'opencode', 'xxx'):
             manifest, code = self.run_case(backend=backend)
             self.assertEqual(code, 0, manifest.get('diagnostics'))
             contexts.append([call['context'].get('source_context') for call in self.calls])
-            self.assertNotIn('source_context', self.calls[-1]['context'])
-            for call in self.calls[1:-1]:
+            for call in self.calls[1:]:
                 context = call['context']
                 fragments = context['source_context']['fragments']
-                assigned = context['analysis_shard']['primary_file_paths']
+                assigned = {p.name for p in self.source.glob('*.py')}
                 self.assertTrue(fragments)
                 self.assertTrue(all(f['path'] in assigned for f in fragments))
             for call in self.calls:
@@ -56,7 +55,7 @@ class PreparedContextTests(FolderFixture):
         manifest, code = self.run_case(large=False)
         self.assertEqual(code, 0, manifest.get('diagnostics'))
         self.assertTrue(all('source_context' not in c['context'] for c in self.calls))
-        for stage, variant in (('compare', 'compare'), ('study', 'synthesis'), ('repair', 'repair')):
+        for stage, variant in (('compare', 'compare'), ('repair', 'repair')):
             projected = project_model_context(stage, {'source_context': {'fragments': []},
                                                      'prompt_variant': variant})
             self.assertNotIn('source_context', projected)
@@ -100,17 +99,6 @@ class PreparedContextTests(FolderFixture):
         self.assertFalse(failed['publication_complete'])
         self.assertIn('tool_observation', failed['metrics'])
         self.assertTrue((Path(failed['artifact_directory']) / 'tool-events.jsonl').is_file())
-
-    def test_stopped_shard_preserves_independent_successes(self):
-        def stop_first(runner, context, data):
-            if context.get('analysis_shard', {}).get('id') == 'R-001':
-                raise AuditError('Fixture stop.', code='NO_PROGRESS',
-                                 failure_kind='NO_PROGRESS', failure_layer='execution')
-        manifest, code = self.run_case(change=stop_first)
-        self.assertNotEqual(code, 0)
-        self.assertEqual([s['status'] for s in manifest['study_shards']],
-                         ['FAILED', 'SUCCEEDED', 'SUCCEEDED'])
-        self.assertNotIn('synthesis_invocation', manifest)
 
     def test_xxx_stop_deletes_only_owned_session_without_observing_cleanup(self):
         self.value['agent']['backend'] = 'xxx'

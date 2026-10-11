@@ -155,7 +155,7 @@ class Binding:
         if ('source_snapshot_id' in raw and self._mode != 'folder'
                 or 'review_target_id' in raw and self._stage != 'review'):
             raise _error('$.binding')
-        if self._stage in ('catalog', 'study', 'study-shard', 'review'):
+        if self._stage in ('catalog', 'study', 'review'):
             keys = ('source_directory',) if self._mode == 'folder' else ('branch', 'source_commit')
             for key in keys:
                 if raw.get(key) != self._context.get(key):
@@ -163,10 +163,6 @@ class Binding:
             if self._mode == 'folder' and (raw.get('source_snapshot_id') != self._snapshot_id
                                            or 'source_fingerprint' in raw):
                 raise _error('$.source_snapshot_id')
-        if self._stage == 'study-shard':
-            shard = self._context['analysis_shard']
-            if raw.get('shard_id') != shard['id'] or raw.get('assigned_subsystem_ids') != shard['subsystem_ids']:
-                raise _error('$.analysis_shard')
         if self._stage == 'review' and (raw.get('review_target_id') != self._review_id or 'target' in raw):
             raise _error('$.review_target_id')
         if self._stage == 'compare':
@@ -191,19 +187,13 @@ class Binding:
 
     @property
     def schema(self):
-        stage = 'synthesis' if self._stage == 'study' and self._context.get('prompt_variant') == 'synthesis' else self._stage
-        return (MODEL_FOLDER_SCHEMAS if self._mode == 'folder' else MODEL_SCHEMAS)[stage]
+        return (MODEL_FOLDER_SCHEMAS if self._mode == 'folder' else MODEL_SCHEMAS)[self._stage]
 
     def expand(self, raw, allow_invalid=False):
         self.validate_identity(raw)
-        synthesis = self._stage == 'study' and self._context.get('prompt_variant') == 'synthesis'
-        if not allow_invalid or synthesis:
+        if not allow_invalid:
             validate_schema(raw, self.schema)
         expanded = copy.deepcopy(raw)
-        if synthesis:
-            # Only a validated narrative may receive the frozen registries.
-            for field in ('evidence', 'claims', 'coverage'):
-                expanded[field] = copy.deepcopy(self._context['synthesis_' + field])
         if self._mode == 'folder':
             expanded.pop('source_snapshot_id', None)
             expanded['source_fingerprint'] = self._context['source_fingerprint']

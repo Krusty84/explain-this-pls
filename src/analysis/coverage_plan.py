@@ -204,18 +204,17 @@ def verify_coverage_plan(plan):
     return plan
 
 
-def coverage_checks(data, context, resolutions, *, area_ids=None):
+def coverage_checks(data, context, resolutions):
     plan = context.get('coverage_plan')
     if plan is None:  # Direct library callers can validate a study without orchestration.
         return {'expected_ids': [], 'missing_ids': [], 'unfinished_ids': [], 'unsupported_ids': [],
                 'metadata_verified_empty_paths': [],
                 'reported_by': 'AGENT', 'completeness_measured': False, 'policy_satisfied': True}
     verify_coverage_plan(plan)
-    areas = [a for a in plan['areas'] if area_ids is None or a['id'] in area_ids]
+    areas = plan['areas']
     reports = {r['area_id']: r for r in data['coverage']}
     resolved = {e['id']: e for e in resolutions if e['status'] == 'RESOLVED'}
     sources = {s['id']: s for s in source_catalog(context)}
-    primary = set(context['analysis_shard']['primary_file_paths']) if area_ids is not None else None
     inventory = context.get('_inventory')
     if inventory is not None and sha(canonical(inventory['entries'])) != plan['inventory_sha256']:
         raise ContractError('Coverage and pinned source inventories differ.')
@@ -224,8 +223,6 @@ def coverage_checks(data, context, resolutions, *, area_ids=None):
 
     def empty_scope(area):
         paths = set(area['entry_paths'])
-        if primary is not None:
-            paths &= primary
         if not paths or not all(entries.get(path, {}).get('type') == 'file'
                 and type(entries[path].get('size')) is int and entries[path]['size'] == 0
                 and entries[path].get('sha256') == sha(b'') for path in paths):
@@ -237,7 +234,7 @@ def coverage_checks(data, context, resolutions, *, area_ids=None):
         source = sources.get(evidence['source_id'], {})
         prefix = source.get('identity', {}).get('submodule_path', '')
         path = prefix + '/' + evidence['path'] if prefix else evidence['path']
-        return path in area['file_paths'] and (primary is None or path in primary)
+        return path in area['file_paths']
 
     expected = [a['id'] for a in areas]
     required = {a['id'] for a in areas if a['required']}
@@ -251,5 +248,5 @@ def coverage_checks(data, context, resolutions, *, area_ids=None):
     return {'expected_ids': expected, 'missing_ids': missing, 'unfinished_ids': unfinished,
             'unsupported_ids': unsupported, 'metadata_verified_empty_paths': sorted(metadata_paths),
             'reported_by': 'AGENT', 'completeness_measured': False,
-            'policy_satisfied': (area_ids is not None or plan['policy_satisfied'])
+            'policy_satisfied': plan['policy_satisfied']
                                 and not missing and not unfinished and not unsupported}

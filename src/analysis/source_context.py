@@ -332,8 +332,8 @@ class SourceContextBuilder:
         started = time.monotonic()
         manifest = dict(stage=stage, enabled=self.settings['enabled'], files=[], prepared_bytes=0,
                         transmitted_bytes=0, duration_seconds=0)
-        if (not self.settings['enabled'] or stage not in ('catalog', 'study', 'study-shard', 'review', 'revise') or
-                context.get('prompt_variant') == 'synthesis' or context.get('correction_prompt')):
+        if (not self.settings['enabled'] or stage not in ('catalog', 'study', 'review', 'revise') or
+                context.get('correction_prompt')):
             manifest['reason'] = 'disabled' if not self.settings['enabled'] else 'stage_without_sources'
             return None, manifest
         inventory = context.get('_inventory')
@@ -343,9 +343,6 @@ class SourceContextBuilder:
         expected_files = expected_files if expected_files is not None else {p: e['sha256'] for p, e in entries.items()}
         if any(path not in expected_files or entries[path]['sha256'] != expected_files[path] for path in entries):
             raise SourceChanged('Source context inventory differs from the pinned file hashes.')
-        if stage == 'study-shard':
-            assigned = set(context['analysis_shard']['primary_file_paths'])
-            entries = {path: entry for path, entry in entries.items() if path in assigned}
         catalog = source_catalog(context)
         snapshot = canonical([s['identity'] for s in catalog])
         decoding = normalize_source_decoding(context.get('source_decoding'))

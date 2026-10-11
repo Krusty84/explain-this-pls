@@ -40,7 +40,7 @@ The review and revision sections below describe the opt-in reviewed workflow.
 
 The orchestrator selects the required response schema for each stage and validates
 its structure locally.
-`schemas/{catalog,study,study-shard,synthesis,review,compare}.schema.json` and the
+`schemas/{catalog,study,review,compare}.schema.json` and the
 available `folder-` variants
 are **model wire** schemas generated from `MODEL_SCHEMAS` / `MODEL_FOLDER_SCHEMAS`
 in `src/contracts/contracts.py`. Internal `SCHEMAS` / `FOLDER_SCHEMAS` validate the expanded
@@ -55,7 +55,6 @@ Unsupported results are rejected without modifying their artifacts.
 | Data | Authority |
 | --- | --- |
 | `completion_status`, narrative, claims, evidence pointers, findings, assessments, study coverage, omission-search activity | Agent; completion is a self-assessment |
-| Synthesized study `evidence`, `claims`, `coverage` | Python deep-copies the frozen, remapped records from validated shards; the synthesis agent cannot supply them |
 | Transport completion/error/timeout/interruption and cleanup | Backend adapter and runner |
 | Expected source identities, review target, contract/artifact identifiers in invocation metadata and manifest | Orchestrator |
 | `program_checks` (including coverage checks), `verdict`, frozen plan, hashes, file distribution, reverse links, tables | Python, after local wire validation |
@@ -72,11 +71,7 @@ records `rule: "MODEL_BINDING"`, `hash_format: "canonical-json-utf8"`,
 after verified expansion they cover the whole original wire and expanded canonical
 objects, not pretty-printed artifact bytes. Binding records are private
 and do not enter model context. Expanding an ID adds no facts or positive status.
-For synthesis, expansion also inserts the three frozen registry arrays after
-model identity and synthesis schema validation. `extracted.json` has only the
-model-authored response; `expanded.json` has the complete study input. The same
-binding hashes cover these distinct objects. Direct studies and revisions still
-supply their own registry arrays under the full study wire schema.
+Studies and revisions supply their own registry arrays under the full study wire schema.
 Transport/stdout and stderr remain private attempt artifacts. A saved `study.json`,
 `review.json` or `compare.json` is a separate representation with processed wire
 fields and `program_checks`. Study narrative is authored as sections/blocks;
@@ -468,8 +463,7 @@ task, matching pinned Git/folder identity and, for review, unchanged frozen
 context and exact target. The caller verifies transport before calling it.
 It never repairs the schema.
 The rule is `EVIDENCE_IDS` in both strict and compromise, shared by Codex,
-OpenCode and XXX after their transport checks. It also applies to
-study shards, which use the `study:` namespace for claims and coverage references.
+OpenCode and XXX after their transport checks.
 
 Evidence definitions may pad one/two numeric digits (`E-1`, `E-01` -> `E-001`)
 and remove the stage's own namespace (`study:E-001` in study or `review:E-001`
@@ -504,8 +498,7 @@ Live processing preserves the existing source/cleanup guards:
 2. Retain the original object in private `extracted.json`. Verify model identity
    bindings and write `expanded.json` and `binding.json`. An unknown, foreign or
    stale binding is an identity failure and cannot be repaired or recovered.
-   Synthesis must pass its model schema before expansion copies frozen registries.
-   For study/study-shard/review, check prerequisites on the expanded object, create the
+   For study/review, check prerequisites on the expanded object, create the
    candidate, and write private `normalized.json` and `normalization.json`
    separately. These files are required even for zero edits.
 3. Fully validate the internal candidate, including the study block/claim graph.
@@ -513,8 +506,7 @@ Live processing preserves the existing source/cleanup guards:
    strictly check all computed links and hashes. A failure on a valid wire input
    is a program materialization defect, not a model line-counting error. `validation.json`
    identifies `validated_object` and includes the normalization provenance when
-   available. A successful normalization is the separate `study_normalized`,
-   `study-shard_normalized` or `review_normalized`
+   available. A successful normalization is the separate `study_normalized` or `review_normalized`
    event with its replacement count, never a schema/semantic failure or model
    repair request. A later failure retains the candidate and its actual error.
 4. Finish cleanup and source guards, resolve evidence against pinned bytes,
@@ -543,7 +535,7 @@ separators=(',', ':'), allow_nan=False)` and UTF-8 encoded, without BOM or trail
 newline. They do not hash the pretty-printed artifact file bytes. Unicode and
 array order are unchanged. With zero edits both hashes are identical.
 The same provenance summary is carried in invocation metadata and every new
-published study/study-shard/review; direct library callers may omit that summary, but every
+published study/review; direct library callers may omit that summary, but every
 new Runner publication requires the normalization artifacts.
 It is never requested from the model or admitted by the wire schema. Successful
 normalization does not change `completion_status`, establish content accuracy,
@@ -575,8 +567,7 @@ solely by those quotes; all identity, schema, assignment, source, publication,
 timeout, NO_PROGRESS and cleanup checks remain in force. Saved reports without
 these fields retain their previous meaning and are not rewritten.
 
-Warning-only shards can succeed and enter synthesis. Warnings follow remapped
-claim/evidence IDs into synthesis and review; affected claims require manual
+Citation warnings pass from study into review; affected claims require manual
 verification. Comparison can use such inputs only as REPORTED_UNVERIFIED, never
 as proof of CONFIRMED_DIFFERENCE. Otherwise completed runs exit 0 with
 COMPLETE_WITH_WARNINGS and processing_completed=true. Strict workflow_satisfied
@@ -628,8 +619,7 @@ never overwrite the original `extracted.json`, manifest, material or review.
 ## Frozen registry and review plan
 
 Direct-study and revision claims have `id`, `statement`, `scope`, `epistemic_kind`,
-`evidence_ids`, `uncertainty` on the wire. Synthesis references frozen shard claims
-and does not return claim records. `report_sections` has exactly ten sections, with keys
+`evidence_ids`, `uncertainty` on the wire. `report_sections` has exactly ten sections, with keys
 `scope`, `context`, `components`, `startup_and_flows`, `data_and_state`,
 `cross_cutting`, `constraints`, `change_navigation`, `unknowns`, `evidence_basis`
 in that order. Each has `title` and `blocks`, each block `markdown` and `claim_ids`.
@@ -638,7 +628,7 @@ claim.block_ids, hashes, provenance, report_markdown or document locators.
 Sections and Markdown together are rejected as a hybrid wire response.
 
 All material narrative/table/scenario claims
-must be registered by the authoring agent (the shard agents for synthesis). This requirement is not a claim that
+must be registered by the authoring agent. This requirement is not a claim that
 Python can find every factual assertion in free text, or prove a block's semantic
 correspondence to its claims. Definitions must be unique, block references must
 exist and be unique within each block, and every claim must be linked. Multiple
@@ -847,156 +837,19 @@ acceptance. Final output separately reports file allocation and agent assessment
 Neither is called completeness of system understanding; semantic_quality stays
 NOT_MEASURED.
 
-## Multi-session study
+An empty-file area may use pinned inventory metadata: its nonempty scope must
+contain only regular files with zero size and the empty-content hash.
+`program_checks.coverage.metadata_verified_empty_paths` records those paths
+without inventing line evidence or excluding files. This saved field is optional
+for older artifacts. Mixed scopes still require source evidence; an invalid line
+pointer fails even when its file is empty. Metadata does not complete unfinished
+inspection or waive the study's claim requirements.
 
-The top-level `multi_session` setting is a strict boolean, default `true` when
-omitted. `false` forces the ordinary single-study path. The top-level
-`max_source_bytes_per_session` setting defaults to `262144` (256 KiB). It accepts
-only positive integers; zero, negative numbers, booleans, floats, strings and null
-are invalid. The same setting applies to all backends. Catalog always uses one
-invocation. The backend-independent planner starts with this session target:
-
-```
-N_target = max(1, ceil(areas / 4), ceil(source_files / 300), ceil(source_bytes / max_source_bytes_per_session))
-```
-
-Areas include UNCLASSIFIED. File batching can increase the target when groups do
-not fit; unused sessions are removed. The area and file thresholds remain code
-constants; the byte threshold is configurable. One resulting session uses the
-existing study call, with no shard or synthesis calls. Multiple sessions use study shards in stable
-R-001, R-002, ... order, then one synthesis call. There is no concurrency. Shards
-and synthesis inherit the effective `stage_agents.study` selection. Their fixed
-internal prompts are `study-shard.md` and `synthesis.md`; direct study and revision
-keep the existing configurable prompts.
-
-Size metrics describe **eligible regular files**. The byte limit measures the total
-size of source files assigned to a session, not bytes actually read by the LLM.
-Inventory has no authoritative language classification. Directories and symlinks
-do not count; no new extension/vendor/generated heuristics are applied. Git source
-preparation retains its existing ignored-untracked exclusions. Catalog exclusions
-affect area membership and analysis file/byte totals. The complete inventory and
-coverage counts retain excluded files with their explicit paths and reasons.
-Planning `source_bytes` sums the frozen inventory's `size` values. The planner
-does not reread source files or add filesystem scans. The inventory retains
-`source_lines`, which counts LF bytes plus one for a nonempty unterminated final line.
-Blank lines count; CRLF counts once; standalone CR is not a separator. Binary
-bytes use the same rule. Empty files have zero lines. Counts are collected during
-the existing hash read (or reused from Git source preparation), without another
-source-content scan. Metadata guards reuse the frozen counts.
-
-`analysis.plan.json` is saved beside `coverage.plan.json` and `source.inventory.json`.
-It contains the enable flag, exact session count, thresholds, metric definition,
-global totals, area sizes, shard primary_file_paths, oversized_file_paths and loads.
-The existing subsystem fields include the UNCLASSIFIED area when present. It binds the inventory
-and coverage-plan hashes. Local validation rebuilds the plan and compares canonical
-JSON using the expected configured byte limit, checking every assignment, count,
-ID, capacity flag and hash. The effective limit is frozen in
-`thresholds.max_source_bytes_per_session`; totals, areas and shards use `source_bytes`.
-The metric is `nonexcluded_regular_files; sum_inventory_size_bytes`.
-A changed effective limit invalidates the plan, even if assignments remain the same.
-Old line-based plans must be regenerated. Once study
-starts, every boundary checks the frozen plan bytes; changes are integrity failures.
-
-Area cost is max(1/4, files/300, bytes/max_source_bytes_per_session). Descending cost, then area ID,
-determines placement order. Sorted file paths form batches within the file and
-byte limits. Each batch goes to the least-loaded shard that can hold it, with
-shard order breaking ties; a new shard is added when none fits. Shard load uses
-the same maximum with its area count. Rational arithmetic determines placement;
-normalized_load is a JSON number. Each inventory path counts once per shard
-despite overlapping areas. Global totals also count paths once; sums across
-shards can exceed global totals. Oversized individual files remain intact in
-their own batches and set `over_capacity: true`; their paths are explicit.
-Unused sessions are removed. Areas without regular files share an existing
-session for their coverage report. No assignment is treated as inspection.
-
-The shard schema carries task/source/shard identity, assigned subsystem IDs,
-components, flows, state, constraints, cross-area relationships, evidence, claims,
-coverage, limitations and completion. Observation records link claims; relationships
-link a primary subsystem to an inventoried common-root-relative path. The model
-receives only its primary coverage areas and assignment, with source identity and
-normal study context. primary_file_paths gives the exact common-root-relative file
-scope. Coverage for an area concerns its intersection with these paths, even when
-other shards share the area ID. INSPECTED requires resolved evidence in that
-intersection. Other locations may be read to understand interfaces and support
-dependency claims, but cannot establish primary coverage.
-An empty-file scope may instead use pinned inventory metadata: the nonempty scope
-must contain only regular files with zero size and the empty-content hash.
-`program_checks.coverage.metadata_verified_empty_paths` records the paths without
-inventing line evidence or excluding files. This saved field is optional for older
-artifacts. A shard whose entire primary scope meets this check may have no claims.
-Mixed scopes still require source evidence, and an invalid line pointer still
-fails even when its file is empty. Source and inventory guards remain mandatory.
-Model scope changes are identity failures. No shard produces a global report.
-
-Each shard must pass backend completion, binding, schema, semantics, source
-integrity, evidence resolution and primary coverage checks. There is no shard
-revision or compromise promotion. Validated results, logs and per-attempt metrics
-are preserved in `study-shards/R-NNN/`. Manifest `study_shards` records PLANNED,
-RUNNING, SUCCEEDED or FAILED, each with its own invocation metadata. With
-continue_on_error=true, recoverable failure permits later planned shards to run;
-false stops them, leaving their state PLANNED. Quote-only continuation under
-compromise counts as processing success without strict policy acceptance.
-Any failed shard blocks synthesis
-under both result policies. Integrity failures always stop the run. Multi-session
-analysis accepts AGENT, AGENT_SALVAGED and DIRECTORY_FALLBACK coverage plans after
-the same structural, inventory and frozen-plan verification. Catalog provenance
-does not relax any shard validation or evidence requirement.
-Shard `validation.json` separates structural `valid` from `policy_valid` and, on
-rejection, `policy_error`. Indexed relationship diagnostics distinguish an
-unassigned subsystem from a target path missing from the inventory.
-
-When no usable study exists, FINAL_REPORT.md locally displays published, verified
-shards, with shard-qualified claim/evidence IDs and explicit failed/planned scopes.
-An area is INSPECTED only if every planned contributor passed and reported INSPECTED.
-Successful empty-only assignments do not by themselves count as useful material.
-With compromise, useful verified shard material permits PARTIAL / exit 2;
-strict retains FAILED / exit 1. Critical failures prevent promotion and interrupted
-runs retain exit 130. Original shard errors and failed workflow checks remain.
-This local collection adds no model call, creates no canonical study, and cannot
-enter review or comparison. Full synthesis still requires every shard to succeed.
-
-Synthesis runs as a study invocation with prompt_variant=synthesis, a neutral
-working directory and the adapters' existing reports-only tool restrictions.
-Inputs include the available catalog, validated shards, frozen plan, description, priority
-scenarios and source identity. Evidence and claims receive deterministic global
-E-/C- IDs in shard/ID order. `shard_id_mappings` records the remapping in the saved
-input prompt. The model uses `synthesis.schema.json` or `folder-synthesis.schema.json`:
-only task/source identity, completion_status, limitations and report_sections are
-permitted. Every registered claim must appear in a block's claim_ids, and all ten
-sections must retain their required order. Registry arrays and other unexpected
-fields are rejected, even if they match the inputs.
-Python merges repeated area coverage into one record, retaining all evidence
-references and limitations. A partial or uninspected contribution cannot become
-INSPECTED through this merge. Coverage completeness remains unmeasured.
-
-After checking model identity and the synthesis schema, Python deep-copies
-`synthesis_evidence`, `synthesis_claims` and `synthesis_coverage` from the frozen
-binding context into the complete study. Missing inputs are never fabricated.
-The unchanged full study contract validates the assembled object. Local checks
-also require exact evidence, claim and coverage equality, including array order,
-with the remapped inputs before publication. The model cannot mint source evidence
-or change a claim's scope/certainty. Source evidence
-resolutions are reused from validated shards, under the same boundary guards.
-The shard artifacts are pinned and checked before synthesis publication.
-
-The global study uses existing materialization, saved schemas, review plans,
-optional review/revision, selection and publication. Unclassified/incomplete
-catalog policy still prevents global success. A successful synthesis from a salvaged
-or fallback catalog remains usable and is selected and published through the usual
-report pipeline. Original catalog limitations and provenance remain visible in
-study.annotated.md and FINAL_REPORT.md. ARCHITECTURE.md retains the authored study.
-The overall result is PARTIAL (exit 2 in
-compromise mode), accepted=false and coverage_plan.policy_satisfied=false, even
-when all shards, synthesis and optional review finish. Study completion_status
-remains the model's self-assessment; it does not override the overall result.
-Successful processing does not establish architectural correctness. Model-facing
-study, study-shard and synthesis schemas are unchanged. A failed synthesis retains shards
-and diagnostics but publishes no successful or recovered global study. Manifest
-`study_origin` distinguishes direct_single_session from multi_session_synthesis;
-it also records source_metrics, required_sessions, analysis_plan_path,
-synthesis_status and synthesis_invocation. Metrics retain one row per shard and
-one for synthesis. Later ordinary revisions use the same frozen coverage and
-analysis plans; they do not rerun or revise shards.
+The inventory retains `source_lines`, which counts LF bytes plus one for a nonempty
+unterminated final line. Blank lines count; CRLF counts once; standalone CR is not
+a separator. Binary bytes use the same rule. Empty files have zero lines. Counts
+are collected during the existing hash read, or reused from Git source preparation,
+without another source-content scan. Metadata guards reuse the frozen counts.
 
 ## Bounded revision and selected artifacts
 
@@ -1007,8 +860,8 @@ transport failures and recovered contract-invalid material do not trigger it.
 prompts.revise supplies a separate prompt to the existing study agent; no revision
 backend profile is introduced. stage_agents.catalog inherits study settings.
 prompts.catalog controls catalog. Each substantive invocation has its own budget.
-Single-session analysis has at most five invocations per snapshot; multi-session
-analysis adds the planned shards and uses synthesis for the first global study.
+Analysis has at most five substantive stage invocations per snapshot: catalog,
+study and, when enabled, review plus one revision and repeat review.
 
 The program compares registries for added, removed and changed claims. Coordinate
 changes alone are not semantic edits; unchanged assertions retain their IDs.

@@ -86,7 +86,7 @@ def verify_review_context(context):
 
 def citation_warnings(stage, data, resolutions, corrections):
     """Safe locator facts only; original quote text stays in private attempt files."""
-    namespace = 'study' if stage == 'study-shard' else stage
+    namespace = stage
     warnings = []
     repaired = {change['evidence_index']: change for change in corrections or []}
     for index, (pointer, resolution) in enumerate(zip(data['evidence'], resolutions)):
@@ -208,15 +208,9 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
             checks['completion_self_assessment'] = None
         finish_citation_checks(checks)
         return result
-    if stage == 'study' and context.get('prompt_variant') == 'synthesis':
-        # Exact evidence/claim equality was validated before materialization.
-        # Reuse the pinned resolutions: synthesis has no new source evidence.
-        checks['evidence'] = copy.deepcopy(context['_synthesis_resolutions'])
-        checks['citation_warnings'] = copy.deepcopy(context.get('citation_warnings', []))
-    else:
-        checks['evidence'] = resolve_evidence('study' if stage == 'study-shard' else stage, data['evidence'], context, expected_files,
-                                             expected_metadata=expected_metadata)
-        checks['citation_warnings'] = citation_warnings(stage, data, checks['evidence'], citation_corrections)
+    checks['evidence'] = resolve_evidence(stage, data['evidence'], context, expected_files,
+                                         expected_metadata=expected_metadata)
+    checks['citation_warnings'] = citation_warnings(stage, data, checks['evidence'], citation_corrections)
     if stage == 'review':
         checks['citation_warnings'] = (copy.deepcopy(context['architecture_document'].get('program_checks', {})
             .get('citation_warnings', [])) + checks['citation_warnings'])
@@ -224,11 +218,6 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
     evidence_ok = all(e['status'] == 'RESOLVED' for e in checks['evidence'])
     citations_only = (context.get('result_policy') == 'compromise'
                       and all(e['status'] in ('RESOLVED', 'QUOTE_MISMATCH') for e in checks['evidence']))
-    if stage == 'study-shard':
-        from src.analysis.study_shards import shard_checks
-        shard_checks(data, context, checks)
-        finish_citation_checks(checks)
-        return result
     if stage == 'study':
         result['revision_id'] = context.get('revision_id', '001')
         result['registry_diff'] = None

@@ -10,6 +10,21 @@ from test_folder import FolderFixture
 
 
 class ConfigTests(FolderFixture):
+    def test_removed_settings_are_unknown_before_backend_lookup(self):
+        original = copy.deepcopy(self.value)
+        for mode in ('git', 'folder'):
+            for backend in ('codex', 'opencode', 'xxx'):
+                for key, value in (('multi_session', True), ('max_source_bytes_per_session', 262144)):
+                    self.value = copy.deepcopy(original)
+                    self.value.update(mode=mode, git_mode={'repository': './source',
+                        'branches': ['main'], 'baseline_branch': 'main'})
+                    self.value['agent']['backend'] = backend
+                    self.value[key] = value
+                    with self.subTest(mode=mode, backend=backend, key=key), patch('explain.process') as process:
+                        with self.assertRaisesRegex(AuditError, 'Unknown configuration keys:.*' + key):
+                            self.config()
+                        process.assert_not_called()
+
     def test_unsupported_backend_is_rejected_before_cli_in_both_modes(self):
         original = copy.deepcopy(self.value)
         for mode in ('git', 'folder'):
@@ -54,28 +69,6 @@ class ConfigTests(FolderFixture):
             with self.subTest(read_loop_guard=value), patch('explain.shutil.which') as which:
                 with self.assertRaises(AuditError):
                     self.config()
-                which.assert_not_called()
-
-    def test_source_byte_limit_defaults_and_custom_values_for_all_backends_and_modes(self):
-        self.value['git_mode'] = {'repository': './source', 'branches': ['main'], 'baseline_branch': 'main'}
-        for mode in ('git', 'folder'):
-            self.value['mode'] = mode
-            for backend in ('codex', 'opencode', 'xxx'):
-                self.value['agent']['backend'] = backend
-                self.value.pop('max_source_bytes_per_session', None)
-                with self.subTest(mode=mode, backend=backend):
-                    self.assertEqual(self.config()['max_source_bytes_per_session'], 262144)
-                    for limit in (1, 100, 1048576):
-                        self.value['max_source_bytes_per_session'] = limit
-                        self.assertEqual(self.config()['max_source_bytes_per_session'], limit)
-
-    def test_invalid_source_byte_limits_fail_before_backend_lookup(self):
-        for value in (0, -1, True, False, 1.0, 1.5, 262144.0, '262144', None, [], {}):
-            self.value['max_source_bytes_per_session'] = value
-            with self.subTest(value=value), patch('explain.shutil.which') as which:
-                with self.assertRaisesRegex(AuditError, 'max_source_bytes_per_session must be a positive integer') as caught:
-                    self.config()
-                self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
                 which.assert_not_called()
 
     def test_explicit_mode_and_active_section_required_before_backend(self):

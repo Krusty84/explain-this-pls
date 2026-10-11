@@ -75,9 +75,7 @@ CHECKS = {
         prior_finding_coverage=obj(expected=array(PRIOR_FINDING), missing=array(PRIOR_FINDING), unresolved=array(PRIOR_FINDING))),
     'compare': obj(**BASE_CHECKS, evidence_scope=string('SUPPLIED_REPORTS_ONLY')),
 }
-CHECKS['study-shard'] = obj(**BASE_CHECKS, evidence_counts=mapping(INTEGER),
-                             coverage=CHECKS['study']['properties']['coverage'])
-for stage in ('study', 'study-shard', 'review', 'compare'):
+for stage in ('study', 'review', 'compare'):
     # Optional saved-only fields keep earlier reports readable.
     CHECKS[stage]['properties'].update(continuation_allowed={'type': 'boolean'},
                                      citation_warnings=array(CITATION_WARNING))
@@ -100,7 +98,7 @@ def artifact_schemas(wire):
         if stage == 'review':
             properties.update(claim_registry=array(MATERIALIZED_CLAIM), verdict=string('PASS', 'CHANGES_REQUIRED', 'INCONCLUSIVE'))
         result[stage] = obj(**properties)
-        if stage in ('study', 'study-shard', 'review'):
+        if stage in ('study', 'review'):
             # Optional for direct prepare_result callers;
             # every new Runner publication writes this orchestrator-only record.
             result[stage]['properties']['normalization_provenance'] = NORMALIZATION_PROVENANCE

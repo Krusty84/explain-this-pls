@@ -64,7 +64,7 @@ class XXXTests(unittest.TestCase):
     def prompts(self):
         return [c for c in self.recorded() if c['args'][0] == 'run' and '--help' not in c['args']]
 
-    def test_incomplete_catalogs_publish_partial_multi_session_reports(self):
+    def test_incomplete_catalogs_publish_partial_studies(self):
         paths = ['app.py'] + [f'part{i}.py' for i in range(2, 10)]
         for path in paths:
             (self.source / path).write_text('print(1)\n')
@@ -77,10 +77,9 @@ class XXXTests(unittest.TestCase):
                 self.assertEqual((code, manifest['status'], manifest['accepted']), (2, 'PARTIAL', False), manifest.get('diagnostics'))
                 self.assertEqual(manifest['coverage_plan']['origin'], origin)
                 self.assertFalse(manifest['coverage_plan']['policy_satisfied'])
-                self.assertEqual(manifest['synthesis_status'], 'SUCCEEDED')
-                self.assertEqual([s['status'] for s in manifest['study_shards']], ['SUCCEEDED'] * 3)
-                self.assertEqual(len(self.prompts()) - previous, 6)
-                self.assertEqual(self.prompts()[-2]['permissions'], {'*': 'deny'})
+                self.assertIsNotNone(manifest['study'])
+                self.assertEqual(len(self.prompts()) - previous, 3)
+                self.assertNotEqual(self.prompts()[-2]['permissions'], {'*': 'deny'})
                 self.assertTrue((self.run_dir / 'ARCHITECTURE.md').exists())
                 self.assertIn(origin + ' / PARTIAL', Path(manifest['final_report']).read_text())
                 self.assertIn('Synthetic catalog limitation.', Path(manifest['final_report']).read_text())

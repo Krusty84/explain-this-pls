@@ -10,7 +10,6 @@ import unittest
 from unittest.mock import patch
 
 from explain import AuditError, Folder, Runner, UnsafeRepository
-from src.analysis.analysis_plan import build_analysis_plan, verify_analysis_plan
 from src.analysis.coverage_plan import build_coverage_plan, inventory_summary
 from src.analysis.evidence import resolve_evidence, _read_confined
 from src.analysis.git_sources import tracked_paths, ignored_paths, inventory_delta
@@ -256,7 +255,7 @@ class FolderFilterTests(FolderFixture):
         self.assertEqual(self.scan(follow=False, exclude=roots)[2], set(important) | {'app.py'})
         self.assertGreater(len(self.scan(follow=False)[2]), len(important) + 1)
 
-    def test_inventory_catalog_and_study_plans_are_deterministic(self):
+    def test_inventory_and_coverage_are_deterministic(self):
         self.write('.gitignore', 'build/\n')
         self.write('build/generated.py')
         self.write('secret.py')
@@ -273,10 +272,7 @@ class FolderFilterTests(FolderFixture):
         unclassified = build_coverage_plan(catalog, first, context)
         self.assertEqual(unclassified['areas'][0]['id'], 'UNCLASSIFIED')
         self.assertEqual(set(unclassified['areas'][0]['file_paths']), files)
-        plan = build_analysis_plan(first, coverage, max_source_bytes_per_session=10)
-        self.assertEqual(plan, build_analysis_plan(second, coverage, max_source_bytes_per_session=10))
-        verify_analysis_plan(plan, first, coverage, max_source_bytes_per_session=10)
-        self.assertEqual({p for shard in plan['shards'] for p in shard['primary_file_paths']}, files)
+        self.assertEqual(coverage, build_coverage_plan(None, second, context, fallback=True))
         self.value['source_filter'] = {'follow_gitignore': True, 'exclude_paths': ['secret.py']}
         runner = Runner(self.config(), self.base / 'run')
         with patch.object(runner, 'check_cli', return_value={}):

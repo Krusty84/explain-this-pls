@@ -243,14 +243,11 @@ class ContextTests(unittest.TestCase):
         self.assertEqual({(f['source_id'], f['path']) for f in payload['fragments']},
                          {('source-001', 'file.py'), ('source-002', 'file.py'), ('source-003', 'file.py')})
 
-    def test_shard_catalog_disabled_synthesis_compare_and_repair(self):
+    def test_catalog_disabled_compare_and_repair(self):
         context = self.context({'a.py': 'def a(): pass\n', 'b.py': 'def b(): pass\n'})
-        context['analysis_shard'] = {'primary_file_paths': ['b.py']}
-        payload, _ = SourceContextBuilder().prepare('study-shard', context)
-        self.assertEqual({f['path'] for f in payload['fragments']}, {'b.py'})
         self.assertEqual(SourceContextBuilder().prepare('catalog', context)[0]['fragments'], [])
         self.assertIsNone(SourceContextBuilder({'enabled': False}).prepare('study', context)[0])
-        for stage, extra in [('compare', {}), ('repair', {}), ('study', {'prompt_variant': 'synthesis'})]:
+        for stage, extra in [('compare', {}), ('repair', {})]:
             self.assertIsNone(SourceContextBuilder().prepare(stage, context | extra)[0])
 
     def test_review_prioritizes_citations_and_never_executes_source(self):
