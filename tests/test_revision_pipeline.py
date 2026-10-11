@@ -353,20 +353,21 @@ class RevisionPipelineTests(FolderFixture):
         self.assertFalse(manifest['publication_complete'])
         self.assertFalse((self.run_dir / 'study.material.json').exists())
 
-    def test_invalid_study_scope_has_no_fallback(self):
+    def test_invalid_advisory_scope_does_not_need_a_fallback(self):
         def invalid_scope(stage, context, data):
             if stage == 'study':
-                data['subsystems'][0]['paths'] = ['absent']
+                data['subsystems'] = [dict(id='S-001', name='App', purpose='Fixture.', paths=['absent'])]
             return data
         for policy in ('strict', 'compromise'):
             for keep_going in (False, True):
                 with self.subTest(policy=policy, keep_going=keep_going):
                     manifest, code = self.run_case(invalid_scope, policy=policy, continue_on_error=keep_going)
-                    self.assertNotEqual(code, 0)
-                    self.assertFalse(manifest['accepted'])
-                    self.assertNotIn('coverage_plan', manifest)
-                    self.assertFalse((self.run_dir / 'coverage.plan.json').exists())
-                    self.assertEqual(self.stages(), ['study', 'review'] if policy == 'compromise' and keep_going else ['study'])
+                    self.assertEqual(code, 0, manifest.get('diagnostics'))
+                    self.assertTrue(manifest['accepted'])
+                    self.assertEqual(manifest['coverage_plan']['origin'], 'SOURCE_INVENTORY')
+                    self.assertTrue((self.run_dir / 'coverage.plan.json').exists())
+                    self.assertEqual(self.stages(), ['study', 'review'])
+                    self.assertTrue(manifest['study']['advisory']['diagnostics'])
 
     def test_partial_study_can_complete_a_revision_in_the_same_scope(self):
         def change(stage, context, data):
@@ -382,17 +383,24 @@ class RevisionPipelineTests(FolderFixture):
         self.assertTrue(second['study']['program_checks']['policy_satisfied'])
         self.assertEqual(first['study']['review_plan']['coverage_plan'], second['study']['review_plan']['coverage_plan'])
 
-    def test_revised_study_cannot_change_frozen_scope(self):
+    def test_revised_advisory_classification_cannot_change_inventory_scope(self):
         def change(stage, context, data):
             initial_finding(stage, context, data)
             if stage == 'study' and context['revision_id'] == '002':
-                data['subsystems'][0]['paths'] = ['app.py']
+                data['subsystems'] = [dict(id='S-001', name='Revised', purpose='Different model grouping.', paths=['absent'])]
+                data['exclusions'] = [dict(path='.', reason='Model would omit every source.')]
             return data
         manifest, code = self.run_case(change)
-        self.assertNotEqual(code, 0)
-        self.assertEqual(manifest['selected_revision'], '001')
-        self.assert_selected_aliases('001')
-        self.assertEqual(manifest['revisions'][1]['study_invocation']['error']['details']['code'], 'COVERAGE_SCOPE_CHANGED')
+        self.assertEqual(code, 0, manifest.get('diagnostics'))
+        self.assert_selected_aliases('002')
+        plan = manifest['coverage_plan']
+        for revision in manifest['revisions']:
+            self.assertEqual(revision['study']['review_plan']['coverage_plan'], plan)
+            self.assertEqual(revision['review']['review_plan']['coverage_plan'], plan)
+        contexts = [call['coverage_plan'] for call in self.calls]
+        self.assertTrue(all(scope == contexts[0] for scope in contexts))
+        self.assertEqual([entry['path'] for entry in json.loads((self.run_dir / 'source.inventory.json').read_text())['entries']
+                          if entry['type'] == 'file'], ['app.py'])
 
 
 

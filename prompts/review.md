@@ -169,10 +169,13 @@ and integrity records separately. Do not interpret compact context as missing do
 The frozen internal plan binds coverage_plan and source_decoding; the compact model
 context supplies one copy of each at the top level. Include source
 areas in omission_search alongside thematic areas and priority scenarios. Check
-the study's per-area coverage claims and cited sources; INSPECTED is an agent
-assessment, not exhaustive understanding. Incomplete required areas, UNCLASSIFIED
-cannot be hidden by a positive narrative. Encoding rules
-affect program evidence resolution only; actual reading support depends on the CLI.
+the document's stated investigation limits and cited sources. Python derives the
+source areas from the filtered inventory; model relevance notes cannot change
+them. Auxiliary classification and citation diagnostics do not invalidate the
+document. NOT_CITED does not mean NOT_INSPECTED, and Python leaves inspection
+UNVERIFIED. Report concrete omissions from your source review; do not infer them
+from missing citations alone. Encoding rules affect program evidence resolution
+only; actual reading support depends on the CLI.
 
 Return prior_findings: [] for an initial review. For a revised study, assess every
 supplied previous HIGH/MEDIUM finding exactly once using revision_id, finding_id,

@@ -264,7 +264,7 @@ class OpenCodeAcceptanceTests(FolderFixture):
                 original = {}
                 def process(command, cwd, env, payload, **kwargs):
                     wire = response(prompt_context(payload))
-                    wire['subsystems'][0]['paths'] = ['app.py', 'src/']
+                    wire['subsystems'] = [dict(id='S-001', name='App', purpose='Fixture.', paths=['app.py', 'src/'])]
                     wire['exclusions'] = [dict(path='src/generated/', reason='Generated fixture.')]
                     original.update(wire)
                     return cli_result(command, wire)
@@ -273,10 +273,11 @@ class OpenCodeAcceptanceTests(FolderFixture):
                 self.assertEqual(mocked.call_count, 1)
                 self.assertTrue(meta['publication_complete'])
                 plan = data['review_plan']['coverage_plan']
-                self.assertTrue(plan['policy_satisfied'])
-                self.assertEqual(plan['areas'][0]['paths'], ['app.py', 'src'])
-                self.assertEqual(plan['areas'][0]['file_paths'], ['app.py', 'src/main.py'])
-                self.assertEqual(plan['exclusions'][0]['file_paths'], ['src/generated/data.py'])
+                self.assertEqual(plan['origin'], 'SOURCE_INVENTORY')
+                self.assertEqual({path for area in plan['areas'] for path in area['file_paths']},
+                                 {'app.py', 'src/main.py', 'src/generated/data.py'})
+                self.assertNotIn('exclusions', plan)
+                self.assertEqual(json.loads(data['advisory']['raw_json'])['subsystems'], original['subsystems'])
                 attempt = Path(meta['artifact_directory'])
                 self.assertEqual(json.loads((attempt / 'extracted.json').read_text()), original)
                 self.assertTrue(json.loads((attempt / 'validation.json').read_text())['valid'])

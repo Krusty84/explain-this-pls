@@ -3,7 +3,7 @@
 
 """Artifact-only schemas. These are never sent to a backend as wire schemas."""
 from src.contracts.contracts import (SCHEMAS, FOLDER_SCHEMAS, MATERIALIZED_CLAIM, STRINGS, PRIOR_FINDING,
-                       CONTRACT_ID, obj, array, string)
+                       CONTRACT_ID, ARTIFACT_FORMAT, obj, array, string)
 from src.reports.document_rendering import materialized_schema
 
 INTEGER = {'type': 'integer', 'minimum': 0}
@@ -24,13 +24,12 @@ IDENTITY['properties'].update(repository=string(), branch=NULL_STRING, base_comm
     source_type=string('commit', 'working_tree'), snapshot_id=string(), submodule_head=string())
 NULL_IDENTITY = dict(IDENTITY, type=['object', 'null'])
 SOURCE = obj(id=string(), root=string(), identity=IDENTITY)
-COVERAGE_PLAN = obj(contract_id=string(CONTRACT_ID), sources=array(SOURCE), inventory_sha256=string(),
+COVERAGE_PLAN = obj(contract_id=string(CONTRACT_ID), artifact_format=string(ARTIFACT_FORMAT),
+    origin=string('SOURCE_INVENTORY'), sources=array(SOURCE), inventory_sha256=string(),
     areas=array(obj(id=string(), name=string(), purpose=string(), paths=STRINGS, entry_paths=STRINGS,
                     file_paths=STRINGS, required={'type': 'boolean'})),
-    exclusions=array(obj(path=string(), reason=string(), entry_paths=STRINGS, file_paths=STRINGS)),
-    unclassified_paths=STRINGS, counts=obj(files=INTEGER, symlinks=INTEGER, directories=INTEGER, empty_directories=INTEGER, assigned_files=INTEGER,
-        excluded_files=INTEGER, unclassified_files=INTEGER, overlapping_files=INTEGER),
-    policy_satisfied={'type': 'boolean'}, plan_sha256=string())
+    counts=obj(files=INTEGER, symlinks=INTEGER, directories=INTEGER, empty_directories=INTEGER),
+    plan_sha256=string())
 REGISTRY_DIFF = obj(added_ids=STRINGS, removed_ids=STRINGS, changed_ids=STRINGS, unchanged_ids=STRINGS)
 REGISTRY_DIFF['properties'].update(previous_revision_id=string(), revision_id=string())
 SOURCE_DECODING = obj(rules=array(obj(path=string(), encoding=string())))
@@ -61,8 +60,9 @@ BASE_CHECKS = dict(execution=string('COMPLETED'), contract=string('VALID'), sour
         'type': ['string', 'null'], 'enum': ['COMPLETE', 'PARTIAL', 'BLOCKED', None]}, meaning=string())
 CHECKS = {
     'study': obj(**BASE_CHECKS, evidence_counts=mapping(INTEGER), document_links=DOCUMENT_LINKS,
-        coverage=obj(expected_ids=STRINGS, missing_ids=STRINGS, unfinished_ids=STRINGS, unsupported_ids=STRINGS,
-            reported_by=string('AGENT'), completeness_measured={'type': 'boolean'}, policy_satisfied={'type': 'boolean'})),
+        coverage=obj(expected_ids=STRINGS, cited_ids=STRINGS, not_cited_ids=STRINGS, unverified_ids=STRINGS,
+            metadata_verified_empty_paths=STRINGS, reported_by=string('ORCHESTRATOR'),
+            completeness_measured={'type': 'boolean'})),
     'review': obj(**BASE_CHECKS, evidence_counts=mapping(INTEGER), document_links=DOCUMENT_LINKS,
         outcome_counts=mapping(INTEGER), finding_ids_by_claim=mapping(STRINGS),
         registry_coverage=obj(expected_ids=STRINGS, received_ids=STRINGS, assessed_ids=STRINGS,
@@ -77,7 +77,7 @@ for stage in ('study', 'review', 'compare'):
     # Optional saved-only fields keep earlier reports readable.
     CHECKS[stage]['properties'].update(continuation_allowed={'type': 'boolean'},
                                      citation_warnings=array(CITATION_WARNING))
-CHECKS['study']['properties']['coverage']['properties']['metadata_verified_empty_paths'] = STRINGS
+ADVISORY = obj(raw_json=string(), diagnostics=array(obj(path=string(), code=string(), message=string())))
 
 
 def artifact_schemas(wire):
@@ -94,6 +94,8 @@ def artifact_schemas(wire):
         if stage == 'review':
             properties.update(claim_registry=array(MATERIALIZED_CLAIM), verdict=string('PASS', 'CHANGES_REQUIRED', 'INCONCLUSIVE'))
         result[stage] = obj(**properties)
+        if stage == 'study':
+            result[stage]['properties']['advisory'] = ADVISORY
         if stage in ('study', 'review'):
             # Optional for direct prepare_result callers;
             # every new Runner publication writes this orchestrator-only record.

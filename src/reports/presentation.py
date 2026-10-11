@@ -74,15 +74,15 @@ def render_architecture(data, language='English'):
     return data['report_markdown'] + ('\n\n' + appendix if appendix else '')
 
 
-def render_coverage(plan, reports=(), checks=None):
+def render_coverage(plan, checks=None):
     if not plan:
         return ''
+    checks = checks or {}
     counts = plan['counts']
-    out = ['## Source distribution — program reconciliation', '',
+    out = ['## Source scope — pinned inventory', '',
            '; '.join(f'{key}: {counts[key]}' for key in
-                     ('files', 'assigned_files', 'excluded_files', 'unclassified_files', 'overlapping_files', 'symlinks',
-                      'directories', 'empty_directories')), '',
-           'Totals count unique files. Areas may overlap. This does not measure understanding.', '',
+                     ('files', 'symlinks', 'directories', 'empty_directories')), '',
+           'Python groups the filtered inventory for navigation. This does not measure understanding.', '',
            '| Area | Purpose | Paths | Files | Symbolic links |', '| --- | --- | --- | --- | --- |']
     links = set()
     for area in plan['areas']:
@@ -90,29 +90,22 @@ def render_coverage(plan, reports=(), checks=None):
         links.update(symlinks)
         out += ['| ' + ' | '.join(cell(x) for x in (area['id'] + ': ' + area['name'], area['purpose'],
                   ', '.join(area['paths']), len(area['file_paths']), len(symlinks))) + ' |']
-    if plan['exclusions']:
-        out += ['', 'Explicit exclusions:', '']
-        for exclusion in plan['exclusions']:
-            links.update(set(exclusion['entry_paths']) - set(exclusion['file_paths']))
-            out += ['- ' + cell(exclusion['path']) + ': ' + cell(exclusion['reason'])]
     if links:
         out += ['', 'Symbolic links (targets were not followed): ' + cell(', '.join(sorted(links)))]
     out += ['',
-            '## Area inspection — agent reports', '',
-            'INSPECTED requires resolved source evidence or verified metadata for an empty-file scope; '
-            'it does not establish exhaustive investigation.', '',
-            '| Area | Reported status | Evidence | Limitation |', '| --- | --- | --- | --- |']
-    by_id = {r['area_id']: r for r in reports}
+            '## Citation coverage — program diagnostics', '',
+            'CITED means an evidence locator resolved within the area. NOT_CITED does not mean NOT_INSPECTED. '
+            'Inspection remains UNVERIFIED; citations and inventory metadata do not record agent file reads. '
+            'These diagnostics do not block document publication.', '',
+            '| Area | Citations | Inspection | Note |', '| --- | --- | --- | --- |']
     for area in plan['areas']:
-        record = by_id.get(area['id'], {})
-        limitation = record.get('limitation', '')
-        if area['id'] in (checks or {}).get('unsupported_ids', []):
-            limitation += ' No resolved evidence within this area.'
-        empty_paths = set((checks or {}).get('metadata_verified_empty_paths', [])) & set(area['file_paths'])
+        cited = area['id'] in checks.get('cited_ids', [])
+        note = ''
+        empty_paths = set(checks.get('metadata_verified_empty_paths', [])) & set(area['file_paths'])
         if empty_paths:
-            limitation += ' Empty files verified from pinned metadata: ' + ', '.join(sorted(empty_paths)) + '.'
-        out += ['| ' + ' | '.join(cell(x) for x in (area['id'], record.get('status', 'MISSING'),
-                  ', '.join(record.get('evidence_ids', [])), limitation)) + ' |']
+            note = 'Empty files verified from pinned metadata: ' + ', '.join(sorted(empty_paths)) + '.'
+        out += ['| ' + ' | '.join(cell(x) for x in (area['id'], 'CITED' if cited else 'NOT_CITED',
+                  'UNVERIFIED', note)) + ' |']
     return '\n'.join(out) + '\n'
 
 
@@ -141,8 +134,15 @@ def render_stage(stage, data, language='English'):
                 '; strict policy checks satisfied: ' + str(checks['policy_satisfied']) + '.', '']
     if stage == 'study':
         out += ['Study completion reported by the agent: ' + data['completion_status'], '']
-        out += [render_coverage(data.get('review_plan', {}).get('coverage_plan'), data.get('coverage', []),
-                               checks.get('coverage')), '']
+        out += [render_coverage(data.get('review_plan', {}).get('coverage_plan'), checks.get('coverage')), '']
+        diagnostics = data.get('advisory', {}).get('diagnostics', [])
+        if diagnostics:
+            out += ['## Auxiliary observations — warnings', '',
+                    'These warnings do not change the document, source scope or acceptance checks.', '',
+                    '| Response path | Reason | Detail |', '| --- | --- | --- |']
+            for diagnostic in diagnostics:
+                out += ['| ' + ' | '.join(cell(diagnostic[key]) for key in ('path', 'code', 'message')) + ' |']
+            out += ['']
     elif stage == 'review':
         out += [label(data['verdict'], language), '']
         c = checks['registry_coverage']

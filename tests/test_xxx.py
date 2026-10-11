@@ -64,20 +64,20 @@ class XXXTests(unittest.TestCase):
     def prompts(self):
         return [c for c in self.recorded() if c['args'][0] == 'run' and '--help' not in c['args']]
 
-    def test_invalid_study_scope_retains_material_without_a_plan(self):
+    def test_invalid_advisory_scope_preserves_a_valid_study(self):
         self.value['result_policy'] = 'compromise'
         for scenario in ('scope-mixed', 'scope-unknown'):
             with self.subTest(scenario=scenario):
                 previous = len(self.prompts())
                 manifest, code = self.run_case(scenario)
-                self.assertEqual((code, manifest['status'], manifest['accepted']), (2, 'PARTIAL', False), manifest.get('diagnostics'))
-                self.assertNotIn('coverage_plan', manifest)
-                self.assertIsNone(manifest['study'])
-                self.assertIsNotNone(manifest['study_material'])
+                self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True), manifest.get('diagnostics'))
+                self.assertEqual(manifest['coverage_plan']['origin'], 'SOURCE_INVENTORY')
+                self.assertIsNotNone(manifest['study'])
+                self.assertNotIn('study_material', manifest)
                 self.assertEqual(len(self.prompts()) - previous, 2)
-                self.assertFalse((self.run_dir / 'coverage.plan.json').exists())
+                self.assertTrue((self.run_dir / 'coverage.plan.json').exists())
                 self.assertIn('Synthetic scope limitation.', Path(manifest['final_report']).read_text())
-                self.assertEqual(manifest['revisions'][0]['review']['verdict'], 'INCONCLUSIVE')
+                self.assertTrue(manifest['study']['advisory']['diagnostics'])
 
 
     def git(self, *args):

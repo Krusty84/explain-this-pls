@@ -26,9 +26,7 @@ class ContextComparisonTests(FolderFixture):
         folder = Folder(self.source, source_filter=config['source_filter'])
         inventory = folder.snapshot()
         context = {'source_directory': str(self.source), 'source_fingerprint': inventory['source_fingerprint']}
-        scope = {**context, 'task': 'architecture_documentation', 'completion_status': 'COMPLETE', 'limitations': [], 'exclusions': [],
-                   'subsystems': [{'id': 'S-001', 'name': 'Unit', 'purpose': 'A test unit.', 'paths': ['.']}]}
-        coverage = build_coverage_plan(scope['subsystems'], scope['exclusions'], inventory, context)
+        coverage = build_coverage_plan(inventory, context)
         baseline = self.base / 'baseline'
         baseline.mkdir()
         for name, value in [('source.inventory.json', inventory), ('coverage.plan.json', coverage)]:
@@ -183,10 +181,7 @@ class GitContextComparisonTests(unittest.TestCase):
             setup.repo.checkout(pins['test01'])
             inventory, _ = setup.source_inventory()
             context = {'branch': 'test01', 'source_commit': pins['test01'], 'repository': str(fixture.repo_path)}
-            scope = {**{key: context[key] for key in ('branch', 'source_commit')},
-                'task': 'architecture_documentation', 'completion_status': 'COMPLETE', 'limitations': [], 'exclusions': [],
-                'subsystems': [{'id': 'S-001', 'name': 'Unit', 'purpose': 'A test unit.', 'paths': ['.']}]}
-            coverage = build_coverage_plan(scope['subsystems'], scope['exclusions'], inventory, context)
+            coverage = build_coverage_plan(inventory, context)
             for name, value in [('source.inventory.json', inventory), ('coverage.plan.json', coverage)]:
                 save_json(baseline / name, value)
         finally:

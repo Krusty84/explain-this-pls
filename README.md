@@ -16,7 +16,7 @@ read the code without running the project's builds or tests.
   with references to the source code.
 - **PlantUML diagrams** of components and data flows, embedded as source in the reports.
 - **Optional report review** identifying unsupported claims, contradictions and missing information.
-- **Subsystem coverage** showing which areas the agent reports inspecting and where gaps remain.
+- **Source coverage diagnostics** showing cited areas without treating missing citations as unread files.
 - **Report revision**, when review is enabled, allowing one correction round and a new review while retaining earlier versions.
 - **Branch comparison** showing differences from a branch you choose as a baseline.
 - **Folder analysis** for source code that does not need to be in Git.
@@ -164,7 +164,8 @@ Run artifacts record filter settings and excluded paths or pruned roots, with
 rule-file hashes and the matching rule's file and line. Git `source.inventory.json`
 also records filter exclusions. The manifest records pinned commits, recursive
 checkout plans, switch attempts, and verified restoration results.
-These records are separate from the Study LLM's advisory exclusions.
+Only `source_filter` and Git rules exclude source files. Agent relevance notes
+cannot change the inventory or evidence checks.
 Active Folder rule files are pinned even when a rule edit would not change selection.
 Changes confined to excluded source content do not invalidate a filtered Folder snapshot.
 
@@ -200,10 +201,11 @@ in this configuration.
 #### Optional settings
 
 **Initial study** runs once per folder or selected Git branch, with source tools enabled.
-The pinned inventory defines its scope. Study returns provisional subsystem areas,
-explicit exclusions and inspection assessments; Python freezes the reconciled
-coverage plan for review and all revisions. Investigate every nonexcluded regular file,
-including unclassified files, and report unfinished investigation as a limitation.
+The pinned, filtered inventory defines its scope. Python creates a deterministic
+coverage plan from that inventory for Study, Review and all revisions. Study returns
+architecture sections, claims, evidence, completion status and limitations.
+Component boundaries, file relevance and investigation gaps belong in the report.
+Agent classification errors cannot reject a valid document or remove source files.
 Review and revision, when enabled, use the resulting study.
 
 **Prepared source context** uses the pinned, filtered inventory and existing decoding
@@ -364,20 +366,22 @@ Each run saves results in a new subfolder of `reports_dir`. Start with these fil
 and `ARCHITECTURE_REVIEW.md` are under `branches/<branch-id>/`, and the comparison,
 when applicable, is under `comparison/`. In folder mode, the architecture report
 and review are directly in the run folder.
-`coverage.plan.json` records the source distribution returned by the first valid
-Study and reconciled against inventory. It is shared by all revisions. Distribution
-and inspection assessments also appear in the consolidated report.
+`coverage.plan.json` records deterministic directory groups from the filtered
+inventory. Study, Review and Revision share the same plan. Citation diagnostics
+also appear in the consolidated report: `NOT_CITED` means no resolved citation,
+not `NOT_INSPECTED`. File inspection remains `UNVERIFIED` by Python.
 
 Catalog configuration keys and old artifact formats are unsupported. Remove
-`stage_agents.catalog` and `prompts.catalog`, update custom Study prompts to return
-`subsystems` and `exclusions`, and start a new run directory. Existing reports are
-left unchanged.
+`stage_agents.catalog` and `prompts.catalog`. Custom Study prompts must use the
+current document contract; subsystem, exclusion and coverage arrays are no longer
+required. The artifact format is `evidence-ledger-inventory-scope-v2-artifacts`.
+Start a new run directory. Existing reports are left unchanged.
 
 #### FINAL_REPORT.md — consolidated results
 
 - **Run summary:** overall status and limitations affecting the results.
 - **Results for each branch or folder:** document versions, review findings,
-  subsystem coverage and the full architecture and review text. Additional revision
+  source citation diagnostics and the full architecture and review text. Additional revision
   material appears when available.
 - **Comparison:** differences between branches and the agent's detailed explanation,
   or a note explaining why comparison is unavailable or unnecessary.
@@ -441,9 +445,15 @@ By default, useful partial results are kept even if a stage fails
 in the final report. If a revision is produced, the results identify the selected
 version and retain earlier material.
 
+Both `strict` and `compromise` publish structurally valid studies with valid source
+identity and evidence regardless of auxiliary classification errors. Those errors
+are diagnostics. A valid `PARTIAL` study retains its claims and limitations, while
+its completion status still prevents a complete workflow result. Required document,
+evidence and source-integrity failures retain their strict checks.
+
 - **COMPLETE:** checks for all enabled stages passed, review is required only when enabled.
 - **COMPLETE_WITH_WARNINGS:** processing completed under `compromise` with citation warnings. Strict evidence quality and acceptance remain separate from permission to continue.
-- **PARTIAL:** useful material is available, with unresolved issues or missing coverage.
+- **PARTIAL:** useful material is available, with unresolved issues or missing required review checks.
 - **FAILED:** no usable report material was produced, or a critical error prevented completion.
 
 Read the limitations and findings before relying on the reports. Source references

@@ -144,17 +144,13 @@ class OptionalReviewPipelineTests(PipelineMixin, FolderFixture):
                 self.assertIn('Review is disabled by configuration', summary)
 
     def test_incomplete_recovered_and_changed_sources_cannot_succeed(self):
-        for case in ('partial', 'evidence', 'coverage', 'scope', 'recovered', 'changed'):
+        for case in ('partial', 'evidence', 'recovered', 'changed'):
             def change(ctx, data):
-                if ctx['stage'] == 'study' and case == 'scope':
-                    data['subsystems'][0]['paths'] = ['missing']
                 if ctx['stage'] == 'study':
                     if case == 'partial':
                         data.update(completion_status='PARTIAL', limitations=['Incomplete inspection.'])
                     elif case == 'evidence':
                         data['evidence'][0]['end_line'] = 99
-                    elif case == 'coverage':
-                        data['coverage'][0].update(status='PARTIALLY_INSPECTED', limitation='Missing inspection.')
                     elif case == 'recovered':
                         data['unexpected'] = True
                     elif case == 'changed':

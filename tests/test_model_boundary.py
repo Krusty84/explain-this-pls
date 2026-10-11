@@ -75,14 +75,14 @@ class ModelBoundaryTests(unittest.TestCase):
                 context = (self.folder() if mode == 'folder' else {'branch': 'main', 'source_commit': 'abc'}) | {'prompt_variant': variant}
                 binding = BindingRegistry().bind('study', context, mode)
                 wire = response(binding.project())
-                for field in ('evidence', 'claims', 'coverage'):
+                for field in ('evidence', 'claims', 'report_sections'):
                     self.assertIn(field, binding.schema['required'])
                     invalid = copy.deepcopy(wire)
                     invalid.pop(field)
                     with self.subTest(mode=mode, variant=variant, field=field), self.assertRaises(ContractError):
                         binding.expand(invalid)
                 expanded = binding.expand(wire)
-                for field in ('evidence', 'claims', 'coverage'):
+                for field in ('evidence', 'claims', 'report_sections'):
                     self.assertEqual(expanded[field], wire[field])
 
     def test_review_expansion_and_repair_preserve_contents_and_commits(self):

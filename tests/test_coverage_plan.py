@@ -2,16 +2,18 @@
 # SPDX-License-Identifier: MIT
 
 import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from src.contracts.contracts import ContractError, validate_result, validate_schema
-from src.analysis.coverage_plan import build_coverage_plan, coverage_checks, inventory_summary, verify_coverage_plan, study_coverage_plan
-from src.analysis.ledger import prepare_result, review_context
+from src.analysis.coverage_plan import (advisory_diagnostics, build_coverage_plan, coverage_checks,
+    inventory_summary, verify_coverage_plan, study_coverage_plan)
+from src.analysis.ledger import prepare_result, review_context, verify_review_context
 from src.reports.presentation import render_coverage
 from src.contracts.saved_contracts import SAVED_SCHEMAS
-from src.analysis.evidence import canonical, sha, valid_path
+from src.analysis.evidence import canonical, sha
 from fixtures.ledger_response import response
 
 
@@ -24,103 +26,107 @@ class CoveragePlanTests(unittest.TestCase):
             {'path': 'src/lib.py', 'type': 'file', 'sha256': '2'},
             {'path': 'README.md', 'type': 'file', 'sha256': '3'},
             {'path': 'linked', 'type': 'symlink', 'target': '../outside'}]}
-        self.scope = dict(subsystems=[dict(id='S-001', name='Source', purpose='Application code.', paths=['src'])],
-            exclusions=[dict(path='README.md', reason='User documentation.'),
-                        dict(path='linked', reason='Symbolic link; target not inspected.')])
 
-    def plan(self, scope=None):
-        scope = scope if scope is not None else self.scope
-        return build_coverage_plan(scope['subsystems'], scope['exclusions'], self.inventory, self.context)
+    def plan(self):
+        return build_coverage_plan(self.inventory, self.context)
 
-    def test_unclassified_entries_block_policy(self):
-        self.scope['exclusions'] = []
+    def rehash(self, plan):
+        plan['plan_sha256'] = sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))
+
+    def test_inventory_defines_all_area_memberships(self):
         plan = self.plan()
-        self.assertEqual(plan['unclassified_paths'], ['README.md', 'linked'])
-        self.assertEqual(plan['areas'][-1]['id'], 'UNCLASSIFIED')
-        self.assertFalse(plan['policy_satisfied'])
+        self.assertEqual(plan['origin'], 'SOURCE_INVENTORY')
+        self.assertEqual([a['paths'] for a in plan['areas']], [['.'], ['src']])
+        self.assertEqual(plan['areas'][0]['entry_paths'], ['README.md', 'linked'])
+        self.assertEqual(plan['areas'][1]['entry_paths'], ['src/app.py', 'src/lib.py'])
+        self.assertEqual(plan['counts'], {'files': 3, 'symlinks': 1, 'directories': 2, 'empty_directories': 0})
+        self.assertNotIn('policy_satisfied', plan)
+        self.assertNotIn('exclusions', plan)
+        self.assertNotIn('unclassified_paths', plan)
         self.assertEqual(verify_coverage_plan(plan), plan)
 
-    def test_paths_require_real_inventory_entries(self):
-        for path in ('src2', '../src', '/src', 'src//app.py', 'src/../src', 'src\\app.py', 'linked/outside.py',
-                     'src//', './', '/', 'missing/', 'README.md/', 'linked/'):
-            for location in ('subsystem', 'exclusion'):
-                with self.subTest(path=path, location=location):
-                    scope = copy.deepcopy(self.scope)
-                    if location == 'subsystem':
-                        scope['subsystems'][0]['paths'] = [path]
-                    else:
-                        scope['exclusions'].append(dict(path=path, reason='Invalid selector.'))
-                    with self.assertRaises(ContractError):
-                        self.plan(scope)
+    def test_model_metadata_never_changes_frozen_scope(self):
+        context = self.context | {'_inventory': self.inventory, 'coverage_plan': self.plan()}
+        original = copy.deepcopy(context)
+        for observation in ({}, {'subsystems': None}, {'coverage': 'invalid'},
+                {'subsystems': [{'paths': ['missing/']}]},
+                {'exclusions': [{'path': 'src', 'reason': 'Not relevant.'}]}):
+            with self.subTest(observation=observation):
+                self.assertEqual(study_coverage_plan(observation, context), context['coverage_plan'])
+        self.assertEqual(context, original)
 
-    def test_directory_suffix_preserves_assignments_without_mutating_response(self):
-        expected = self.plan()
-        self.scope['subsystems'][0]['paths'] = ['src/']
-        original = copy.deepcopy(self.scope)
-        self.assertEqual(self.plan(), expected)
-        self.assertEqual(self.scope, original)
-        self.assertFalse(valid_path('src/'))
-
-    def test_alias_duplicates_empty_paths_and_reserved_ids_are_rejected(self):
-        changes = [lambda s: s['subsystems'][0].update(paths=['src', 'src/']),
-                   lambda s: s['subsystems'][0].update(paths=[]),
-                   lambda s: s['subsystems'][0].update(id='UNCLASSIFIED'),
-                   lambda s: s['subsystems'].append(copy.deepcopy(s['subsystems'][0])),
-                   lambda s: s['exclusions'].append(dict(path='README.md', reason='Duplicate.')),
-                   lambda s: s['exclusions'][0].update(reason=' ')]
-        for change in changes:
-            with self.subTest(change=change):
-                scope = copy.deepcopy(self.scope)
-                change(scope)
+    def test_changed_inventory_or_source_identity_is_rejected(self):
+        context = self.context | {'_inventory': self.inventory, 'coverage_plan': self.plan()}
+        changed = copy.deepcopy(context)
+        changed['_inventory']['entries'][2]['sha256'] = 'changed'
+        for invalid in (changed, context | {'source_commit': 'other'}):
+            with self.subTest(invalid=invalid):
                 with self.assertRaises(ContractError):
-                    self.plan(scope)
+                    study_coverage_plan({}, invalid)
 
-    def test_plan_policy_counts_and_hash_cannot_be_forged(self):
-        for change in (lambda p: p['counts'].update(assigned_files=999),
-                       lambda p: p.update(policy_satisfied=False)):
-            plan = self.plan()
-            change(plan)
-            plan['plan_sha256'] = sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))
-            with self.assertRaises(ContractError):
-                verify_coverage_plan(plan)
+    def test_frozen_hash_counts_and_memberships_cannot_be_forged(self):
+        for change in (lambda p: p['counts'].update(files=999),
+                lambda p: p['areas'][0].update(id='S-999'),
+                lambda p: p['areas'][0].update(name='Changed'),
+                lambda p: p['areas'][0].update(required=False),
+                lambda p: p['areas'][0].update(entry_paths=['../outside']),
+                lambda p: p['areas'][1].update(entry_paths=['README.md'])):
+            with self.subTest(change=change):
+                plan = self.plan()
+                change(plan)
+                self.rehash(plan)
+                with self.assertRaises(ContractError):
+                    verify_coverage_plan(plan)
         plan = self.plan()
         plan['areas'][0]['name'] = 'Changed'
         with self.assertRaises(ContractError):
             verify_coverage_plan(plan)
 
-    def test_scope_is_frozen_across_revisions_without_binding_mutation(self):
-        context = self.context | {'_inventory': self.inventory, 'coverage_plan': self.plan()}
-        original = copy.deepcopy(context)
-        self.assertEqual(study_coverage_plan(self.scope, context), context['coverage_plan'])
-        self.assertEqual(context, original)
-        for change in (lambda s: s['subsystems'][0].update(paths=['src/app.py']),
-                       lambda s: s['subsystems'][0].update(name='Changed'),
-                       lambda s: s['exclusions'].pop()):
-            scope = copy.deepcopy(self.scope)
-            change(scope)
-            with self.assertRaises(ContractError) as caught:
-                study_coverage_plan(scope, context)
-            self.assertEqual(caught.exception.details['code'], 'COVERAGE_SCOPE_CHANGED')
-
-    def test_old_coverage_fields_are_rejected(self):
-        for key, value in (('origin', 'AGENT'), ('catalog_status', 'COMPLETE'), ('limitations', [])):
+    def test_old_plan_fields_and_format_are_rejected(self):
+        for key, value in (('exclusions', []), ('unclassified_paths', []), ('policy_satisfied', True),
+                           ('artifact_format', 'evidence-ledger-study-coverage-artifacts')):
             plan = self.plan() | {key: value}
-            plan['plan_sha256'] = sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))
+            self.rehash(plan)
             with self.assertRaises(ContractError):
                 verify_coverage_plan(plan)
 
-    def test_distribution_escapes_values_without_old_stage_metadata(self):
-        self.scope['subsystems'][0].update(name='Исходники | <core>', purpose='Код\nприложения\x1b.')
+    def test_invalid_advisory_paths_are_preserved_and_only_warn(self):
+        observations = {'subsystems': [{'id': 'S-001', 'name': 'App', 'purpose': 'App code.',
+            'paths': ['src/', 'missing', '../private']}],
+            'exclusions': [{'path': 'src', 'reason': 'Not relevant.'}]}
+        original = copy.deepcopy(observations)
+        context = self.context | {'_inventory': self.inventory}
+        diagnostics = advisory_diagnostics(observations, context)
+        self.assertEqual(observations, original)
+        self.assertEqual([d['code'] for d in diagnostics], ['UNSAFE_COVERAGE_PATH',
+            'UNKNOWN_COVERAGE_PATH', 'UNSAFE_COVERAGE_PATH', 'MODEL_EXCLUSION_IGNORED'])
+        self.assertNotIn('../private', json.dumps(diagnostics))
+        self.assertEqual(study_coverage_plan(observations, context), self.plan())
+
+    def test_arbitrary_advisory_types_cannot_reject_scope(self):
+        context = self.context | {'_inventory': self.inventory}
+        for observations in (None, [], 1, '', {'subsystems': None, 'coverage': 'wrong', 'exclusions': 9},
+                {'subsystems': [None, {'paths': [None, [], {}]}], 'exclusions': [None, []]},
+                {'advisory': {'arbitrary': [1]}, 'relevance_notes': None}):
+            with self.subTest(observations=observations):
+                self.assertIsInstance(advisory_diagnostics(observations, context), list)
+                self.assertEqual(study_coverage_plan(observations, context), self.plan())
+
+    def test_distribution_escapes_directory_names_and_distinguishes_citations(self):
+        for entry in self.inventory['entries']:
+            entry['path'] = entry['path'].replace('src', 'Исходники | <core>', 1)
         markdown = render_coverage(self.plan())
         self.assertIn('Исходники &#124; &lt;core&gt;', markdown)
-        self.assertNotIn('Catalog', markdown)
+        self.assertIn('| S-001 | NOT_CITED | UNVERIFIED |', markdown)
+        self.assertNotIn('| NOT_INSPECTED |', markdown)
         self.assertNotIn('plan_sha256', markdown)
 
-    def test_first_study_builds_plan_and_review_binds_decoding(self):
+    def test_first_study_and_review_share_inventory_plan(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             (root / 'app.py').write_text('print(1)\n')
-            inventory = {'entries': [{'path': '.', 'type': 'directory'}, {'path': 'app.py', 'type': 'file', 'sha256': sha(b'print(1)\n')}]}
+            inventory = {'entries': [{'path': '.', 'type': 'directory'},
+                {'path': 'app.py', 'type': 'file', 'sha256': sha(b'print(1)\n')}]}
             context = self.context | {'repository': str(root), '_inventory': inventory, 'revision_id': '001'}
             original = copy.deepcopy(context)
             wire = response(context)
@@ -129,49 +135,49 @@ class CoveragePlanTests(unittest.TestCase):
             validate_schema(study, SAVED_SCHEMAS['study'])
             self.assertTrue(study['program_checks']['policy_satisfied'])
             self.assertEqual(context, original)
-            context = context | {'coverage_plan': study['review_plan']['coverage_plan']}
             review = review_context(study, context)
+            self.assertEqual(review['coverage_plan'], build_coverage_plan(inventory, context))
             self.assertIn('S-001', [a['id'] for a in review['review_plan']['omission_areas']])
             from src.analysis.ledger import freeze_plan
             changed = freeze_plan(study, context | {'source_decoding': {'rules': [{'path': '.', 'encoding': 'cp1251'}]}})
             self.assertNotEqual(changed['plan_sha256'], study['review_plan']['plan_sha256'])
             self.assertEqual(changed['document_sha256'], study['review_plan']['document_sha256'])
 
+            changed_context = copy.deepcopy(context)
+            changed_context['_inventory']['entries'][1]['sha256'] = 'changed'
+            with self.assertRaisesRegex(ContractError, 'inventories differ'):
+                review_context(study, changed_context)
+            changed_review = copy.deepcopy(review)
+            changed_review['_inventory']['entries'][1]['sha256'] = 'changed'
+            with self.assertRaisesRegex(ContractError, 'inventories differ'):
+                verify_review_context(changed_review)
 
-    def test_overlaps_count_unique_files_and_keep_exclusions(self):
-        self.scope['subsystems'].append({'id': 'S-002', 'name': 'Library', 'purpose': 'Shared code.', 'paths': ['src/lib.py']})
+    def test_empty_directory_group_has_no_source_members(self):
+        self.inventory['entries'].append({'path': 'empty', 'type': 'directory'})
         plan = self.plan()
-        self.assertEqual(plan['counts'], {'files': 3, 'symlinks': 1, 'assigned_files': 2,
-            'excluded_files': 1, 'unclassified_files': 0, 'overlapping_files': 1,
-            'directories': 2, 'empty_directories': 0})
-        self.assertTrue(plan['policy_satisfied'])
-        self.assertEqual(plan['exclusions'][1]['entry_paths'], ['linked'])
+        empty = next(a for a in plan['areas'] if a['paths'] == ['empty'])
+        self.assertEqual(empty['entry_paths'], [])
+        self.assertFalse(empty['required'])
         self.assertEqual(verify_coverage_plan(plan), plan)
 
+    def test_citations_do_not_measure_inspection(self):
+        context = self.context | {'coverage_plan': self.plan()}
+        resolution = {'id': 'study:E-001', 'source_id': 'source-001', 'path': 'src/app.py', 'status': 'RESOLVED'}
+        checks = coverage_checks({'coverage': None}, context, [resolution])
+        self.assertEqual(checks['cited_ids'], ['S-002'])
+        self.assertEqual(checks['not_cited_ids'], ['S-001'])
+        self.assertEqual(checks['unverified_ids'], ['S-001', 'S-002'])
+        self.assertFalse(checks['completeness_measured'])
+        self.assertNotIn('policy_satisfied', checks)
+        checks = coverage_checks({}, context, [resolution | {'status': 'DECODE_ERROR'}])
+        self.assertEqual(checks['cited_ids'], [])
+        self.assertEqual(checks['not_cited_ids'], ['S-001', 'S-002'])
 
-    def test_unsupported_contract_is_rejected_even_with_matching_hash(self):
-        for missing in (False, True):
-            with self.subTest(missing=missing):
-                plan = self.plan()
-                if missing:
-                    plan.pop('contract_id')
-                else:
-                    plan['contract_id'] = 'unsupported-format'
-                plan['plan_sha256'] = sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))
-                with self.assertRaises(ContractError):
-                    verify_coverage_plan(plan)
-
-
-    def test_empty_area_report_is_required_but_inspection_is_not(self):
-        self.scope['exclusions'].append({'path': 'src', 'reason': 'Explicitly excluded synthetic fixture.'})
-        plan = self.plan()
-        self.assertFalse(plan['areas'][0]['required'])
-        context = self.context | {'coverage_plan': plan}
-        self.assertEqual(coverage_checks({'coverage': []}, context, [])['missing_ids'], ['S-001'])
-        study = {'coverage': [{'area_id': 'S-001', 'status': 'NOT_INSPECTED',
-                              'evidence_ids': [], 'limitation': 'All entries explicitly excluded.'}]}
-        self.assertTrue(coverage_checks(study, context, [])['policy_satisfied'])
-
+    def test_submodule_evidence_uses_common_source_root(self):
+        self.context['submodules'] = [{'path': 'src', 'expected_commit': 'def'}]
+        context = self.context | {'coverage_plan': self.plan()}
+        resolution = {'id': 'study:E-001', 'source_id': 'source-002', 'path': 'app.py', 'status': 'RESOLVED'}
+        self.assertEqual(coverage_checks({}, context, [resolution])['cited_ids'], ['S-002'])
 
     def test_summary_does_not_include_file_contents_or_full_inventory(self):
         summary = inventory_summary(self.inventory)
@@ -188,28 +194,5 @@ class CoveragePlanTests(unittest.TestCase):
                                                     'directories': 3, 'empty_directories': 1})
 
 
-    def test_inspected_needs_resolved_evidence_inside_area(self):
-        plan = self.plan()
-        context = self.context | {'coverage_plan': plan}
-        study = {'coverage': [{'area_id': 'S-001', 'status': 'INSPECTED',
-                              'evidence_ids': ['study:E-001'], 'limitation': ''}]}
-        resolution = {'id': 'study:E-001', 'source_id': 'source-001', 'path': 'src/app.py', 'status': 'RESOLVED'}
-        self.assertTrue(coverage_checks(study, context, [resolution])['policy_satisfied'])
-        self.assertEqual(coverage_checks(study, context, [resolution | {'path': 'README.md'}])['unsupported_ids'], ['S-001'])
-        self.assertEqual(coverage_checks(study, context, [resolution | {'status': 'DECODE_ERROR'}])['unsupported_ids'], ['S-001'])
-        study['coverage'] = []
-        self.assertEqual(coverage_checks(study, context, [])['missing_ids'], ['S-001'])
-
-
-    def test_submodule_evidence_uses_common_source_root(self):
-        self.context['submodules'] = [{'path': 'src', 'expected_commit': 'def'}]
-        plan = self.plan()
-        context = self.context | {'coverage_plan': plan}
-        study = {'coverage': [{'area_id': 'S-001', 'status': 'INSPECTED', 'evidence_ids': ['study:E-001'], 'limitation': ''}]}
-        resolution = {'id': 'study:E-001', 'source_id': 'source-002', 'path': 'app.py', 'status': 'RESOLVED'}
-        self.assertTrue(coverage_checks(study, context, [resolution])['policy_satisfied'])
-
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

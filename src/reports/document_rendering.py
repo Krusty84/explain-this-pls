@@ -9,10 +9,11 @@ LF. A locator includes the block's final LF, never the separator or heading.
 """
 from __future__ import annotations
 import copy
+import json
 
 from src.contracts.contracts import (SECTION_KEYS, SECTIONS, CLAIM, MATERIALIZED_CLAIM, SCHEMAS,
     FOLDER_SCHEMAS, LOCATOR, STRINGS, array, obj, string, validate_schema,
-    unique_ids, references, contract_violation)
+    unique_ids, references, contract_violation, document_contract, STUDY_ADVISORY_KEYS)
 from src.analysis.evidence import canonical, sha, lines
 
 RENDERING_RULE = 'study-blocks-lf'
@@ -88,9 +89,13 @@ def render_document(sections, claims):
 def materialize_study(wire):
     if type(wire) is not dict:
         validate_schema(wire, SCHEMAS['study'])
-    validate_schema(wire, (FOLDER_SCHEMAS if 'source_directory' in wire else SCHEMAS)['study'])
+    core = document_contract('study', wire)
+    validate_schema(core, (FOLDER_SCHEMAS if 'source_directory' in wire else SCHEMAS)['study'])
     markdown, blocks, registry = render_document(wire['report_sections'], wire['claims'])
-    result = copy.deepcopy({k: v for k, v in wire.items() if k not in ('report_sections', 'claims')})
+    result = copy.deepcopy({k: v for k, v in core.items() if k not in ('report_sections', 'claims')})
+    observations = {key: wire[key] for key in STUDY_ADVISORY_KEYS if key in wire}
+    if observations:
+        result['advisory'] = dict(raw_json=json.dumps(observations, ensure_ascii=False), diagnostics=[])
     result.update(report_markdown=markdown, claims=registry, block_map=blocks,
         materialization_provenance=dict(rule=RENDERING_RULE, normalized_sha256=sha(canonical(wire)),
             document_sha256=sha(markdown.encode('utf-8')), registry_sha256=sha(canonical(registry)),
@@ -106,7 +111,7 @@ def validate_materialized(value):
     schema = MATERIALIZED_SCHEMAS[mode]
     # Saved-only fields are checked by saved_contracts at publication.
     validate_schema({k: v for k, v in value.items()
-                     if k not in ('program_checks', 'review_plan', 'normalization_provenance', 'revision_id', 'registry_diff')}, schema)
+                     if k not in ('program_checks', 'review_plan', 'normalization_provenance', 'revision_id', 'registry_diff', 'advisory')}, schema)
     document = lines(value['report_markdown'])
     ids = unique_ids(value['claims'], r'C-[0-9]{3,}', '$.claims')
     for i, block in enumerate(value['block_map']):

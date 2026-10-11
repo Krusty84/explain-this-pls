@@ -265,13 +265,11 @@ class FolderFilterTests(FolderFixture):
         self.assertEqual(first, second)
         self.assertEqual(inventory_summary(first)['files'], len(files))
         context = {'source_directory': str(self.source), 'source_fingerprint': first['source_fingerprint']}
-        subsystems = [dict(id='S-001', name='Source', purpose='All files.', paths=['.'])]
-        coverage = build_coverage_plan(subsystems, [], first, context)
-        self.assertEqual(coverage['exclusions'], [])
-        unclassified = build_coverage_plan([], [], first, context)
-        self.assertEqual(unclassified['areas'][0]['id'], 'UNCLASSIFIED')
-        self.assertEqual(set(unclassified['areas'][0]['file_paths']), files)
-        self.assertEqual(coverage, build_coverage_plan(subsystems, [], second, context))
+        coverage = build_coverage_plan(first, context)
+        self.assertEqual(coverage['origin'], 'SOURCE_INVENTORY')
+        self.assertNotIn('exclusions', coverage)
+        self.assertEqual({path for area in coverage['areas'] for path in area['file_paths']}, files)
+        self.assertEqual(coverage, build_coverage_plan(second, context))
         self.value['source_filter'] = {'follow_gitignore': True, 'exclude_paths': ['secret.py']}
         runner = Runner(self.config(), self.base / 'run')
         with patch.object(runner, 'check_cli', return_value={}):

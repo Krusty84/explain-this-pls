@@ -60,7 +60,7 @@ class PreparedContextTests(FolderFixture):
                                                      'prompt_variant': variant})
             self.assertNotIn('source_context', projected)
 
-    def test_no_progress_keeps_logs_metrics_without_a_plan_without_retry(self):
+    def test_no_progress_keeps_inventory_plan_logs_and_metrics_without_retry(self):
         cfg = self.config()
         cfg['execution']['structured_output_repair_attempts'] = 2
         cfg['execution']['opencode_format_retries'] = 2
@@ -90,7 +90,8 @@ class PreparedContextTests(FolderFixture):
             manifest, code = runner.run()
         self.assertNotEqual(code, 0)
         self.assertEqual(calls, ['study'])
-        self.assertNotIn('coverage_plan', manifest)
+        self.assertEqual(manifest['coverage_plan']['origin'], 'SOURCE_INVENTORY')
+        self.assertEqual(json.loads((runner.run_dir / 'coverage.plan.json').read_text()), manifest['coverage_plan'])
         attempts = list(runner.run_dir.rglob('attempt-*/invocation.json'))
         failed = next(json.loads(path.read_text()) for path in attempts
                       if json.loads(path.read_text())['status'] == 'FAILED')

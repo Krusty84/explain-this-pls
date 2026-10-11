@@ -147,5 +147,6 @@ terminology when it describes the investigated system's actual behavior.
 Each branch supplies only its selected study/review revision. Keep selected_revision
 and supplied revision identities with references; never pair a new study with an
 older review or use an unselected draft as support. Source file distribution and
-agent-reported coverage are separate from semantic correctness. UNCLASSIFIED
-remains a comparison limitation.
+auxiliary citation diagnostics are separate from semantic correctness. Missing
+citations do not prove unread files or absent components. Model classification
+errors do not invalidate an otherwise valid input document or change its scope.

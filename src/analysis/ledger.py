@@ -7,7 +7,7 @@ import copy
 from collections import Counter
 from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, ContractError, contract_violation, has_ledger_structure, has_program_checks, is_recovered_material, review_verdict, workflow_satisfied, processing_satisfied, comparison_factual_sides
 from src.analysis.evidence import canonical, sha, source_catalog, resolve_evidence
-from src.analysis.coverage_plan import study_coverage_plan, verify_coverage_plan, coverage_checks
+from src.analysis.coverage_plan import study_coverage_plan, verify_coverage_plan, coverage_checks, advisory_diagnostics
 from src.analysis.source_decoding import normalize_source_decoding
 
 OMISSION_AREAS = ('context', 'components', 'startup_and_flows', 'data_and_state',
@@ -24,11 +24,9 @@ def freeze_plan(document, context):
     areas = [{'id': 'A-' + str(i + 1).zfill(3), 'scope': name} for i, name in enumerate(OMISSION_AREAS)]
     areas += [{'id': 'P-' + str(i + 1).zfill(3), 'scope': name}
               for i, name in enumerate(context.get('priority_scenarios', []))]
-    coverage = copy.deepcopy(context.get('coverage_plan', (document.get('review_plan') or {}).get('coverage_plan')))
+    coverage = context.get('coverage_plan', (document.get('review_plan') or {}).get('coverage_plan'))
+    coverage = copy.deepcopy(study_coverage_plan(document, context | {'coverage_plan': coverage}))
     if coverage is not None:
-        verify_coverage_plan(coverage)
-        if coverage['sources'] != source_catalog(context):
-            raise ContractError('Coverage plan identifies another source snapshot.')
         areas += [{'id': a['id'], 'scope': a['name'] + ': ' + a['purpose']}
                   for a in coverage['areas'] if a['required']]
     previous = context.get('previous_revision')
@@ -110,11 +108,6 @@ def citation_warnings(stage, data, resolutions, corrections):
     return warnings
 
 
-def quote_tolerant_resolutions(resolutions):
-    """Counterfactual inputs for continuation only; never saved as evidence."""
-    return [dict(e, status='RESOLVED') if e['status'] == 'QUOTE_MISMATCH' else e for e in resolutions]
-
-
 def continuation_allowed(checks):
     """Only recorded citation exceptions can relax the strict processing gate."""
     if checks.get('policy_satisfied'):
@@ -128,8 +121,7 @@ def continuation_allowed(checks):
     if any(e['status'] not in ('RESOLVED', 'QUOTE_MISMATCH') or
            e['status'] == 'QUOTE_MISMATCH' and e['id'] not in unresolved for e in checks.get('evidence', [])):
         return False
-    for field, keys in (('coverage', ('missing_ids', 'unfinished_ids')),
-                        ('registry_coverage', ('missing_ids', 'not_checked_ids')),
+    for field, keys in (('registry_coverage', ('missing_ids', 'not_checked_ids')),
                         ('omission_coverage', ('missing_ids', 'unfinished_ids')),
                         ('prior_finding_coverage', ('missing', 'unresolved'))):
         if any(checks.get(field, {}).get(key) for key in keys):
@@ -165,6 +157,9 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
         if plan is not None:
             context = context | {'coverage_plan': plan}
     result = copy.deepcopy(data)
+    if stage == 'study' and 'advisory' in result:
+        from src.contracts.contracts import strict_json
+        result['advisory']['diagnostics'] = advisory_diagnostics(strict_json(result['advisory']['raw_json']), context)
     checks = {'execution': 'COMPLETED', 'contract': 'VALID', 'source': 'MATCHED_AT_BOUNDARIES',
         'evidence': [], 'policy_satisfied': False, 'semantic_quality': 'NOT_MEASURED',
         'completion_self_assessment': data['completion_status'],
@@ -228,9 +223,8 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
                                    'scope': 'REGISTERED_CLAIMS_ONLY'}
         study_conditions = bool(data['claims'] and data['completion_status'] == 'COMPLETE'
             and all(c['evidence_ids'] or c['epistemic_kind'] != 'FACT' for c in data['claims']))
-        checks['policy_satisfied'] = bool(study_conditions and evidence_ok and checks['coverage']['policy_satisfied'])
-        checks['continuation_allowed'] = checks['policy_satisfied'] or bool(citations_only and study_conditions
-            and coverage_checks(data, context, quote_tolerant_resolutions(checks['evidence']))['policy_satisfied'])
+        checks['policy_satisfied'] = bool(study_conditions and evidence_ok)
+        checks['continuation_allowed'] = checks['policy_satisfied'] or bool(citations_only and study_conditions)
         result['review_plan'] = freeze_plan(result, context)
         finish_citation_checks(checks)
         return result
@@ -331,8 +325,7 @@ def completed_study(item, *, continuation=False):
             plan['registry_sha256'] == sha(canonical(doc['claims'])) and
             plan['source_sha256'] == sha(canonical(plan['sources'])) and
             plan['plan_sha256'] == sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'})) and
-            source_matches and doc.get('revision_id') == plan.get('revision_id') and
-            (not plan.get('coverage_plan') or plan['coverage_plan']['policy_satisfied']))
+            source_matches and doc.get('revision_id') == plan.get('revision_id'))
     except (ContractError, KeyError, TypeError, IndexError):
         return False
 

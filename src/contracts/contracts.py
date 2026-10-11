@@ -64,7 +64,7 @@ def obj(**properties: dict) -> dict:
 # additionalProperties. Local semantic checks enforce nonblank strings, bounds
 # and graph constraints regardless of a backend's JSON Schema dialect.
 CONTRACT_ID = 'evidence-ledger'
-ARTIFACT_FORMAT = 'evidence-ledger-study-coverage-artifacts'
+ARTIFACT_FORMAT = 'evidence-ledger-inventory-scope-v2-artifacts'
 STRINGS = array(string())
 STATUS = string('COMPLETE', 'PARTIAL', 'BLOCKED')
 BASE = dict(completion_status=STATUS, report_markdown=string(), limitations=STRINGS)
@@ -88,7 +88,7 @@ PRIOR_FINDING = obj(revision_id=string(), finding_id=string())
 TARGET = obj(source_sha256=string(), document_sha256=string(), registry_sha256=string(), plan_sha256=string())
 SCHEMAS = {
     'study': obj(**STUDY_BASE, task=string('architecture_documentation'), branch=string(), source_commit=string(),
-                 evidence=EVIDENCE, claims=array(CLAIM), subsystems=SUBSYSTEMS, exclusions=EXCLUSIONS, coverage=COVERAGE),
+                 evidence=EVIDENCE, claims=array(CLAIM)),
     'review': obj(**BASE, task=string('architecture_review'), branch=string(), source_commit=string(),
         target=TARGET, evidence=EVIDENCE,
         claims=array(obj(id=string(), outcome=string('SUPPORTED', 'CONTRADICTED', 'UNVERIFIABLE',
@@ -139,6 +139,15 @@ def model_schemas(internal):
 
 MODEL_SCHEMAS = model_schemas(SCHEMAS)
 MODEL_FOLDER_SCHEMAS = model_schemas(FOLDER_SCHEMAS)
+
+STUDY_ADVISORY_KEYS = ('subsystems', 'exclusions', 'coverage', 'relevance_notes', 'advisory')
+
+
+def document_contract(stage, value):
+    """Separate known Study observations before any mandatory schema checks."""
+    if stage == 'study' and type(value) is dict:
+        return {key: item for key, item in value.items() if key not in STUDY_ADVISORY_KEYS}
+    return value
 
 def strict_json(text: str) -> Any:
     def pairs(items):
@@ -282,7 +291,7 @@ def validate_schema(value: Any, schema: dict, where: str = '$') -> None:
 
 def has_ledger_structure(stage, value, *, representation='materialized'):
     """Recognize substantive ledger fields for the requested representation."""
-    fields = {'study': ('claims', 'evidence', 'subsystems', 'exclusions', 'coverage'),
+    fields = {'study': ('claims', 'evidence'),
               'review': ('claims', 'evidence', 'target', 'omission_search', 'prior_findings'),
               'compare': ('differences', 'unresolved_branches')}
     specs = dict(SCHEMAS[stage]['properties'])
@@ -414,7 +423,7 @@ def references(refs, allowed, path, *, namespaces=None):
 
 def validate_wire_identity(stage, value, context, mode='git'):
     """Structural and pinned-identity prerequisites; performs no repair."""
-    validate_schema(value, (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage])
+    validate_schema(document_contract(stage, value), (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage])
     if stage in ('study', 'review'):
         identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
         for key in identity:
@@ -431,6 +440,7 @@ def validate_wire_identity(stage, value, context, mode='git'):
 
 
 def validate_result(stage, value, context, mode='git'):
+    value = document_contract(stage, value)
     validate_wire_identity(stage, value, context, mode)
     nonblank(value)
     if value['completion_status'] != 'COMPLETE' and not value['limitations']:
@@ -451,17 +461,6 @@ def validate_result(stage, value, context, mode='git'):
             references(claim['evidence_ids'], evidence_ids, f'$.claims[{i}].evidence_ids', namespaces={'study'})
             if claim['epistemic_kind'] != 'FACT' and not claim['uncertainty'].strip():
                 raise ContractError('Hypothesis/unknown requires a concrete missing check or limitation')
-        from src.analysis.coverage_plan import study_coverage_plan
-        plan = study_coverage_plan(value, context)
-        areas = {a['id'] for a in plan['areas']} if plan is not None else {s['id'] for s in value['subsystems']}
-        seen = set()
-        for i, area in enumerate(value['coverage']):
-            if area['area_id'] in seen or area['area_id'] not in areas:
-                raise contract_violation('INVALID_COVERAGE_AREA_ID', f'$.coverage[{i}].area_id')
-            seen.add(area['area_id'])
-            references(area['evidence_ids'], evidence_ids, f'$.coverage[{i}].evidence_ids', namespaces={'study'})
-            if area['status'] != 'INSPECTED' and not area['limitation'].strip():
-                raise ContractError('Unfinished coverage requires a limitation')
         if context.get('previous_revision'):
             from src.analysis.revisions import registry_diff
             registry_diff(context['previous_revision']['study'], value)
@@ -560,6 +559,7 @@ def validate_result(stage, value, context, mode='git'):
 
 
 def result_diagnostics(stage, value, context, mode='git'):
+    value = document_contract(stage, value)
     schema = (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage]
     structural = schema_diagnostics(value, schema)
     issues = []

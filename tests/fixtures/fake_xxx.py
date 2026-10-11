@@ -14,7 +14,7 @@ import uuid
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).parent))
-from ledger_response import response, prompt_context
+from ledger_response import response, prompt_context, scope
 from xxx_protocol import transcript
 
 args = sys.argv[1:]
@@ -83,6 +83,7 @@ else:
     data = response(context)
     if stage == 'study' and scenario in ('scope-mixed', 'scope-unknown'):
         data['limitations'] = ['Synthetic scope limitation.']
+        data.update(scope(context))
         for subsystem in data['subsystems']:
             subsystem['paths'] = ([] if scenario == 'scope-unknown' else subsystem['paths']) + ['unknown']
     if scenario == 'missing-claims' and stage == 'study': del data['claims']

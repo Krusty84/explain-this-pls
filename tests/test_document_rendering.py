@@ -154,7 +154,8 @@ class RenderingTests(unittest.TestCase):
 
     def test_link_counts_are_claims_not_occurrences(self):
         self.wire['report_sections'][0]['blocks'] *= 3
-        with patch('src.analysis.ledger.resolve_evidence', return_value=[{'status': 'RESOLVED'}]):
+        with patch('src.analysis.ledger.resolve_evidence', return_value=[{
+                'id': 'study:E-001', 'status': 'RESOLVED', 'source_id': 'source-001', 'path': 'app.py'}]):
             saved = prepare_result('study', self.wire, self.context)
         self.assertEqual(len(saved['claims'][0]['document_locators']), 3)
         self.assertEqual(saved['program_checks']['document_links']['matched'], 1)
@@ -173,9 +174,6 @@ class EvidenceIDTests(unittest.TestCase):
                 canonical_id = 'E-' + identifier.split('E-')[1].zfill(3)
                 local = identifier.removeprefix(stage + ':')
                 wire['claims'][0]['evidence_ids'] = [stage + ':' + local]
-                if stage == 'study':
-                    for area in wire['coverage']:
-                        area['evidence_ids'] = [stage + ':' + local]
                 wire['evidence'][0]['quote'] = identifier + '\t source quotation'
                 original = copy.deepcopy(wire)
                 candidate, changes = normalize_evidence(stage, wire, context)

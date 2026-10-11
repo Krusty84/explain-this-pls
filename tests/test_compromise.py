@@ -96,39 +96,43 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         self.manifest, self.calls, self.originals, self.run_dir = manifest, calls, originals, run_dir
         return manifest, code
 
-    def test_invalid_study_scope_retains_original_material_without_a_plan(self):
+    def test_invalid_advisory_scope_preserves_the_valid_document(self):
         def change(stage, data):
             if stage == 'study':
-                data['subsystems'][0]['paths'].append('PRIVATE_UNKNOWN')
-                data['exclusions'].append(dict(path='PRIVATE_EXCLUSION', reason='Unknown exclusion.'))
+                data['subsystems'] = [dict(id='S-001', name='App', purpose='Fixture.', paths=['PRIVATE_UNKNOWN'])]
+                data['exclusions'] = [dict(path='PRIVATE_EXCLUSION', reason='Unknown exclusion.')]
             return data
         for backend in ('codex', 'opencode'):
             with self.subTest(backend=backend):
                 manifest, code = self.run_case(change, backend=backend)
-                self.assertEqual((code, manifest['status'], manifest['accepted']), (2, 'PARTIAL', False))
-                self.assertNotIn('coverage_plan', manifest)
-                self.assertIsNone(manifest['study'])
-                self.assertIsNotNone(manifest['study_material'])
-                self.assertEqual(manifest['revisions'][0]['review']['verdict'], 'INCONCLUSIVE')
+                self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
+                self.assertEqual(manifest['coverage_plan']['origin'], 'SOURCE_INVENTORY')
+                self.assertIsNotNone(manifest['study'])
+                self.assertNotIn('study_material', manifest)
+                self.assertEqual(manifest['revisions'][0]['review']['verdict'], 'PASS')
+                advisory = manifest['study']['advisory']
+                self.assertEqual(json.loads(advisory['raw_json'])['subsystems'], self.originals['study']['subsystems'])
+                self.assertTrue(advisory['diagnostics'])
                 attempt = Path(manifest['revisions'][0]['study_invocation']['artifact_directory'])
                 self.assertEqual(json.loads((attempt / 'extracted.json').read_text()), self.originals['study'])
                 self.assertFalse((attempt / 'recovery.json').exists())
-                self.assertFalse((self.run_dir / 'coverage.plan.json').exists())
+                self.assertTrue((self.run_dir / 'coverage.plan.json').exists())
                 final = Path(manifest['final_report']).read_text()
                 self.assertNotIn('PRIVATE_UNKNOWN', final)
                 self.assertNotIn('PRIVATE_EXCLUSION', final)
 
-    def test_strict_study_paths_are_rejected_without_recovery(self):
+    def test_strict_study_advisory_paths_do_not_require_recovery(self):
         def change(stage, data):
             if stage == 'study':
-                data['subsystems'][0]['paths'].append('unknown')
+                data['subsystems'] = [dict(id='S-001', name='App', purpose='Fixture.', paths=['unknown'])]
             return data
         manifest, code = self.run_case(change, policy='strict')
-        self.assertEqual((code, manifest['status'], manifest['accepted']), (1, 'FAILED', False))
-        self.assertEqual([s for s, _ in self.calls], ['study'])
+        self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
+        self.assertEqual([s for s, _ in self.calls], ['study', 'review'])
         attempt = Path(manifest['revisions'][0]['study_invocation']['artifact_directory'])
         self.assertFalse((attempt / 'recovered.json').exists())
-        self.assertEqual(manifest['revisions'][0]['study_invocation']['error']['details']['code'], 'UNKNOWN_COVERAGE_PATH')
+        self.assertTrue(manifest['study']['program_checks']['policy_satisfied'])
+        self.assertTrue(manifest['study']['advisory']['diagnostics'])
 
     def test_semantic_review_is_retained_for_both_cli_adapters(self):
         for backend in ('codex', 'opencode'):

@@ -55,7 +55,7 @@ def _pair(pair):
 def _coverage(plan):
     if not isinstance(plan, dict):
         return
-    for area in plan.get('areas', []) + plan.get('exclusions', []):
+    for area in plan.get('areas', []):
         # Selectors define scope; expanded inventory membership is used only by
         # program reconciliation. No source or authored prose is summarized.
         if 'entry_paths' in area:

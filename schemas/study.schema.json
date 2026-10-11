@@ -158,90 +158,6 @@
         ],
         "additionalProperties": false
       }
-    },
-    "subsystems": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "purpose": {
-            "type": "string"
-          },
-          "paths": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "purpose",
-          "paths"
-        ],
-        "additionalProperties": false
-      }
-    },
-    "exclusions": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "path",
-          "reason"
-        ],
-        "additionalProperties": false
-      }
-    },
-    "coverage": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "area_id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "INSPECTED",
-              "PARTIALLY_INSPECTED",
-              "NOT_INSPECTED"
-            ]
-          },
-          "evidence_ids": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "limitation": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "area_id",
-          "status",
-          "evidence_ids",
-          "limitation"
-        ],
-        "additionalProperties": false
-      }
     }
   },
   "required": [
@@ -252,10 +168,7 @@
     "branch",
     "source_commit",
     "evidence",
-    "claims",
-    "subsystems",
-    "exclusions",
-    "coverage"
+    "claims"
   ],
   "additionalProperties": false
 }

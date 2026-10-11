@@ -26,8 +26,7 @@ class HashlessMarkdownTests(unittest.TestCase):
                          start_line=1, end_line=1, quote='')]
         self.study = prepare_result('study', dict(task='architecture_documentation',
             branch='main', source_commit=self.context['source_commit'], completion_status='COMPLETE',
-            limitations=[], subsystems=[dict(id='S-001', name='Source', purpose='Static source.', paths=['.'])],
-            exclusions=[], coverage=[], evidence=evidence,
+            limitations=[], evidence=evidence,
             claims=[dict(id='C-001', statement='The source computes SHA-256.', scope='Static source.',
                          epistemic_kind='FACT', evidence_ids=['study:E-001'], uncertainty='')],
             report_sections=[dict(key=key, title=key, blocks=[dict(

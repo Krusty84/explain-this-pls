@@ -47,7 +47,7 @@ from src.analysis.study_normalization import normalize_evidence, normalization_p
 from src.analysis.citation_repair import repair_citations
 from src.reports.document_rendering import materialize_study, validate_materialized
 from src.analysis.evidence import source_catalog, SourceChanged, open_source_directory, read_confined, stamp
-from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, validate_schema, response_error
+from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, validate_schema, response_error, document_contract
 from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
 from src.reports.presentation import render_stage, render_architecture
 from src.model.model_context import CONTEXT_FORMAT
@@ -55,7 +55,7 @@ from src.model.model_boundary import BindingRegistry
 from src.analysis.source_decoding import normalize_source_decoding
 from src.analysis.source_context import SourceContextBuilder, source_context_settings, serialize_source_context
 from src.analysis.source_filter import normalize_source_filter, excluded_root, gitignore_spec, gitignore_match
-from src.analysis.coverage_plan import inventory_summary, verify_coverage_plan
+from src.analysis.coverage_plan import inventory_summary, verify_coverage_plan, build_coverage_plan
 from src.analysis.revisions import revision_inputs, choose_revision, completed_pair
 from src.analysis.git_sources import ignore_path, tracked_paths, ignored_paths, inventory_delta
 from src.analysis.source_metrics import PhysicalLines
@@ -1393,6 +1393,8 @@ class Runner:
                 self.assert_source()
             evidence_pins = {e['path']: e['sha256'] for e in inventory['entries'] if e['type'] == 'file'}
             context['_inventory'] = inventory
+            if stage == 'study' and context.get('coverage_plan') is None:
+                context['coverage_plan'] = build_coverage_plan(inventory, context)
         try:
             prepared_context, preparation = self.source_context.prepare(
                 stage, context, evidence_pins, expected_metadata=evidence_metadata)
@@ -1470,7 +1472,7 @@ class Runner:
             self.save_attempt_value(attempt, 'expanded.json', candidate, meta)
             self.save_binding(binding, data, candidate, attempt, meta)
             validation['validated_object'] = 'expanded.json'
-            validate_schema(data, binding.schema)
+            validate_schema(document_contract(stage, data), binding.schema)
             expanded = candidate
             if stage in ('study', 'review'):
                 normalization_input = expanded
@@ -1508,7 +1510,7 @@ class Runner:
             validation['valid'] = True
         except BaseException as exc:
             validation.update(result_diagnostics(stage, candidate, context, self.mode))
-            validation['schema_diagnostics'] = schema_diagnostics(data, binding.schema, private=True)
+            validation['schema_diagnostics'] = schema_diagnostics(document_contract(stage, data), binding.schema, private=True)
             validation['error'] = asdict(diagnostic(exc))
             meta['local_validation'] = False
             meta['validation_failed'] = True
@@ -1719,22 +1721,6 @@ class Runner:
             try:
                 guard(stage_context)
                 data, meta = self.invoke(stage, stage_context, destination)
-                if stage == 'study' and data is not None:
-                    plan = data['review_plan']['coverage_plan']
-                    try:
-                        self.publish_coverage_plan(plan, directory)
-                    except (OSError, ContractError, AuditError) as exc:
-                        self.critical_failure = True
-                        meta.update(publication_complete=False, status='FAILED', error=asdict(diagnostic(exc)))
-                        save_json(destination / 'invocation.json', meta)
-                        save_json(Path(meta['artifact_directory']) / 'invocation.json', meta)
-                        raise
-                    item['coverage_plan'] = plan
-                    scope = dict(coverage_plan=plan, _coverage_plan_path=str(directory / 'coverage.plan.json'))
-                    context.update(scope)
-                    stage_context.update(scope)
-                    context.pop('inventory_summary', None)
-                    stage_context.pop('inventory_summary', None)
                 self.store_stage(state, stage, data, meta, stage_context)
                 if data is not None:
                     self.stage_finished(stage, stage_context, data, started,
@@ -1777,6 +1763,10 @@ class Runner:
             save_json(directory / 'source.inventory.json', inventory)
             context['_inventory'] = inventory
             context['inventory_summary'] = inventory_summary(inventory)
+            plan = build_coverage_plan(inventory, context)
+            self.publish_coverage_plan(plan, directory)
+            item['coverage_plan'] = plan
+            context.update(coverage_plan=plan, _coverage_plan_path=str(directory / 'coverage.plan.json'))
             previous = None
             revision_rounds = self.execution['max_revision_rounds'] if review_enabled else 0
             for number in range(1, revision_rounds + 2):
@@ -2119,6 +2109,9 @@ class Runner:
             try:
                 data = prepare_result(stage, data, context, evidence_pins, expected_metadata=evidence_metadata,
                                       citation_corrections=meta.get('citation_corrections'))
+                if stage == 'study' and data.get('advisory'):
+                    meta['advisory_diagnostics'] = data['advisory']['diagnostics']
+                    self.save_attempt_value(attempt, 'advisory.json', data['advisory'], meta)
                 for warning in data.get('program_checks', {}).get('citation_warnings', []):
                     self.reporter.emit('citation_warning', **(warning | self.stage_context(stage, context)),
                                        evidence_branch=warning.get('branch'))

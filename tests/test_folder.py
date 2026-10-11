@@ -410,7 +410,7 @@ class FolderCLIIntegrationTests(FolderFixture):
                     run = Path(output['manifest']).parent
                     manifest = json.loads((run / 'manifest.json').read_text())
                     self.assertEqual(manifest['contract_id'], 'evidence-ledger')
-                    self.assertEqual(manifest['artifact_format'], 'evidence-ledger-study-coverage-artifacts')
+                    self.assertEqual(manifest['artifact_format'], 'evidence-ledger-inventory-scope-v2-artifacts')
                     self.assertEqual(manifest['source_fingerprint'], before['source_fingerprint'])
                     self.assertEqual(json.loads((run / 'source.inventory.json').read_text()), before)
                     snapshot = json.loads((run / 'config.snapshot.json').read_text())

@@ -8,7 +8,7 @@ import copy
 import json
 import secrets
 
-from src.contracts.contracts import contract_violation, validate_schema, MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS
+from src.contracts.contracts import contract_violation, validate_schema, document_contract, MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS
 from src.analysis.evidence import canonical, sha
 from src.model.model_context import project_model_context
 
@@ -192,7 +192,7 @@ class Binding:
     def expand(self, raw, allow_invalid=False):
         self.validate_identity(raw)
         if not allow_invalid:
-            validate_schema(raw, self.schema)
+            validate_schema(document_contract(self._stage, raw), self.schema)
         expanded = copy.deepcopy(raw)
         if self._mode == 'folder':
             expanded.pop('source_snapshot_id', None)

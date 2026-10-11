@@ -139,7 +139,7 @@ class RepoFixture(unittest.TestCase):
         self.assertEqual(code,0)
         self.assertEqual(result['status'],'COMPLETE')
         self.assertEqual(result['contract_id'],'evidence-ledger')
-        self.assertEqual(result['artifact_format'],'evidence-ledger-study-coverage-artifacts')
+        self.assertEqual(result['artifact_format'],'evidence-ledger-inventory-scope-v2-artifacts')
         self.assertEqual(result['comparison']['compared_branches'],['test01','dev_01_customerA'])
         self.assertEqual(self.repo.symbolic(),'master')
         self.assertEqual(self.repo.head(),self.master)
@@ -538,7 +538,7 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                     run_dir=Path(output['manifest']).parent
                     manifest=json.loads((run_dir/'manifest.json').read_text())
                     self.assertEqual(manifest['contract_id'],'evidence-ledger')
-                    self.assertEqual(manifest['artifact_format'],'evidence-ledger-study-coverage-artifacts')
+                    self.assertEqual(manifest['artifact_format'],'evidence-ledger-inventory-scope-v2-artifacts')
                     snapshot=json.loads((run_dir/'config.snapshot.json').read_text())
                     self.assertEqual(snapshot['project_description'],cfg.get('project_description',''))
                     self.assertEqual(result.stderr.count('Project description is missing.'),int(check_only))

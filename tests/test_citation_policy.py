@@ -31,18 +31,13 @@ class CitationPolicyTests(unittest.TestCase):
                        priority_scenarios=[], result_policy=policy)
         context['_inventory'] = dict(entries=[dict(path='.', type='directory'),
             dict(path='app.py', type='file', size=9, sha256=sha(b'print(1)\n'))])
-        scope = dict(task='architecture_documentation', branch=branch, source_commit='abc',
-            completion_status='COMPLETE', limitations=[], exclusions=[],
-            subsystems=[dict(id='S-001', name='App', purpose='Entry.', paths=['app.py'])])
-        context['coverage_plan'] = build_coverage_plan(scope['subsystems'], scope['exclusions'], context['_inventory'], context)
+        context['coverage_plan'] = build_coverage_plan(context['_inventory'], context)
         return context
 
     def wire(self, context=None, *, mismatch=True):
         context = context or self.context
         data = study(context)
         data['evidence'][0]['quote'] = 'private invented quote' if mismatch else 'print(1)'
-        data['coverage'] = [dict(area_id='S-001', status='INSPECTED',
-                                 evidence_ids=['study:E-001'], limitation='')]
         return data
 
     def saved(self, context=None, **options):
@@ -54,13 +49,14 @@ class CitationPolicyTests(unittest.TestCase):
         meta = dict(contract_id=CONTRACT_ID, artifact_format=ARTIFACT_FORMAT, publication_complete=True)
         return dict(branch=doc['branch'], study=doc, study_invocation=meta, review_enabled=False)
 
-    def test_compromise_retains_mismatch_and_unsupported_coverage(self):
+    def test_compromise_retains_mismatch_and_unverified_scope(self):
         data = self.saved()
         checks = data['program_checks']
         self.assertFalse(checks['policy_satisfied'])
         self.assertTrue(continuation_allowed(checks))
         self.assertEqual(checks['evidence'][0]['status'], 'QUOTE_MISMATCH')
-        self.assertEqual(checks['coverage']['unsupported_ids'], ['S-001'])
+        self.assertEqual(checks['coverage']['not_cited_ids'], ['S-001'])
+        self.assertEqual(checks['coverage']['unverified_ids'], ['S-001'])
         warning = checks['citation_warnings'][0]
         self.assertEqual((warning['evidence_id'], warning['claim_ids'], warning['action']),
                          ('study:E-001', ['C-001'], 'UNRESOLVED'))
@@ -79,11 +75,8 @@ class CitationPolicyTests(unittest.TestCase):
             data = self.saved(context)
             self.assertFalse(continuation_allowed(data['program_checks']))
 
-    def test_independent_coverage_completion_and_unsafe_failures_still_block(self):
-        changes = [lambda d: d.update(coverage=[]),
-                   lambda d: d['coverage'][0].update(status='NOT_INSPECTED', limitation='Missing.'),
-                   lambda d: d['coverage'][0].update(evidence_ids=[]),
-                   lambda d: d.update(completion_status='PARTIAL', limitations=['Missing.']),
+    def test_completion_and_unsafe_failures_still_block(self):
+        changes = [lambda d: d.update(completion_status='PARTIAL', limitations=['Missing.']),
                    lambda d: d['evidence'][0].update(path='missing.py'),
                    lambda d: d['evidence'][0].update(source_id='unknown')]
         for change in changes:

@@ -50,7 +50,7 @@ def normalize_evidence(stage, value, context, mode='git'):
             changes.append(dict(rule=RULE, path=path, before=before, after=after))
     for i, evidence in enumerate(candidate['evidence']):
         change(evidence, 'id', definitions[evidence['id']], f'$.evidence[{i}].id')
-    for field in ('claims', 'findings') if stage == 'review' else ('claims', 'coverage'):
+    for field in ('claims', 'findings') if stage == 'review' else ('claims',):
         for i, record in enumerate(candidate[field]):
             for j, ref in enumerate(record['evidence_ids']):
                 change(record['evidence_ids'], j, aliases.get(ref, ref), f'$.{field}[{i}].evidence_ids[{j}]')

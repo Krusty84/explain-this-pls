@@ -17,11 +17,12 @@ invocation artifacts are fabricated. The study's frozen registry and
 
 `accepted` retains its study-AND-review meaning. `workflow_satisfied` is computed
 separately by Python: a complete, valid, published study satisfying evidence,
-coverage and identity checks is sufficient when review is disabled; with review
+document and identity checks is sufficient when review is disabled; with review
 enabled the existing accepted-pair policy applies. Run success additionally
 requires successful applicable comparison and no blocking run errors.
 Both strict and compromise modes can finish COMPLETE / exit 0 without review.
-Recovery material, coverage gaps and integrity failures do not gain acceptance.
+Recovery material and integrity failures do not gain acceptance. Auxiliary
+coverage diagnostics do not determine document publication or acceptance.
 Old saved results and library contexts without `review_enabled` retain the prior
 review-required interpretation; this differs intentionally from the new config default.
 
@@ -33,8 +34,7 @@ support or INSUFFICIENT_EVIDENCE prevents positive processing policy. The existi
 CONFIRMED_DIFFERENCE requirement for supported facts in reviewed, accepted pairs
 is unchanged and that classification is forbidden in review-disabled runs.
 An empty difference list still requires complete eligible input studies on all
-requested branches. Success is not factual verification. Agent response schemas
-and artifact formats are unchanged.
+requested branches. Success is not factual verification.
 
 The review and revision sections below describe the opt-in reviewed workflow.
 
@@ -54,7 +54,7 @@ Unsupported results are rejected without modifying their artifacts.
 
 | Data | Authority |
 | --- | --- |
-| `completion_status`, narrative, claims, evidence pointers, findings, assessments, study coverage, omission-search activity | Agent; completion is a self-assessment |
+| `completion_status`, narrative, claims, evidence pointers, findings, assessments, relevance observations, omission-search activity | Agent; completion is a self-assessment |
 | Transport completion/error/timeout/interruption and cleanup | Backend adapter and runner |
 | Expected source identities, review target, contract/artifact identifiers in invocation metadata and manifest | Orchestrator |
 | `program_checks` (including coverage checks), `verdict`, frozen plan, hashes, file distribution, reverse links, tables | Python, after local wire validation |
@@ -77,10 +77,11 @@ Transport/stdout and stderr remain private attempt artifacts. A saved `study.jso
 fields and `program_checks`. Study narrative is authored as sections/blocks;
 the program computes the Markdown, block map and every document locator.
 Contract/artifact identifiers (`contract_id:
-"evidence-ledger"`, `artifact_format: "evidence-ledger-study-coverage-artifacts"`) belong only
-to invocation metadata and the manifest, not agent responses or the root of saved
-results. The immutable coverage plan also records `contract_id` and is embedded
-in saved review plans. Study adds `review_plan` and `normalization_provenance` (including
+"evidence-ledger"`, `artifact_format: "evidence-ledger-inventory-scope-v2-artifacts"`) belong only
+to invocation metadata, the manifest and the immutable coverage plan, not agent
+responses or the root of saved results. The coverage plan records both identifiers
+and `origin: "SOURCE_INVENTORY"`; it is also embedded in saved review plans.
+Study adds `review_plan` and `normalization_provenance` (including
 the normalization rule). Review also adds `review_plan`, the
 unchanged `claim_registry`, and the Python-derived `verdict`. These extra fields
 are forbidden in wire output. The saved representation must not be re-submitted
@@ -112,9 +113,10 @@ review or publication. `study.annotated.md` contains generated checks and the re
 `ARCHITECTURE_REVIEW.md` and `BRANCH_COMPARISON.md` contain generated tables;
 `study.original.md` retains the canonical program assembly of authored blocks.
 `review.original.md` and `compare.original.md` preserve original prose.
-`coverage.plan.json` is generated from the first valid Study's subsystem selectors
-and exclusions, reconciled against the pinned inventory. Each Study publication
-hashes its plan copy; the common source-level plan remains immutable across revisions.
+`coverage.plan.json` is generated deterministically from the filtered pinned
+inventory before Study. Each Study publication hashes its plan copy; the common
+source-level plan remains immutable across Study, Review and Revision. Model
+classifications and relevance observations cannot change its membership.
 
 The final report places limitations and assessments before narrative,
 and keeps contradictory assessments visible. It summarizes the selected architecture
@@ -561,9 +563,9 @@ source paths, ranges, reasons, actions and affected claims enter ordinary logs.
 
 Optional saved `program_checks.citation_warnings` and `continuation_allowed`
 separate permission to continue from strict `policy_satisfied`. Unresolved quotes
-remain QUOTE_MISMATCH, cannot confirm coverage or differences, and prevent strict
-acceptance. Continuation permits only quote mismatches and coverage unsupported
-solely by those quotes; all identity, schema, assignment, source, publication,
+remain QUOTE_MISMATCH, cannot confirm citations or differences, and prevent strict
+acceptance. Continuation permits only quote mismatches; all identity, schema,
+source, publication,
 timeout, NO_PROGRESS and cleanup checks remain in force. Saved reports without
 these fields retain their previous meaning and are not rewritten.
 
@@ -771,50 +773,52 @@ validation and publication use expanded internal and saved schemas.
 
 ## Study scope and coverage
 
-Study returns subsystems `{id,name,purpose,paths}` and exclusions `{path,reason}`
-together with the architecture document, claims, evidence and inspection assessments.
-The initial call receives a compact directory summary and prepared source context.
-Python checks selectors against the complete pinned inventory. Subsystems are
-provisional grouping hints, not established architecture. Unknown purpose is not
-an exclusion reason. Symlinks remain represented and their targets are never followed.
-Unallocated entries become UNCLASSIFIED and prevent policy success.
+The strict Study document contains source identity, `completion_status`,
+`limitations`, `report_sections`, `claims` and `evidence`. Subsystems, exclusions,
+coverage assessments and relevance notes are auxiliary observations. Their
+absence, wrong types or nonexistent paths cannot reject a valid document in
+either result policy. Python preserves the original response and records auxiliary
+errors in diagnostics without repairing model paths, changing claims, evidence or
+authored text. This independent validation does not use compromise text recovery.
+The optional saved-only `advisory` sidecar contains `raw_json` (the unchanged
+recognized auxiliary values encoded as JSON) and `diagnostics` records with
+`path`, `code` and `message`. Attempts also retain `advisory.json` and invocation
+`advisory_diagnostics`. The complete original response remains in `extracted.json`;
+expanded and normalized private responses retain auxiliary values too.
+`study.annotated.md` and the consolidated report show auxiliary warning tables;
+`ARCHITECTURE.md` keeps the authored report text unchanged.
 
-The first valid Study publishes coverage.plan.json, shared by every revision and
-review for that source. Its membership, exclusions and unique-file counts are
-sealed with the source identity and inventory hash. It has no independent agent
-completion status or recovery origin. The initial Study's PARTIAL status and
-limitations do not prevent a later revision from completing the same scope.
-Revisions must return the same subsystem IDs, names, purposes, selectors and exclusions.
-Changing these boundaries requires a new run. A supplied frozen scope is also used
-by source-context comparison experiments.
+Only the user's `source_filter` and Git rules determine the available source set.
+Python records that set and snapshot in `source.inventory.json`, then creates
+`coverage.plan.json` with `origin: "SOURCE_INVENTORY"`. Directory groups are
+deterministic navigation aids, not model-declared components. The plan records the
+source identity, inventory hash, areas and unique file, symbolic-link and directory
+counts. Symlink targets are never followed. Model suggestions to exclude `src/`,
+`vendor/` or another path remain observations; those files stay in the inventory
+and evidence references to them receive the usual strict checks.
 
-Selectors may have one trailing `/` only for real inventory directories. Original
-response spelling is retained; plan paths are canonical, and aliases cannot hide
-duplicate selectors. Files, symlinks, unknown directories and unsafe paths do not
-gain this alias. Evidence paths remain strict. Unknown or unsafe selectors reject
-the Study response; they are never discarded or replaced by directory grouping.
-Compromise can retain rejected Study prose under the existing material rules,
-without a trusted coverage plan or successful policy result. Identity, source
-integrity, cleanup and publication failures remain blocking.
+Study, Review and Revision share the same frozen inventory-derived plan. The same
+snapshot and filter produce the same scope regardless of model classification.
+Component boundaries and relevance judgments belong in `components`; investigated
+areas, missing checks and uncertainty belong in `unknowns` and `limitations`.
+A structurally valid PARTIAL document is published with its complete registry and
+limitations. Its self-assessment still prevents a COMPLETE workflow result; it
+does not make the document contract invalid.
 
-Study adds coverage entries `{area_id,status,evidence_ids,limitation}` with status
-INSPECTED, PARTIALLY_INSPECTED or NOT_INSPECTED for every area. A missing response
-blocks acceptance; unfinished inspection blocks acceptance only for required areas.
-Empty or fully excluded areas may report NOT_INSPECTED with a limitation. INSPECTED
-needs a resolved source pointer inside that area. This is evidence of support, not
-proof of exhaustive reading. Review omission_search includes required source areas as well
-as thematic scopes and user scenarios; missing/unfinished mandatory responses block
-acceptance. Final output separately reports file allocation and agent assessments.
-Neither is called completeness of system understanding; semantic_quality stays
-NOT_MEASURED.
+`program_checks.coverage` is diagnostic. `cited_ids` identifies areas with a
+resolved source citation, and `not_cited_ids` identifies the rest. `NOT_CITED`
+does not mean `NOT_INSPECTED`: Python does not record agent file reads. All areas
+remain `UNVERIFIED` for inspection (`unverified_ids`), and
+`completeness_measured` is false. No missing classification or citation changes
+document acceptance. Review omission search still checks the frozen source areas,
+thematic scopes and user scenarios; mandatory review responses and substantive
+findings retain their review policy rules. `semantic_quality` stays `NOT_MEASURED`.
 
-An empty-file area may use pinned inventory metadata: its nonempty scope must
-contain only regular files with zero size and the empty-content hash.
-`program_checks.coverage.metadata_verified_empty_paths` records those paths
-without inventing line evidence or excluding files. This saved field is optional
-for older artifacts. Mixed scopes still require source evidence; an invalid line
-pointer fails even when its file is empty. Metadata does not complete unfinished
-inspection or waive the study's claim requirements.
+`program_checks.coverage.metadata_verified_empty_paths` records regular files
+whose pinned size and content hash establish empty content. This invents no line
+evidence and proves no agent inspection. An invalid evidence line pointer still
+fails, including a pointer into an empty file. Metadata never waives the strict
+document or evidence requirements.
 
 The inventory retains `source_lines`, which counts LF bytes plus one for a nonempty
 unterminated final line. Blank lines count; CRLF counts once; standalone CR is not
@@ -859,5 +863,5 @@ run within each revision; a new study can never inherit an older review.
 
 The removed Catalog stage is not accepted in stage_agents or prompts. Configuration
 errors identify the key to remove. The artifact format changed to
-`evidence-ledger-study-coverage-artifacts`; earlier run formats and coverage plans
+`evidence-ledger-inventory-scope-v2-artifacts`; earlier run formats and coverage plans
 are rejected without migration or modification of existing reports.

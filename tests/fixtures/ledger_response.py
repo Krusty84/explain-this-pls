@@ -19,8 +19,7 @@ def scope(context):
     plan = context.get('coverage_plan')
     if plan is not None:
         return dict(subsystems=[{k: copy.deepcopy(a[k]) for k in ('id', 'name', 'purpose', 'paths')}
-                                for a in plan['areas'] if a['id'] != 'UNCLASSIFIED'],
-                    exclusions=[{k: e[k] for k in ('path', 'reason')} for e in plan['exclusions']])
+                                for a in plan['areas']], exclusions=[])
     paths = json.loads(os.environ['AUDIT_TEST_SUBSYSTEM_PATHS']) if os.environ.get('AUDIT_TEST_SUBSYSTEM_PATHS') else ['.']
     return dict(subsystems=[dict(id=f'S-{i + 1:03d}', name=f'Fixture {i + 1}',
                                 purpose='Synthetic subsystem.', paths=[path]) for i, path in enumerate(paths)],
@@ -60,11 +59,8 @@ def response(context):
     else:
         del data['report_markdown']
         data['report_sections'] = sections()
-        data.update(scope(context))
         data.update(task='architecture_documentation', claims=[dict(id='C-001', statement='Has an entry point',
-            scope='Static source inspection.', epistemic_kind='FACT', evidence_ids=['study:E-001'], uncertainty='')],
-            coverage=[dict(area_id=a['id'], status='INSPECTED', evidence_ids=['study:E-001'], limitation='')
-                      for a in (context['coverage_plan']['areas'] if context.get('coverage_plan') else data['subsystems'])])
+            scope='Static source inspection.', epistemic_kind='FACT', evidence_ids=['study:E-001'], uncertainty='')])
     return data
 
 

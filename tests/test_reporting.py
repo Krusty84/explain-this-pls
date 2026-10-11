@@ -23,6 +23,9 @@ from unittest.mock import Mock, patch
 from src.contracts.contracts import ContractError, jsonc
 from explain import AuditError, Runner, UnsafeRepository, cli_env, load_config, main, process
 from src.runtime.reporting import NullReporter, Reporter, duration, output_mode, safe_text
+from src.analysis.ledger import prepare_result
+from src.reports.presentation import render_architecture, render_stage
+from fixtures.ledger_response import response
 import test_startup as startup
 import test_submodules as recursive
 
@@ -37,6 +40,18 @@ class ReporterTests(unittest.TestCase):
         self.out, self.err = io.StringIO(), io.StringIO()
         self.reporter = Reporter(stdout=self.out, stderr=self.err)
         self.addCleanup(self.reporter.close)
+
+    def test_auxiliary_warning_is_visible_without_changing_architecture(self):
+        (self.base / 'app.py').write_text('print(1)\n')
+        context = dict(branch='main', source_commit='abc', repository=str(self.base.resolve()))
+        wire = response(context) | {'subsystems': False}
+        saved = prepare_result('study', wire, context)
+        report = render_stage('study', saved)
+        self.assertIn('Auxiliary observations — warnings', report)
+        self.assertIn('$.subsystems', report)
+        self.assertIn('INVALID_ADVISORY_DATA', report)
+        self.assertTrue(saved['program_checks']['policy_satisfied'])
+        self.assertEqual(render_architecture(saved), saved['report_markdown'])
 
     def test_output_selection_and_explicit_precedence(self):
         for tty in (False, True):

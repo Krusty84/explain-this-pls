@@ -25,7 +25,7 @@ class PublicationTests(FolderFixture):
         directory = self.base / 'existing-run'
         directory.mkdir()
         supported = {'contract_id': 'evidence-ledger',
-                     'artifact_format': 'evidence-ledger-study-coverage-artifacts', 'accepted': True}
+                     'artifact_format': 'evidence-ledger-inventory-scope-v2-artifacts', 'accepted': True}
         for name in ('claim.registry.json', 'review.plan.json', 'study.json', 'ARCHITECTURE.md'):
             (directory / name).write_bytes(b'existing artifact bytes')
         for field in ('contract_id', 'artifact_format'):
@@ -222,7 +222,7 @@ class PublicationTests(FolderFixture):
                 def fail_write(path, content):
                     if failure == 'corrupt_alias' and path == runner.run_dir / 'coverage.plan.json':
                         return atomic(path, content + b'changed')
-                    if ((failure == 'coverage' and path.name == 'coverage.plan.json') or
+                    if ((failure == 'coverage' and path == runner.run_dir / 'revisions/001/coverage.plan.json') or
                             (failure == 'alias' and path == runner.run_dir / 'coverage.plan.json') or
                             (failure == 'metadata' and path == runner.run_dir / 'revisions/001/study.logs/invocation.json'
                              and json.loads(content).get('publication_complete'))):
@@ -232,8 +232,13 @@ class PublicationTests(FolderFixture):
                         patch('explain.atomic', side_effect=fail_write):
                     manifest, code = runner.run()
                 self.assertEqual(code, 1)
-                self.assertFalse(manifest['revisions'][0]['study_invocation']['publication_complete'])
-                self.assertEqual(invoked.call_count, 1)
+                self.assertFalse(manifest['publication_complete'])
+                if failure in ('alias', 'corrupt_alias'):
+                    self.assertEqual(manifest['revisions'], [])
+                    self.assertEqual(invoked.call_count, 0)
+                else:
+                    self.assertFalse(manifest['revisions'][0]['study_invocation']['publication_complete'])
+                    self.assertEqual(invoked.call_count, 1)
                 self.assertNotIn('      Report: ', err.getvalue())
 
     def test_document_bytes_plan_and_wire_are_separate(self):
@@ -256,7 +261,7 @@ class PublicationTests(FolderFixture):
             self.assertNotIn(field, saved)
             self.assertNotIn(field, saved['review_plan'])
         self.assertEqual(meta['contract_id'], 'evidence-ledger')
-        self.assertEqual(meta['artifact_format'], 'evidence-ledger-study-coverage-artifacts')
+        self.assertEqual(meta['artifact_format'], 'evidence-ledger-inventory-scope-v2-artifacts')
         self.assertEqual(meta['context_format'], 'compact-context')
         self.assertTrue(meta['publication_complete'])
 

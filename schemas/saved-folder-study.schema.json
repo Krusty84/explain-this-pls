@@ -56,90 +56,6 @@
         "additionalProperties": false
       }
     },
-    "subsystems": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "purpose": {
-            "type": "string"
-          },
-          "paths": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "purpose",
-          "paths"
-        ],
-        "additionalProperties": false
-      }
-    },
-    "exclusions": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "path",
-          "reason"
-        ],
-        "additionalProperties": false
-      }
-    },
-    "coverage": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "area_id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "INSPECTED",
-              "PARTIALLY_INSPECTED",
-              "NOT_INSPECTED"
-            ]
-          },
-          "evidence_ids": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "limitation": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "area_id",
-          "status",
-          "evidence_ids",
-          "limitation"
-        ],
-        "additionalProperties": false
-      }
-    },
     "source_directory": {
       "type": "string"
     },
@@ -524,19 +440,25 @@
                 "type": "string"
               }
             },
-            "missing_ids": {
+            "cited_ids": {
               "type": "array",
               "items": {
                 "type": "string"
               }
             },
-            "unfinished_ids": {
+            "not_cited_ids": {
               "type": "array",
               "items": {
                 "type": "string"
               }
             },
-            "unsupported_ids": {
+            "unverified_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "metadata_verified_empty_paths": {
               "type": "array",
               "items": {
                 "type": "string"
@@ -545,30 +467,21 @@
             "reported_by": {
               "type": "string",
               "enum": [
-                "AGENT"
+                "ORCHESTRATOR"
               ]
             },
             "completeness_measured": {
               "type": "boolean"
-            },
-            "policy_satisfied": {
-              "type": "boolean"
-            },
-            "metadata_verified_empty_paths": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
             }
           },
           "required": [
             "expected_ids",
-            "missing_ids",
-            "unfinished_ids",
-            "unsupported_ids",
+            "cited_ids",
+            "not_cited_ids",
+            "unverified_ids",
+            "metadata_verified_empty_paths",
             "reported_by",
-            "completeness_measured",
-            "policy_satisfied"
+            "completeness_measured"
           ],
           "additionalProperties": false
         },
@@ -784,6 +697,18 @@
                 "evidence-ledger"
               ]
             },
+            "artifact_format": {
+              "type": "string",
+              "enum": [
+                "evidence-ledger-inventory-scope-v2-artifacts"
+              ]
+            },
+            "origin": {
+              "type": "string",
+              "enum": [
+                "SOURCE_INVENTORY"
+              ]
+            },
             "sources": {
               "type": "array",
               "items": {
@@ -911,45 +836,6 @@
                 "additionalProperties": false
               }
             },
-            "exclusions": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "path": {
-                    "type": "string"
-                  },
-                  "reason": {
-                    "type": "string"
-                  },
-                  "entry_paths": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  },
-                  "file_paths": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  }
-                },
-                "required": [
-                  "path",
-                  "reason",
-                  "entry_paths",
-                  "file_paths"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "unclassified_paths": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
             "counts": {
               "type": "object",
               "properties": {
@@ -968,38 +854,15 @@
                 "empty_directories": {
                   "type": "integer",
                   "minimum": 0
-                },
-                "assigned_files": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "excluded_files": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "unclassified_files": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "overlapping_files": {
-                  "type": "integer",
-                  "minimum": 0
                 }
               },
               "required": [
                 "files",
                 "symlinks",
                 "directories",
-                "empty_directories",
-                "assigned_files",
-                "excluded_files",
-                "unclassified_files",
-                "overlapping_files"
+                "empty_directories"
               ],
               "additionalProperties": false
-            },
-            "policy_satisfied": {
-              "type": "boolean"
             },
             "plan_sha256": {
               "type": "string"
@@ -1007,13 +870,12 @@
           },
           "required": [
             "contract_id",
+            "artifact_format",
+            "origin",
             "sources",
             "inventory_sha256",
             "areas",
-            "exclusions",
-            "unclassified_paths",
             "counts",
-            "policy_satisfied",
             "plan_sha256"
           ],
           "additionalProperties": false
@@ -1190,6 +1052,42 @@
       ],
       "additionalProperties": false
     },
+    "advisory": {
+      "type": "object",
+      "properties": {
+        "raw_json": {
+          "type": "string"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "raw_json",
+        "diagnostics"
+      ],
+      "additionalProperties": false
+    },
     "normalization_provenance": {
       "type": "object",
       "properties": {
@@ -1231,9 +1129,6 @@
     "limitations",
     "task",
     "evidence",
-    "subsystems",
-    "exclusions",
-    "coverage",
     "source_directory",
     "source_fingerprint",
     "report_markdown",

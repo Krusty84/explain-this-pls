@@ -43,8 +43,6 @@ def run_case(self, *, backend='codex', large=True, change=None, review=False,
             data['evidence'] = [dict(id=f'E-{i + 1:03d}', source_id='source-001',
                 path='app.py' if path == '.' else path, start_line=1, end_line=1, quote='')
                 for i, path in enumerate(selectors)]
-            for i, area in enumerate(data['coverage'], 1):
-                area['evidence_ids'] = [f'study:E-{i:03d}']
         if change:
             change(runner, context, data)
         if backend == 'xxx':

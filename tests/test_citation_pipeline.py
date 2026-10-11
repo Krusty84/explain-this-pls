@@ -70,8 +70,8 @@ class CitationPipelineTests(test_folder.FolderFixture):
         self.assertFalse(continuation_allowed(checks))
         self.assertEqual(checks['evidence_counts']['QUOTE_MISMATCH'], 1)
 
-    def test_warning_does_not_hide_bad_range_or_missing_coverage(self):
-        for kind in ('range', 'coverage'):
+    def test_warning_does_not_hide_bad_range_or_missing_source(self):
+        for kind in ('range', 'source'):
             with self.subTest(kind=kind):
                 def change(runner, context, data):
                     self.mismatch(runner, context, data)
@@ -80,7 +80,7 @@ class CitationPipelineTests(test_folder.FolderFixture):
                     if kind == 'range':
                         data['evidence'][1]['end_line'] = 999
                     else:
-                        data['coverage'][1].update(status='NOT_INSPECTED', limitation='Independent missing inspection.')
+                        data['evidence'][1]['source_id'] = 'source-999'
                 manifest, code = self.run_case(policy='compromise', change=change)
                 self.assertNotEqual(code, 0)
                 self.assertFalse(manifest['processing_completed'])

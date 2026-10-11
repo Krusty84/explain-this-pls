@@ -1,27 +1,21 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Reconcile study areas with inventory; assignment is not inspection."""
+"""Inventory defines source scope; citations never establish inspection."""
 from __future__ import annotations
-import copy
-import re
 
-from src.contracts.contracts import CONTRACT_ID, ContractError, contract_violation
+from src.contracts.contracts import ARTIFACT_FORMAT, CONTRACT_ID, ContractError
 from src.analysis.evidence import canonical, sha, source_catalog, valid_path
 
 
-def checked_path(path, *, directories=None):
-    """Validate syntax; supplied inventory directories constrain suffix aliases."""
-    if (type(path) is str and path.endswith('/') and valid_path(path[:-1])
-            and (directories is None or path[:-1] in directories)):
-        path = path[:-1]
+def checked_path(path):
     if path != '.' and not valid_path(path):
-        raise contract_violation('UNSAFE_COVERAGE_PATH', '$.paths')
+        raise ContractError('Coverage plan contains an unsafe inventory path.')
     return path
 
 
-def matches(path, root):
-    return root == '.' or path == root or path.startswith(root + '/')
+def group_path(path):
+    return path.split('/')[0] if '/' in path else '.'
 
 
 def inventory_summary(inventory):
@@ -46,61 +40,29 @@ def inventory_summary(inventory):
             'directories': [groups[p] for p in sorted(groups)]}
 
 
-def build_coverage_plan(subsystems, exclusions, inventory, context):
-    from src.contracts.contracts import SUBSYSTEMS, EXCLUSIONS, validate_schema, nonblank, unique_ids
-    validate_schema(subsystems, SUBSYSTEMS, '$.subsystems')
-    validate_schema(exclusions, EXCLUSIONS, '$.exclusions')
-    nonblank(subsystems)
-    nonblank(exclusions)
-    unique_ids(subsystems, r'S-[0-9]{3,}', '$.subsystems')
+AREA_PURPOSE = 'Source inventory entries in this directory group; inspection is unverified.'
+
+
+def build_coverage_plan(inventory, context):
+    """Build a reproducible navigation plan from the already filtered inventory."""
     entries = inventory['entries']
-    known = {e['path']: e for e in entries}
-    directories = {p for p, e in known.items() if e['type'] == 'directory'}
-    leaves = {p for p, e in known.items() if e['type'] in ('file', 'symlink')}
-    files = {p for p, e in known.items() if e['type'] == 'file'}
-
-    def members(paths):
-        paths = [checked_path(path, directories=directories) for path in paths]
-        if len(paths) != len(set(paths)) or not paths:
-            raise contract_violation('INVALID_COVERAGE_PATHS', '$.paths')
-        for path in paths:
-            if path not in known:
-                raise contract_violation('UNKNOWN_COVERAGE_PATH', '$.paths')
-        return paths, {p for p in leaves if any(matches(p, root) for root in paths)}
-
-    expanded_exclusions, excluded = [], set()
-    seen_exclusions = set()
-    for exclusion in exclusions:
-        path = checked_path(exclusion['path'], directories=directories)
-        if path in seen_exclusions or not exclusion['reason'].strip():
-            raise contract_violation('INVALID_COVERAGE_EXCLUSION', '$.exclusions')
-        seen_exclusions.add(path)
-        _, selected = members([path])
-        excluded |= selected
-        expanded_exclusions.append(dict(exclusion, path=path, entry_paths=sorted(selected), file_paths=sorted(selected & files)))
-    areas, assigned = [], set()
-    for subsystem in subsystems:
-        paths, selected = members(subsystem['paths'])
-        selected -= excluded
-        assigned |= selected
-        areas.append(dict(copy.deepcopy(subsystem), paths=paths, entry_paths=sorted(selected),
-                          file_paths=sorted(selected & files), required=bool(selected)))
-    unclassified = leaves - assigned - excluded
-    if unclassified:
-        areas.append({'id': 'UNCLASSIFIED', 'name': 'Unclassified source entries',
-                      'purpose': 'Investigate entries not classified or explicitly excluded by the study.',
-                      'paths': sorted(unclassified), 'entry_paths': sorted(unclassified),
-                      'file_paths': sorted(unclassified & files), 'required': True})
     summary = inventory_summary(inventory)
-    plan = {'contract_id': CONTRACT_ID,
+    groups = {group['path']: [] for group in summary['directories']}
+    files = set()
+    for entry in entries:
+        path = checked_path(entry['path'])
+        if entry['type'] in ('file', 'symlink'):
+            groups[group_path(path)].append(path)
+            if entry['type'] == 'file':
+                files.add(path)
+    areas = [dict(id=f'S-{index:03d}', name='Source root' if path == '.' else path,
+                  purpose=AREA_PURPOSE, paths=[path], entry_paths=sorted(members),
+                  file_paths=sorted(files.intersection(members)), required=bool(members))
+             for index, (path, members) in enumerate(sorted(groups.items()), 1)]
+    plan = {'contract_id': CONTRACT_ID, 'artifact_format': ARTIFACT_FORMAT, 'origin': 'SOURCE_INVENTORY',
             'sources': source_catalog(context), 'inventory_sha256': sha(canonical(entries)),
-            'areas': areas, 'exclusions': expanded_exclusions, 'unclassified_paths': sorted(unclassified),
-            'counts': {'files': len(files), 'symlinks': len(leaves - files),
-                       'directories': summary['directory_count'], 'empty_directories': summary['empty_directories'],
-                       'assigned_files': len(assigned & files), 'excluded_files': len(excluded & files),
-                       'unclassified_files': len(unclassified & files),
-                       'overlapping_files': sum(sum(p in a['file_paths'] for a in areas) > 1 for p in files)},
-            'policy_satisfied': not unclassified}
+            'areas': areas, 'counts': {'files': summary['files'], 'symlinks': summary['symlinks'],
+                'directories': summary['directory_count'], 'empty_directories': summary['empty_directories']}}
     return plan | {'plan_sha256': sha(canonical(plan))}
 
 
@@ -108,120 +70,122 @@ def verify_coverage_plan(plan):
     from src.contracts.saved_contracts import COVERAGE_PLAN
     from src.contracts.contracts import validate_schema
     validate_schema(plan, COVERAGE_PLAN)
-    if (type(plan) is not dict or plan.get('contract_id') != CONTRACT_ID
-            or plan.get('plan_sha256') != sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))):
+    if (plan['contract_id'] != CONTRACT_ID or plan['artifact_format'] != ARTIFACT_FORMAT
+            or plan['origin'] != 'SOURCE_INVENTORY'
+            or plan['plan_sha256'] != sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))):
         raise ContractError('Frozen coverage plan changed.')
-    identifiers = [a['id'] for a in plan['areas']]
-    if (len(identifiers) != len(set(identifiers)) or
-            any(identifier != 'UNCLASSIFIED' and not re.fullmatch(r'S-[0-9]{3,}', identifier) for identifier in identifiers)):
-        raise ContractError('Coverage plan has invalid or duplicate area IDs.')
-    assigned, excluded, files = set(), set(), set()
-    for record in plan['areas'] + plan['exclusions']:
-        for path in record['entry_paths'] + record['file_paths']:
-            checked_path(path, directories=())
-        entries = set(record['entry_paths'])
-        if len(entries) != len(record['entry_paths']) or not set(record['file_paths']) <= entries:
-            raise ContractError('Coverage plan membership is inconsistent.')
-        files.update(record['file_paths'])
-        if 'id' in record:
-            if record['required'] != bool(entries):
-                raise ContractError('Coverage plan required areas changed.')
-            if record['id'] != 'UNCLASSIFIED':
-                assigned.update(entries)
-        else:
-            excluded.update(entries)
-    unclassified = set(plan['unclassified_paths'])
-    unclassified_areas = [a for a in plan['areas'] if a['id'] == 'UNCLASSIFIED']
-    if (assigned & excluded or unclassified & (assigned | excluded)
-            or bool(unclassified_areas) != bool(unclassified)
-            or (unclassified_areas and set(unclassified_areas[0]['entry_paths']) != unclassified)):
-        raise ContractError('Coverage plan assignments changed.')
-    expected_policy = not unclassified
-    expected_counts = {'files': len(files), 'symlinks': len((assigned | excluded | unclassified) - files),
-        'assigned_files': len(assigned & files), 'excluded_files': len(excluded & files),
-        'unclassified_files': len(unclassified & files),
-        'overlapping_files': sum(sum(p in a['file_paths'] for a in plan['areas']) > 1 for p in files)}
-    if plan['policy_satisfied'] != expected_policy or any(plan['counts'][k] != v for k, v in expected_counts.items()):
-        raise ContractError('Coverage plan policy or unique-file counts changed.')
+    paths = [area['paths'][0] for area in plan['areas'] if len(area['paths']) == 1]
+    if len(paths) != len(plan['areas']) or paths != sorted(set(paths)) or '.' not in paths:
+        raise ContractError('Coverage plan directory groups changed.')
+    members, files = set(), set()
+    for index, area in enumerate(plan['areas'], 1):
+        path = checked_path(area['paths'][0])
+        selected = area['entry_paths']
+        selected_files = area['file_paths']
+        if (area['id'] != f'S-{index:03d}' or path != '.' and '/' in path
+                or area['name'] != ('Source root' if path == '.' else path)
+                or area['purpose'] != AREA_PURPOSE
+                or selected != sorted(set(selected)) or selected_files != sorted(set(selected_files))
+                or not set(selected_files) <= set(selected) or members.intersection(selected)
+                or area['required'] != bool(selected)):
+            raise ContractError('Coverage plan inventory groups changed.')
+        for member in selected:
+            checked_path(member)
+            if member == '.' or group_path(member) != path:
+                raise ContractError('Coverage plan membership is inconsistent.')
+        members.update(selected)
+        files.update(selected_files)
+    if plan['counts']['files'] != len(files) or plan['counts']['symlinks'] != len(members - files):
+        raise ContractError('Coverage plan unique-file counts changed.')
     return plan
 
 
 def study_coverage_plan(data, context):
-    """Derive scope without changing the invocation's bound input context."""
-    from src.contracts.contracts import unique_ids
-    unique_ids(data['subsystems'], r'S-[0-9]{3,}', '$.subsystems')
-    inventory = context.get('_inventory')
-    directories = ({e['path'] for e in inventory['entries'] if e['type'] == 'directory'}
-                   if inventory is not None else None)
-    subsystems = copy.deepcopy(data['subsystems'])
-    exclusions = copy.deepcopy(data['exclusions'])
-    for subsystem in subsystems:
-        subsystem['paths'] = [checked_path(p, directories=directories) for p in subsystem['paths']]
-        if not subsystem['paths'] or len(set(subsystem['paths'])) != len(subsystem['paths']):
-            raise contract_violation('INVALID_COVERAGE_PATHS', '$.subsystems')
-    for exclusion in exclusions:
-        exclusion['path'] = checked_path(exclusion['path'], directories=directories)
-    if len({e['path'] for e in exclusions}) != len(exclusions):
-        raise contract_violation('INVALID_COVERAGE_EXCLUSION', '$.exclusions')
+    """Model metadata cannot change the scope bound to Study, Review, or Revision."""
     frozen = context.get('coverage_plan')
     if frozen is not None:
         verify_coverage_plan(frozen)
-        expected_subsystems = [{k: a[k] for k in ('id', 'name', 'purpose', 'paths')}
-                               for a in frozen['areas'] if a['id'] != 'UNCLASSIFIED']
-        expected_exclusions = [{k: e[k] for k in ('path', 'reason')} for e in frozen['exclusions']]
-        if subsystems != expected_subsystems or exclusions != expected_exclusions:
-            raise contract_violation('COVERAGE_SCOPE_CHANGED', '$.subsystems')
-    if inventory is None:  # Direct validation can use a supplied frozen scope.
+        if frozen['sources'] != source_catalog(context):
+            raise ContractError('Coverage plan identifies another source snapshot.')
+    inventory = context.get('_inventory')
+    if inventory is None:
         return frozen
-    plan = build_coverage_plan(subsystems, exclusions, inventory, context)
+    plan = build_coverage_plan(inventory, context)
     if frozen is not None and plan != frozen:
-        raise contract_violation('COVERAGE_SCOPE_CHANGED', '$.subsystems')
+        raise ContractError('Coverage and pinned source inventories differ.')
     return plan
 
 
 def coverage_checks(data, context, resolutions):
-    plan = context.get('coverage_plan')
-    if plan is None:  # Direct library callers can validate a study without orchestration.
-        return {'expected_ids': [], 'missing_ids': [], 'unfinished_ids': [], 'unsupported_ids': [],
-                'metadata_verified_empty_paths': [],
-                'reported_by': 'AGENT', 'completeness_measured': False, 'policy_satisfied': True}
-    verify_coverage_plan(plan)
-    areas = plan['areas']
-    reports = {r['area_id']: r for r in data['coverage']}
-    resolved = {e['id']: e for e in resolutions if e['status'] == 'RESOLVED'}
-    sources = {s['id']: s for s in source_catalog(context)}
+    """Report citation distribution and pinned metadata without judging the document."""
+    plan = study_coverage_plan(data, context)
+    areas = plan['areas'] if plan is not None else []
+    sources = {source['id']: source for source in source_catalog(context)} if plan is not None else {}
+    cited_paths = set()
+    for evidence in resolutions:
+        source = sources.get(evidence['source_id'])
+        if evidence['status'] == 'RESOLVED' and source is not None:
+            prefix = source['identity'].get('submodule_path', '')
+            cited_paths.add(prefix + '/' + evidence['path'] if prefix else evidence['path'])
+    expected = [area['id'] for area in areas]
+    cited = [area['id'] for area in areas if cited_paths.intersection(area['file_paths'])]
     inventory = context.get('_inventory')
-    if inventory is not None and sha(canonical(inventory['entries'])) != plan['inventory_sha256']:
-        raise ContractError('Coverage and pinned source inventories differ.')
-    entries = {entry['path']: entry for entry in inventory['entries']} if inventory is not None else {}
-    metadata_paths = set()
+    metadata_paths = sorted(entry['path'] for entry in inventory['entries']
+        if entry['type'] == 'file' and type(entry.get('size')) is int and entry['size'] == 0
+        and entry.get('sha256') == sha(b'')) if inventory is not None else []
+    return {'expected_ids': expected, 'cited_ids': cited,
+            'not_cited_ids': [identifier for identifier in expected if identifier not in cited],
+            'unverified_ids': expected, 'metadata_verified_empty_paths': metadata_paths,
+            'reported_by': 'ORCHESTRATOR', 'completeness_measured': False}
 
-    def empty_scope(area):
-        paths = set(area['entry_paths'])
-        if not paths or not all(entries.get(path, {}).get('type') == 'file'
-                and type(entries[path].get('size')) is int and entries[path]['size'] == 0
-                and entries[path].get('sha256') == sha(b'') for path in paths):
-            return False
-        metadata_paths.update(paths)
-        return True
 
-    def within(evidence, area):
-        source = sources.get(evidence['source_id'], {})
-        prefix = source.get('identity', {}).get('submodule_path', '')
-        path = prefix + '/' + evidence['path'] if prefix else evidence['path']
-        return path in area['file_paths']
+def advisory_diagnostics(observations, context):
+    """Retain observations as submitted; auxiliary defects are warnings only."""
+    from src.contracts.contracts import SUBSYSTEMS, EXCLUSIONS, COVERAGE, schema_diagnostics
+    diagnostics = []
 
-    expected = [a['id'] for a in areas]
-    required = {a['id'] for a in areas if a['required']}
-    unsupported = [a['id'] for a in areas if a['id'] in reports
-                   and reports[a['id']]['status'] == 'INSPECTED'
-                   and not empty_scope(a)
-                   and not any(ref in resolved and within(resolved[ref], a)
-                               for ref in reports[a['id']]['evidence_ids'])]
-    missing = [area for area in expected if area not in reports]
-    unfinished = [area for area in expected if area in required and area in reports and reports[area]['status'] != 'INSPECTED']
-    return {'expected_ids': expected, 'missing_ids': missing, 'unfinished_ids': unfinished,
-            'unsupported_ids': unsupported, 'metadata_verified_empty_paths': sorted(metadata_paths),
-            'reported_by': 'AGENT', 'completeness_measured': False,
-            'policy_satisfied': plan['policy_satisfied']
-                                and not missing and not unfinished and not unsupported}
+    def warn(path, code, message):
+        diagnostics.append({'path': path, 'code': code, 'message': message})
+
+    if type(observations) is not dict:
+        warn('$.advisory', 'INVALID_ADVISORY_DATA', 'Auxiliary observations must be an object.')
+        return diagnostics
+    for key in ('advisory', 'relevance_notes'):
+        if key in observations:
+            warn('$.' + key, 'UNVERIFIED_ADVISORY_DATA',
+                 'Free-form observations are retained without verifying classification or paths.')
+    for key, schema in (('subsystems', SUBSYSTEMS), ('exclusions', EXCLUSIONS), ('coverage', COVERAGE)):
+        if key in observations:
+            defects = schema_diagnostics(observations[key], schema, '$.' + key)
+            for defect in defects['violations']:
+                warn(defect['path'], 'INVALID_ADVISORY_DATA',
+                     'Auxiliary observation does not match its legacy schema.')
+    inventory = context.get('_inventory')
+    known = {entry['path'] for entry in inventory['entries']} if inventory is not None else None
+
+    def check_path(path, location):
+        if path != '.' and not valid_path(path):
+            warn(location, 'UNSAFE_COVERAGE_PATH', 'Auxiliary path has invalid source-path syntax.')
+        elif known is None:
+            warn(location, 'UNVERIFIED_COVERAGE_PATH', 'No pinned inventory is available to verify this path.')
+        elif path not in known:
+            warn(location, 'UNKNOWN_COVERAGE_PATH', 'Auxiliary path is absent from the source inventory.')
+
+    subsystems = observations.get('subsystems')
+    if type(subsystems) is list:
+        for index, subsystem in enumerate(subsystems):
+            if type(subsystem) is dict and type(subsystem.get('paths')) is list:
+                for path_index, path in enumerate(subsystem['paths']):
+                    if type(path) is str:
+                        check_path(path, f'$.subsystems[{index}].paths[{path_index}]')
+    if 'exclusions' in observations:
+        exclusions = observations['exclusions']
+        if type(exclusions) is not list:
+            exclusions = [exclusions]
+        for index, exclusion in enumerate(exclusions):
+            location = f'$.exclusions[{index}]'
+            warn(location, 'MODEL_EXCLUSION_IGNORED',
+                 'Model exclusion cannot change the source inventory; only the user source filter can exclude sources.')
+            if type(exclusion) is dict and type(exclusion.get('path')) is str:
+                check_path(exclusion['path'], location + '.path')
+    return diagnostics

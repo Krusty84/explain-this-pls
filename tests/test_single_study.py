@@ -26,8 +26,9 @@ class SingleStudyTests(FolderFixture):
                 self.assertEqual([c['context']['stage'] for c in self.calls], ['study'])
                 document = manifest if self.value['mode'] == 'folder' else manifest['branches'][0]
                 self.assertEqual(document['coverage_plan']['counts']['files'], 301)
-                self.assertEqual(len(document['study']['coverage']), 5)
-                self.assertTrue(document['study']['program_checks']['coverage']['policy_satisfied'])
+                self.assertNotIn('coverage', document['study'])
+                self.assertTrue(document['study']['program_checks']['policy_satisfied'])
+                self.assertFalse(document['study']['program_checks']['coverage']['completeness_measured'])
                 self.assertTrue(document['study_invocation']['source_tools_enabled'])
                 self.assertEqual(self.calls[-1]['cwd'], self.source)
                 inventory = json.loads(next(self.runner.run_dir.rglob('source.inventory.json')).read_text())

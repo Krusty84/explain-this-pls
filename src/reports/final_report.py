@@ -142,7 +142,7 @@ def render_final_report(manifest, source, mode, language='Russian'):
                           ('revision_id', 'study_status', 'review_status', 'review_complete', 'accepted', 'workflow_satisfied')) + ' |']
             out += ['']
         if b.get('coverage_plan') and not b.get('study'):
-            out += [render_coverage(b['coverage_plan'], (), {}), '']
+            out += [render_coverage(b['coverage_plan']), '']
         review = b.get('review')
         if review:
             out += [render_stage('review', review, language), '']
