@@ -78,7 +78,7 @@ class NormalizerTests(unittest.TestCase):
 
 
 class PipelineMetricsTests(FolderFixture):
-    def test_revision_totals_include_all_five_stages_without_selected_aliases(self):
+    def test_revision_totals_include_all_four_stages_without_selected_aliases(self):
         cfg = self.config()
         out, err = io.StringIO(), io.StringIO()
         reporter = Reporter(stdout=out, stderr=err, progress=False)
@@ -91,10 +91,10 @@ class PipelineMetricsTests(FolderFixture):
             manifest, code = runner.run()
         self.assertEqual(code, 0)
         metrics = manifest['metrics']
-        self.assertEqual(metrics['attempts'], 5)
-        self.assertEqual(metrics['usage']['total_tokens'], 600)
-        self.assertEqual([r['stage'] for r in metrics['stages']], ['catalog', 'study', 'review', 'revise', 'review'])
-        self.assertEqual(err.getvalue().count('Tokens: 120'), 5)
+        self.assertEqual(metrics['attempts'], 4)
+        self.assertEqual(metrics['usage']['total_tokens'], 480)
+        self.assertEqual([r['stage'] for r in metrics['stages']], ['study', 'review', 'revise', 'review'])
+        self.assertEqual(err.getvalue().count('Tokens: 120'), 4)
         self.assertEqual(json.loads((runner.run_dir / 'manifest.json').read_text())['metrics'], metrics)
         self.assertNotIn('Total usage:', Path(manifest['final_report']).read_text())
 
@@ -129,8 +129,8 @@ class PipelineMetricsTests(FolderFixture):
                 with self.subTest(backend=backend, failure=failure):
                     self.assertNotEqual(code, 0)
                     metrics = manifest['metrics']
-                    self.assertEqual(metrics['attempts'], 2)
-                    self.assertEqual(metrics['usage']['total_tokens'], 240)
+                    self.assertEqual(metrics['attempts'], 1)
+                    self.assertEqual(metrics['usage']['total_tokens'], 120)
                     self.assertEqual(metrics['stages'][-1]['status'], 'FAILED')
                     if backend == 'codex' and failure in ('timeout', 'interrupt'):
                         self.assertEqual(metrics['usage']['coverage']['total_tokens'], 'partial')
@@ -146,7 +146,7 @@ class CLIMetricsTests(unittest.TestCase):
     prepare = startup.StartupCLIIntegrationTests.prepare
 
     def test_json_manifest_text_and_no_progress_agree(self):
-        for mode, attempts in (('folder', 3), ('git', 7)):
+        for mode, attempts in (('folder', 2), ('git', 5)):
             for backend in ('codex', 'opencode'):
                 args = self.prepare(mode)
                 config = json.loads(self.config_path.read_text().split('\n', 1)[1])
@@ -187,7 +187,7 @@ class XXXMetricsTests(unittest.TestCase):
         for scenario in ('', 'backend-error', 'schema-extra'):
             self.value['execution'] = {'structured_output_repair_attempts': 1}
             manifest, code = self.run_case(scenario)
-            attempts = 3 if not scenario else 2 if scenario == 'backend-error' else 2
+            attempts = 2 if not scenario else 1
             metrics = manifest['metrics']
             self.assertEqual(metrics['attempts'], attempts)
             self.assertEqual(metrics['usage']['total_tokens'], 10 * attempts)

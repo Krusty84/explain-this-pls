@@ -79,7 +79,6 @@ def render_coverage(plan, reports=(), checks=None):
         return ''
     counts = plan['counts']
     out = ['## Source distribution — program reconciliation', '',
-           'Catalog: ' + cell(plan['origin']) + ' / ' + cell(plan['catalog_status']), '',
            '; '.join(f'{key}: {counts[key]}' for key in
                      ('files', 'assigned_files', 'excluded_files', 'unclassified_files', 'overlapping_files', 'symlinks',
                       'directories', 'empty_directories')), '',
@@ -98,7 +97,7 @@ def render_coverage(plan, reports=(), checks=None):
             out += ['- ' + cell(exclusion['path']) + ': ' + cell(exclusion['reason'])]
     if links:
         out += ['', 'Symbolic links (targets were not followed): ' + cell(', '.join(sorted(links)))]
-    out += ['', *('- ' + cell(x) for x in plan['limitations']), '',
+    out += ['',
             '## Area inspection — agent reports', '',
             'INSPECTED requires resolved source evidence or verified metadata for an empty-file scope; '
             'it does not establish exhaustive investigation.', '',
@@ -130,21 +129,6 @@ def render_stage(stage, data, language='English'):
     validate_report(stage, data)
     if is_recovered_material(stage, data):
         return '> Text retained after contract rejection; full policy checks are not complete.\n\n'
-    if stage == 'catalog':
-        out = ['# Subsystem catalog', '',
-               'Catalog completion reported by the agent: ' + cell(data['program_checks']['completion_self_assessment']), '',
-               'Catalog: ' + cell(data['coverage_plan']['origin']) + ' / ' + data['coverage_plan']['catalog_status'], '',
-               '## Subsystems', '', '| ID | Subsystem | Purpose | Paths |', '| --- | --- | --- | --- |']
-        for subsystem in data['subsystems']:
-            out.append('| ' + ' | '.join(cell(v) for v in (subsystem['id'], subsystem['name'],
-                subsystem['purpose'], ', '.join(subsystem['paths']))) + ' |')
-        out += ['', '## Exclusions', '', '| Path | Reason |', '| --- | --- |']
-        for exclusion in data['exclusions']:
-            out.append('| ' + cell(exclusion['path']) + ' | ' + cell(exclusion['reason']) + ' |')
-        for title, values in (('Limitations', data['coverage_plan']['limitations']),
-                              ('Unclassified paths', data['coverage_plan']['unclassified_paths'])):
-            out += ['', '## ' + title, '', *(['- ' + cell(v) for v in values] or ['None.'])]
-        return '\n'.join(out) + '\n'
     checks = data['program_checks']
     out = ['# Program checks and agent assessments', '',
         ('Study processing conditions satisfied; final acceptance depends on review.' if stage == 'study' else

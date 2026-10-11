@@ -499,7 +499,6 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         raw = bytearray()
         try:
             for stage, label, completed in (
-                    ('catalog', 'Cataloging subsystems…', 'Subsystem catalog created.'),
                     ('study', 'Analyzing project…', 'Architecture report created.'),
                     ('review', 'Reviewing report…', 'Review complete.')):
                 deadline = time.monotonic() + 12
@@ -550,7 +549,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
             content = artifact.read_text()
             self.assertNotIn('\x1b', content, str(artifact))
             self.assertFalse(any(c in content for c in SPINNER), str(artifact))
-        self.assertEqual(len(self.prompts()), 3)
+        self.assertEqual(len(self.prompts()), 2)
 
     def test_xxx_cli_plain_fallback_is_live_without_duplicate_waits(self):
         for term, tty in (('xterm', False), ('dumb', True)):
@@ -577,7 +576,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
                 self.assertNotIn('\x1b', err.getvalue())
                 self.assertNotIn('CLI output', err.getvalue())
                 self.assertTrue(records)
-                for stage in ('catalog', 'study', 'review'):
+                for stage in ('study', 'review'):
                     times = [x['elapsed_seconds'] for x in records if x['stage'] == stage]
                     self.assertTrue(times)
                     self.assertTrue(all(b - a >= .049 for a, b in zip(times, times[1:])))
@@ -616,8 +615,8 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         with patch.object(Runner, '_invoke_once', invoke):
             manifest, code = self.run_case('schema-extra', reporter=r)
         self.assertEqual(code, 1, manifest)
-        self.assertEqual(attempts, [('catalog', 100, 0), ('study', 101.25, 0)])
-        self.assertEqual(len(self.prompts()), 2)
+        self.assertEqual(attempts, [('study', 100, 0)])
+        self.assertEqual(len(self.prompts()), 1)
         self.assertIsNone(r._progress)
 
     def test_real_stage_error_then_next_branch_and_comparison_stop_cleanly(self):
@@ -650,11 +649,11 @@ class XXXProgressIntegrationTests(unittest.TestCase):
             raw = bytearray()
             try:
                 deadline = time.monotonic() + 10
-                while not (gate / 'catalog.ready').exists() and time.monotonic() < deadline:
+                while not (gate / 'study.ready').exists() and time.monotonic() < deadline:
                     if select.select([master], [], [], .05)[0]:
                         raw.extend(os.read(master, 65536))
                     self.assertIsNone(child.poll(), raw.decode())
-                self.assertTrue((gate / 'catalog.ready').exists())
+                self.assertTrue((gate / 'study.ready').exists())
                 child.send_signal(signal.SIGINT)
                 stdout, _ = child.communicate(timeout=10)
                 while select.select([master], [], [], .1)[0]:
@@ -753,7 +752,7 @@ sys.exit(explain.main())
                         self.assertEqual(result['metrics']['attempts'], 0)
                         self.assertEqual(result['metrics']['stages'], [])
                     else:
-                        self.assertIn('Cataloging subsystems…  ⠋ 00:00', console)
+                        self.assertIn('Analyzing project…  ⠋ 00:00', console)
                     self.assertNotIn('Traceback', console)
 
     def test_live_cli_spinner_preserves_private_raw_output_and_no_waiting_scroll(self):

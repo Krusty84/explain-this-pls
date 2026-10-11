@@ -7,7 +7,7 @@ import copy
 from collections import Counter
 from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, ContractError, contract_violation, has_ledger_structure, has_program_checks, is_recovered_material, review_verdict, workflow_satisfied, processing_satisfied, comparison_factual_sides
 from src.analysis.evidence import canonical, sha, source_catalog, resolve_evidence
-from src.analysis.coverage_plan import build_coverage_plan, verify_coverage_plan, coverage_checks
+from src.analysis.coverage_plan import study_coverage_plan, verify_coverage_plan, coverage_checks
 from src.analysis.source_decoding import normalize_source_decoding
 
 OMISSION_AREAS = ('context', 'components', 'startup_and_flows', 'data_and_state',
@@ -24,7 +24,7 @@ def freeze_plan(document, context):
     areas = [{'id': 'A-' + str(i + 1).zfill(3), 'scope': name} for i, name in enumerate(OMISSION_AREAS)]
     areas += [{'id': 'P-' + str(i + 1).zfill(3), 'scope': name}
               for i, name in enumerate(context.get('priority_scenarios', []))]
-    coverage = copy.deepcopy(context.get('coverage_plan'))
+    coverage = copy.deepcopy(context.get('coverage_plan', (document.get('review_plan') or {}).get('coverage_plan')))
     if coverage is not None:
         verify_coverage_plan(coverage)
         if coverage['sources'] != source_catalog(context):
@@ -65,6 +65,8 @@ def review_context(document, context):
     existing = document.get('review_plan')
     if existing is not None and existing != plan:
         raise ContractError('Frozen document/registry/plan identity changed')
+    if plan['coverage_plan'] is not None:
+        context = context | {'coverage_plan': copy.deepcopy(plan['coverage_plan'])}
     return context | {'architecture_document': copy.deepcopy(document),
         'document_strictly_valid': has_program_checks(document),
         'document_sha256': plan['document_sha256'], 'claim_registry': copy.deepcopy(document.get('claims', []))
@@ -142,7 +144,7 @@ def finish_citation_checks(checks):
         checks.pop('continuation_allowed', None)
 
 
-def prepare_result(stage, data, context, expected_files=None, *, expected_metadata=None, catalog_recovery=None,
+def prepare_result(stage, data, context, expected_files=None, *, expected_metadata=None,
                    citation_corrections=None):
     """Caller must pass source/cleanup guards and validate its input first.
 
@@ -159,20 +161,15 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
             validate_result(stage, data, context, 'folder' if 'source_directory' in context else 'git')
             data = materialize_study(data)
         validate_materialized(data)
+        plan = study_coverage_plan(data, context)
+        if plan is not None:
+            context = context | {'coverage_plan': plan}
     result = copy.deepcopy(data)
     checks = {'execution': 'COMPLETED', 'contract': 'VALID', 'source': 'MATCHED_AT_BOUNDARIES',
         'evidence': [], 'policy_satisfied': False, 'semantic_quality': 'NOT_MEASURED',
         'completion_self_assessment': data['completion_status'],
         'meaning': 'Policy checks concern processing and agent assessments; factual correctness is not established.'}
     result['program_checks'] = checks
-    if stage == 'catalog':
-        plan = build_coverage_plan(data, context['_inventory'], context,
-            fallback=bool(catalog_recovery and not data['subsystems']), salvaged=bool(catalog_recovery))
-        result['coverage_plan'] = plan
-        if catalog_recovery:
-            checks['completion_self_assessment'] = catalog_recovery['completion_self_assessment']
-        checks['policy_satisfied'] = plan['policy_satisfied']
-        return result
     if stage == 'compare':
         review_enabled = context.get('review_enabled', True)
         entries = {b['branch']: b for b in context['branches']}

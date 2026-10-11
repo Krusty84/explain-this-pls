@@ -153,6 +153,55 @@
         "additionalProperties": false
       }
     },
+    "subsystems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "purpose",
+          "paths"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "exclusions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
     "coverage": {
       "type": "array",
       "items": {
@@ -202,6 +251,8 @@
     "task",
     "evidence",
     "claims",
+    "subsystems",
+    "exclusions",
     "coverage",
     "source_directory",
     "source_snapshot_id"

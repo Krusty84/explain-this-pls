@@ -7,28 +7,6 @@
         "evidence-ledger"
       ]
     },
-    "origin": {
-      "type": "string",
-      "enum": [
-        "AGENT",
-        "AGENT_SALVAGED",
-        "DIRECTORY_FALLBACK"
-      ]
-    },
-    "catalog_status": {
-      "type": "string",
-      "enum": [
-        "COMPLETE",
-        "PARTIAL",
-        "BLOCKED"
-      ]
-    },
-    "limitations": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
     "sources": {
       "type": "array",
       "items": {
@@ -252,9 +230,6 @@
   },
   "required": [
     "contract_id",
-    "origin",
-    "catalog_status",
-    "limitations",
     "sources",
     "inventory_sha256",
     "areas",

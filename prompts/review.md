@@ -167,11 +167,11 @@ omitted from this model view. The orchestrator preserves and verifies full locat
 and integrity records separately. Do not interpret compact context as missing document text.
 
 The frozen internal plan binds coverage_plan and source_decoding; the compact model
-context supplies one copy of each at the top level. Include catalog
+context supplies one copy of each at the top level. Include source
 areas in omission_search alongside thematic areas and priority scenarios. Check
 the study's per-area coverage claims and cited sources; INSPECTED is an agent
 assessment, not exhaustive understanding. Incomplete required areas, UNCLASSIFIED
-and DIRECTORY_FALLBACK cannot be hidden by a positive narrative. Encoding rules
+cannot be hidden by a positive narrative. Encoding rules
 affect program evidence resolution only; actual reading support depends on the CLI.
 
 Return prior_findings: [] for an initial review. For a revised study, assess every

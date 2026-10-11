@@ -25,7 +25,7 @@ class PublicationTests(FolderFixture):
         directory = self.base / 'existing-run'
         directory.mkdir()
         supported = {'contract_id': 'evidence-ledger',
-                     'artifact_format': 'evidence-ledger-artifacts', 'accepted': True}
+                     'artifact_format': 'evidence-ledger-study-coverage-artifacts', 'accepted': True}
         for name in ('claim.registry.json', 'review.plan.json', 'study.json', 'ARCHITECTURE.md'):
             (directory / name).write_bytes(b'existing artifact bytes')
         for field in ('contract_id', 'artifact_format'):
@@ -35,7 +35,7 @@ class PublicationTests(FolderFixture):
                     if missing:
                         unsupported.pop(field)
                     else:
-                        unsupported[field] = 'unsupported-format'
+                        unsupported[field] = 'evidence-ledger-artifacts' if field == 'artifact_format' else 'unsupported-format'
                     (directory / 'manifest.json').write_text(json.dumps(unsupported))
                     before = {p.name: p.read_bytes() for p in directory.iterdir()}
                     with self.assertRaises(AuditError) as caught: Runner(self.config(), directory)
@@ -187,7 +187,7 @@ class PublicationTests(FolderFixture):
         self.assertTrue((runner.run_dir / 'revisions/001/ARCHITECTURE.md').is_file())
         self.assertNotIn('      Report: ' + str(runner.run_dir / 'revisions/001/ARCHITECTURE.md'), err.getvalue())
 
-    def test_catalog_markdown_is_hashed_private_and_immutable(self):
+    def test_coverage_plan_is_hashed_private_and_immutable(self):
         import hashlib
         runner, _, _ = self.prepare()
         def process(command, cwd, env, payload, **kwargs):
@@ -195,21 +195,23 @@ class PublicationTests(FolderFixture):
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process) as invoked:
             manifest, code = runner.run()
         self.assertEqual(code, 0)
-        self.assertEqual(invoked.call_count, 3)
-        path = runner.run_dir / 'SUBSYSTEM_CATALOG.md'
+        self.assertEqual(invoked.call_count, 2)
+        path = runner.run_dir / 'coverage.plan.json'
         blob = path.read_bytes()
-        meta = manifest['catalog_invocation']
+        meta = manifest['study_invocation']
         self.assertTrue(meta['publication_complete'])
         self.assertEqual(meta['artifact_hashes'][path.name], {'sha256': hashlib.sha256(blob).hexdigest(), 'bytes': len(blob)})
-        self.assertEqual(meta['report_sha256'], hashlib.sha256((runner.run_dir / 'catalog.json').read_bytes()).hexdigest())
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertFalse((runner.run_dir / 'catalog.json').exists())
+        self.assertFalse((runner.run_dir / 'SUBSYSTEM_CATALOG.md').exists())
+        self.assertFalse(any('catalog' in key for key in manifest))
         path.write_bytes(blob + b'changed')
         with self.assertRaises(AuditError) as caught:
             runner.assert_revision_files(manifest)
-        self.assertEqual(caught.exception.code, 'REVIEW_TARGET_CHANGED')
+        self.assertEqual(caught.exception.code, 'COVERAGE_PLAN_CHANGED')
 
-    def test_catalog_write_or_metadata_failure_never_announces_report(self):
-        for failure in ('markdown', 'metadata'):
+    def test_coverage_write_or_metadata_failure_never_announces_report(self):
+        for failure in ('coverage', 'alias', 'corrupt_alias', 'metadata'):
             with self.subTest(failure=failure):
                 err = io.StringIO()
                 reporter = Reporter(stdout=io.StringIO(), stderr=err, progress=False)
@@ -218,17 +220,20 @@ class PublicationTests(FolderFixture):
                 def process(command, cwd, env, payload, **kwargs):
                     return self.result(command, response(prompt_context(payload)))
                 def fail_write(path, content):
-                    if ((failure == 'markdown' and path.name == 'SUBSYSTEM_CATALOG.md') or
-                            (failure == 'metadata' and path == runner.run_dir / 'catalog.logs/invocation.json'
+                    if failure == 'corrupt_alias' and path == runner.run_dir / 'coverage.plan.json':
+                        return atomic(path, content + b'changed')
+                    if ((failure == 'coverage' and path.name == 'coverage.plan.json') or
+                            (failure == 'alias' and path == runner.run_dir / 'coverage.plan.json') or
+                            (failure == 'metadata' and path == runner.run_dir / 'revisions/001/study.logs/invocation.json'
                              and json.loads(content).get('publication_complete'))):
                         raise OSError('fixture disk full')
                     atomic(path, content)
-                with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process), \
+                with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process) as invoked, \
                         patch('explain.atomic', side_effect=fail_write):
                     manifest, code = runner.run()
                 self.assertEqual(code, 1)
-                self.assertFalse(manifest['catalog_invocation']['publication_complete'])
-                self.assertEqual((runner.run_dir / 'SUBSYSTEM_CATALOG.md').is_file(), failure == 'metadata')
+                self.assertFalse(manifest['revisions'][0]['study_invocation']['publication_complete'])
+                self.assertEqual(invoked.call_count, 1)
                 self.assertNotIn('      Report: ', err.getvalue())
 
     def test_document_bytes_plan_and_wire_are_separate(self):
@@ -251,7 +256,7 @@ class PublicationTests(FolderFixture):
             self.assertNotIn(field, saved)
             self.assertNotIn(field, saved['review_plan'])
         self.assertEqual(meta['contract_id'], 'evidence-ledger')
-        self.assertEqual(meta['artifact_format'], 'evidence-ledger-artifacts')
+        self.assertEqual(meta['artifact_format'], 'evidence-ledger-study-coverage-artifacts')
         self.assertEqual(meta['context_format'], 'compact-context')
         self.assertTrue(meta['publication_complete'])
 

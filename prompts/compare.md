@@ -146,6 +146,6 @@ terminology when it describes the investigated system's actual behavior.
 
 Each branch supplies only its selected study/review revision. Keep selected_revision
 and supplied revision identities with references; never pair a new study with an
-older review or use an unselected draft as support. Catalog file distribution and
-agent-reported coverage are separate from semantic correctness. Incomplete catalogs,
-UNCLASSIFIED and DIRECTORY_FALLBACK remain comparison limitations.
+older review or use an unselected draft as support. Source file distribution and
+agent-reported coverage are separate from semantic correctness. UNCLASSIFIED
+remains a comparison limitation.

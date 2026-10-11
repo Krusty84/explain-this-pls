@@ -4,7 +4,7 @@
 
 `execution.review_enabled` is a strict boolean and defaults to `false` in JSON
 and JSONC configurations. It applies to every source and backend in the run.
-With review disabled, the source pipeline is catalog → planned study; comparison remains
+With review disabled, the source pipeline is study; comparison remains
 available for multiple selected Git branches. Review/revision agents and prompts
 are inactive, and `max_revision_rounds` has no effect. Set `review_enabled: true`
 explicitly to retain the reviewed workflow, including its bounded revision loop.
@@ -40,7 +40,7 @@ The review and revision sections below describe the opt-in reviewed workflow.
 
 The orchestrator selects the required response schema for each stage and validates
 its structure locally.
-`schemas/{catalog,study,review,compare}.schema.json` and the
+`schemas/{study,review,compare}.schema.json` and the
 available `folder-` variants
 are **model wire** schemas generated from `MODEL_SCHEMAS` / `MODEL_FOLDER_SCHEMAS`
 in `src/contracts/contracts.py`. Internal `SCHEMAS` / `FOLDER_SCHEMAS` validate the expanded
@@ -77,7 +77,7 @@ Transport/stdout and stderr remain private attempt artifacts. A saved `study.jso
 fields and `program_checks`. Study narrative is authored as sections/blocks;
 the program computes the Markdown, block map and every document locator.
 Contract/artifact identifiers (`contract_id:
-"evidence-ledger"`, `artifact_format: "evidence-ledger-artifacts"`) belong only
+"evidence-ledger"`, `artifact_format: "evidence-ledger-study-coverage-artifacts"`) belong only
 to invocation metadata and the manifest, not agent responses or the root of saved
 results. The immutable coverage plan also records `contract_id` and is embedded
 in saved review plans. Study adds `review_plan` and `normalization_provenance` (including
@@ -112,10 +112,10 @@ review or publication. `study.annotated.md` contains generated checks and the re
 `ARCHITECTURE_REVIEW.md` and `BRANCH_COMPARISON.md` contain generated tables;
 `study.original.md` retains the canonical program assembly of authored blocks.
 `review.original.md` and `compare.original.md` preserve original prose.
-`SUBSYSTEM_CATALOG.md` is generated from the validated or recovered catalog and its frozen
-coverage plan, with subsystem tables, exclusions, limitations and unclassified
-paths. It is included in the catalog's `artifact_hashes`; the catalog's
-`report_sha256` continues to identify `catalog.json`.
+`coverage.plan.json` is generated from the first valid Study's subsystem selectors
+and exclusions, reconciled against the pinned inventory. Each Study publication
+hashes its plan copy; the common source-level plan remains immutable across revisions.
+
 The final report places limitations and assessments before narrative,
 and keeps contradictory assessments visible. It summarizes the selected architecture
 revision and its corresponding review when that optional stage is enabled.
@@ -334,7 +334,7 @@ For each branch, the orchestrator switches the root and then its submodules usin
 `git switch --detach <pinned-sha>`, with hooks and recursion disabled, network
 transports denied, and ignored-file overwrite protection. Only a verified switch
 updates expected HEAD/index metadata. Each source stage runs in the original root.
-Catalog, file assignment, Study, revisions, Review, and evidence validation complete
+Study, file assignment, revisions, Review, and evidence validation complete
 before the next branch. Source and Git guards remain active at stage boundaries.
 
 Git selects tracked paths with NUL-delimited output. Recursive submodule paths use
@@ -733,8 +733,8 @@ cannot enter recovery, review or format repair. No partial registry is presented
 as accepted, and empty-registry review is explicitly limited/ineligible.
 An existing manifest with missing or unsupported `contract_id` / `artifact_format`
 causes `UNSUPPORTED_ARTIFACT_FORMAT` before any artifact writes. Use a new run directory.
-Default execution uses catalog → planned study → selection → compare. With review enabled,
-execution uses catalog → study → review, optionally one revised study → full review,
+Default execution uses study → selection → compare. With review enabled,
+execution uses study → review, optionally one revised study → full review,
 then selection → compare (comparison only for
 multiple Git branches). XXX and OpenCode V2 use final JSON with local validation;
 no orchestrator format-repair prompt is sent.
@@ -769,69 +769,40 @@ Invocation metadata records `context_format: "compact-context"`.
 in invocation metadata. The backend receives the model schema, while local
 validation and publication use expanded internal and saved schemas.
 
-## Subsystem catalog and coverage
+## Study scope and coverage
 
-The catalog stage uses the same read-only source scope and boundary guards as study.
-Its wire task is architecture_catalog, with source identity, completion_status,
-limitations, subsystems `{id,name,purpose,paths}` and exclusions `{path,reason}`.
-The agent receives source information and a compact directory summary; Python
-checks selectors against the full file inventory. Subsystems are provisional
-navigation hints, not established architecture or indivisible scheduling units.
-Unknown purpose is not an exclusion reason. Explicit exclusions and symlinks
-remain represented, and links are never followed. Unallocated entries become
-UNCLASSIFIED; their regular files still receive primary study assignments.
-The resulting coverage.plan.json is immutable for the snapshot and
-shared by all document revisions. Large sources can use multiple study sessions
-before the first global document is assembled.
+Study returns subsystems `{id,name,purpose,paths}` and exclusions `{path,reason}`
+together with the architecture document, claims, evidence and inspection assessments.
+The initial call receives a compact directory summary and prepared source context.
+Python checks selectors against the complete pinned inventory. Subsystems are
+provisional grouping hints, not established architecture. Unknown purpose is not
+an exclusion reason. Symlinks remain represented and their targets are never followed.
+Unallocated entries become UNCLASSIFIED and prevent policy success.
 
-In both strict and compromise modes, catalog selectors may have one trailing `/`
-when the path without it is a valid directory in the frozen inventory. Subsystem
-paths and exclusions use the same rule. The response keeps its original spelling;
-the coverage plan uses canonical paths and detects duplicates after resolving these
-aliases. This does not change completion status or coverage origin. Files, symlinks,
-unknown directories and unsafe paths do not gain this alias; source evidence paths
-remain strict.
+The first valid Study publishes coverage.plan.json, shared by every revision and
+review for that source. Its membership, exclusions and unique-file counts are
+sealed with the source identity and inventory hash. It has no independent agent
+completion status or recovery origin. The initial Study's PARTIAL status and
+limitations do not prevent a later revision from completing the same scope.
+Revisions must return the same subsystem IDs, names, purposes, selectors and exclusions.
+Changing these boundaries requires a new run. A supplied frozen scope is also used
+by source-context comparison experiments.
 
-In compromise mode, catalog recovery first checks response structure, pinned source
-identity, IDs, selector syntax and exclusion rules. Only UNKNOWN_CATALOG_PATH is
-recoverable: selectors absent from the frozen inventory are removed without replacement.
-Valid assignments and exclusions remain. Subsystems with no remaining paths are
-removed; unallocated entries become UNCLASSIFIED through normal reconciliation.
-Traversal and other unsafe selectors are never recovered or authorized. Symlink
-targets are never followed. Strict mode continues to reject unknown paths.
-
-Coverage origin AGENT identifies a catalog that passed validation without recovery.
-AGENT_SALVAGED identifies a catalog with retained subsystems after unknown selectors
-were removed. Its saved completion_status and coverage catalog_status are PARTIAL,
-even if the agent reported COMPLETE. If none remain, DIRECTORY_FALLBACK groups
-top-level directories and root files while retaining valid exclusions and catalog
-limitations. Other catalog failures can use the existing directory fallback in
-compromise mode; catalog identity failures stop analysis for that source.
-
-The original extracted.json and expanded.json are unchanged. Private recovered.json
-holds the filtered catalog; recovery.json records rejected selectors with their
-JSON locations, original self-assessment, provenance and canonical input/output hashes.
-These artifacts are pinned and checked with the other attempt files. validation.json
-identifies recovered.json as its validated object and records original_valid=false.
-The saved program_checks retain the original completion_self_assessment. Rejected
-selector values are not copied into public reports or later model inputs.
-
-Recovered and fallback plans require PARTIAL status, limitations and
-policy_satisfied=false; their provenance is included in the frozen plan hash.
-Successful analysis cannot restore positive catalog acceptance. In strict mode a
-catalog failure stops the current source. continue_on_error=false stops further
-calls after a stage failure or catalog recovery; the recovered catalog is retained.
-Deterministic recovery is not a retry. Integrity, cleanup and publication errors
-stop the run regardless of policy. An incomplete, salvaged
-or fallback catalog and remaining UNCLASSIFIED prevent overall COMPLETE even if
-usable documentation is retained.
+Selectors may have one trailing `/` only for real inventory directories. Original
+response spelling is retained; plan paths are canonical, and aliases cannot hide
+duplicate selectors. Files, symlinks, unknown directories and unsafe paths do not
+gain this alias. Evidence paths remain strict. Unknown or unsafe selectors reject
+the Study response; they are never discarded or replaced by directory grouping.
+Compromise can retain rejected Study prose under the existing material rules,
+without a trusted coverage plan or successful policy result. Identity, source
+integrity, cleanup and publication failures remain blocking.
 
 Study adds coverage entries `{area_id,status,evidence_ids,limitation}` with status
 INSPECTED, PARTIALLY_INSPECTED or NOT_INSPECTED for every area. A missing response
 blocks acceptance; unfinished inspection blocks acceptance only for required areas.
 Empty or fully excluded areas may report NOT_INSPECTED with a limitation. INSPECTED
 needs a resolved source pointer inside that area. This is evidence of support, not
-proof of exhaustive reading. Review omission_search includes required catalog areas as well
+proof of exhaustive reading. Review omission_search includes required source areas as well
 as thematic scopes and user scenarios; missing/unfinished mandatory responses block
 acceptance. Final output separately reports file allocation and agent assessments.
 Neither is called completeness of system understanding; semantic_quality stays
@@ -858,10 +829,9 @@ published, strictly valid study and review, when review completion_status is
 COMPLETE and there are HIGH/MEDIUM findings. LOW-only findings, incomplete review,
 transport failures and recovered contract-invalid material do not trigger it.
 prompts.revise supplies a separate prompt to the existing study agent; no revision
-backend profile is introduced. stage_agents.catalog inherits study settings.
-prompts.catalog controls catalog. Each substantive invocation has its own budget.
-Analysis has at most five substantive stage invocations per snapshot: catalog,
-study and, when enabled, review plus one revision and repeat review.
+backend profile is introduced. Each substantive invocation has its own budget.
+Analysis has at most four substantive stage invocations per snapshot: study and,
+when enabled, review plus one revision and repeat review.
 
 The program compares registries for added, removed and changed claims. Coordinate
 changes alone are not semantic edits; unchanged assertions retain their IDs.
@@ -886,3 +856,8 @@ The manifest records selected_revision and revision history. Comparison uses onl
 selected pairs. Top-level ARCHITECTURE.md, study.json and companion files are exact
 copies of the selected artifacts, published after selection. Frozen-document checks
 run within each revision; a new study can never inherit an older review.
+
+The removed Catalog stage is not accepted in stage_agents or prompts. Configuration
+errors identify the key to remove. The artifact format changed to
+`evidence-ledger-study-coverage-artifacts`; earlier run formats and coverage plans
+are rejected without migration or modification of existing reports.

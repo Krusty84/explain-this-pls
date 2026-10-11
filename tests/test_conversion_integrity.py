@@ -92,7 +92,7 @@ class PrivateChainRecoveryTests(FolderFixture):
                 with patch.object(runner, 'check_cli', return_value={}), \
                         patch('explain.process', side_effect=process):
                     manifest, code = runner.run()
-                self.assertEqual(calls, ['catalog', 'study', 'review'])
+                self.assertEqual(calls, ['study', 'review'])
                 self.assertEqual((code, manifest['status'], manifest['critical_failure']), (1, 'FAILED', True))
                 self.assertFalse(manifest['publication_complete'])
                 self.assertTrue(any(d.get('failure_layer') == 'integrity' for d in manifest['diagnostics']))

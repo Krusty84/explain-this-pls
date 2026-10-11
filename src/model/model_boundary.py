@@ -155,7 +155,7 @@ class Binding:
         if ('source_snapshot_id' in raw and self._mode != 'folder'
                 or 'review_target_id' in raw and self._stage != 'review'):
             raise _error('$.binding')
-        if self._stage in ('catalog', 'study', 'review'):
+        if self._stage in ('study', 'review'):
             keys = ('source_directory',) if self._mode == 'folder' else ('branch', 'source_commit')
             for key in keys:
                 if raw.get(key) != self._context.get(key):

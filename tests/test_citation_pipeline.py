@@ -41,7 +41,7 @@ class CitationPipelineTests(test_folder.FolderFixture):
                 self.assertEqual(code, 0, manifest.get('diagnostics'))
                 self.assertEqual(manifest['status'], 'COMPLETE_WITH_WARNINGS')
                 self.assertEqual([c['context']['stage'] for c in self.calls],
-                                 ['catalog', 'study', 'review'])
+                                 ['study', 'review'])
                 self.assertTrue(processing_satisfied(manifest))
                 self.assertFalse(workflow_satisfied(manifest))
                 self.assertFalse(accepted(manifest))
@@ -117,7 +117,7 @@ class CitationPipelineTests(test_folder.FolderFixture):
                 self.assertFalse(manifest['processing_completed'])
                 self.assertFalse(manifest['processing_completed'])
                 self.assertEqual([c['context']['stage'] for c in self.calls],
-                                 ['catalog', 'study'])
+                                 ['study'])
 
     def test_correction_preserves_original_and_materialization_chain(self):
         (self.source / 'app.py').write_text('def main():\n    return 42\n# end\n')

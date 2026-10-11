@@ -47,7 +47,7 @@ class HashlessPipelineTests(FolderFixture):
     def test_all_revision_prompts_omit_service_hashes_and_preserve_private_chain(self):
         runner, manifest, code, calls = self.execute_case(lambda r, c, d: initial_finding(c['stage'], c, d))
         self.assertEqual(code, 0)
-        self.assertEqual([c['stage'] for c, _, _ in calls], ['catalog', 'study', 'review', 'study', 'review'])
+        self.assertEqual([c['stage'] for c, _, _ in calls], ['study', 'review', 'study', 'review'])
         self.assertEqual(len({c['source_snapshot_id'] for c, _, _ in calls}), 1)
         targets = [c['review_target_id'] for c, _, _ in calls if c['stage'] == 'review']
         self.assertEqual(len(set(targets)), 2)
@@ -63,7 +63,7 @@ class HashlessPipelineTests(FolderFixture):
             if context['stage'] == 'review':
                 self.assertNotIn('target', raw)
         attempts = list(runner.run_dir.rglob('attempt-001'))
-        self.assertEqual(len(attempts), 5)
+        self.assertEqual(len(attempts), 4)
         for attempt in attempts:
             raw = json.loads((attempt / 'extracted.json').read_text())
             expanded = json.loads((attempt / 'expanded.json').read_text())
@@ -75,11 +75,10 @@ class HashlessPipelineTests(FolderFixture):
             self.assertEqual(expanded['source_fingerprint'], manifest['source_fingerprint'])
             self.assertEqual(meta['prompt_sha256'], sha((attempt / 'input.prompt.txt').read_bytes()))
             self.assertEqual(list(service_hashes(json.loads((attempt / 'schema.json').read_text()))), [])
-            if raw['task'] != 'architecture_catalog':
-                normalized = json.loads((attempt / 'normalized.json').read_text())
-                provenance = meta['normalization_provenance']
-                self.assertEqual(provenance['input_sha256'], sha(canonical(expanded)))
-                self.assertEqual(provenance['normalized_sha256'], sha(canonical(normalized)))
+            normalized = json.loads((attempt / 'normalized.json').read_text())
+            provenance = meta['normalization_provenance']
+            self.assertEqual(provenance['input_sha256'], sha(canonical(expanded)))
+            self.assertEqual(provenance['normalized_sha256'], sha(canonical(normalized)))
         self.assertTrue(manifest['study']['program_checks']['evidence'][0]['file_sha256'])
         final = Path(manifest['final_report']).read_text()
         self.assertNotIn('File SHA-256', final)
@@ -95,7 +94,7 @@ class HashlessPipelineTests(FolderFixture):
         self.assertEqual((code, manifest['status'], manifest['critical_failure']), (1, 'FAILED', True))
         self.assertFalse(manifest['publication_complete'])
         self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
-        self.assertEqual([c['stage'] for c, _, _ in calls], ['catalog', 'study'])
+        self.assertEqual([c['stage'] for c, _, _ in calls], ['study'])
         self.assertTrue(any(d.get('failure_layer') == 'integrity' for d in manifest['diagnostics']))
 
     def test_wrong_snapshot_id_never_becomes_recovered_material(self):
@@ -108,7 +107,7 @@ class HashlessPipelineTests(FolderFixture):
         self.assertNotEqual(code, 0)
         self.assertIsNone(manifest['study'])
         self.assertNotIn('study_material', manifest['revisions'][0])
-        self.assertEqual([c['stage'] for c, _, _ in calls], ['catalog', 'study'])
+        self.assertEqual([c['stage'] for c, _, _ in calls], ['study'])
         self.assertFalse((runner.run_dir / 'revisions/001/study.material.json').exists())
 
 

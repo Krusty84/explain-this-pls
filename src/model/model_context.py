@@ -71,9 +71,6 @@ def project_model_context(stage, context):
     result.pop('_coverage_plan_path', None)
     if stage in ('compare', 'repair') or result.get('prompt_variant') == 'repair':
         result.pop('source_context', None)
-    if isinstance(result.get('catalog'), dict):
-        result['catalog'].pop('coverage_plan', None)
-        result['catalog'].pop('program_checks', None)
     if 'architecture_document' in result:
         _document(result['architecture_document'], registry=False, plan=False)
         _registry(result.get('claim_registry', []))

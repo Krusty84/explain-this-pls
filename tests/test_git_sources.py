@@ -109,7 +109,7 @@ class GitSourceTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 observed = [c for c in calls if 'source_files' in c]
                 self.assertEqual([c['context']['branch'] for c in observed],
-                                 ['topic'] * 3 + ['main'] * 3 + ['alias'] * 3)
+                                 ['topic'] * 2 + ['main'] * 2 + ['alias'] * 2)
                 for call in observed:
                     self.assertEqual(Path(call['cwd']), self.path)
                     content = 'TOPIC_SENTINEL\n' if call['context']['branch'] == 'topic' else 'HEAD_SENTINEL\n'

@@ -21,9 +21,9 @@ class SingleStudyTests(FolderFixture):
         for backend in ('codex', 'opencode', 'xxx'):
             with self.subTest(backend=backend):
                 manifest, code = self.run_case(backend=backend,
-                    catalog_paths=['.', 'part2.py', 'part3.py', 'part4.py', 'part5.py'])
+                    subsystem_paths=['.', 'part2.py', 'part3.py', 'part4.py', 'part5.py'])
                 self.assertEqual(code, 0, manifest.get('diagnostics'))
-                self.assertEqual([c['context']['stage'] for c in self.calls], ['catalog', 'study'])
+                self.assertEqual([c['context']['stage'] for c in self.calls], ['study'])
                 document = manifest if self.value['mode'] == 'folder' else manifest['branches'][0]
                 self.assertEqual(document['coverage_plan']['counts']['files'], 301)
                 self.assertEqual(len(document['study']['coverage']), 5)
@@ -34,7 +34,7 @@ class SingleStudyTests(FolderFixture):
                 self.assertGreater(sum(e.get('size', 0) for e in inventory['entries']), 262144)
                 self.assertEqual({p.name for p in self.runner.run_dir.rglob('*.plan.json')},
                                  {'coverage.plan.json', 'review.plan.json'})
-                self.assertTrue(all(row['stage'] in ('catalog', 'study', 'review')
+                self.assertTrue(all(row['stage'] in ('study', 'review')
                                     for row in manifest['metrics']['stages']))
                 if backend == 'codex':
                     self.assertNotIn('features.shell_tool=false', self.calls[-1]['command'])

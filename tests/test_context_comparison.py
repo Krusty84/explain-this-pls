@@ -26,9 +26,9 @@ class ContextComparisonTests(FolderFixture):
         folder = Folder(self.source, source_filter=config['source_filter'])
         inventory = folder.snapshot()
         context = {'source_directory': str(self.source), 'source_fingerprint': inventory['source_fingerprint']}
-        catalog = {**context, 'task': 'architecture_catalog', 'completion_status': 'COMPLETE', 'limitations': [], 'exclusions': [],
+        scope = {**context, 'task': 'architecture_documentation', 'completion_status': 'COMPLETE', 'limitations': [], 'exclusions': [],
                    'subsystems': [{'id': 'S-001', 'name': 'Unit', 'purpose': 'A test unit.', 'paths': ['.']}]}
-        coverage = build_coverage_plan(catalog, inventory, context)
+        coverage = build_coverage_plan(scope['subsystems'], scope['exclusions'], inventory, context)
         baseline = self.base / 'baseline'
         baseline.mkdir()
         for name, value in [('source.inventory.json', inventory), ('coverage.plan.json', coverage)]:
@@ -144,6 +144,18 @@ class ContextComparisonTests(FolderFixture):
         with self.assertRaisesRegex(ValueError, 'inventories differ'):
             frozen_inputs(baseline, config)
 
+    def test_old_scope_format_is_rejected_without_changing_baseline(self):
+        config, baseline, _ = self.baseline()
+        from src.analysis.evidence import canonical, sha
+        coverage = json.loads((baseline / 'coverage.plan.json').read_text())
+        coverage.update(origin='AGENT', catalog_status='COMPLETE', limitations=[])
+        coverage['plan_sha256'] = sha(canonical({k: v for k, v in coverage.items() if k != 'plan_sha256'}))
+        save_json(baseline / 'coverage.plan.json', coverage)
+        before = {p.name: p.read_bytes() for p in baseline.iterdir()}
+        with self.assertRaises(ValueError):
+            frozen_inputs(baseline, config)
+        self.assertEqual(before, {p.name: p.read_bytes() for p in baseline.iterdir()})
+
     def test_fact_assessment_is_explicit_and_covers_every_fact(self):
         report = {'facts': [{'id': 'F-001'}], 'attempts': [{'variant': 'context', 'repetition': 1}]}
         assessment = [{'variant': 'context', 'repetition': 1,
@@ -171,10 +183,10 @@ class GitContextComparisonTests(unittest.TestCase):
             setup.repo.checkout(pins['test01'])
             inventory, _ = setup.source_inventory()
             context = {'branch': 'test01', 'source_commit': pins['test01'], 'repository': str(fixture.repo_path)}
-            catalog = {**{key: context[key] for key in ('branch', 'source_commit')},
-                'task': 'architecture_catalog', 'completion_status': 'COMPLETE', 'limitations': [], 'exclusions': [],
+            scope = {**{key: context[key] for key in ('branch', 'source_commit')},
+                'task': 'architecture_documentation', 'completion_status': 'COMPLETE', 'limitations': [], 'exclusions': [],
                 'subsystems': [{'id': 'S-001', 'name': 'Unit', 'purpose': 'A test unit.', 'paths': ['.']}]}
-            coverage = build_coverage_plan(catalog, inventory, context)
+            coverage = build_coverage_plan(scope['subsystems'], scope['exclusions'], inventory, context)
             for name, value in [('source.inventory.json', inventory), ('coverage.plan.json', coverage)]:
                 save_json(baseline / name, value)
         finally:

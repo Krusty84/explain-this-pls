@@ -15,6 +15,18 @@ def sections(markdown='C-001: Has an entry point\n'):
                  blocks=[dict(markdown=markdown if i == 0 else 'Not applicable in this synthetic fixture.',
                               claim_ids=['C-001'] if i == 0 else [])]) for i, key in enumerate(SECTION_KEYS)]
 
+def scope(context):
+    plan = context.get('coverage_plan')
+    if plan is not None:
+        return dict(subsystems=[{k: copy.deepcopy(a[k]) for k in ('id', 'name', 'purpose', 'paths')}
+                                for a in plan['areas'] if a['id'] != 'UNCLASSIFIED'],
+                    exclusions=[{k: e[k] for k in ('path', 'reason')} for e in plan['exclusions']])
+    paths = json.loads(os.environ['AUDIT_TEST_SUBSYSTEM_PATHS']) if os.environ.get('AUDIT_TEST_SUBSYSTEM_PATHS') else ['.']
+    return dict(subsystems=[dict(id=f'S-{i + 1:03d}', name=f'Fixture {i + 1}',
+                                purpose='Synthetic subsystem.', paths=[path]) for i, path in enumerate(paths)],
+                exclusions=[])
+
+
 def response(context):
     stage = context.get('stage') or ('compare' if 'baseline_branch' in context else
                                     'review' if 'architecture_document' in context else 'study')
@@ -33,14 +45,6 @@ def response(context):
         data.update(source_directory=context['source_directory'], **{identity: context[identity]})
     else:
         data.update(branch=context['branch'], source_commit=context['source_commit'])
-    if stage == 'catalog':
-        data.pop('report_markdown')
-        data.update(task='architecture_catalog', subsystems=[dict(id='S-001',
-            name='Fixture system', purpose='Synthetic fixture source tree.', paths=['.'])], exclusions=[])
-        if os.environ.get('AUDIT_TEST_SUBSYSTEM_PATHS'):
-            data['subsystems'] = [dict(id=f'S-{i + 1:03d}', name=f'Fixture {i + 1}', purpose='Synthetic subsystem.', paths=[path])
-                                  for i, path in enumerate(json.loads(os.environ['AUDIT_TEST_SUBSYSTEM_PATHS']))]
-        return data
     data['evidence'] = [dict(id='E-001', source_id='source-001', path='app.py', start_line=1, end_line=1, quote='')]
     if stage == 'review':
         identity = ({'review_target_id': context['review_target_id']} if 'review_target_id' in context else
@@ -56,10 +60,11 @@ def response(context):
     else:
         del data['report_markdown']
         data['report_sections'] = sections()
+        data.update(scope(context))
         data.update(task='architecture_documentation', claims=[dict(id='C-001', statement='Has an entry point',
             scope='Static source inspection.', epistemic_kind='FACT', evidence_ids=['study:E-001'], uncertainty='')],
             coverage=[dict(area_id=a['id'], status='INSPECTED', evidence_ids=['study:E-001'], limitation='')
-                      for a in context.get('coverage_plan', {}).get('areas', [])])
+                      for a in (context['coverage_plan']['areas'] if context.get('coverage_plan') else data['subsystems'])])
     return data
 
 

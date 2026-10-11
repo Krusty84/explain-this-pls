@@ -154,7 +154,7 @@ class OpenCodeCLITests(unittest.TestCase):
         original = {'providers': {'private': {'settings': {'baseURL': 'https://example.invalid'}}},
                     'model': 'private/model', 'agent': {'legacy': {'mode': 'primary'}},
                     'agents': {'custom': {'permissions': []}}, 'plugins': ['auth-plugin']}
-        for stage in ('catalog', 'study', 'review', 'compare', 'repair'):
+        for stage in ('study', 'review', 'compare', 'repair'):
             env = {'OPENCODE_CONFIG_CONTENT': json.dumps(original), 'OPENCODE_CONFIG': '/profile'}
             name = adapter.prepare_environment(env, stage)
             merged = json.loads(env['OPENCODE_CONFIG_CONTENT'])
@@ -247,7 +247,7 @@ class OpenCodeCLITests(unittest.TestCase):
 
 
 class OpenCodeAcceptanceTests(FolderFixture):
-    def test_catalog_directory_suffix_is_accepted_without_a_repair_call(self):
+    def test_study_directory_suffix_is_accepted_without_a_repair_call(self):
         (self.source / 'src').mkdir()
         (self.source / 'src/main.py').write_text('def main(): return 42\n')
         (self.source / 'src/generated').mkdir()
@@ -255,9 +255,9 @@ class OpenCodeAcceptanceTests(FolderFixture):
         for policy in ('strict', 'compromise'):
             with self.subTest(policy=policy):
                 config = self.config() | {'result_policy': policy}
-                agent = config['_agents']['catalog']
+                agent = config['_agents']['study']
                 agent['backend'] = 'opencode'
-                runner = Runner(config, self.base / ('catalog-' + policy))
+                runner = Runner(config, self.base / ('study-' + policy))
                 runner.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
                 context = {'source_directory': str(self.source),
                            'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
@@ -269,13 +269,11 @@ class OpenCodeAcceptanceTests(FolderFixture):
                     original.update(wire)
                     return cli_result(command, wire)
                 with patch('explain.process', side_effect=process) as mocked:
-                    data, meta = runner.invoke('catalog', context, runner.run_dir / 'catalog.logs')
+                    data, meta = runner.invoke('study', context, runner.run_dir / 'study.logs')
                 self.assertEqual(mocked.call_count, 1)
                 self.assertTrue(meta['publication_complete'])
-                self.assertNotIn('catalog_recovery', meta)
-                plan = data['coverage_plan']
-                self.assertEqual((plan['origin'], plan['catalog_status'], plan['policy_satisfied']),
-                                 ('AGENT', 'COMPLETE', True))
+                plan = data['review_plan']['coverage_plan']
+                self.assertTrue(plan['policy_satisfied'])
                 self.assertEqual(plan['areas'][0]['paths'], ['app.py', 'src'])
                 self.assertEqual(plan['areas'][0]['file_paths'], ['app.py', 'src/main.py'])
                 self.assertEqual(plan['exclusions'][0]['file_paths'], ['src/generated/data.py'])

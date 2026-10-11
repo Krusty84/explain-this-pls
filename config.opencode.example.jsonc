@@ -123,8 +123,7 @@
   // When changing backend, also override executable and any inherited model/version.
   // model: null selects the CLI's model; expected_version: null clears version pinning.
   "stage_agents": {
-    // Catalog inherits study settings; substantive revision always uses study.
-    "catalog": {},
+    // Substantive revision always uses study.
     "study": {
       // "backend": "opencode",
       // "executable": "opencode",
@@ -148,14 +147,13 @@
 
   // Business flows or areas to prioritize, e.g. ["Order creation", "Inventory updates"].
   "priority_scenarios": [],
-  // Continue after recoverable stage failures, including catalog fallback in folder mode.
+  // Continue after recoverable stage failures, with retained material under compromise policy.
   // false stops further agent calls in both modes; integrity, cleanup and publication failures always stop.
   "continue_on_error": true,
 
   // Omitted entries use bundled prompts, even if this config is moved elsewhere.
   // Custom prompts must be outside the source directory and match the output schema.
   "prompts": {
-    // "catalog": "./custom-prompts/catalog.md",
     // "study": "./custom-prompts/study.md",
     // "revise": "./custom-prompts/revise.md",
     // "review": "./custom-prompts/review.md",

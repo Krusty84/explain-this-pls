@@ -64,7 +64,7 @@ def obj(**properties: dict) -> dict:
 # additionalProperties. Local semantic checks enforce nonblank strings, bounds
 # and graph constraints regardless of a backend's JSON Schema dialect.
 CONTRACT_ID = 'evidence-ledger'
-ARTIFACT_FORMAT = 'evidence-ledger-artifacts'
+ARTIFACT_FORMAT = 'evidence-ledger-study-coverage-artifacts'
 STRINGS = array(string())
 STATUS = string('COMPLETE', 'PARTIAL', 'BLOCKED')
 BASE = dict(completion_status=STATUS, report_markdown=string(), limitations=STRINGS)
@@ -82,15 +82,13 @@ SECTIONS = array(obj(key=string(*SECTION_KEYS), title=string(),
 STUDY_BASE = dict(completion_status=STATUS, report_sections=SECTIONS, limitations=STRINGS)
 INSPECTION_STATUS = string('INSPECTED', 'PARTIALLY_INSPECTED', 'NOT_INSPECTED')
 COVERAGE = array(obj(area_id=string(), status=INSPECTION_STATUS, evidence_ids=STRINGS, limitation=string()))
+SUBSYSTEMS = array(obj(id=string(), name=string(), purpose=string(), paths=STRINGS))
+EXCLUSIONS = array(obj(path=string(), reason=string()))
 PRIOR_FINDING = obj(revision_id=string(), finding_id=string())
 TARGET = obj(source_sha256=string(), document_sha256=string(), registry_sha256=string(), plan_sha256=string())
 SCHEMAS = {
-    'catalog': obj(task=string('architecture_catalog'), branch=string(), source_commit=string(),
-        completion_status=STATUS, limitations=STRINGS,
-        subsystems=array(obj(id=string(), name=string(), purpose=string(), paths=STRINGS)),
-        exclusions=array(obj(path=string(), reason=string()))),
     'study': obj(**STUDY_BASE, task=string('architecture_documentation'), branch=string(), source_commit=string(),
-                 evidence=EVIDENCE, claims=array(CLAIM), coverage=COVERAGE),
+                 evidence=EVIDENCE, claims=array(CLAIM), subsystems=SUBSYSTEMS, exclusions=EXCLUSIONS, coverage=COVERAGE),
     'review': obj(**BASE, task=string('architecture_review'), branch=string(), source_commit=string(),
         target=TARGET, evidence=EVIDENCE,
         claims=array(obj(id=string(), outcome=string('SUPPORTED', 'CONTRADICTED', 'UNVERIFIABLE',
@@ -115,7 +113,7 @@ FOLDER_SCHEMAS = {
     stage: obj(**({key: spec for key, spec in SCHEMAS[stage]['properties'].items()
                   if key not in ('branch', 'source_commit')} |
                  {'source_directory': string(), 'source_fingerprint': string()}))
-    for stage in ('catalog', 'study', 'review')
+    for stage in ('study', 'review')
 }
 
 def model_schemas(internal):
@@ -284,7 +282,7 @@ def validate_schema(value: Any, schema: dict, where: str = '$') -> None:
 
 def has_ledger_structure(stage, value, *, representation='materialized'):
     """Recognize substantive ledger fields for the requested representation."""
-    fields = {'catalog': ('subsystems', 'exclusions'), 'study': ('claims', 'evidence', 'coverage'),
+    fields = {'study': ('claims', 'evidence', 'subsystems', 'exclusions', 'coverage'),
               'review': ('claims', 'evidence', 'target', 'omission_search', 'prior_findings'),
               'compare': ('differences', 'unresolved_branches')}
     specs = dict(SCHEMAS[stage]['properties'])
@@ -417,7 +415,7 @@ def references(refs, allowed, path, *, namespaces=None):
 def validate_wire_identity(stage, value, context, mode='git'):
     """Structural and pinned-identity prerequisites; performs no repair."""
     validate_schema(value, (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage])
-    if stage in ('catalog', 'study', 'review'):
+    if stage in ('study', 'review'):
         identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
         for key in identity:
             if value[key] != context.get(key):
@@ -437,18 +435,6 @@ def validate_result(stage, value, context, mode='git'):
     nonblank(value)
     if value['completion_status'] != 'COMPLETE' and not value['limitations']:
         raise ContractError('PARTIAL/BLOCKED requires explicit limitations')
-    if stage == 'catalog':
-        from src.analysis.coverage_plan import checked_path, build_coverage_plan
-        unique_ids(value['subsystems'], r'S-[0-9]{3,}', '$.subsystems')
-        for subsystem in value['subsystems']:
-            paths = [checked_path(path) for path in subsystem['paths']]
-            if not paths or len(paths) != len(set(paths)):
-                raise contract_violation('INVALID_CATALOG_PATHS', '$.subsystems')
-        for exclusion in value['exclusions']:
-            checked_path(exclusion['path'])
-        if '_inventory' in context:
-            build_coverage_plan(value, context['_inventory'], context)
-        return
     if stage in ('study', 'review'):
         unique_ids(value['evidence'], r'E-[0-9]{3,}', '$.evidence')
         for i, e in enumerate(value['evidence']):
@@ -465,7 +451,9 @@ def validate_result(stage, value, context, mode='git'):
             references(claim['evidence_ids'], evidence_ids, f'$.claims[{i}].evidence_ids', namespaces={'study'})
             if claim['epistemic_kind'] != 'FACT' and not claim['uncertainty'].strip():
                 raise ContractError('Hypothesis/unknown requires a concrete missing check or limitation')
-        areas = {a['id'] for a in (context.get('coverage_plan') or {}).get('areas', [])}
+        from src.analysis.coverage_plan import study_coverage_plan
+        plan = study_coverage_plan(value, context)
+        areas = {a['id'] for a in plan['areas']} if plan is not None else {s['id'] for s in value['subsystems']}
         seen = set()
         for i, area in enumerate(value['coverage']):
             if area['area_id'] in seen or area['area_id'] not in areas:

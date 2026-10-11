@@ -16,13 +16,19 @@ from src.model.model_context import input_measurements, project_model_context
 
 def measurements():
     result = {}
-    for stage in ('catalog', 'study', 'revise', 'review'):
+    for stage in ('study', 'revise', 'review'):
         task = 'study' if stage == 'revise' else stage
         context = {'stage': task, 'source_mode': 'folder', 'source_directory': '/synthetic/source',
                    'source_snapshot_id': 'synthetic-snapshot', 'output_language': 'English',
                    'priority_scenarios': [], '_inventory': [{'path': 'src/app.py'}],
                    'coverage_plan': {'areas': [{'id': 'S-001', 'paths': ['src'],
                        'entry_paths': ['src/app.py'], 'file_paths': ['src/app.py']}], 'exclusions': []}}
+        if stage == 'study':
+            context.pop('coverage_plan')
+            context['inventory_summary'] = {'files': 1, 'symlinks': 0, 'directory_count': 2,
+                'empty_directories': 0, 'directories': [
+                    {'path': '.', 'files': 0, 'symlinks': 0, 'directories': 1, 'empty_directories': 0},
+                    {'path': 'src', 'files': 1, 'symlinks': 0, 'directories': 1, 'empty_directories': 0}]}
         projected = json.dumps(project_model_context(task, context), ensure_ascii=False)
         schema = json.dumps(MODEL_FOLDER_SCHEMAS[task], ensure_ascii=False)
         template = (ROOT / 'prompts' / (stage + '.md')).read_text(encoding='utf-8')

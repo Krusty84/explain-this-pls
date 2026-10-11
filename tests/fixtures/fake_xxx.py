@@ -81,14 +81,14 @@ else:
                         call['source_files'][str(file.relative_to(Path.cwd()))] = file.read_text(errors='replace')
     record()
     data = response(context)
-    if stage == 'catalog' and scenario in ('catalog-mixed', 'catalog-unknown'):
-        data['limitations'] = ['Synthetic catalog limitation.']
+    if stage == 'study' and scenario in ('scope-mixed', 'scope-unknown'):
+        data['limitations'] = ['Synthetic scope limitation.']
         for subsystem in data['subsystems']:
-            subsystem['paths'] = ([] if scenario == 'catalog-unknown' else subsystem['paths']) + ['unknown']
+            subsystem['paths'] = ([] if scenario == 'scope-unknown' else subsystem['paths']) + ['unknown']
     if scenario == 'missing-claims' and stage == 'study': del data['claims']
     if scenario == 'markdown-study' and stage == 'study':
         del data['report_sections']; data['report_markdown'] = '# Unsupported study'
-    if scenario == 'schema-extra' and stage != 'catalog':
+    if scenario == 'schema-extra':
         data['extra_private_key'] = ['private value']
     if scenario in ('claims-44', 'claims-40', 'claims-empty') and stage == 'review':
         data['claims'] = [dict(data['claims'][0], id=f'C-{i+1:03d}',
@@ -99,15 +99,15 @@ else:
         data.update(completion_status='PARTIAL', limitations=['Synthetic incomplete review'])
     if scenario == 'material-review' and stage == 'review':
         data['claims'][0].update(outcome='UNVERIFIABLE', limitation='Insufficient static evidence')
-    if scenario == 'wrong-identity' and stage != 'catalog':
+    if scenario == 'wrong-identity':
         data['source_snapshot_id' if 'source_snapshot_id' in data else 'source_commit'] = 'wrong'
-    if (scenario == 'schema-error' and stage != 'catalog') or (
+    if (scenario == 'schema-error') or (
             scenario == 'fail-main-study' and context.get('branch') == 'main' and stage == 'study'):
         data['completion_status'] = 'INVALID'
-    if scenario == 'claims-string' and stage != 'catalog': data['claims'] = '[{"private":"' + 'x' * 21295
-    if stage != 'catalog' and os.environ.get('AUDIT_FAKE_LOCAL_REFS'):
+    if scenario == 'claims-string': data['claims'] = '[{"private":"' + 'x' * 21295
+    if os.environ.get('AUDIT_FAKE_LOCAL_REFS'):
         data['claims'][0]['evidence_ids'] = ['E-001']
-    if stage != 'catalog' and os.environ.get('AUDIT_FAKE_SHORT_IDS'):
+    if os.environ.get('AUDIT_FAKE_SHORT_IDS'):
         data['evidence'][0]['id'] = stage + ':E-1'
         data['claims'][0]['evidence_ids'] = [stage + ':E-1']
     if stage == 'review' and scenario == 'review-bare-unique':
@@ -115,7 +115,7 @@ else:
         data['claims'][0]['evidence_ids'] = ['E-002', 'E-001']
         data['findings'] = [dict(id='F-001', severity='LOW', type='SCOPE_MISMATCH', claim_ids=['C-001'],
             location='C-001', evidence_ids=['E-002'], impact='Synthetic', proposed_correction='Synthetic')]
-    chosen = scenario if stage != 'catalog' else ''
+    chosen = scenario
     if scenario == 'unknown-compare-finish' and stage != 'compare': chosen = ''
     if chosen in ('invalid-json', 'prose-only'):
         data = {'invalid-json': '{broken', 'prose-only': 'Ordinary prose'}[chosen]
@@ -133,7 +133,7 @@ else:
         while not (gate / (stage + '.release')).exists():
             if time.monotonic() > deadline: raise RuntimeError('Progress fixture was not released')
             time.sleep(.01)
-    if scenario == 'source-change' and stage != 'catalog':
+    if scenario == 'source-change':
         (Path.cwd() / 'app.py').write_text('unexpected fixture mutation\n')
     if chosen in ('slow', 'active', 'interrupt'):
         print(output.splitlines()[0], flush=True)

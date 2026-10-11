@@ -16,13 +16,13 @@ from src.analysis.ledger import freeze_plan, prepare_result, review_context, CON
 from src.reports.presentation import render_stage, label
 from src.reports.final_report import render_final_report, recoverable_material
 from src.reports.document_rendering import materialize_study, validate_materialized
-from fixtures.ledger_response import sections
+from fixtures.ledger_response import sections, scope
 
 
 def study(context):
     return dict(task='architecture_documentation',
         branch=context['branch'], source_commit=context['source_commit'],
-        completion_status='COMPLETE', limitations=[], report_sections=sections('A claim.\n'), coverage=[],
+        completion_status='COMPLETE', limitations=[], report_sections=sections('A claim.\n'), **scope(context), coverage=[],
         evidence=[dict(id='E-001', source_id='source-001', path='app.py', start_line=1, end_line=1, quote='')],
         claims=[dict(id='C-001', statement='A claim.', scope='Static fixture.', epistemic_kind='FACT',
             evidence_ids=['study:E-001'], uncertainty='')])

@@ -130,8 +130,8 @@ class RepoFixture(unittest.TestCase):
                 'branches':['master','test01','dev_01_customerA'],'baseline_branch':'master'},
             'output_language':'Russian','project_description':'ERP-система 1995 года.',
             'priority_scenarios':[],'continue_on_error':True,
-            '_agents':{s:dict(agent) for s in ('catalog','study','review','compare')},
-            '_prompt_paths':{s:str(Path(__file__).resolve().parents[1]/'prompts'/f'{s}.md') for s in ('catalog','study','review','revise','compare')}}
+            '_agents':{s:dict(agent) for s in ('study','review','compare')},
+            '_prompt_paths':{s:str(Path(__file__).resolve().parents[1]/'prompts'/f'{s}.md') for s in ('study','review','revise','compare')}}
     def test_grouped_git_configuration_runs_and_restores(self):
         cfg=self.config()
         cfg['folder_mode']={'path':'/missing/inactive/folder'}
@@ -139,7 +139,7 @@ class RepoFixture(unittest.TestCase):
         self.assertEqual(code,0)
         self.assertEqual(result['status'],'COMPLETE')
         self.assertEqual(result['contract_id'],'evidence-ledger')
-        self.assertEqual(result['artifact_format'],'evidence-ledger-artifacts')
+        self.assertEqual(result['artifact_format'],'evidence-ledger-study-coverage-artifacts')
         self.assertEqual(result['comparison']['compared_branches'],['test01','dev_01_customerA'])
         self.assertEqual(self.repo.symbolic(),'master')
         self.assertEqual(self.repo.head(),self.master)
@@ -194,7 +194,7 @@ class RepoFixture(unittest.TestCase):
         result,code=fake.run()
         self.assertEqual(code,0)
         self.assertEqual(result['status'],'COMPLETE')
-        self.assertEqual(len(fake.calls),10)
+        self.assertEqual(len(fake.calls),7)
         for stage,context in fake.calls:
             self.assertEqual(context['project_description'],config['project_description'],stage)
         self.assertEqual(result['isolation'],'in-place-checkout; cli-native-permissions')
@@ -289,9 +289,7 @@ class FakeRunner(Runner):
     def check_cli(self):return {'TEST_ONLY':'mocked agents'}
     def invoke(self,stage,context,destination):
         self.calls.append((stage,copy.deepcopy(context)))
-        if stage=='catalog':
-            data=response(dict(context, stage=stage))
-        elif stage=='study':
+        if stage=='study':
             assert 'architecture_document' not in context and 'branches' not in context
             assert (self.source_path / '.git').exists()
             assert self.repo.head() == context['source_commit']
@@ -380,8 +378,8 @@ class ConfigTests(unittest.TestCase):
             stage_agents={'compare':{'backend':'unavailable','executable':'/missing/cli'}},
             prompts={'compare':'/missing/prompt'})
         cfg=self.load()
-        self.assertEqual(set(cfg['_agents']),{'catalog','study','review'})
-        self.assertEqual(set(cfg['_prompt_paths']),{'catalog','study','review','revise'})
+        self.assertEqual(set(cfg['_agents']),{'study','review'})
+        self.assertEqual(set(cfg['_prompt_paths']),{'study','review','revise'})
     def test_git_branches_and_baseline_validation(self):
         for branches,baseline in (([],'master'),(['master','master'],'master'),
                 ([''],'master'),([None],'master'),('master','master'),
@@ -540,14 +538,14 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                     run_dir=Path(output['manifest']).parent
                     manifest=json.loads((run_dir/'manifest.json').read_text())
                     self.assertEqual(manifest['contract_id'],'evidence-ledger')
-                    self.assertEqual(manifest['artifact_format'],'evidence-ledger-artifacts')
+                    self.assertEqual(manifest['artifact_format'],'evidence-ledger-study-coverage-artifacts')
                     snapshot=json.loads((run_dir/'config.snapshot.json').read_text())
                     self.assertEqual(snapshot['project_description'],cfg.get('project_description',''))
                     self.assertEqual(result.stderr.count('Project description is missing.'),int(check_only))
                     calls=[json.loads(line) for line in calls_path.read_text().splitlines()]
                     invocations=[call for call in calls if 'context' in call]
-                    self.assertEqual(len(calls),2 if check_only else 12)
-                    self.assertEqual(len(invocations),0 if check_only else 10)
+                    self.assertEqual(len(calls),2 if check_only else 9)
+                    self.assertEqual(len(invocations),0 if check_only else 7)
                     for call in invocations:
                         for field in ('contract_id', 'artifact_format', 'context_format'):
                             self.assertNotIn(field,call['schema']['properties'])
@@ -570,8 +568,8 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                             self.assertEqual(branch['study_invocation']['stage'],'study')
                             self.assertEqual(bundle['branches'][index]['study'],branch['study'])
                             self.assertNotIn('document',bundle['branches'][index])
-                            self.assertNotIn('architecture_document',invocations[index*3]['context'])
-                            review_context=invocations[index*3+2]['context']
+                            self.assertNotIn('architecture_document',invocations[index*2]['context'])
+                            review_context=invocations[index*2+1]['context']
                             self.assertEqual(review_context['architecture_document']['report_markdown'],branch['study']['report_markdown'])
                             branch_dir=run_dir/branch['directory']
                             self.assertNotIn('document_sha256', review_context)

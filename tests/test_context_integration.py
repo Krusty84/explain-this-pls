@@ -36,7 +36,7 @@ class PreparedContextTests(FolderFixture):
             manifest, code = self.run_case(backend=backend)
             self.assertEqual(code, 0, manifest.get('diagnostics'))
             contexts.append([call['context'].get('source_context') for call in self.calls])
-            for call in self.calls[1:]:
+            for call in self.calls:
                 context = call['context']
                 fragments = context['source_context']['fragments']
                 assigned = {p.name for p in self.source.glob('*.py')}
@@ -60,7 +60,7 @@ class PreparedContextTests(FolderFixture):
                                                      'prompt_variant': variant})
             self.assertNotIn('source_context', projected)
 
-    def test_no_progress_keeps_logs_metrics_and_catalog_without_retry(self):
+    def test_no_progress_keeps_logs_metrics_without_a_plan_without_retry(self):
         cfg = self.config()
         cfg['execution']['structured_output_repair_attempts'] = 2
         cfg['execution']['opencode_format_retries'] = 2
@@ -89,8 +89,8 @@ class PreparedContextTests(FolderFixture):
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=answer):
             manifest, code = runner.run()
         self.assertNotEqual(code, 0)
-        self.assertEqual(calls, ['catalog', 'study'])
-        self.assertIsNotNone(manifest['catalog'])
+        self.assertEqual(calls, ['study'])
+        self.assertNotIn('coverage_plan', manifest)
         attempts = list(runner.run_dir.rglob('attempt-*/invocation.json'))
         failed = next(json.loads(path.read_text()) for path in attempts
                       if json.loads(path.read_text())['status'] == 'FAILED')
@@ -144,8 +144,8 @@ class PreparedContextTests(FolderFixture):
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=answer):
             manifest, code = runner.run()
         self.assertNotEqual(code, 0)
-        self.assertEqual(calls, ['catalog', 'study'])
-        self.assertEqual(service_calls, ['export', 'delete', 'export', 'delete'])
+        self.assertEqual(calls, ['study'])
+        self.assertEqual(service_calls, ['export', 'delete'])
         self.assertEqual(exports, {})
         failed = json.loads(next(runner.run_dir.rglob('study.logs/attempt-001/invocation.json')).read_text())
         self.assertEqual(failed['error']['code'], 'NO_PROGRESS')

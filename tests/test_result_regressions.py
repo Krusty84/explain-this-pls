@@ -36,14 +36,18 @@ class ResultRegressions(unittest.TestCase):
         from src.contracts.contracts import MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS
         from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS, COVERAGE_PLAN
         root = Path(__file__).resolve().parents[1]
+        expected_paths = {root / 'schemas/coverage-plan.schema.json'}
         for prefix, schemas in (('', MODEL_SCHEMAS), ('folder-', MODEL_FOLDER_SCHEMAS),
                                 ('saved-', SAVED_SCHEMAS), ('saved-folder-', SAVED_FOLDER_SCHEMAS)):
             for stage, schema in schemas.items():
-                saved = json.loads((root / 'schemas' / f'{prefix}{stage}.schema.json').read_text())
+                path = root / 'schemas' / f'{prefix}{stage}.schema.json'
+                expected_paths.add(path)
+                saved = json.loads(path.read_text())
                 self.assertEqual(saved, schema)
                 for field in ('contract_id', 'artifact_format', 'context_format'):
                     self.assertNotIn(field, saved['properties'])
         self.assertEqual(json.loads((root / 'schemas/coverage-plan.schema.json').read_text()), COVERAGE_PLAN)
+        self.assertEqual(set((root / 'schemas').glob('*.schema.json')), expected_paths)
 
     def test_prompts_exclude_orchestrator_format_metadata(self):
         for path in (Path(__file__).resolve().parents[1] / 'prompts').glob('*.md'):

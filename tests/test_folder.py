@@ -114,8 +114,8 @@ class ModeConfigTests(FolderFixture):
             prompts={'compare': '/missing/prompt'})
         cfg = self.config()
         self.assertEqual(cfg['folder_mode']['path'], str(self.source))
-        self.assertEqual(set(cfg['_agents']), {'catalog', 'study', 'review'})
-        self.assertEqual(set(cfg['_prompt_paths']), {'catalog', 'study', 'review', 'revise'})
+        self.assertEqual(set(cfg['_agents']), {'study', 'review'})
+        self.assertEqual(set(cfg['_prompt_paths']), {'study', 'review', 'revise'})
 
     def test_git_sections_are_required(self):
         git = {'repository': './source', 'branches': ['master', 'customer'], 'baseline_branch': 'master'}
@@ -167,7 +167,7 @@ class ModeConfigTests(FolderFixture):
                 self.value['mode'] = 'folder'
                 self.value['folder_mode']['path'] = str(self.source)
                 with patch('explain.shutil.which', return_value=sys.executable):
-                    self.assertEqual(set(self.config()['_agents']), {'catalog', 'study'})
+                    self.assertEqual(set(self.config()['_agents']), {'study'})
 
 
 class FolderInventoryTests(FolderFixture):
@@ -305,14 +305,14 @@ class FolderPipelineTests(FolderFixture):
         manifest, code, stages = self.run_pipeline(doc_status='BLOCKED')
         self.assertEqual(code, 2)
         self.assertEqual(manifest['status'], 'PARTIAL')
-        self.assertEqual(stages, ['catalog', 'study'])
+        self.assertEqual(stages, ['study'])
         self.assertEqual(manifest['errors'], [])
 
     def test_partial_document_is_reviewed_but_not_accepted(self):
         manifest, code, stages = self.run_pipeline(doc_status='PARTIAL')
         self.assertEqual(code, 2)
         self.assertFalse(manifest['accepted'])
-        self.assertEqual(stages, ['catalog', 'study', 'review'])
+        self.assertEqual(stages, ['study', 'review'])
 
     def test_stage_failure_stops_even_with_continue_on_error(self):
         for stage in ('study', 'review'):
@@ -386,7 +386,7 @@ class FolderCLIIntegrationTests(FolderFixture):
                     self.assertEqual(output['workflow_satisfied'], not check)
                     calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
                     stages = [c['context']['stage'] for c in calls if 'context' in c]
-                    self.assertEqual(stages, [] if check else ['catalog', 'study'])
+                    self.assertEqual(stages, [] if check else ['study'])
                     if not check:
                         manifest = json.loads(Path(output['manifest']).read_text())
                         self.assertFalse(manifest['accepted'])
@@ -410,15 +410,15 @@ class FolderCLIIntegrationTests(FolderFixture):
                     run = Path(output['manifest']).parent
                     manifest = json.loads((run / 'manifest.json').read_text())
                     self.assertEqual(manifest['contract_id'], 'evidence-ledger')
-                    self.assertEqual(manifest['artifact_format'], 'evidence-ledger-artifacts')
+                    self.assertEqual(manifest['artifact_format'], 'evidence-ledger-study-coverage-artifacts')
                     self.assertEqual(manifest['source_fingerprint'], before['source_fingerprint'])
                     self.assertEqual(json.loads((run / 'source.inventory.json').read_text()), before)
                     snapshot = json.loads((run / 'config.snapshot.json').read_text())
                     self.assertEqual(snapshot['folder_mode']['path'], str(self.source))
                     calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
                     invocations = [c for c in calls if 'context' in c]
-                    self.assertEqual(len(calls), 2 if check else 5)
-                    self.assertEqual(len(invocations), 0 if check else 3)
+                    self.assertEqual(len(calls), 2 if check else 4)
+                    self.assertEqual(len(invocations), 0 if check else 2)
                     self.assertFalse((run / 'comparison').exists())
                     self.assertFalse((self.source / '.git').exists())
                     for call in invocations:
@@ -438,8 +438,8 @@ class FolderCLIIntegrationTests(FolderFixture):
                                 'glob': 'allow', 'grep': 'allow'})
                     if not check:
                         self.assertNotIn('architecture_document', invocations[0]['context'])
-                        self.assertEqual(invocations[2]['context']['architecture_document']['report_markdown'], manifest['study']['report_markdown'])
-                        review_context = invocations[2]['context']
+                        self.assertEqual(invocations[1]['context']['architecture_document']['report_markdown'], manifest['study']['report_markdown'])
+                        review_context = invocations[1]['context']
                         self.assertNotIn('document_sha256', review_context)
                         self.assertNotIn('source_fingerprint', review_context)
                         bindings = json.loads((run / 'revisions/001/review.logs/attempt-001/binding.json').read_text())
@@ -476,7 +476,7 @@ class FolderCLIIntegrationTests(FolderFixture):
         manifest = json.loads((run / 'manifest.json').read_text())
         self.assertIsNone(manifest['study'])
         self.assertIsNone(manifest['review'])
-        meta = json.loads((run / 'catalog.logs/invocation.json').read_text())
+        meta = json.loads((run / 'revisions/001/study.logs/invocation.json').read_text())
         self.assertEqual(meta['status'], 'FAILED')
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         self.assertEqual(len([c for c in calls if 'context' in c]), 1)

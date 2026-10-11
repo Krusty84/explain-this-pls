@@ -152,7 +152,7 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
                 self.assert_original(before)
                 calls = [json.loads(s) for s in self.calls.read_text().splitlines()]
                 stages = [c for c in calls if 'context' in c]
-                self.assertEqual(len(stages), 7)
+                self.assertEqual(len(stages), 5)
                 for call in stages[:-1]:
                     self.assertEqual(call['observed'], self.expected[call['context']['branch']])
                 changes = stages[-1]['context']['git_deltas']['topic']

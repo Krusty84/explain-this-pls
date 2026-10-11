@@ -55,7 +55,7 @@ class ModelBoundaryTests(unittest.TestCase):
         identifier = projected['source_snapshot_id']
         self.assertRegex(identifier, r'^S-[A-Za-z0-9_-]{16}$')
         self.assertEqual(projected['sources'][0]['identity']['source_snapshot_id'], identifier)
-        self.assertEqual(registry.bind('catalog', context, 'folder').project()['source_snapshot_id'], identifier)
+        self.assertEqual(registry.bind('study', context, 'folder').project()['source_snapshot_id'], identifier)
         self.assertNotEqual(BindingRegistry().bind('study', context, 'folder').project()['source_snapshot_id'], identifier)
         self.assert_hashless(projected)
         wire = response(projected)

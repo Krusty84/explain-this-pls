@@ -24,8 +24,7 @@ IDENTITY['properties'].update(repository=string(), branch=NULL_STRING, base_comm
     source_type=string('commit', 'working_tree'), snapshot_id=string(), submodule_head=string())
 NULL_IDENTITY = dict(IDENTITY, type=['object', 'null'])
 SOURCE = obj(id=string(), root=string(), identity=IDENTITY)
-COVERAGE_PLAN = obj(contract_id=string(CONTRACT_ID), origin=string('AGENT', 'AGENT_SALVAGED', 'DIRECTORY_FALLBACK'),
-    catalog_status=string('COMPLETE', 'PARTIAL', 'BLOCKED'), limitations=STRINGS, sources=array(SOURCE), inventory_sha256=string(),
+COVERAGE_PLAN = obj(contract_id=string(CONTRACT_ID), sources=array(SOURCE), inventory_sha256=string(),
     areas=array(obj(id=string(), name=string(), purpose=string(), paths=STRINGS, entry_paths=STRINGS,
                     file_paths=STRINGS, required={'type': 'boolean'})),
     exclusions=array(obj(path=string(), reason=string(), entry_paths=STRINGS, file_paths=STRINGS)),
@@ -61,7 +60,6 @@ BASE_CHECKS = dict(execution=string('COMPLETED'), contract=string('VALID'), sour
     semantic_quality=string('NOT_MEASURED'), completion_self_assessment={
         'type': ['string', 'null'], 'enum': ['COMPLETE', 'PARTIAL', 'BLOCKED', None]}, meaning=string())
 CHECKS = {
-    'catalog': obj(**BASE_CHECKS),
     'study': obj(**BASE_CHECKS, evidence_counts=mapping(INTEGER), document_links=DOCUMENT_LINKS,
         coverage=obj(expected_ids=STRINGS, missing_ids=STRINGS, unfinished_ids=STRINGS, unsupported_ids=STRINGS,
             reported_by=string('AGENT'), completeness_measured={'type': 'boolean'}, policy_satisfied={'type': 'boolean'})),
@@ -88,8 +86,6 @@ def artifact_schemas(wire):
         if stage == 'study':
             spec = materialized_schema(spec)
         properties = dict(spec['properties'], program_checks=CHECKS[stage])
-        if stage == 'catalog':
-            properties['coverage_plan'] = COVERAGE_PLAN
         if stage in ('study', 'review'):
             properties['review_plan'] = PLAN
             properties['revision_id'] = string()

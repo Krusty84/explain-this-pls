@@ -31,10 +31,10 @@ class CitationPolicyTests(unittest.TestCase):
                        priority_scenarios=[], result_policy=policy)
         context['_inventory'] = dict(entries=[dict(path='.', type='directory'),
             dict(path='app.py', type='file', size=9, sha256=sha(b'print(1)\n'))])
-        catalog = dict(task='architecture_catalog', branch=branch, source_commit='abc',
+        scope = dict(task='architecture_documentation', branch=branch, source_commit='abc',
             completion_status='COMPLETE', limitations=[], exclusions=[],
             subsystems=[dict(id='S-001', name='App', purpose='Entry.', paths=['app.py'])])
-        context['coverage_plan'] = build_coverage_plan(catalog, context['_inventory'], context)
+        context['coverage_plan'] = build_coverage_plan(scope['subsystems'], scope['exclusions'], context['_inventory'], context)
         return context
 
     def wire(self, context=None, *, mismatch=True):

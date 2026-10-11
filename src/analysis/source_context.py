@@ -332,7 +332,7 @@ class SourceContextBuilder:
         started = time.monotonic()
         manifest = dict(stage=stage, enabled=self.settings['enabled'], files=[], prepared_bytes=0,
                         transmitted_bytes=0, duration_seconds=0)
-        if (not self.settings['enabled'] or stage not in ('catalog', 'study', 'review', 'revise') or
+        if (not self.settings['enabled'] or stage not in ('study', 'review', 'revise') or
                 context.get('correction_prompt')):
             manifest['reason'] = 'disabled' if not self.settings['enabled'] else 'stage_without_sources'
             return None, manifest
@@ -406,7 +406,7 @@ class SourceContextBuilder:
                          for start, end in record['delivered']]
             reasons = {reason for reason in (record['map_reason'], record['text_reason']) if reason}
             if missing:
-                reasons.add('catalog_map_only' if stage == 'catalog' else 'budget')
+                reasons.add('budget')
             if record['map_sent'] < len(record['symbols']) or (record['source_id'], record['path']) not in map_paths:
                 reasons.add('budget')
             new = (int(bool(missing or record['text_reason'])), len(missing),
@@ -449,42 +449,41 @@ class SourceContextBuilder:
                 record['delivered'] = best if best is not None else old
                 measure(record)
 
-        if stage != 'catalog':
-            if stage in ('review', 'revise') or context.get('prompt_variant') == 'revise':
-                by_path = {(r['source_id'], r['path']): r for r in records}
-                for pointer in _pointers({k: v for k, v in context.items() if k not in ('_inventory', 'source_context')}):
-                    record = by_path.get((pointer['source_id'], pointer['path']))
-                    start, end = pointer['start_line'], pointer['end_line']
-                    if record and type(start) is int and type(end) is int and 1 <= start <= end:
-                        for left in range(start, min(end, len(record['source_lines'])) + 1, MAX_FRAGMENT_LINES):
-                            add(record, left, min(end, left + MAX_FRAGMENT_LINES - 1))
-            candidates = []
-            for record in records:
-                symbols = sorted(record['symbols'], key=lambda s: (s['kind'] != 'import', s['start_line']))
-                windows = [(s['start_line'], min(s['end_line'], s['start_line'] + MAX_FRAGMENT_LINES - 1)) for s in symbols]
-                windows.extend((start, min(start + MAX_FRAGMENT_LINES - 1, len(record['source_lines'])))
-                               for start in range(1, len(record['source_lines']) + 1, MAX_FRAGMENT_LINES))
-                candidates.append(iter(windows))
-            def cycle(queues, fair):
-                active_indices = list(range(len(records)))
-                while active_indices:
-                    next_indices = []
-                    for index in active_indices:
-                        candidate = next(queues[index], None)
-                        if candidate is not None:
-                            add(records[index], *candidate, fair=fair and len(active_indices) > 1)
-                            next_indices.append(index)
-                    active_indices = next_indices
-            cycle(candidates, True)
-            # Reconsider residual windows without the per-turn fair share once
-            # every file has had its turn; small peers can leave capacity free.
-            remaining = []
-            for record in records:
-                windows = [(start, min(end, start + MAX_FRAGMENT_LINES - 1))
-                           for left, end in _subtract(1, len(record['source_lines']), record['delivered'])
-                           for start in range(left, end + 1, MAX_FRAGMENT_LINES)]
-                remaining.append(iter(windows))
-            cycle(remaining, False)
+        if stage in ('review', 'revise') or context.get('prompt_variant') == 'revise':
+            by_path = {(r['source_id'], r['path']): r for r in records}
+            for pointer in _pointers({k: v for k, v in context.items() if k not in ('_inventory', 'source_context')}):
+                record = by_path.get((pointer['source_id'], pointer['path']))
+                start, end = pointer['start_line'], pointer['end_line']
+                if record and type(start) is int and type(end) is int and 1 <= start <= end:
+                    for left in range(start, min(end, len(record['source_lines'])) + 1, MAX_FRAGMENT_LINES):
+                        add(record, left, min(end, left + MAX_FRAGMENT_LINES - 1))
+        candidates = []
+        for record in records:
+            symbols = sorted(record['symbols'], key=lambda s: (s['kind'] != 'import', s['start_line']))
+            windows = [(s['start_line'], min(s['end_line'], s['start_line'] + MAX_FRAGMENT_LINES - 1)) for s in symbols]
+            windows.extend((start, min(start + MAX_FRAGMENT_LINES - 1, len(record['source_lines'])))
+                           for start in range(1, len(record['source_lines']) + 1, MAX_FRAGMENT_LINES))
+            candidates.append(iter(windows))
+        def cycle(queues, fair):
+            active_indices = list(range(len(records)))
+            while active_indices:
+                next_indices = []
+                for index in active_indices:
+                    candidate = next(queues[index], None)
+                    if candidate is not None:
+                        add(records[index], *candidate, fair=fair and len(active_indices) > 1)
+                        next_indices.append(index)
+                active_indices = next_indices
+        cycle(candidates, True)
+        # Reconsider residual windows without the per-turn fair share once
+        # every file has had its turn; small peers can leave capacity free.
+        remaining = []
+        for record in records:
+            windows = [(start, min(end, start + MAX_FRAGMENT_LINES - 1))
+                       for left, end in _subtract(1, len(record['source_lines']), record['delivered'])
+                       for start in range(left, end + 1, MAX_FRAGMENT_LINES)]
+            remaining.append(iter(windows))
+        cycle(remaining, False)
         payload['fragments'] = [fragment for record in records for fragment in record['_fragments']]
         for record in records:
             item = {k: record[k] for k in ('source_id', 'path', 'relative', 'status', 'parser', 'map_status',
@@ -498,7 +497,7 @@ class SourceContextBuilder:
                         transmitted_text_bytes=sum(len(''.join(record['source_lines'][a - 1:b]).encode('utf-8'))
                                                    for a, b in record['delivered']))
             if item['omitted_ranges'] and not item['text_reason']:
-                item['text_reason'] = 'catalog_map_only' if stage == 'catalog' else 'budget'
+                item['text_reason'] = 'budget'
             manifest['files'].append(item)
         manifest.update(prepared_bytes=sum(r['prepared_bytes'] for r in records), transmitted_bytes=_size(payload),
                         map_bytes=_size({'files': payload['files']}), duration_seconds=time.monotonic() - started)

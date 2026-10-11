@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Offline catalog/revision pipeline with the shared synthetic CLI response."""
+"""Offline study/revision pipeline with the shared synthetic CLI response."""
 import copy
 import io
 import json
@@ -94,7 +94,7 @@ class RevisionPipelineTests(FolderFixture):
                 change = None if severity is None else lambda s, c, d: initial_finding(s, c, d, severity)
                 manifest, code = self.run_case(change)
                 self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
-                self.assertEqual(self.stages(), ['catalog', 'study', 'review'])
+                self.assertEqual(self.stages(), ['study', 'review'])
                 self.assertEqual(len(manifest['revisions']), 1)
                 self.assert_selected_aliases('001')
 
@@ -103,7 +103,7 @@ class RevisionPipelineTests(FolderFixture):
             with self.subTest(severity=severity):
                 manifest, code = self.run_case(lambda s, c, d: initial_finding(s, c, d, severity))
                 self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
-                self.assertEqual(self.stages(), ['catalog', 'study', 'review', 'revise', 'review'])
+                self.assertEqual(self.stages(), ['study', 'review', 'revise', 'review'])
                 self.assertEqual(len(manifest['revisions']), 2)
                 self.assert_selected_aliases('002')
                 coverage = json.loads((self.run_dir / 'coverage.plan.json').read_text())
@@ -122,7 +122,7 @@ class RevisionPipelineTests(FolderFixture):
     def test_disabled_revision_stops_after_initial_material_review(self):
         manifest, code = self.run_case(initial_finding, rounds=0)
         self.assertEqual((code, manifest['status'], manifest['accepted']), (2, 'PARTIAL', False))
-        self.assertEqual(self.stages(), ['catalog', 'study', 'review'])
+        self.assertEqual(self.stages(), ['study', 'review'])
         self.assert_selected_aliases('001')
 
     def test_revision_report_paths_are_visible_before_the_next_stage(self):
@@ -136,8 +136,7 @@ class RevisionPipelineTests(FolderFixture):
         with patch('explain.NullReporter', return_value=reporter):
             manifest, code = self.run_case(change)
         self.assertEqual(code, 0)
-        paths = [self.run_dir / 'SUBSYSTEM_CATALOG.md',
-                 self.run_dir / 'revisions/001/ARCHITECTURE.md',
+        paths = [self.run_dir / 'revisions/001/ARCHITECTURE.md',
                  self.run_dir / 'revisions/001/ARCHITECTURE_REVIEW.md',
                  self.run_dir / 'revisions/002/ARCHITECTURE.md',
                  self.run_dir / 'revisions/002/ARCHITECTURE_REVIEW.md']
@@ -162,7 +161,7 @@ class RevisionPipelineTests(FolderFixture):
                 manifest, code = self.run_case(change, policy='compromise')
                 self.assertFalse(manifest['accepted'])
                 self.assertNotEqual(code, 0)
-                self.assertEqual(self.stages(), ['catalog', 'study', 'review'])
+                self.assertEqual(self.stages(), ['study', 'review'])
                 self.assertEqual(len(manifest['revisions']), 1)
 
     def test_failed_and_recovered_studies_do_not_announce_unpublished_reports(self):
@@ -176,7 +175,7 @@ class RevisionPipelineTests(FolderFixture):
                 with patch('explain.NullReporter', return_value=reporter):
                     manifest, code = self.run_case(change, policy='compromise')
                 self.assertNotEqual(code, 0)
-                expected = [self.run_dir / 'SUBSYSTEM_CATALOG.md']
+                expected = []
                 if recovered:
                     self.assertTrue(manifest['revisions'][0]['study_invocation']['material_retained'])
                     expected.append(self.run_dir / 'revisions/001/ARCHITECTURE_REVIEW.md')
@@ -203,7 +202,7 @@ class RevisionPipelineTests(FolderFixture):
                     self.assertIsNone(revised['study'])
                 else:
                     self.assertIsNotNone(revised['study'])
-                expected = ['catalog', 'study', 'review', 'revise'] + ([] if failed_stage == 'study' else ['review'])
+                expected = ['study', 'review', 'revise'] + ([] if failed_stage == 'study' else ['review'])
                 self.assertEqual(self.stages(), expected)
                 self.assertEqual(manifest['review']['revision_id'], '001')
                 self.assertTrue(manifest['revision_history'][0]['review_complete'])
@@ -218,7 +217,7 @@ class RevisionPipelineTests(FolderFixture):
         manifest, code = self.run_case(change)
         self.assertEqual(code, 2)
         self.assert_selected_aliases('001')
-        self.assertEqual(self.stages(), ['catalog', 'study', 'review', 'revise', 'review'])
+        self.assertEqual(self.stages(), ['study', 'review', 'revise', 'review'])
         revised = manifest['revisions'][1]
         self.assertEqual(revised['study']['revision_id'], '002')
         self.assertEqual(revised['review']['revision_id'], '002')
@@ -259,7 +258,7 @@ class RevisionPipelineTests(FolderFixture):
                 manifest, code = self.run_case(change)
                 self.assertEqual((code, manifest['accepted']), (2, False))
                 self.assert_selected_aliases('002')
-                self.assertEqual(self.stages(), ['catalog', 'study', 'review', 'revise', 'review'])
+                self.assertEqual(self.stages(), ['study', 'review', 'revise', 'review'])
                 self.assertEqual(len(manifest['revisions']), 2)
 
     def test_no_complete_review_selects_last_usable_study_without_old_review_alias(self):
@@ -354,24 +353,47 @@ class RevisionPipelineTests(FolderFixture):
         self.assertFalse(manifest['publication_complete'])
         self.assertFalse((self.run_dir / 'study.material.json').exists())
 
-    def test_invalid_catalog_fallback_and_continue_on_error_are_explicit(self):
-        def invalid_catalog(stage, context, data):
-            if stage == 'catalog':
-                data['subsystems'][0]['paths'] = ['missing-source-file']
+    def test_invalid_study_scope_has_no_fallback(self):
+        def invalid_scope(stage, context, data):
+            if stage == 'study':
+                data['subsystems'][0]['paths'] = ['absent']
             return data
-        for policy, keep_going in (('strict', True), ('compromise', True), ('compromise', False)):
-            with self.subTest(policy=policy, keep_going=keep_going):
-                manifest, code = self.run_case(invalid_catalog, policy=policy, continue_on_error=keep_going)
-                self.assertNotEqual(code, 0)
-                self.assertFalse(manifest['accepted'])
-                if policy == 'compromise' and keep_going:
-                    self.assertEqual(self.stages(), ['catalog', 'study', 'review'])
-                    self.assertEqual(manifest['coverage_plan']['origin'], 'DIRECTORY_FALLBACK')
-                    self.assertFalse(manifest['coverage_plan']['policy_satisfied'])
-                    self.assert_selected_aliases('001')
-                else:
-                    self.assertEqual(self.stages(), ['catalog'])
-                    self.assertEqual(manifest['revisions'], [])
+        for policy in ('strict', 'compromise'):
+            for keep_going in (False, True):
+                with self.subTest(policy=policy, keep_going=keep_going):
+                    manifest, code = self.run_case(invalid_scope, policy=policy, continue_on_error=keep_going)
+                    self.assertNotEqual(code, 0)
+                    self.assertFalse(manifest['accepted'])
+                    self.assertNotIn('coverage_plan', manifest)
+                    self.assertFalse((self.run_dir / 'coverage.plan.json').exists())
+                    self.assertEqual(self.stages(), ['study', 'review'] if policy == 'compromise' and keep_going else ['study'])
+
+    def test_partial_study_can_complete_a_revision_in_the_same_scope(self):
+        def change(stage, context, data):
+            initial_finding(stage, context, data)
+            if stage == 'study' and context['revision_id'] == '001':
+                data.update(completion_status='PARTIAL', limitations=['Initial investigation unfinished.'])
+            return data
+        manifest, code = self.run_case(change)
+        self.assertEqual(code, 0)
+        self.assertEqual(manifest['selected_revision'], '002')
+        first, second = manifest['revisions']
+        self.assertFalse(first['study']['program_checks']['policy_satisfied'])
+        self.assertTrue(second['study']['program_checks']['policy_satisfied'])
+        self.assertEqual(first['study']['review_plan']['coverage_plan'], second['study']['review_plan']['coverage_plan'])
+
+    def test_revised_study_cannot_change_frozen_scope(self):
+        def change(stage, context, data):
+            initial_finding(stage, context, data)
+            if stage == 'study' and context['revision_id'] == '002':
+                data['subsystems'][0]['paths'] = ['app.py']
+            return data
+        manifest, code = self.run_case(change)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(manifest['selected_revision'], '001')
+        self.assert_selected_aliases('001')
+        self.assertEqual(manifest['revisions'][1]['study_invocation']['error']['details']['code'], 'COVERAGE_SCOPE_CHANGED')
+
 
 
 class RevisionGitPipelineTests(unittest.TestCase):
@@ -480,7 +502,7 @@ class RevisionGitPipelineTests(unittest.TestCase):
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
             manifest, code = runner.run()
         self.assertEqual((code, manifest['status']), (0, 'COMPLETE'))
-        self.assertEqual(len(calls), 9)
+        self.assertEqual(len(calls), 7)
         comparison = calls[-1]
         self.assertEqual(comparison['stage'], 'compare')
         master, topic = comparison['branches']
@@ -502,7 +524,6 @@ class RevisionGitPipelineTests(unittest.TestCase):
         self.assertTrue(manifest['comparison']['program_checks']['policy_satisfied'])
         paths = []
         for branch in manifest['branches']:
-            paths.append(runner.run_dir / branch['directory'] / 'SUBSYSTEM_CATALOG.md')
             for revision in branch['revisions']:
                 paths.extend(runner.run_dir / revision['directory'] / name
                              for name in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md'))

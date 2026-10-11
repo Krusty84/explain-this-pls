@@ -28,7 +28,7 @@ class ConfigTests(FolderFixture):
     def test_unsupported_backend_is_rejected_before_cli_in_both_modes(self):
         original = copy.deepcopy(self.value)
         for mode in ('git', 'folder'):
-            targets = ('agent', 'catalog', 'study', 'review') + (('compare',) if mode == 'git' else ())
+            targets = ('agent', 'study', 'review') + (('compare',) if mode == 'git' else ())
             for target in targets:
                 self.value = copy.deepcopy(original)
                 self.value['mode'] = mode
@@ -91,17 +91,24 @@ class ConfigTests(FolderFixture):
                         self.config()
                     process.assert_not_called()
 
-    def test_catalog_inherits_effective_study_then_its_own_overrides(self):
+    def test_removed_catalog_keys_fail_before_any_cli(self):
+        base = copy.deepcopy(self.value)
+        for section in ('stage_agents', 'prompts'):
+            self.value = copy.deepcopy(base)
+            self.value[section] = {'catalog': {} if section == 'stage_agents' else './missing.md'}
+            with self.subTest(section=section), patch('explain.process') as process:
+                with self.assertRaisesRegex(AuditError, 'Remove ' + section + r'\.catalog') as caught:
+                    self.config()
+                self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
+                process.assert_not_called()
+
+    def test_revision_uses_study_agent(self):
         self.value['agent']['model'] = 'shared'
-        self.value['stage_agents'] = {'study': {'model': 'study-model', 'expected_version': 'pinned'},
-                                    'catalog': {'model': 'catalog-model'}}
+        self.value['stage_agents'] = {'study': {'model': 'study-model', 'expected_version': 'pinned'}}
         config = self.config()
-        self.assertEqual(config['_agents']['catalog']['model'], 'catalog-model')
-        self.assertEqual(config['_agents']['catalog']['expected_version'], 'pinned')
-        self.assertEqual(config['_agents']['catalog']['executable'], config['_agents']['study']['executable'])
+        self.assertEqual(config['_agents']['study']['model'], 'study-model')
         self.assertEqual(config['_agents']['review']['model'], 'shared')
         self.assertNotIn('revise', config['_agents'])
-        self.assertTrue(config['_prompt_paths']['catalog'].endswith('catalog.md'))
         self.assertTrue(config['_prompt_paths']['revise'].endswith('revise.md'))
 
     def test_decoding_is_normalized_and_invalid_settings_fail_before_any_cli(self):
@@ -119,9 +126,9 @@ class ConfigTests(FolderFixture):
                 self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
                 process.assert_not_called()
 
-    def test_revision_prompt_is_checked_when_enabled_and_catalog_prompt_always(self):
+    def test_study_prompt_is_checked_and_revision_prompt_is_checked_when_enabled(self):
         base = copy.deepcopy(self.value)
-        for stage in ('catalog', 'revise'):
+        for stage in ('study', 'revise'):
             self.value = copy.deepcopy(base) | {'prompts': {stage: './missing-prompt.md'}}
             with self.subTest(stage=stage), self.assertRaises(AuditError):
                 self.config()

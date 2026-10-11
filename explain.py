@@ -55,15 +55,15 @@ from src.model.model_boundary import BindingRegistry
 from src.analysis.source_decoding import normalize_source_decoding
 from src.analysis.source_context import SourceContextBuilder, source_context_settings, serialize_source_context
 from src.analysis.source_filter import normalize_source_filter, excluded_root, gitignore_spec, gitignore_match
-from src.analysis.coverage_plan import build_coverage_plan, inventory_summary, verify_coverage_plan, recover_catalog_paths
+from src.analysis.coverage_plan import inventory_summary, verify_coverage_plan
 from src.analysis.revisions import revision_inputs, choose_revision, completed_pair
 from src.analysis.git_sources import ignore_path, tracked_paths, ignored_paths, inventory_delta
 from src.analysis.source_metrics import PhysicalLines
 
 ROOT = Path(__file__).resolve().parent
-STAGES = ('catalog', 'study', 'review', 'compare')
-SOURCE_STAGES = ('catalog', 'study', 'review')
-ARTIFACTS = {'catalog': 'SUBSYSTEM_CATALOG.md', 'study': 'ARCHITECTURE.md', 'review': 'ARCHITECTURE_REVIEW.md',
+STAGES = ('study', 'review', 'compare')
+SOURCE_STAGES = ('study', 'review')
+ARTIFACTS = {'study': 'ARCHITECTURE.md', 'review': 'ARCHITECTURE_REVIEW.md',
              'compare': 'BRANCH_COMPARISON.md'}
 BACKENDS = {'codex': 'codex', 'opencode': 'opencode', 'xxx': 'xxx'}
 CLI_ADAPTERS = {'codex': codex, 'opencode': opencode_cli, 'xxx': xxx}
@@ -1128,6 +1128,9 @@ def load_config(path: Path) -> dict:
     stages = STAGES if mode == 'git' and len(source['branches']) > 1 else SOURCE_STAGES
     if not value['execution']['review_enabled']:
         stages = tuple(stage for stage in stages if stage != 'review')
+    for section in ('stage_agents', 'prompts'):
+        if 'catalog' in value[section]:
+            raise AuditError(f'Remove {section}.catalog: the Catalog stage has been removed.', code='INVALID_CONFIG')
     for stage in value['stage_agents']:
         if stage not in STAGES:
             raise AuditError(f'Unknown stage override: {stage}')
@@ -1135,7 +1138,7 @@ def load_config(path: Path) -> dict:
             raise AuditError(f'stage_agents.{stage} must be a JSON object.')
     value['_agents'] = {}
     for stage in ('study', *(s for s in stages if s != 'study')):
-        agent = dict(value['_agents']['study'] if stage == 'catalog' else value['agent'])
+        agent = dict(value['agent'])
         agent.update(value['stage_agents'].get(stage, {}))
         if set(agent) - {'backend', 'executable', 'model', 'expected_version'}:
             raise AuditError('Unknown agent configuration field.')
@@ -1382,8 +1385,7 @@ class Runner:
             inventory, evidence_metadata = self.source_inventory()
             if context.get('_inventory') and inventory['source_fingerprint'] != context['_inventory']['source_fingerprint']:
                 raise UnsafeRepository('Source changed from the inventory used for the coverage plan.', failure_layer='integrity')
-            if stage == 'catalog':
-                context['_inventory'] = inventory
+            if stage == 'study' and not context.get('coverage_plan'):
                 context['inventory_summary'] = inventory_summary(inventory)
             if self.folder and inventory['source_fingerprint'] != context['source_fingerprint']:
                 raise UnsafeRepository('Source folder changed from the pinned snapshot before invocation.')
@@ -1470,14 +1472,6 @@ class Runner:
             validation['validated_object'] = 'expanded.json'
             validate_schema(data, binding.schema)
             expanded = candidate
-            if stage == 'catalog' and self.compromise:
-                candidate, recovery = recover_catalog_paths(expanded, context['_inventory'], context)
-                if recovery:
-                    self.save_attempt_value(attempt, 'recovered.json', candidate, meta)
-                    self.save_attempt_value(attempt, 'recovery.json', recovery, meta)
-                    meta['catalog_recovery'] = {k: v for k, v in recovery.items() if k != 'rejected_selectors'}
-                    validation.update(validated_object='recovered.json', original_valid=False,
-                                      catalog_recovery=meta['catalog_recovery'])
             if stage in ('study', 'review'):
                 normalization_input = expanded
                 if self.compromise:
@@ -1597,8 +1591,6 @@ class Runner:
         item[stage + '_usable'] = usable_study(item) if stage == 'study' else bool(stage_document(item, stage))
         if material is not None and not self.cfg['continue_on_error']:
             raise ContractError('Stopped after retaining unvalidated material (continue_on_error=false).')
-        if meta.get('catalog_recovery') and not self.cfg['continue_on_error']:
-            raise ContractError('Stopped after recovering an invalid catalog (continue_on_error=false).')
 
     def publish_coverage_plan(self, plan, directory):
         verify_coverage_plan(plan)
@@ -1608,6 +1600,7 @@ class Runner:
             self.assert_coverage_file({'coverage_plan': plan, '_coverage_plan_path': str(path)})
             return
         atomic(path, content)
+        self.assert_coverage_file({'coverage_plan': plan, '_coverage_plan_path': str(path)})
 
     def assert_coverage_file(self, context):
         if not context.get('_coverage_plan_path'):
@@ -1679,11 +1672,10 @@ class Runner:
         if item.get('coverage_plan'):
             self.assert_coverage_file({'coverage_plan': item['coverage_plan'],
                                        '_coverage_plan_path': str(self.run_dir / directory / 'coverage.plan.json')})
-        states.append({'directory': directory, 'catalog_invocation': item.get('catalog_invocation')})
         if item.get('selection_publication_complete'):
             states.append(item | {'directory': directory, 'selected_aliases': True})
         for revision in states:
-            for stage in ('catalog', 'study', 'review'):
+            for stage in ('study', 'review'):
                 meta = revision.get(stage + '_invocation') or {}
                 hashes = dict(meta.get('artifact_hashes', {})) if meta.get('publication_complete') else {}
                 if meta.get('material_retained'):
@@ -1703,7 +1695,7 @@ class Runner:
                                          failure_layer='integrity') from exc
 
     def run_source(self, item, context, directory, persist):
-        """One pinned source, one catalog, and at most two independent document pairs."""
+        """One pinned source and at most two independent document pairs."""
         review_enabled = self.execution['review_enabled']
         item['review_enabled'] = review_enabled
         item['workflow_satisfied'] = False
@@ -1727,6 +1719,22 @@ class Runner:
             try:
                 guard(stage_context)
                 data, meta = self.invoke(stage, stage_context, destination)
+                if stage == 'study' and data is not None:
+                    plan = data['review_plan']['coverage_plan']
+                    try:
+                        self.publish_coverage_plan(plan, directory)
+                    except (OSError, ContractError, AuditError) as exc:
+                        self.critical_failure = True
+                        meta.update(publication_complete=False, status='FAILED', error=asdict(diagnostic(exc)))
+                        save_json(destination / 'invocation.json', meta)
+                        save_json(Path(meta['artifact_directory']) / 'invocation.json', meta)
+                        raise
+                    item['coverage_plan'] = plan
+                    scope = dict(coverage_plan=plan, _coverage_plan_path=str(directory / 'coverage.plan.json'))
+                    context.update(scope)
+                    stage_context.update(scope)
+                    context.pop('inventory_summary', None)
+                    stage_context.pop('inventory_summary', None)
                 self.store_stage(state, stage, data, meta, stage_context)
                 if data is not None:
                     self.stage_finished(stage, stage_context, data, started,
@@ -1769,18 +1777,6 @@ class Runner:
             save_json(directory / 'source.inventory.json', inventory)
             context['_inventory'] = inventory
             context['inventory_summary'] = inventory_summary(inventory)
-            catalog = run_stage('catalog', item, context, directory)
-            if catalog is None:
-                error = (item.get('catalog_invocation') or {}).get('error', {})
-                if not self.compromise or error.get('failure_kind') == 'IDENTITY_MISMATCH':
-                    return
-                plan = build_coverage_plan(None, inventory, context, fallback=True)
-                self.publish_coverage_plan(plan, directory)
-            else:
-                plan = catalog['coverage_plan']
-            item['coverage_plan'] = plan
-            context.update(coverage_plan=plan, _coverage_plan_path=str(directory / 'coverage.plan.json'))
-            context.pop('inventory_summary', None)
             previous = None
             revision_rounds = self.execution['max_revision_rounds'] if review_enabled else 0
             for number in range(1, revision_rounds + 2):
@@ -1859,20 +1855,18 @@ class Runner:
             path = destination.parent / name
             if not path.exists():
                 atomic(path, content)
-        return digest(contents[stage + '.json' if stage == 'catalog' else ARTIFACTS[stage]])
+        return digest(contents[ARTIFACTS[stage]])
 
     def artifact_contents(self, stage, data):
         def encoded(value):
             return (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
-        if stage == 'catalog':
-            verify_coverage_plan(data['coverage_plan'])
-            return {'coverage.plan.json': encoded(data['coverage_plan']), 'catalog.json': encoded(data),
-                    ARTIFACTS[stage]: render_stage(stage, data, self.cfg.get('output_language')).encode('utf-8')}
         report = render_architecture(data, self.cfg.get('output_language')) if stage == 'study' else render_stage(stage, data, self.cfg.get('output_language'))
         contents = {ARTIFACTS[stage]: report.encode('utf-8'),
                     stage + '.original.md': data['report_markdown'].encode('utf-8'),
                     stage + '.json': encoded(data)}
         if stage == 'study':
+            if data['review_plan']['coverage_plan'] is not None:
+                contents['coverage.plan.json'] = encoded(data['review_plan']['coverage_plan'])
             contents.update({'study.annotated.md': render_stage(stage, data, self.cfg.get('output_language')).encode('utf-8'),
                              'claim.registry.json': encoded(data['claims']), 'review.plan.json': encoded(data['review_plan'])})
             if data.get('registry_diff') is not None:
@@ -2124,7 +2118,6 @@ class Runner:
             # Publish after the CLI exits and temporary invocation files are removed.
             try:
                 data = prepare_result(stage, data, context, evidence_pins, expected_metadata=evidence_metadata,
-                                      catalog_recovery=meta.get('catalog_recovery'),
                                       citation_corrections=meta.get('citation_corrections'))
                 for warning in data.get('program_checks', {}).get('citation_warnings', []):
                     self.reporter.emit('citation_warning', **(warning | self.stage_context(stage, context)),

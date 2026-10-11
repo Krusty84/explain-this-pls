@@ -65,7 +65,7 @@ class FolderHashingTests(FolderFixture):
                 self.assertEqual(code, 0, manifest['errors'])
                 self.assertEqual(snapshots.call_count, 1)
                 self.assertEqual(hashes[blob], 1)
-                self.assertEqual(len(stages), 0 if check else 5 if revise else 3 if review else 2)
+                self.assertEqual(len(stages), 0 if check else 4 if revise else 2 if review else 1)
                 for revision in manifest.get('revisions', []):
                     for stage in ('study', 'review'):
                         for evidence in (revision.get(stage) or {}).get('program_checks', {}).get('evidence', []):

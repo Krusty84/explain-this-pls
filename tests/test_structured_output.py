@@ -199,7 +199,7 @@ class NativeGitComparisonTests(unittest.TestCase):
                 before = len(self.prompts())
                 manifest, code = self.run_case('unknown-compare-finish')
                 self.assertNotEqual(code, 0)
-                self.assertEqual(len(self.prompts()) - before, 7)
+                self.assertEqual(len(self.prompts()) - before, 5)
                 self.assertTrue(all(b['accepted'] for b in manifest['branches']))
                 self.assertNotIn('comparison', manifest)
                 final = Path(manifest['final_report']).read_text()
@@ -227,7 +227,7 @@ class NativeGitComparisonTests(unittest.TestCase):
                     manifest, code = self.run_case(scenario)
                 self.assertEqual(code, expected_code, manifest)
                 self.assertFalse(any(b['accepted'] for b in manifest['branches']))
-                self.assertEqual(len(self.prompts()) - start, 4 if scenario == 'schema-error' else 6)
+                self.assertEqual(len(self.prompts()) - start, 2 if scenario == 'schema-error' else 4)
                 result = manifest['comparison']
                 self.assertEqual(result['completion_status'], 'BLOCKED')
                 self.assertEqual(result['compared_branches'], ['other'])

@@ -27,7 +27,6 @@ LABEL_COLORS = {'[WARN]': '\x1b[33m', '[RUN]': '\x1b[36m', '[OK]': '\x1b[32m',
 STATUS_COLORS = {'Complete': '\x1b[32m', 'Complete with warnings': '\x1b[33m', 'Failed': '\x1b[31m',
                  'May be incomplete': '\x1b[33m', 'Not started': '\x1b[90m'}
 STAGE_MESSAGES = {
-    'catalog': ('Cataloging subsystems…', 'Subsystem catalog', 'Subsystem catalog created.'),
     'study': ('Analyzing project…', 'Project analysis', 'Architecture report created.'),
     'revise': ('Revising architecture report…', 'Architecture revision', 'Revised architecture report created.'),
     'review': ('Reviewing report…', 'Report review', 'Review complete. No significant issues reported.'),

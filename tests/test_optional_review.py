@@ -110,7 +110,7 @@ class OptionalReviewPipelineTests(PipelineMixin, FolderFixture):
                 self.assertTrue(workflow_satisfied(manifest))
                 self.assertFalse(manifest['accepted'])
                 self.assertFalse(accepted(manifest))
-                self.assertEqual([c['stage'] for c in self.calls], ['catalog', 'study'])
+                self.assertEqual([c['stage'] for c in self.calls], ['study'])
                 self.assertEqual(manifest['selected_revision'], '001')
                 self.assertEqual(len(manifest['revisions']), 1)
                 for item in (manifest, manifest['revisions'][0], manifest['revision_history'][0]):
@@ -124,7 +124,7 @@ class OptionalReviewPipelineTests(PipelineMixin, FolderFixture):
                 self.assertTrue((self.run_dir / 'review.plan.json').is_file())
                 skipped = next(s for s in manifest['metrics']['stages'] if s['stage'] == 'review')
                 self.assertEqual((skipped['status'], skipped['attempts'], skipped['usage']['total_tokens']), ('SKIPPED', 0, 0))
-                self.assertEqual(manifest['metrics']['attempts'], 2)
+                self.assertEqual(manifest['metrics']['attempts'], 1)
                 report = (self.run_dir / 'FINAL_REPORT.md').read_text()
                 self.assertIn('Review is disabled by configuration', report)
                 self.assertNotIn('review: Result n/a', report)
@@ -144,9 +144,9 @@ class OptionalReviewPipelineTests(PipelineMixin, FolderFixture):
                 self.assertIn('Review is disabled by configuration', summary)
 
     def test_incomplete_recovered_and_changed_sources_cannot_succeed(self):
-        for case in ('partial', 'evidence', 'coverage', 'catalog', 'recovered', 'changed'):
+        for case in ('partial', 'evidence', 'coverage', 'scope', 'recovered', 'changed'):
             def change(ctx, data):
-                if ctx['stage'] == 'catalog' and case == 'catalog':
+                if ctx['stage'] == 'study' and case == 'scope':
                     data['subsystems'][0]['paths'] = ['missing']
                 if ctx['stage'] == 'study':
                     if case == 'partial':
@@ -222,7 +222,7 @@ class OptionalReviewGitTests(PipelineMixin, unittest.TestCase):
                 with self.subTest(policy=policy, branches=branches):
                     manifest, code = self.run_pipeline(self.config(policy, branches), self.difference)
                     self.assertEqual((manifest['status'], code), ('COMPLETE', 0), manifest.get('diagnostics'))
-                    stages = ['catalog', 'study'] * len(branches) + (['compare'] if len(branches) > 1 else [])
+                    stages = ['study'] * len(branches) + (['compare'] if len(branches) > 1 else [])
                     self.assertEqual([c['stage'] for c in self.calls], stages)
                     for branch in manifest['branches']:
                         self.assertTrue(branch['workflow_satisfied'])

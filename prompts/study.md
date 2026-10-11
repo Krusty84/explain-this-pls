@@ -216,18 +216,30 @@ Respond in output_language with equivalent meaning. A resolved locator does not
 establish semantic support. Do not repeat mandatory ledger/evidence tables or
 counts in Markdown; Python renders them from the single structured record.
 
-The supplied immutable coverage_plan identifies required source areas and explicit
-exclusions. Catalog classifications are provisional navigation hints. The
-pinned inventory defines the full source scope. Investigate every non-excluded
-regular file, including UNCLASSIFIED, even when the catalog omits or misclassifies
-files. Scope is not evidence of inspection; report unfinished investigation as a
-limitation. Preserve the coverage plan and produce one shared study. Return one
-structured coverage entry per area: area_id, status INSPECTED,
-PARTIALLY_INSPECTED or NOT_INSPECTED, evidence_ids, limitation. INSPECTED requires
-source evidence within the area; an actual citation is support, not proof that all
-its code was examined. Partial/uninspected areas need concrete limitations.
-UNCLASSIFIED, incomplete catalogs and DIRECTORY_FALLBACK stay visible and prevent
-an overall COMPLETE policy result. Do not silently recategorize them.
+The pinned inventory defines the full source scope. In the initial study, use
+inventory_summary and read-only source tools to identify provisional responsibility
+areas. Return subsystems {id,name,purpose,paths} with unique stable IDs S-001 etc.,
+and exclusions {path,reason}. Paths use the common source root, including submodules;
+a directory selects its contents and "." selects the root. Overlap is allowed.
+Use only real inventory paths. A directory selector may end in one trailing "/".
+Unknown purpose is not an exclusion reason. Never silently exclude generated,
+vendor, binary, hidden or linked entries. Symlinks are metadata only; never follow them.
+Grouping hints do not establish architectural behavior.
+
+Return one coverage entry per subsystem: area_id, status INSPECTED,
+PARTIALLY_INSPECTED or NOT_INSPECTED, evidence_ids, limitation. Investigate every
+non-excluded regular file. The program reconciles your selectors with the pinned
+inventory, retains omitted entries as UNCLASSIFIED and blocks policy success when
+any remain. If you knowingly leave entries unclassified, also return their coverage
+under area_id UNCLASSIFIED. INSPECTED requires resolved source evidence within the
+area, or pinned metadata for a scope containing only empty regular files. Evidence
+supports a reported inspection; it does not prove exhaustive reading. Unfinished
+areas require concrete limitations.
+
+When context supplies coverage_plan, its scope is frozen. Return the same subsystem
+IDs, names, purposes, paths and exclusions; update only the document and inspection
+assessments. Do not narrow scope to resolve review findings. Initial completion_status
+and limitations describe that study, not permanent limits on later revisions.
 
 source_decoding rules select explicit encodings by common-root-relative path,
 including submodules. They apply only to program evidence verification. Whether

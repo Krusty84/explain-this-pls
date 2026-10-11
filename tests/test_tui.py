@@ -125,13 +125,13 @@ class RunStateTests(unittest.TestCase):
 
     def test_interruption_retains_completed_steps(self):
         state = RunState()
-        catalog = dict(branch='folder', stage='catalog', revision_id=None)
-        study = dict(branch='folder', stage='study', revision_id='001')
-        state.apply('stage_completed', dict(catalog, status='COMPLETE', elapsed_seconds=1))
-        state.apply('stage_started', study)
+        completed = dict(branch='folder', stage='study', revision_id='001')
+        review = dict(branch='folder', stage='review', revision_id='001')
+        state.apply('stage_completed', dict(completed, status='COMPLETE', elapsed_seconds=1))
+        state.apply('stage_started', review)
         state.finish({'result': {'status': 'FAILED', 'exit_code': 130}})
-        self.assertEqual(state.rows[('folder', 'catalog', None)]['status'], 'COMPLETE')
-        self.assertEqual(state.rows[('folder', 'study', '001')]['status'], 'INTERRUPTED')
+        self.assertEqual(state.rows[('folder', 'study', '001')]['status'], 'COMPLETE')
+        self.assertEqual(state.rows[('folder', 'review', '001')]['status'], 'INTERRUPTED')
 
 
 class TuiTests(unittest.IsolatedAsyncioTestCase):

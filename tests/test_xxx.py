@@ -57,33 +57,27 @@ class XXXTests(unittest.TestCase):
         self.assertEqual((manifest['status'], code), ('COMPLETE', 0), manifest.get('diagnostics'))
         self.assertTrue(manifest['workflow_satisfied'])
         self.assertFalse(manifest['accepted'])
-        self.assertEqual(len(self.prompts()), 2)
+        self.assertEqual(len(self.prompts()), 1)
         self.assertIsNone(manifest['review'])
         self.assertFalse((self.run_dir / 'revisions/001/review.logs').exists())
 
     def prompts(self):
         return [c for c in self.recorded() if c['args'][0] == 'run' and '--help' not in c['args']]
 
-    def test_incomplete_catalogs_publish_partial_studies(self):
-        paths = ['app.py'] + [f'part{i}.py' for i in range(2, 10)]
-        for path in paths:
-            (self.source / path).write_text('print(1)\n')
+    def test_invalid_study_scope_retains_material_without_a_plan(self):
         self.value['result_policy'] = 'compromise'
-        self.env['AUDIT_TEST_SUBSYSTEM_PATHS'] = json.dumps(paths)
-        for scenario, origin in (('catalog-mixed', 'AGENT_SALVAGED'), ('catalog-unknown', 'DIRECTORY_FALLBACK')):
+        for scenario in ('scope-mixed', 'scope-unknown'):
             with self.subTest(scenario=scenario):
                 previous = len(self.prompts())
                 manifest, code = self.run_case(scenario)
                 self.assertEqual((code, manifest['status'], manifest['accepted']), (2, 'PARTIAL', False), manifest.get('diagnostics'))
-                self.assertEqual(manifest['coverage_plan']['origin'], origin)
-                self.assertFalse(manifest['coverage_plan']['policy_satisfied'])
-                self.assertIsNotNone(manifest['study'])
-                self.assertEqual(len(self.prompts()) - previous, 3)
-                self.assertNotEqual(self.prompts()[-2]['permissions'], {'*': 'deny'})
-                self.assertTrue((self.run_dir / 'ARCHITECTURE.md').exists())
-                self.assertIn(origin + ' / PARTIAL', Path(manifest['final_report']).read_text())
-                self.assertIn('Synthetic catalog limitation.', Path(manifest['final_report']).read_text())
-                self.assertEqual(manifest['review']['verdict'], 'INCONCLUSIVE')
+                self.assertNotIn('coverage_plan', manifest)
+                self.assertIsNone(manifest['study'])
+                self.assertIsNotNone(manifest['study_material'])
+                self.assertEqual(len(self.prompts()) - previous, 2)
+                self.assertFalse((self.run_dir / 'coverage.plan.json').exists())
+                self.assertIn('Synthetic scope limitation.', Path(manifest['final_report']).read_text())
+                self.assertEqual(manifest['revisions'][0]['review']['verdict'], 'INCONCLUSIVE')
 
 
     def git(self, *args):
@@ -109,7 +103,7 @@ class XXXTests(unittest.TestCase):
             self.assertEqual(code, 0, manifest)
             self.assertEqual(manifest['status'], 'COMPLETE')
             self.assertTrue(all(branch['accepted'] for branch in manifest['branches']))
-            self.assertEqual(len(self.prompts()) - previous, 3 if len(branches) == 1 else 7)
+            self.assertEqual(len(self.prompts()) - previous, 2 if len(branches) == 1 else 5)
             self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
         compare = self.prompts()[-1]
         self.assertNotEqual(compare['cwd'], str(self.source))
@@ -124,13 +118,13 @@ class XXXTests(unittest.TestCase):
         self.assertEqual(manifest['status'], 'FAILED')
         self.assertFalse(manifest['branches'][0]['accepted'])
         self.assertEqual(manifest['comparison']['unresolved_branches'], ['main'])
-        self.assertEqual(len(self.prompts()), 6)
+        self.assertEqual(len(self.prompts()), 4)
         self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
         self.value['continue_on_error'] = False
         previous = len(self.prompts())
         manifest, code = self.run_case('fail-main-study')
         self.assertEqual(code, 1, manifest)
-        self.assertEqual(len(self.prompts()) - previous, 2)
+        self.assertEqual(len(self.prompts()) - previous, 1)
         self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
 
     def test_stage_timeout_and_cleanup_do_not_touch_other_process(self):
@@ -140,9 +134,9 @@ class XXXTests(unittest.TestCase):
             manifest, code = self.run_case('slow')
             self.assertEqual(code, 1, manifest)
             self.assertEqual(manifest['diagnostics'][0]['failure_kind'], 'STAGE_TIMEOUT')
-            self.assertEqual(manifest['metrics']['attempts'], 2)
-            self.assertEqual(manifest['metrics']['usage']['total_tokens'], 10)
-            self.assertEqual(manifest['metrics']['usage']['coverage']['total_tokens'], 'partial')
+            self.assertEqual(manifest['metrics']['attempts'], 1)
+            self.assertIsNone(manifest['metrics']['usage']['total_tokens'])
+            self.assertEqual(manifest['metrics']['usage']['coverage']['total_tokens'], 'unavailable')
             for pid in {c['pid'] for c in self.recorded()}:
                 with self.assertRaises(ProcessLookupError):
                     os.kill(pid, 0)
@@ -197,7 +191,7 @@ class XXXTests(unittest.TestCase):
         self.assertFalse(manifest['accepted'])
         self.assertEqual((self.source / 'app.py').read_text(), 'unexpected fixture mutation\n')
         self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
-        self.assertEqual(len(self.prompts()), 2)
+        self.assertEqual(len(self.prompts()), 1)
 
     def test_signals_cleanup_real_xxx_pipeline(self):
         path = self.root / 'config.json'
@@ -213,9 +207,9 @@ class XXXTests(unittest.TestCase):
                 manifest = json.loads(Path(json.loads(process.stdout)['manifest']).read_text())
                 self.assertFalse(manifest['accepted'])
                 self.assertEqual(manifest['diagnostics'][0]['code'], 'INTERRUPTED')
-                self.assertEqual(manifest['metrics']['attempts'], 2)
-                self.assertEqual(manifest['metrics']['usage']['total_tokens'], 10)
-                self.assertEqual(manifest['metrics']['usage']['coverage']['total_tokens'], 'partial')
+                self.assertEqual(manifest['metrics']['attempts'], 1)
+                self.assertIsNone(manifest['metrics']['usage']['total_tokens'])
+                self.assertEqual(manifest['metrics']['usage']['coverage']['total_tokens'], 'unavailable')
                 for pid in {c['pid'] for c in self.recorded()}:
                     with self.assertRaises(ProcessLookupError):
                         os.kill(pid, 0)
@@ -246,11 +240,11 @@ class XXXTests(unittest.TestCase):
         self.assertEqual(code, 0, manifest)
         self.assertTrue(manifest['accepted'])
         calls = self.prompts()
-        self.assertEqual([c['context']['stage'] for c in calls], ['catalog', 'study', 'review'])
-        self.assertEqual(len({c['agent'] for c in calls}), 3)
-        self.assertEqual(len({c['session_id'] for c in calls}), 3)
-        self.assertEqual(len([c for c in self.recorded() if c['args'][0] == 'export' and '--help' not in c['args']]), 3)
-        self.assertEqual(len([c for c in self.recorded() if c['args'][:2] == ['session', 'delete'] and '--help' not in c['args']]), 3)
+        self.assertEqual([c['context']['stage'] for c in calls], ['study', 'review'])
+        self.assertEqual(len({c['agent'] for c in calls}), 2)
+        self.assertEqual(len({c['session_id'] for c in calls}), 2)
+        self.assertEqual(len([c for c in self.recorded() if c['args'][0] == 'export' and '--help' not in c['args']]), 2)
+        self.assertEqual(len([c for c in self.recorded() if c['args'][:2] == ['session', 'delete'] and '--help' not in c['args']]), 2)
         for call in calls:
             self.assertEqual(call['permissions'], {'*': 'deny', 'read': 'allow', 'glob': 'allow', 'grep': 'allow', 'list': 'allow', 'external_directory': 'deny'})
             self.assertNotIn('--model', call['args'])
@@ -267,8 +261,8 @@ class XXXTests(unittest.TestCase):
         self.assertEqual(code, 0, manifest)
         self.assertEqual(manifest['study_invocation']['model_actual'], 'chosen/custom')
         self.assertEqual(manifest['study_invocation']['compaction']['completed'], 2)
-        self.assertEqual(manifest['metrics']['usage']['total_tokens'], 90)
-        self.assertEqual(len(self.prompts()), 3)
+        self.assertEqual(manifest['metrics']['usage']['total_tokens'], 60)
+        self.assertEqual(len(self.prompts()), 2)
 
     def test_fenced_json_completes_publication_with_original_logs(self):
         import explain
@@ -283,11 +277,11 @@ class XXXTests(unittest.TestCase):
         with patch('explain.process', side_effect=capture):
             manifest, code = self.run_case('fences')
         self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
-        self.assertEqual([c['context']['stage'] for c in self.prompts()], ['catalog', 'study', 'review'])
+        self.assertEqual([c['context']['stage'] for c in self.prompts()], ['study', 'review'])
         self.assertTrue((self.run_dir / 'ARCHITECTURE.md').exists())
         self.assertTrue(Path(manifest['final_report']).exists())
         paths = list(self.run_dir.rglob('attempt-001/invocation.json'))
-        self.assertEqual(len(paths), 3)
+        self.assertEqual(len(paths), 2)
         for path in paths:
             meta = json.loads(path.read_text())
             self.assertTrue(meta['publication_complete'])
@@ -340,7 +334,7 @@ class XXXTests(unittest.TestCase):
             with self.subTest(backend=backend):
                 self.assertEqual(code, 0, manifest)
                 self.assertEqual(len(calls), 1)
-                self.assertEqual(len(self.prompts()) - before, 2)
+                self.assertEqual(len(self.prompts()) - before, 1)
                 self.assertEqual(manifest['review_invocation']['backend'], backend)
                 self.assertNotIn('--title', calls[0])
                 self.assertEqual('--standalone' in calls[0], backend == 'opencode')
@@ -360,7 +354,7 @@ class XXXTests(unittest.TestCase):
                 manifest, code = self.run_case(scenario)
                 self.assertEqual(code, 1, manifest)
                 self.assertEqual(manifest['diagnostics'][0]['failure_kind'], kind)
-                self.assertEqual(len(self.prompts()) - previous, 2)
+                self.assertEqual(len(self.prompts()) - previous, 1)
                 self.assertFalse(manifest['accepted'])
                 self.assertFalse((self.run_dir / 'ARCHITECTURE.md').exists())
                 self.assertFalse(list(self.run_dir.rglob('attempt-002')))
@@ -369,7 +363,7 @@ class XXXTests(unittest.TestCase):
     def test_missing_finish_is_verified_without_repeating_run(self):
         manifest, code = self.run_case('missing-finish')
         self.assertEqual(code, 0, manifest)
-        self.assertEqual(len(self.prompts()), 3)
+        self.assertEqual(len(self.prompts()), 2)
         self.assertEqual(manifest['study_invocation']['completion_source'], 'session_export')
 
     def test_foreign_export_is_never_deleted_and_failed_cleanup_blocks_publication(self):
@@ -382,7 +376,7 @@ class XXXTests(unittest.TestCase):
                 self.assertFalse(manifest['accepted'])
                 calls = self.recorded()[previous:]
                 if scenario in ('export-foreign', 'export-prompt', 'export-failed'):
-                    # Catalog is healthy except when the export command itself fails.
+                    # Failure occurs during the first Study invocation.
                     study = [c['session_id'] for c in calls if c.get('context', {}).get('stage') == 'study']
                     self.assertFalse(any(c['args'][:2] == ['session', 'delete'] and c['args'][-1] in study for c in calls))
 

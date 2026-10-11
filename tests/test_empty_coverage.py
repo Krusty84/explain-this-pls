@@ -14,10 +14,10 @@ class EmptyCoverageTests(unittest.TestCase):
         entries = entries if entries is not None else [dict(path='.codex', type='file', size=0, sha256=sha(b''))]
         context = dict(branch='main', source_commit='abc', source_mode='git')
         context['_inventory'] = dict(entries=[dict(path='.', type='directory'), *entries])
-        catalog = dict(task='architecture_catalog', branch='main', source_commit='abc',
+        scope = dict(task='architecture_documentation', branch='main', source_commit='abc',
             completion_status='COMPLETE', limitations=[], exclusions=[],
             subsystems=[dict(id='S-001', name='Source', purpose='Source files.', paths=['.'])])
-        context['coverage_plan'] = build_coverage_plan(catalog, context['_inventory'], context)
+        context['coverage_plan'] = build_coverage_plan(scope['subsystems'], scope['exclusions'], context['_inventory'], context)
         return context
 
     def checks(self, context, status='INSPECTED'):

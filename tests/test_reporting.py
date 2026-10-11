@@ -631,8 +631,8 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     self.assertTrue(result.stdout.startswith('[OK] Local setup checked.' if check else '[OK] Analysis complete.'))
                     calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
                     invocations = [call for call in calls if 'context' in call]
-                    self.assertEqual(len(calls), 2 if check else 5)
-                    self.assertEqual(len(invocations), 0 if check else 3)
+                    self.assertEqual(len(calls), 2 if check else 4)
+                    self.assertEqual(len(invocations), 0 if check else 2)
                     self.assertNotIn('Comparing branch reports', result.stderr)
                     self.assertNotIn('Branch report comparison ready', result.stderr)
                     manifests = list(self.reports.glob('*/manifest.json'))
@@ -715,7 +715,6 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     expected = []
                     for source in manifest['branches'] if mode == 'git' else [manifest]:
                         directory = run_dir / source.get('directory', '.')
-                        expected.append(directory / 'SUBSYSTEM_CATALOG.md')
                         for revision in source['revisions']:
                             expected.extend(run_dir / revision['directory'] / name
                                             for name in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md'))
@@ -799,7 +798,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.assertNotIn('Configuration', console)
         run_dir = Path(summary['manifest']).parent
         logs = [run_dir / 'run.log', *run_dir.glob('**/*.logs/attempt-001/stdout.log'), *run_dir.glob('**/*.logs/attempt-001/stderr.log')]
-        self.assertEqual(len(logs), 7)
+        self.assertEqual(len(logs), 5)
         for path in logs:
             self.assertNotIn(b'\x1b', path.read_bytes(), str(path))
 
@@ -964,10 +963,10 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         run = Path(output['manifest']).parent
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         model_calls = [call for call in calls if 'context' in call]
-        self.assertEqual(len(model_calls), 3)
-        for call, stage in zip(model_calls, ('catalog', 'study', 'review')):
+        self.assertEqual(len(model_calls), 2)
+        for call, stage in zip(model_calls, ('study', 'review')):
             self.assertEqual(call['context']['project_description'], description.strip())
-            logs = (run if stage == 'catalog' else run / 'revisions/001') / (stage + '.logs')
+            logs = (run / 'revisions/001') / (stage + '.logs')
             meta = json.loads((logs / 'invocation.json').read_text())
             payload = (logs / meta['attempt'] / 'input.prompt.txt').read_bytes()
             self.assertEqual(meta['status'], 'SUCCEEDED')
@@ -1006,8 +1005,8 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         manifest = json.loads(Path(data['manifest']).read_text())
         self.assertTrue(manifest['restoration']['restored'])
         self.assertEqual(data['metrics'], manifest['metrics'])
-        self.assertEqual(data['metrics']['usage']['total_tokens'], 120)
-        self.assertEqual(data['metrics']['usage']['coverage']['total_tokens'], 'partial')
+        self.assertIsNone(data['metrics']['usage']['total_tokens'])
+        self.assertEqual(data['metrics']['usage']['coverage']['total_tokens'], 'unavailable')
         self.assertEqual(result.stderr.count('[WARN] Stopping analysis…'), 1)
         for message in ('Restoring the original checkout hierarchy',
                         'Original checkout hierarchy restored'):

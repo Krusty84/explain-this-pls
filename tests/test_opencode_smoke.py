@@ -97,9 +97,9 @@ class InstalledOpenCodeSmoke(unittest.TestCase):
                         if p.name in ('stdout.log', 'stderr.log')}
                 self.assertEqual(code, 0, {'diagnostics': manifest.get('diagnostics'), 'logs': logs})
                 self.assertTrue(manifest['accepted'])
-                self.assertEqual(stages, ['catalog', 'study', 'review'])
+                self.assertEqual(stages, ['study', 'review'])
                 attempts = list((root / 'run').rglob('attempt-*/invocation.json'))
-                self.assertEqual(len(attempts), 3)
+                self.assertEqual(len(attempts), 2)
                 for path in attempts:
                     meta = json.loads(path.read_text())
                     self.assertTrue(meta['local_validation'])

@@ -2,7 +2,8 @@
 
 Use the study agent's read-only source permissions and the appended study schema.
 Return a complete replacement architecture study for the same pinned source, with
-all ten report_sections, a complete claims registry, evidence and coverage. Echo
+all ten report_sections, a complete claims registry, evidence, subsystems,
+exclusions and coverage. Echo
 the supplied source identity exactly. Do not return saved-artifact fields, hashes,
 document coordinates, program_checks or acceptance decisions.
 In folder mode echo source_directory and source_snapshot_id. Keep service
@@ -34,7 +35,8 @@ locator or an author's confidence. Retain contradictions and scope limitations.
 Return one coverage entry for every coverage_plan area: area_id, status INSPECTED,
 PARTIALLY_INSPECTED or NOT_INSPECTED, evidence_ids and limitation. INSPECTED requires
 resolved source support inside that area; a citation does not prove exhaustive
-inspection. Do not change the catalog, exclusions, UNCLASSIFIED or coverage plan.
+inspection. Return the same subsystem IDs, names, purposes, paths and exclusions.
+Do not change UNCLASSIFIED or the coverage plan.
 Preserve the section keys, in order: scope, context, components, startup_and_flows,
 data_and_state, cross_cutting, constraints, change_navigation, unknowns, evidence_basis.
 Return unnumbered section titles; the orchestrator renders Markdown and locators.

@@ -173,6 +173,9 @@ class EvidenceIDTests(unittest.TestCase):
                 canonical_id = 'E-' + identifier.split('E-')[1].zfill(3)
                 local = identifier.removeprefix(stage + ':')
                 wire['claims'][0]['evidence_ids'] = [stage + ':' + local]
+                if stage == 'study':
+                    for area in wire['coverage']:
+                        area['evidence_ids'] = [stage + ':' + local]
                 wire['evidence'][0]['quote'] = identifier + '\t source quotation'
                 original = copy.deepcopy(wire)
                 candidate, changes = normalize_evidence(stage, wire, context)

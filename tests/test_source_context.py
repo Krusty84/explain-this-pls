@@ -191,7 +191,7 @@ class ContextTests(unittest.TestCase):
         context = self.context({'x.py': 'def original(): pass\n'})
         builder = SourceContextBuilder()
         with patch('src.analysis.source_context.parse_symbols', wraps=parse_symbols) as parser:
-            builder.prepare('catalog', context)
+            builder.prepare('study', context)
             builder.prepare('study', context)
             self.assertEqual(parser.call_count, 1)
         (self.root / 'x.py').write_text('def changed(): pass\n')
@@ -243,9 +243,8 @@ class ContextTests(unittest.TestCase):
         self.assertEqual({(f['source_id'], f['path']) for f in payload['fragments']},
                          {('source-001', 'file.py'), ('source-002', 'file.py'), ('source-003', 'file.py')})
 
-    def test_catalog_disabled_compare_and_repair(self):
+    def test_disabled_compare_and_repair(self):
         context = self.context({'a.py': 'def a(): pass\n', 'b.py': 'def b(): pass\n'})
-        self.assertEqual(SourceContextBuilder().prepare('catalog', context)[0]['fragments'], [])
         self.assertIsNone(SourceContextBuilder({'enabled': False}).prepare('study', context)[0])
         for stage, extra in [('compare', {}), ('repair', {})]:
             self.assertIsNone(SourceContextBuilder().prepare(stage, context | extra)[0])
@@ -265,7 +264,7 @@ class ContextTests(unittest.TestCase):
         self.assertEqual({f['path'] for f in payload['fragments']}, {'a.txt', 'b.txt', 'c.txt'})
         self.assert_complete_accounting(payload, manifest)
         context = self.context({f'file{i:03d}.py': f'def f{i}(): pass\n' for i in range(100)})
-        payload, _ = SourceContextBuilder({'max_bytes': 4096}).prepare('catalog', context)
+        payload, _ = SourceContextBuilder({'max_bytes': 4096}).prepare('study', context)
         self.assertTrue(payload['files'])
         self.assertTrue(any(item['symbols'] for item in payload['files']))
         self.assertGreater(payload['omissions']['maps'], 0)
@@ -273,7 +272,7 @@ class ContextTests(unittest.TestCase):
 
     def test_large_symbol_does_not_hide_small_later_symbol(self):
         context = self.context({'a.py': 'def ' + 'a' * 1500 + '(): pass\ndef small(): pass\n'})
-        payload, _ = SourceContextBuilder({'max_bytes': 4096}).prepare('catalog', context)
+        payload, _ = SourceContextBuilder({'max_bytes': 4096}).prepare('study', context)
         self.assertEqual([s['name'] for f in payload['files'] for s in f['symbols']], ['small'])
 
     def test_remaining_text_uses_capacity_after_small_peer_finishes(self):

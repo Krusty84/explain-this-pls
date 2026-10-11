@@ -14,7 +14,7 @@ from fixtures.xxx_protocol import transcript
 
 
 def run_case(self, *, backend='codex', large=True, change=None, review=False,
-             policy='strict', keep_going=True, catalog_paths=None, reporter=None):
+             policy='strict', keep_going=True, subsystem_paths=None, reporter=None):
     paths = ['app.py'] + [f'part{i}.py' for i in range(2, 10)] if large else ['app.py']
     for path in paths:
         if not (self.source / path).exists():
@@ -26,7 +26,7 @@ def run_case(self, *, backend='codex', large=True, change=None, review=False,
     runner = Runner(cfg, self.base / f'run-{len(list(self.base.glob("run-*")))}', reporter=reporter)
     runner.versions[backend + ':' + cfg['_agents']['study']['executable']] = '2.0.0' if backend == 'opencode' else 'fixture'
     calls, exports = [], {}
-    selectors = catalog_paths or paths
+    selectors = subsystem_paths or paths
 
     def process(command, cwd, env, payload=b'', **kwargs):
         if Path(command[0]).name == 'git':

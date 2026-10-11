@@ -120,7 +120,7 @@ For folder analysis, replace the source settings with:
 Keep the report and agent settings. Folder mode creates the architecture report
 and, when enabled, a review without requiring Git; `git_mode` settings are ignored.
 
-Set `source_filter` to remove files before hashing, inventory, catalog navigation,
+Set `source_filter` to remove files before hashing, inventory, study navigation,
 coverage planning, and study assignments. Omitted settings preserve existing behavior:
 
 ```json
@@ -164,7 +164,7 @@ Run artifacts record filter settings and excluded paths or pruned roots, with
 rule-file hashes and the matching rule's file and line. Git `source.inventory.json`
 also records filter exclusions. The manifest records pinned commits, recursive
 checkout plans, switch attempts, and verified restoration results.
-These records are separate from the Catalog LLM's advisory exclusions.
+These records are separate from the Study LLM's advisory exclusions.
 Active Folder rule files are pinned even when a rule edit would not change selection.
 Changes confined to excluded source content do not invalidate a filtered Folder snapshot.
 
@@ -200,15 +200,16 @@ in this configuration.
 #### Optional settings
 
 **Initial study** runs once per folder or selected Git branch, with source tools enabled.
-The pinned inventory and immutable coverage plan define its scope. Catalog areas
-are provisional navigation hints. Investigate every nonexcluded regular file,
+The pinned inventory defines its scope. Study returns provisional subsystem areas,
+explicit exclusions and inspection assessments; Python freezes the reconciled
+coverage plan for review and all revisions. Investigate every nonexcluded regular file,
 including unclassified files, and report unfinished investigation as a limitation.
 Review and revision, when enabled, use the resulting study.
 
 **Prepared source context** uses the pinned, filtered inventory and existing decoding
-rules. Catalog receives a file/symbol map. Study receives that map and exact source
-fragments. Review and revision prioritize cited ranges. Comparison and format
-repair receive no prepared source context.
+rules. Study receives a file/symbol map and exact source fragments. Review and
+revision prioritize cited ranges. Comparison and format repair receive no prepared
+source context.
 File order is deterministic; maps use at most one quarter of the budget and snippets
 contain at most 120 complete lines. Omitted data stays visible in a bounded summary.
 Each attempt saves a complete `source-context.manifest.json` with processing status,
@@ -250,7 +251,7 @@ Unknown output formats retain conservative partial metrics.
 }
 ```
 
-Set `execution.review_enabled` to `false` or omit it to run catalog and study,
+Set `execution.review_enabled` to `false` or omit it to run study,
 followed by comparison when several Git branches are selected. Without review,
 no revision round runs and review-agent settings and review/revision prompts are
 inactive. A successful run can be `COMPLETE`, with an explicit notice that no
@@ -265,8 +266,8 @@ The [commented configuration](config.codex.example.jsonc) describes additional o
   enabled, one correction round and repeat review are allowed after substantive review findings. Adjust
   `execution.stage_timeout_seconds` or `execution.max_revision_rounds` as needed.
   Revisions and optional response-format retries can increase model usage.
-- **Different agents per stage:** use `stage_agents` to customize cataloging,
-  analysis, review or comparison. Otherwise the shared agent settings apply.
+- **Different agents per stage:** use `stage_agents` to customize study,
+  review or comparison. Otherwise the shared agent settings apply.
 - **Legacy encodings:** use `source_decoding.rules` to declare encodings such as CP1251.
   These rules affect checks of cited source text; the agent must also be able to
   read the files with its own tools.
@@ -277,7 +278,7 @@ The [commented configuration](config.codex.example.jsonc) describes additional o
 #### Custom prompts
 
 The included prompts are ready to use. To customize them, copy an existing
-[catalog](prompts/catalog.md), [study](prompts/study.md), [revision](prompts/revise.md),
+[study](prompts/study.md), [revision](prompts/revise.md),
 [review](prompts/review.md), or [comparison](prompts/compare.md)
 template, keep its required response format, and set its path in `prompts`.
 Store custom templates outside the source directory. See the
@@ -355,7 +356,6 @@ Each run saves results in a new subfolder of `reports_dir`. Start with these fil
 | Report                   | Contents                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------- |
 | `FINAL_REPORT.md`        | Start here: studies, reviews, comparison and limitations in one document.             |
-| `SUBSYSTEM_CATALOG.md`   | Subsystems, purposes, paths, exclusions, limitations and unclassified source entries. |
 | `ARCHITECTURE.md`        | How the system works, with component and data-flow diagrams.                          |
 | `ARCHITECTURE_REVIEW.md` | Tables of review assessments, source references, findings and gaps.                   |
 | `BRANCH_COMPARISON.md`   | A table of differences from the baseline, for two or more Git branches.               |
@@ -364,9 +364,14 @@ Each run saves results in a new subfolder of `reports_dir`. Start with these fil
 and `ARCHITECTURE_REVIEW.md` are under `branches/<branch-id>/`, and the comparison,
 when applicable, is under `comparison/`. In folder mode, the architecture report
 and review are directly in the run folder.
-`SUBSYSTEM_CATALOG.md` is saved alongside `catalog.json` in the run folder for
-folder mode, or under `branches/<branch-id>/` for Git mode. It is generated from
-the validated catalog and coverage plan without another model call.
+`coverage.plan.json` records the source distribution returned by the first valid
+Study and reconciled against inventory. It is shared by all revisions. Distribution
+and inspection assessments also appear in the consolidated report.
+
+Catalog configuration keys and old artifact formats are unsupported. Remove
+`stage_agents.catalog` and `prompts.catalog`, update custom Study prompts to return
+`subsystems` and `exclusions`, and start a new run directory. Existing reports are
+left unchanged.
 
 #### FINAL_REPORT.md — consolidated results
 
@@ -482,7 +487,7 @@ Tests use small fixtures and need no external report directory.
 `compare_read_context.py` compares one study using an existing
 `source.inventory.json` and `coverage.plan.json`. Point
 `--baseline` at the directory containing these files. The tool reuses the frozen
-scope; it does not call the catalog stage. It uses the normal study prompt,
+scope supplied by a completed Study. It uses the normal study prompt,
 source checks, result validation, publication and Git restoration.
 
 First save significant facts with source references in a JSON file, for example:
