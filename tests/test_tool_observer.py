@@ -378,7 +378,7 @@ class ToolObserverTests(unittest.TestCase):
             self.assertIsNone(result['possible_stop'])
             self.assertIn('No per-call timestamps', ' '.join(result['metrics']['observation']['limitations']))
 
-    def test_replay_cli_rejects_claude_backend(self):
+    def test_replay_cli_rejects_unsupported_backend(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'stdout.log'
             path.write_text('')
@@ -386,9 +386,9 @@ class ToolObserverTests(unittest.TestCase):
             error = io.StringIO()
             with contextlib.redirect_stderr(error), patch('scripts.replay_tool_observation.replay', wraps=replay) as replay_attempt:
                 with self.assertRaises(SystemExit) as caught:
-                    main([folder, '--attempt', 'stdout.log', '--backend', 'claude-code', '--output', str(output)])
+                    main([folder, '--attempt', 'stdout.log', '--backend', 'unsupported-backend', '--output', str(output)])
             self.assertEqual(caught.exception.code, 2)
-            self.assertIn("invalid choice: 'claude-code'", error.getvalue())
+            self.assertIn("invalid choice: 'unsupported-backend'", error.getvalue())
             replay_attempt.assert_not_called()
             self.assertFalse(output.with_suffix('.json').exists())
             self.assertFalse(output.with_suffix('.md').exists())

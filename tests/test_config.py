@@ -10,7 +10,7 @@ from test_folder import FolderFixture
 
 
 class ConfigTests(FolderFixture):
-    def test_claude_backend_is_rejected_before_cli_in_both_modes(self):
+    def test_unsupported_backend_is_rejected_before_cli_in_both_modes(self):
         original = copy.deepcopy(self.value)
         for mode in ('git', 'folder'):
             targets = ('agent', 'catalog', 'study', 'review') + (('compare',) if mode == 'git' else ())
@@ -20,11 +20,11 @@ class ConfigTests(FolderFixture):
                 self.value['git_mode'] = {'repository': './source', 'branches': ['main', 'feature'],
                                           'baseline_branch': 'main'}
                 if target == 'agent':
-                    self.value['agent']['backend'] = 'claude-code'
+                    self.value['agent']['backend'] = 'unsupported-backend'
                 else:
-                    self.value['stage_agents'] = {target: {'backend': 'claude-code'}}
+                    self.value['stage_agents'] = {target: {'backend': 'unsupported-backend'}}
                 with self.subTest(mode=mode, target=target), patch('explain.process') as process:
-                    with self.assertRaisesRegex(AuditError, '^Unsupported backend: claude-code$'):
+                    with self.assertRaisesRegex(AuditError, '^Unsupported backend: unsupported-backend$'):
                         self.config()
                     process.assert_not_called()
 
