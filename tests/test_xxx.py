@@ -321,7 +321,7 @@ class XXXTests(unittest.TestCase):
         mock_cli = self.root / 'mock-review'
         mock_cli.write_text('#!' + sys.executable + '\n')
         mock_cli.chmod(0o700)
-        for backend in ('codex', 'claude-code', 'opencode'):
+        for backend in ('codex', 'opencode'):
             calls = []
             self.value['stage_agents'] = {'review': {'backend': backend, 'executable': str(mock_cli)}}
             def process(command, cwd, env, payload=b'', **kwargs):
@@ -334,7 +334,6 @@ class XXXTests(unittest.TestCase):
                     return {'returncode': 0, 'stdout': ' '.join(flags).encode(), 'stderr': b''}
                 calls.append(command)
                 data = response(prompt_context(payload))
-                if backend == 'claude-code': data = {'is_error': False, 'structured_output': data}
                 return cli_result(command, data)
             before = len(self.prompts())
             with patch('explain.process', side_effect=process):

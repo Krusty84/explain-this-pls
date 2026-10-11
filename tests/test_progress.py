@@ -189,7 +189,7 @@ class ProgressTests(unittest.TestCase):
         runner.reporter, runner.mode, runner.source_path = r, 'git', Path('/source/name')
         runner.metrics = RunMetrics(r.clock)
         runner.cfg = {'_agents': {stage: {'backend': backend} for stage, backend in
-                      (('study', 'xxx'), ('review', 'codex'), ('compare', 'claude-code'))}}
+                      (('study', 'xxx'), ('review', 'codex'), ('compare', 'opencode'))}}
         started = runner.stage_started('study', {'branch': 'topic'})
         self.assertEqual(started, r._progress.started)
         state = r._progress

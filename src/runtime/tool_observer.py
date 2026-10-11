@@ -69,7 +69,7 @@ class ToolObserver:
         self.terminal = False
         if backend == 'codex':
             self.limitations.add('Codex shell source coordinates and model request events are unavailable.')
-        elif backend not in ('opencode', 'xxx', 'claude-code'):
+        elif backend not in ('opencode', 'xxx'):
             self.limitations.add('Unsupported backend event format.')
         try:
             self.sources = source_catalog(self.context)
@@ -194,14 +194,13 @@ class ToolObserver:
         owner = max(owners, key=lambda s: len(s['root']))
         return owner['id'], relative if owner['root'] == '.' else relative[len(owner['root']) + 1:]
 
-    def _read_lines(self, tool, arguments, output, *, native=None):
+    def _read_lines(self, tool, arguments, output, *, native):
         """Read only explicit native line prefixes; never shell commands or offsets."""
         if not isinstance(tool, str) or tool.lower() != 'read' or not isinstance(arguments, dict) or not isinstance(output, str):
             return [], []
         if re.search(r'\.\.\. \(line truncated to \d+ chars\)(?:\n|$)', output):
             return [], ['Truncated native source line.']
-        path = arguments.get('path') if native == 'opencode' else (
-            arguments.get('filePath') if native == 'xxx' else arguments.get('file_path'))
+        path = arguments.get('path') if native == 'opencode' else arguments.get('filePath')
         owner = self._source(path)
         if owner is None:
             return [], ['Read source ownership unavailable.']
@@ -229,11 +228,6 @@ class ToolObserver:
                 if not envelope:
                     return [], ['Unrecognized native read result format.']
                 body, pattern = envelope[1], r'(\d+)\| (.*)'
-        else:
-            # Claude Read uses cat -n style line labels. Tool wrappers are not code.
-            body = output.split('\n\n<system-reminder>', 1)[0]
-            pattern = r'[ \t]*(\d+)→(.*)'
-            body = body.removesuffix('\n')
         parsed = []
         for line in body.split('\n') if body else []:
             match = re.fullmatch(pattern, line)
@@ -251,8 +245,6 @@ class ToolObserver:
             return
         if self.backend == 'codex':
             completed = self._codex(event)
-        elif self.backend == 'claude-code':
-            completed = self._claude(event)
         elif self.backend == 'opencode':
             completed = self._opencode_v2(event)
         elif self.backend == 'xxx':
@@ -350,48 +342,6 @@ class ToolObserver:
             result['attachments'] = part['attachments']
         return [CompletedTool(part.get('callID') or part.get('id'), tool, arguments,
                               status, result, complete, str(session), source_lines, limitations)]
-
-    def _claude(self, event):
-        kind, session = event.get('type'), event.get('session_id', self.session_id)
-        if kind == 'result':
-            self._terminal()
-        if kind == 'stream_event':
-            stream = event.get('event', {})
-            if isinstance(stream, dict) and stream.get('type') == 'message_start':
-                message = stream.get('message', {})
-                if isinstance(message, dict) and message.get('id'):
-                    self._request((session, message['id']))
-            return []
-        message = event.get('message')
-        if kind not in ('assistant', 'user') or not isinstance(message, dict):
-            return []
-        result = []
-        for block in message.get('content', []) if isinstance(message.get('content'), list) else []:
-            if not isinstance(block, dict):
-                continue
-            if kind == 'assistant' and block.get('type') == 'tool_use' and block.get('id'):
-                if (self.attempt_id, session, block['id']) not in self.seen:
-                    name = block.get('name')
-                    name = name if isinstance(name, str) and name else 'unknown'
-                    self.pending[(session, block['id'])] = (name, block.get('input'))
-                    self._record(kind='pending', session_id=session, call_id=block['id'])
-            elif kind == 'user' and block.get('type') == 'tool_result':
-                call_id = block.get('tool_use_id')
-                tool, arguments = self.pending.pop((session, call_id), ('unknown', None))
-                content = block.get('content')
-                text = content if isinstance(content, str) else None
-                if (isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict)
-                        and content[0].get('type') == 'text'):
-                    text = content[0].get('text')
-                source_lines, limitations = self._read_lines(tool, arguments, text)
-                complete = (content is not None and tool != 'unknown' and isinstance(arguments, dict)
-                            and not block.get('truncated', False))
-                if any('Truncated' in reason or 'Ambiguous' in reason or 'Nonconsecutive' in reason for reason in limitations):
-                    complete = False
-                result.append(CompletedTool(call_id, tool, arguments,
-                              'error' if block.get('is_error') else 'success', content,
-                              complete, str(session), source_lines, limitations))
-        return result
 
     def observe(self, call, *, observed_at=None):
         """Accept a completed normalized result. Timestamp is elapsed monotonic time."""

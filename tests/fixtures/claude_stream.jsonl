@@ -1,6 +1,0 @@
-{"type":"system","subtype":"init","session_id":"fixture-session","tools":["Read","Glob","Grep"]}
-{"type":"stream_event","session_id":"fixture-session","event":{"type":"message_start","message":{"id":"msg_fixture","type":"message","role":"assistant","model":"fixture-model","content":[]}}}
-{"type":"assistant","session_id":"fixture-session","message":{"id":"msg_fixture","type":"message","role":"assistant","content":[{"type":"text","text":"Checking the declaration."}]}}
-{"type":"assistant","session_id":"fixture-session","message":{"id":"msg_fixture","type":"message","role":"assistant","content":[{"type":"tool_use","id":"tool_fixture","name":"Read","input":{"file_path":"/fixture/unit.py","offset":1,"limit":2}}]}}
-{"type":"user","session_id":"fixture-session","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_fixture","content":"     1→def unit():\n     2→    return 1","is_error":false}]}}
-{"type":"result","subtype":"success","session_id":"fixture-session","is_error":false,"structured_output":{"completion_status":"COMPLETE","report_markdown":"# Report"},"result":"","total_cost_usd":0.1,"usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":20,"cache_creation_input_tokens":3},"modelUsage":{"fixture-model":{"inputTokens":10,"outputTokens":4,"cacheReadInputTokens":20,"cacheCreationInputTokens":3,"costUSD":0.1}}}

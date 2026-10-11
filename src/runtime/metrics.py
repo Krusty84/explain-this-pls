@@ -92,48 +92,6 @@ def codex_usage(events, requested=None, *, malformed=False):
     return measurement('codex', requested, measured=measured)
 
 
-def claude_tokens(raw, *, model=False):
-    names = ('inputTokens', 'outputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens') if model else (
-        'input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')
-    incoming, outgoing, read, write = [number(raw.get(key), tokens=True) for key in names]
-    incoming = add(incoming, read, write)
-    return {'input_tokens': incoming, 'output_tokens': outgoing,
-            'cache_read_tokens': read, 'cache_write_tokens': write,
-            'total_tokens': add(incoming, outgoing)}
-
-
-def claude_usage(envelope, requested=None):
-    if type(envelope) is not dict:
-        return measurement('claude-code', requested)
-    models = envelope.get('modelUsage')
-    entries = []
-    if type(models) is dict and models:
-        for name, raw in models.items():
-            values = claude_tokens(raw, model=True) if type(raw) is dict else {}
-            values['cost_usd'] = raw.get('costUSD') if type(raw) is dict else None
-            entries.append(model_entry('claude-code', requested, name,
-                                       usage(values, source='claude.modelUsage')))
-        measured = sum_usage(entry['usage'] for entry in entries)
-    else:
-        raw = envelope.get('usage')
-        measured = usage(claude_tokens(raw) if type(raw) is dict else {}, source='claude.usage')
-    # The envelope cost and per-model costs describe the same work, never add them.
-    cost = number(envelope.get('total_cost_usd'))
-    measured.update(cost_usd=cost, cost_is_estimate=cost is not None)
-    measured['coverage']['cost_usd'] = 'complete' if cost is not None else 'unavailable'
-    if cost is not None:
-        measured['sources'] = sorted(set(measured['sources']) | {'claude.total_cost_usd'})
-    if not entries:
-        entries = [model_entry('claude-code', requested, None, measured)]
-    # Crash envelopes can zero every counter. Preserve reported zeros but flag
-    # unknown remaining spend rather than claiming that accounting is complete.
-    if envelope.get('subtype') == 'error_during_execution':
-        for item in [measured, *(entry['usage'] for entry in entries)]:
-            for key in FIELDS:
-                item['coverage'][key] = 'partial' if item[key] is not None else 'unavailable'
-    return {'usage': measured, 'by_model': entries}
-
-
 def native_usage(raw, cost, source, complete):
     raw = raw if type(raw) is dict else {}
     cache = raw.get('cache') if type(raw.get('cache')) is dict else {}

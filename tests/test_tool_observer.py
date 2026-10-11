@@ -1,10 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
+import contextlib
+import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from src.runtime.tool_observer import CompletedTool, ToolObserver
 from scripts.replay_tool_observation import main, replay
@@ -212,25 +215,17 @@ class ToolObserverTests(unittest.TestCase):
             self.assertEqual(observer.snapshot()['consecutive_confirmed_repeats'], 0)
 
     def test_truncated_read_without_source_ownership_cannot_stop(self):
-        for backend in ('opencode', 'xxx', 'claude-code'):
+        for backend in ('opencode', 'xxx'):
             for context in (None, CONTEXT):
                 with self.subTest(backend=backend, context=context):
                     clock = Clock()
                     observer = ToolObserver(backend, context=context, clock=clock)
                     for n in range(51):
                         clock.now = 3 * n
-                        if backend == 'claude-code':
-                            observer.event({'type': 'assistant', 'message': {'content': [
-                                {'type': 'tool_use', 'id': str(n), 'name': 'Read',
-                                 'input': {'file_path': '/outside/unit.py'}}]}})
-                            observer.event({'type': 'user', 'message': {'content': [
-                                {'type': 'tool_result', 'tool_use_id': str(n),
-                                 'content': '     1→abc... (line truncated to 2000 chars)'}]}})
-                        else:
-                            event = native(n, backend=backend, path='/outside/unit.py')
-                            event['part']['state']['output'] = event['part']['state']['output'].replace(
-                                'abc', 'abc... (line truncated to 2000 chars)')
-                            observer.event(event)
+                        event = native(n, backend=backend, path='/outside/unit.py')
+                        event['part']['state']['output'] = event['part']['state']['output'].replace(
+                            'abc', 'abc... (line truncated to 2000 chars)')
+                        observer.event(event)
                     self.assertFalse(observer.triggered)
                     self.assertEqual(observer.snapshot()['incomplete_results'], 51)
                     self.assertEqual(observer.snapshot()['consecutive_confirmed_repeats'], 0)
@@ -347,49 +342,6 @@ class ToolObserverTests(unittest.TestCase):
         self.assertEqual(observer.snapshot()['consecutive_confirmed_repeats'], 0)
         self.assertEqual(observer.snapshot()['unknown_results'], 1)
 
-    def test_claude_stream_complete_results_and_confirmed_model_requests(self):
-        observer = ToolObserver('claude-code', context=CONTEXT)
-        assistant = {'type': 'assistant', 'session_id': 's', 'message': {'id': 'm', 'content': [
-            {'type': 'tool_use', 'id': 'c1', 'name': 'Read', 'input': {'file_path': '/source/unit.py'}}]}}
-        observer.event(assistant)
-        self.assertEqual(observer.snapshot()['calls'], 0)
-        self.assertIsNone(observer.snapshot()['model_requests'])
-        request = {'type': 'stream_event', 'session_id': 's', 'event': {'type': 'message_start', 'message': {'id': 'm'}}}
-        observer.event(request)
-        observer.event(request)
-        observer.event({'type': 'stream_event', 'event': {'type': 'content_block_stop'}})
-        observer.event({'type': 'user', 'session_id': 's', 'message': {'content': [
-            {'type': 'tool_result', 'tool_use_id': 'c1', 'content': '     1→abc\n     2→xyz\n'}]}})
-        observer.event({'type': 'result', 'structured_output': {'ok': True}})
-        metrics = observer.finish()
-        self.assertEqual(metrics['calls'], 1)
-        self.assertEqual(metrics['unique_lines'], 2)
-        self.assertEqual(metrics['model_requests'], 1)
-
-    def test_claude_truncated_source_lines_never_confirm(self):
-        observer = ToolObserver('claude-code', context=CONTEXT)
-        for n in range(2):
-            observer.event({'type': 'assistant', 'message': {'content': [
-                {'type': 'tool_use', 'id': str(n), 'name': 'Read', 'input': {'file_path': '/source/unit.py'}}]}})
-            observer.event({'type': 'user', 'message': {'content': [
-                {'type': 'tool_result', 'tool_use_id': str(n),
-                 'content': '     1→abc... (line truncated to 2000 chars)'}]}})
-        self.assertEqual(observer.snapshot()['incomplete_results'], 2)
-        self.assertEqual(observer.snapshot()['consecutive_confirmed_repeats'], 0)
-
-    def test_claude_invalid_tool_name_or_arguments_is_incomplete(self):
-        for name, arguments in ((['Read'], {}), ('Read', 'not an object')):
-            with self.subTest(name=name, arguments=arguments):
-                observer = ToolObserver('claude-code', context=CONTEXT)
-                observer.observe(call(0))
-                observer.observe(call(1))
-                observer.event({'type': 'assistant', 'message': {'content': [
-                    {'type': 'tool_use', 'id': 'invalid', 'name': name, 'input': arguments}]}})
-                observer.event({'type': 'user', 'message': {'content': [
-                    {'type': 'tool_result', 'tool_use_id': 'invalid', 'content': 'output'}]}})
-                self.assertEqual(observer.snapshot()['incomplete_results'], 1)
-                self.assertEqual(observer.snapshot()['consecutive_confirmed_repeats'], 0)
-
     def test_malformed_event_resets_without_throwing(self):
         observer, _ = self.observer()
         observer.observe(call(0))
@@ -426,6 +378,21 @@ class ToolObserverTests(unittest.TestCase):
             self.assertIsNone(result['possible_stop'])
             self.assertIn('No per-call timestamps', ' '.join(result['metrics']['observation']['limitations']))
 
+    def test_replay_cli_rejects_claude_backend(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'stdout.log'
+            path.write_text('')
+            output = Path(folder) / 'report'
+            error = io.StringIO()
+            with contextlib.redirect_stderr(error), patch('scripts.replay_tool_observation.replay', wraps=replay) as replay_attempt:
+                with self.assertRaises(SystemExit) as caught:
+                    main([folder, '--attempt', 'stdout.log', '--backend', 'claude-code', '--output', str(output)])
+            self.assertEqual(caught.exception.code, 2)
+            self.assertIn("invalid choice: 'claude-code'", error.getvalue())
+            replay_attempt.assert_not_called()
+            self.assertFalse(output.with_suffix('.json').exists())
+            self.assertFalse(output.with_suffix('.md').exists())
+
     def test_replay_preserves_prompt_invalid_duplicate_and_model_events(self):
         saved = []
         observer, clock = self.observer(context=CONTEXT, event_sink=saved.append)
@@ -442,16 +409,17 @@ class ToolObserverTests(unittest.TestCase):
             result = replay(path, 'opencode')
             self.assertEqual(result['metrics'], observer.finish())
 
-    def test_replay_preserves_unfinished_claude_call_after_terminal_error(self):
+    def test_replay_preserves_unfinished_native_call_after_terminal_event(self):
         saved = []
-        observer = ToolObserver('claude-code', clock=lambda: 0.0, event_sink=saved.append)
-        observer.event({'type': 'assistant', 'session_id': 's', 'message': {'content': [
-            {'type': 'tool_use', 'id': 'unfinished', 'name': 'Read', 'input': {'file_path': '/source/unit.py'}}]}})
-        observer.event({'type': 'result', 'is_error': True})
+        observer = ToolObserver('opencode', clock=lambda: 0.0, event_sink=saved.append)
+        event = native(0)
+        event['part']['state']['status'] = 'running'
+        observer.event(event)
+        observer.event({'type': 'step_finish', 'part': {'reason': 'stop'}})
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'events.jsonl'
             path.write_text('\n'.join(json.dumps(r) for r in saved))
-            result = replay(path, 'claude-code')
+            result = replay(path, 'opencode')
             self.assertEqual(result['metrics'], observer.finish())
             self.assertIn('Tool calls without completed results.', result['metrics']['observation']['limitations'])
 

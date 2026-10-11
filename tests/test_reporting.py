@@ -614,7 +614,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.assertEqual(self.git('branch', '--format=%(refname:short)').strip(), 'master')
         self.env['OPENCODE_CONFIG_CONTENT'] = json.dumps({
             'provider': {'custom': {'options': {'baseURL': 'https://example.invalid'}}}})
-        for backend in ('codex', 'claude-code', 'opencode'):
+        for backend in ('codex', 'opencode'):
             for check in (True, False):
                 with self.subTest(backend=backend, check=check):
                     args = self.prepare('git', check=check)

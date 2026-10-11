@@ -32,7 +32,7 @@ class PreparedContextTests(FolderFixture):
 
     def test_same_preparation_all_backends_shard_scope_and_synthesis_exclusion(self):
         contexts = []
-        for backend in ('codex', 'claude-code', 'opencode', 'xxx'):
+        for backend in ('codex', 'opencode', 'xxx'):
             manifest, code = self.run_case(backend=backend)
             self.assertEqual(code, 0, manifest.get('diagnostics'))
             contexts.append([call['context'].get('source_context') for call in self.calls])

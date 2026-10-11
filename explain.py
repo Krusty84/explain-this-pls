@@ -37,7 +37,6 @@ from src.runtime.execution import Budget, execution_settings
 from src.runtime.metrics import RunMetrics, measurement, usage, FIELDS
 from src.runtime.tool_observer import ToolObserver
 from src.backends import codex
-from src.backends import claude_code
 from src.backends import opencode_cli
 from src.backends import xxx
 from src.backends.json_response import json_object_response
@@ -68,8 +67,8 @@ STAGES = ('catalog', 'study', 'review', 'compare')
 SOURCE_STAGES = ('catalog', 'study', 'review')
 ARTIFACTS = {'catalog': 'SUBSYSTEM_CATALOG.md', 'study': 'ARCHITECTURE.md', 'review': 'ARCHITECTURE_REVIEW.md',
              'compare': 'BRANCH_COMPARISON.md'}
-BACKENDS = {'codex': 'codex', 'claude-code': 'claude', 'opencode': 'opencode', 'xxx': 'xxx'}
-CLI_ADAPTERS = {'codex': codex, 'claude-code': claude_code, 'opencode': opencode_cli, 'xxx': xxx}
+BACKENDS = {'codex': 'codex', 'opencode': 'opencode', 'xxx': 'xxx'}
+CLI_ADAPTERS = {'codex': codex, 'opencode': opencode_cli, 'xxx': xxx}
 MIN_GIT_VERSION = (2, 34, 1)
 
 class AuditError(RuntimeError):

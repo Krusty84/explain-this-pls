@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from explain import Runner
-from src.backends import codex, claude_code
+from src.backends import codex
 from src.contracts.contracts import response_error
 from src.runtime.metrics import RunMetrics, measurement, number, sum_usage, usage
 from src.runtime.reporting import Reporter
@@ -22,12 +22,6 @@ from test_folder import FolderFixture
 from test_revision_pipeline import initial_finding
 import test_startup as startup
 import test_xxx as native
-
-
-def claude_envelope(**extra):
-    return {'is_error': False, 'usage': {'input_tokens': 10, 'output_tokens': 4,
-                'cache_read_input_tokens': 20, 'cache_creation_input_tokens': 3},
-            'total_cost_usd': 0.1, **extra}
 
 
 class NormalizerTests(unittest.TestCase):
@@ -45,26 +39,6 @@ class NormalizerTests(unittest.TestCase):
         self.assertEqual(partial['usage']['total_tokens'], 120)
         self.assertEqual(partial['usage']['coverage']['total_tokens'], 'partial')
         self.assertIsNone(partial['by_model'][0]['model_actual'])
-
-    def test_claude_model_usage_takes_precedence_and_cost_is_not_added_twice(self):
-        model = {'inputTokens': 10, 'outputTokens': 4, 'cacheReadInputTokens': 20,
-                 'cacheCreationInputTokens': 3, 'costUSD': 0.1}
-        envelope = claude_envelope(modelUsage={'one': model, 'two': model}, total_cost_usd=0.2)
-        result = claude_code.collect_metrics(json.dumps(envelope))
-        self.assertEqual(result['usage']['input_tokens'], 66)
-        self.assertEqual(result['usage']['total_tokens'], 74)
-        self.assertEqual(result['usage']['cost_usd'], 0.2)
-        self.assertEqual([e['model_actual'] for e in result['by_model']], ['one', 'two'])
-
-    def test_claude_fallback_and_error_result_keep_usage(self):
-        for failed in (False, True):
-            result = claude_code.collect_metrics(json.dumps(claude_envelope(is_error=failed)))['usage']
-            self.assertEqual((result['input_tokens'], result['total_tokens'], result['cost_usd']), (33, 37, 0.1))
-        crash = claude_code.collect_metrics(json.dumps(claude_envelope(
-            is_error=True, subtype='error_during_execution', total_cost_usd=0)))['usage']
-        self.assertEqual(crash['cost_usd'], 0)
-        self.assertEqual(crash['coverage']['cost_usd'], 'partial')
-        self.assertEqual(crash['coverage']['total_tokens'], 'partial')
 
     def test_absent_zero_and_invalid_numbers_are_distinct(self):
         for value in (True, -1, float('nan'), float('inf'), '10', 10 ** 1000):
@@ -85,8 +59,8 @@ class NormalizerTests(unittest.TestCase):
         metrics = measurement('codex', 'requested', measured=usage({'total_tokens': 100}))
         for invocation in ('one', 'one', 'two'):
             registry.record(context, {'invocation_id': invocation, 'backend': 'codex', 'metrics': metrics})
-        registry.record(context, {'invocation_id': 'two', 'backend': 'claude-code',
-                                 'metrics': measurement('claude-code', 'requested', 'reported',
+        registry.record(context, {'invocation_id': 'two', 'backend': 'opencode',
+                                 'metrics': measurement('opencode', 'requested', 'reported',
                                                         usage({'total_tokens': 100, 'cost_usd': 0.1}))})
         clock[0] = 5
         registry.finish_stage(context, 'FAILED')
@@ -95,7 +69,7 @@ class NormalizerTests(unittest.TestCase):
         self.assertEqual(result['attempts'], 2)
         self.assertEqual(result['usage']['total_tokens'], 200)
         self.assertEqual({row['backend']: row['usage']['total_tokens'] for row in result['by_backend']},
-                         {'codex': 100, 'claude-code': 100})
+                         {'codex': 100, 'opencode': 100})
         self.assertEqual(result['by_model'][1]['model_actual'], 'reported')
         self.assertEqual(result['duration_seconds'], 9)
         self.assertEqual(result['stages'][0]['duration_seconds'], 5)
@@ -125,24 +99,22 @@ class PipelineMetricsTests(FolderFixture):
         self.assertNotIn('Total usage:', Path(manifest['final_report']).read_text())
 
     def test_errors_timeouts_and_interruptions_retain_cli_usage(self):
-        for backend in ('codex', 'claude-code'):
+        for backend in ('codex', 'opencode'):
             for failure in ('exit', 'timeout', 'interrupt', 'validation'):
                 cfg = self.config()
                 for agent in cfg['_agents'].values():
                     agent['backend'] = backend
                 cfg['continue_on_error'] = False
                 runner = Runner(cfg, self.base / (backend + failure))
+                if backend == 'opencode':
+                    runner.versions[backend + ':' + cfg['_agents']['study']['executable']] = 'opencode v2.0.23'
                 def answer(command, cwd, env, payload, **kwargs):
                     context = prompt_context(payload)
                     data = response(context)
                     failed = context['stage'] == 'study'
                     if failed and failure == 'validation':
                         data['unexpected'] = 'invalid schema'
-                    if backend == 'claude-code':
-                        result = cli_result(command, claude_envelope(structured_output=data,
-                                            is_error=failed and failure == 'exit'))
-                    else:
-                        result = cli_result(command, data)
+                    result = cli_result(command, data)
                     if failed and failure in ('timeout', 'interrupt'):
                         output = result['stdout'] + (b'\n{"type":"turn.started"}\n' if backend == 'codex' else b'')
                         (kwargs['log_dir'] / 'stdout.log').write_bytes(output)
@@ -158,7 +130,7 @@ class PipelineMetricsTests(FolderFixture):
                     self.assertNotEqual(code, 0)
                     metrics = manifest['metrics']
                     self.assertEqual(metrics['attempts'], 2)
-                    self.assertEqual(metrics['usage']['total_tokens'], 240 if backend == 'codex' else 74)
+                    self.assertEqual(metrics['usage']['total_tokens'], 240)
                     self.assertEqual(metrics['stages'][-1]['status'], 'FAILED')
                     if backend == 'codex' and failure in ('timeout', 'interrupt'):
                         self.assertEqual(metrics['usage']['coverage']['total_tokens'], 'partial')
@@ -175,10 +147,13 @@ class CLIMetricsTests(unittest.TestCase):
 
     def test_json_manifest_text_and_no_progress_agree(self):
         for mode, attempts in (('folder', 3), ('git', 7)):
-            for backend in ('codex', 'claude-code'):
+            for backend in ('codex', 'opencode'):
                 args = self.prepare(mode)
                 config = json.loads(self.config_path.read_text().split('\n', 1)[1])
                 config['agent']['backend'] = backend
+                version = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
+                self.env['AUDIT_TEST_CLI_VERSION'] = version
+                config['agent']['expected_version'] = version
                 self.config_path.write_text(json.dumps(config))
                 result = subprocess.run([sys.executable, '-B', str(startup.ROOT / 'explain.py'),
                     *args, '--output', 'json', '--no-progress'], env=self.env,

@@ -36,7 +36,7 @@ or compare versions before planning changes.
 - macOS or Linux.
 - Python 3.11 or newer.
 - Git 2.34.1 or newer, only for Git mode.
-- An installed and configured coding-agent CLI: Codex CLI, Claude Code, OpenCode V2, or OpenCode 1.2.27 (XXX).
+- An installed and configured coding-agent CLI: Codex CLI, OpenCode V2, or OpenCode 1.2.27 (XXX).
   Sign in before using explain-this-pls.
 
 ### Get Your Input Data
@@ -69,7 +69,6 @@ Copy the example for your agent to `config.jsonc`, or use a project-specific nam
 such as `config_prj1.jsonc` or `config_superErp.jsonc`:
 
 - [Codex CLI](config.codex.example.jsonc)
-- [Claude Code](config.claude-code.example.jsonc)
 - [OpenCode V2](config.opencode.example.jsonc)
 - [OpenCode 1.2.27 / XXX](config.xxx.example.jsonc)
 
@@ -194,8 +193,8 @@ original directory, including excluded paths. Native CLI permissions apply.
 
 | Field              | Purpose                                                                                 |
 | ------------------ | --------------------------------------------------------------------------------------- |
-| `agent.backend`    | Coding agent: `codex`, `claude-code`, `opencode` (V2), or `xxx` (OpenCode 1.2.27).      |
-| `agent.executable` | CLI command or path; defaults to `codex`, `claude`, `opencode`, or `xxx`, respectively. |
+| `agent.backend`    | Coding agent: `codex`, `opencode` (V2), or `xxx` (OpenCode 1.2.27).      |
+| `agent.executable` | CLI command or path; defaults to `codex`, `opencode`, or `xxx`, respectively. |
 | `agent.model`      | Optional model name; omit it or use `null` for the CLI's configured model.              |
 
 The tool uses your CLI's existing login and settings. No separate API key is needed
@@ -256,9 +255,7 @@ partial telemetry is not evidence of a loop. These private logs can contain sour
 OpenCode V2 and XXX/OpenCode V1 observe completed native tools and supported numbered
 Read output. XXX retains its separate session ownership and deletion checks. Codex
 uses completed items and exact shell command/result comparisons; shell source-line
-coordinates and model request counts are unavailable. Claude Code uses
-`stream-json`, `--verbose` and `--include-partial-messages`, preserves the final
-`structured_output`, and counts model calls only from native message-start events.
+coordinates and model request counts are unavailable.
 Unknown output formats retain conservative partial metrics.
 
 **Review is opt-in.** In any existing JSON or JSONC configuration, enable it with:

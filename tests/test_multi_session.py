@@ -61,8 +61,6 @@ class MultiSessionTests(FolderFixture):
                     area['evidence_ids'] = [f'study:E-{i:03d}']
             if change:
                 change(runner, context, data)
-            if backend == 'claude-code':
-                return dict(returncode=0, stdout=json.dumps(dict(is_error=False, structured_output=data)).encode(), stderr=b'')
             if backend == 'xxx':
                 sid = f'ses_multi{len(calls)}'
                 output, exported = transcript(data, session=sid, agent=command[command.index('--agent') + 1],
@@ -93,7 +91,7 @@ class MultiSessionTests(FolderFixture):
 
     def test_success_uses_same_plan_all_backends_and_disables_synthesis_tools(self):
         assignments = []
-        for backend in ('codex', 'claude-code', 'opencode', 'xxx'):
+        for backend in ('codex', 'opencode', 'xxx'):
             with self.subTest(backend=backend):
                 manifest, code = self.run_case(backend=backend)
                 self.assertEqual(code, 0, manifest.get('diagnostics'))
@@ -127,9 +125,6 @@ class MultiSessionTests(FolderFixture):
                                            'completion_status', 'limitations', 'report_sections'})
                 self.assertEqual(set(schema['properties']), set(raw))
                 self.assertEqual(schema, json.loads(synthesis['prompt'].split('# Required final JSON Schema\n')[1]))
-                if backend == 'claude-code':
-                    command = synthesis['command']
-                    self.assertEqual(schema, json.loads(command[command.index('--json-schema') + 1]))
                 inputs = synthesis_inputs(plan, manifest['study_shards'])
                 before = copy.deepcopy(synthesis['context'])
                 before['shard_id_mappings'] = inputs['shard_id_mappings']
@@ -158,8 +153,6 @@ class MultiSessionTests(FolderFixture):
                 self.assertEqual(binding['expanded_sha256'], sha(canonical(expanded)))
                 if backend == 'codex':
                     self.assertIn('features.shell_tool=false', synthesis['command'])
-                elif backend == 'claude-code':
-                    self.assertEqual(synthesis['command'][synthesis['command'].index('--tools') + 1], '')
                 else:
                     config = json.loads(synthesis['env']['OPENCODE_CONFIG_CONTENT'])
                     name = synthesis['command'][synthesis['command'].index('--agent') + 1]
@@ -269,7 +262,7 @@ class MultiSessionTests(FolderFixture):
                         self.assertEqual(error['details']['code'], 'SHARD_POLICY_UNSATISFIED')
 
     def test_source_quote_snippets_and_failures_across_backends_and_policies(self):
-        for backend in ('codex', 'claude-code', 'opencode', 'xxx'):
+        for backend in ('codex', 'opencode', 'xxx'):
             for policy in ('strict', 'compromise'):
                 for valid in (True, False):
                     reporter = Reporter(stdout=io.StringIO(), stderr=io.StringIO(), progress=False)
@@ -628,7 +621,7 @@ class MultiSessionTests(FolderFixture):
 
     def test_file_and_byte_thresholds_split_one_subsystem_and_merge_coverage(self):
         for threshold in ('files', 'bytes'):
-            for backend in ('codex', 'claude-code', 'opencode', 'xxx'):
+            for backend in ('codex', 'opencode', 'xxx'):
                 setting = (patch('src.analysis.analysis_plan.MAX_SOURCE_FILES_PER_SESSION', 3) if threshold == 'files'
                            else patch.dict(self.value, max_source_bytes_per_session=66))
                 with self.subTest(threshold=threshold, backend=backend), \

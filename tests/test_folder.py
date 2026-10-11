@@ -373,7 +373,7 @@ class FolderCLIIntegrationTests(FolderFixture):
         self.value.pop('execution')
         self.value['stage_agents']['review'] = {'backend': 'missing', 'executable': '/missing/review-cli'}
         self.value['prompts'].update(review='/missing/review-prompt', revise='/missing/revise-prompt')
-        for backend in ('codex', 'claude-code', 'opencode'):
+        for backend in ('codex', 'opencode'):
             self.value['agent']['backend'] = backend
             self.env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
             for check in (True, False):
@@ -395,7 +395,7 @@ class FolderCLIIntegrationTests(FolderFixture):
 
     def test_all_backends_check_and_run_without_git(self):
         before = Folder(self.source).snapshot()
-        for backend in ('codex', 'claude-code', 'opencode'):
+        for backend in ('codex', 'opencode'):
             for check in (True, False):
                 with self.subTest(backend=backend, check=check):
                     self.calls.write_text('')
@@ -433,8 +433,6 @@ class FolderCLIIntegrationTests(FolderFixture):
                         if backend == 'codex':
                             self.assertIn('--skip-git-repo-check', args)
                             self.assertNotIn('features.shell_tool=false', args)
-                        elif backend == 'claude-code':
-                            self.assertEqual(args[args.index('--tools') + 1], 'Read,Glob,Grep')
                         else:
                             self.assertEqual(call['permissions'], {'*': 'deny', 'read': 'allow',
                                 'glob': 'allow', 'grep': 'allow'})

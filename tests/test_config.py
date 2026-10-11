@@ -10,6 +10,24 @@ from test_folder import FolderFixture
 
 
 class ConfigTests(FolderFixture):
+    def test_claude_backend_is_rejected_before_cli_in_both_modes(self):
+        original = copy.deepcopy(self.value)
+        for mode in ('git', 'folder'):
+            targets = ('agent', 'catalog', 'study', 'review') + (('compare',) if mode == 'git' else ())
+            for target in targets:
+                self.value = copy.deepcopy(original)
+                self.value['mode'] = mode
+                self.value['git_mode'] = {'repository': './source', 'branches': ['main', 'feature'],
+                                          'baseline_branch': 'main'}
+                if target == 'agent':
+                    self.value['agent']['backend'] = 'claude-code'
+                else:
+                    self.value['stage_agents'] = {target: {'backend': 'claude-code'}}
+                with self.subTest(mode=mode, target=target), patch('explain.process') as process:
+                    with self.assertRaisesRegex(AuditError, '^Unsupported backend: claude-code$'):
+                        self.config()
+                    process.assert_not_called()
+
     def test_source_context_and_read_guard_defaults_and_disable(self):
         config = self.config()
         self.assertEqual(config['source_context'], {'enabled': True, 'max_bytes': 65536})
@@ -42,7 +60,7 @@ class ConfigTests(FolderFixture):
         self.value['git_mode'] = {'repository': './source', 'branches': ['main'], 'baseline_branch': 'main'}
         for mode in ('git', 'folder'):
             self.value['mode'] = mode
-            for backend in ('codex', 'claude-code', 'opencode', 'xxx'):
+            for backend in ('codex', 'opencode', 'xxx'):
                 self.value['agent']['backend'] = backend
                 self.value.pop('max_source_bytes_per_session', None)
                 with self.subTest(mode=mode, backend=backend):

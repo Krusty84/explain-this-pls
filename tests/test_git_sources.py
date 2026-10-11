@@ -103,7 +103,7 @@ class GitSourceTests(unittest.TestCase):
     def test_all_backends_analyze_original_repository_sequentially(self):
         self.topic()
         original = self.git('rev-parse', 'HEAD')
-        for backend in ('codex', 'claude-code', 'xxx', 'opencode'):
+        for backend in ('codex', 'xxx', 'opencode'):
             with self.subTest(backend=backend):
                 result, manifest, calls = self.run_cli(backend, ('topic', 'main', 'alias'))
                 self.assertEqual(result.returncode, 0, result.stderr)

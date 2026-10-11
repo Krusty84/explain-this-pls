@@ -193,13 +193,6 @@ separate schema response. `turn.completed.usage` supplies tokens; total is input
 plus output, with cached input and optional reasoning already included. No monetary
 cost or actual model identity is inferred from the configured model.
 
-Claude Code prefers per-model `modelUsage` token counters, falling back to `usage`
-only when the model map is absent or empty. Input includes the separate cache read
-and creation counts. The envelope's `total_cost_usd` is the attempt cost; it is
-never added to the per-model cost breakdown. Success and error envelopes can carry
-usage. A crash result (`error_during_execution`) is partial; reported zeros are
-preserved but do not establish zero spend because remaining usage is unknown.
-
 XXX (OpenCode 1.2.27) accounts for the assistant messages in its verified final
 session export. It sums unique step-finish counters for each message, using
 assistant totals only when no steps exist. Export and stdout counters are never
@@ -295,7 +288,7 @@ non-finite numbers remain invalid. Payload contents are never repaired.
 This is transport compatibility, not relaxed contract validation. Schema, source
 identity, semantics, evidence and security checks remain authoritative. It does
 not change claims, acceptance policy or self-assessments, and adds no model call.
-Codex and Claude Code parsing is unchanged.
+Codex parsing is unchanged.
 
 OpenCode V2 also accepts introductory prose followed by one final JSON object or
 one JSON-labelled fence. The prefix must contain no earlier object, array or
@@ -475,7 +468,7 @@ task, matching pinned Git/folder identity and, for review, unchanged frozen
 context and exact target. The caller verifies transport before calling it.
 It never repairs the schema.
 The rule is `EVIDENCE_IDS` in both strict and compromise, shared by Codex,
-Claude Code, OpenCode and XXX after their transport checks. It also applies to
+OpenCode and XXX after their transport checks. It also applies to
 study shards, which use the `study:` namespace for claims and coverage references.
 
 Evidence definitions may pad one/two numeric digits (`E-1`, `E-01` -> `E-001`)

@@ -41,7 +41,7 @@ def response_for(context):
 class CompromiseFolder(folder_fixtures.FolderFixture):
     def test_normalized_study_acceptance_and_contract_rejection_remain_distinct(self):
         for policy in ('strict', 'compromise'):
-            for backend in ('codex', 'claude-code'):
+            for backend in ('codex', 'opencode'):
                 def local(stage, data):
                     if stage == 'study': data['claims'][0]['evidence_ids'] = ['E-001']
                     return data
@@ -73,6 +73,8 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             agent['backend'] = backend
         run_dir = self.base / ('run-' + str(len(list(self.base.glob('run-*')))))
         runner = Runner(config, run_dir)
+        if backend == 'opencode':
+            runner.versions[backend + ':' + config['_agents']['study']['executable']] = 'opencode v2.0.23'
         calls, originals = [], {}
 
         def process(command, cwd, env, payload, **kwargs):
@@ -89,8 +91,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             if outcome == 'malformed':
                 return cli_result(command, b'{broken')
             originals[stage] = copy.deepcopy(outcome)
-            encoded = outcome if backend == 'codex' else {'is_error': False, 'structured_output': outcome}
-            return cli_result(command, encoded)
+            return cli_result(command, outcome)
 
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process), \
                 patch('explain.atomic', side_effect=atomic_override or atomic):
@@ -103,7 +104,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             data['subsystems'][0]['paths'].append('PRIVATE_UNKNOWN')
             data['exclusions'].append(dict(path='PRIVATE_EXCLUSION', reason='Unknown exclusion.'))
             data['limitations'].append('Original catalog limitation.')
-        for backend in ('codex', 'claude-code'):
+        for backend in ('codex', 'opencode'):
             with self.subTest(backend=backend):
                 manifest, code = self.run_case(backend=backend, catalog_change=catalog_change)
                 self.assertEqual((code, manifest['status'], manifest['accepted']), (2, 'PARTIAL', False))
@@ -145,7 +146,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         self.assertEqual(manifest['catalog_invocation']['error']['details']['code'], 'UNKNOWN_CATALOG_PATH')
 
     def test_semantic_review_is_retained_for_both_cli_adapters(self):
-        for backend in ('codex', 'claude-code'):
+        for backend in ('codex', 'opencode'):
             with self.subTest(backend=backend):
                 manifest, code = self.run_case(lambda s, d: semantic_failure(d) if s == 'review' else d, backend=backend)
                 self.assertEqual((manifest['status'], code), ('PARTIAL', 2))
@@ -311,7 +312,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         def missing_claims(stage, data):
             data.pop('claims')
             return data
-        for backend in ('codex', 'claude-code'):
+        for backend in ('codex', 'opencode'):
             for policy in ('strict', 'compromise'):
                 with self.subTest(backend=backend, policy=policy):
                     manifest, code = self.run_case(missing_claims, backend=backend, policy=policy)
@@ -328,7 +329,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
                 data.pop('report_sections')
                 data['report_markdown'] = '# Unsupported study'
             return data
-        for backend in ('codex', 'claude-code'):
+        for backend in ('codex', 'opencode'):
             for policy in ('strict', 'compromise'):
                 with self.subTest(backend=backend, policy=policy):
                     manifest, code = self.run_case(markdown_study, backend=backend, policy=policy)

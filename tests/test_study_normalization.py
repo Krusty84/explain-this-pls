@@ -157,7 +157,7 @@ class PureNormalizationTests(unittest.TestCase):
 
 class NormalizationPipelineTests(FolderFixture):
     def test_cli_review_bare_references_share_one_normalization_rule(self):
-        for backend in ('codex', 'claude-code', 'opencode'):
+        for backend in ('codex', 'opencode'):
             for policy in ('strict', 'compromise'):
                 with self.subTest(backend=backend, policy=policy):
                     runner, context, raw = self.prepare(backend, policy)
@@ -172,8 +172,7 @@ class NormalizationPipelineTests(FolderFixture):
                     runner.cfg['_agents']['review']['backend'] = backend
                     def answer(command, cwd, env, payload, **kwargs):
                         model_data = model_wire(wire, prompt_context(payload), ctx)
-                        envelope = {'is_error': False, 'structured_output': model_data} if backend == 'claude-code' else model_data
-                        return cli_result(command, envelope)
+                        return cli_result(command, model_data)
                     with patch('explain.process', side_effect=answer) as process:
                         saved, meta = runner.invoke('review', ctx, runner.run_dir / 'review.logs')
                     self.assertEqual(process.call_count, 1)
@@ -187,7 +186,7 @@ class NormalizationPipelineTests(FolderFixture):
                     self.assertEqual(meta['normalization_provenance']['replacement_count'], 3)
 
     def test_cli_review_normalization_preserves_frozen_study_in_both_policies(self):
-        for backend in ('codex', 'claude-code'):
+        for backend in ('codex', 'opencode'):
             for policy in ('strict', 'compromise'):
                 runner, context, raw = self.prepare(backend, policy)
                 doc, _ = self.invoke(runner, context, raw)
@@ -199,8 +198,7 @@ class NormalizationPipelineTests(FolderFixture):
                 runner.cfg['_agents']['review']['backend'] = backend
                 def answer(command, cwd, env, payload, **kwargs):
                     model_data = model_wire(wire, prompt_context(payload), ctx)
-                    envelope = model_data if backend == 'codex' else {'is_error': False, 'structured_output': model_data}
-                    return cli_result(command, envelope)
+                    return cli_result(command, model_data)
                 with patch('explain.process', side_effect=answer) as process:
                     saved, meta = runner.invoke('review', ctx, runner.run_dir / 'review.logs')
                 self.assertEqual(process.call_count, 1)
@@ -228,14 +226,12 @@ class NormalizationPipelineTests(FolderFixture):
     def invoke(self, runner, context, data):
         def process(command, cwd, env, payload, **kwargs):
             model_data = model_wire(data, prompt_context(payload), context)
-            envelope = {'is_error': False, 'structured_output': model_data} if \
-                runner.cfg['_agents']['study']['backend'] == 'claude-code' else model_data
-            return cli_result(command, envelope)
+            return cli_result(command, model_data)
         with patch('explain.process', side_effect=process):
             return runner.invoke('study', context, runner.run_dir / 'study.logs')
 
     def test_both_cli_backends_preserve_extracted_and_publish_provenance(self):
-        for backend in ('codex', 'claude-code'):
+        for backend in ('codex', 'opencode'):
             for local in (True, False):
                 runner, context, raw = self.prepare(backend, local=local)
                 original = copy.deepcopy(raw)

@@ -136,7 +136,7 @@ class RecursiveFixture:
 class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
     def test_full_cli_reads_each_checkout_for_every_backend_and_restores(self):
         before = self.state()
-        for backend in ('codex', 'claude-code', 'opencode', 'xxx'):
+        for backend in ('codex', 'opencode', 'xxx'):
             with self.subTest(backend=backend):
                 if backend == 'xxx':
                     self.cli.write_text('#!' + sys.executable + '\nimport runpy\nrunpy.run_path(' +

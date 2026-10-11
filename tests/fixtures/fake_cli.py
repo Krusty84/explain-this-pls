@@ -85,9 +85,8 @@ if '--version' in args:
     print('Fixture startup warning', file=sys.stderr)
     print(os.environ.get('AUDIT_TEST_CLI_VERSION', 'fixture-cli 1.0'))
 elif '--help' in args:
-    print('--ephemeral --output-schema --sandbox --json --output-last-message --skip-git-repo-check --no-session-persistence --json-schema '
-          '--tools --allowedTools --disallowedTools --permission-mode --format --model --agent --standalone '
-          '--output-format --verbose --include-partial-messages')
+    print('--ephemeral --output-schema --sandbox --json --output-last-message --skip-git-repo-check '
+          '--format --model --agent --standalone')
 else:
     prompt = sys.stdin.read()
     raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]
@@ -97,8 +96,6 @@ else:
     call['schema'] = json.loads(schema_text)
     if '--output-schema' in args:
         assert json.loads(Path(args[args.index('--output-schema') + 1]).read_text()) == call['schema']
-    elif '--json-schema' in args:
-        assert json.loads(args[args.index('--json-schema') + 1]) == call['schema']
     stage = context.get('stage') or ('compare' if 'baseline_branch' in context else
                                     'review' if 'architecture_document' in context else 'study')
     if stage != 'compare' and context.get('source_mode') == 'git':
@@ -119,11 +116,6 @@ else:
         call['permissions'] = {p['action']: p['effect'] for p in config['agents'][name]['permissions']}
         from cli_response import cli_result
         sys.stdout.buffer.write(cli_result(args, data)['stdout'])
-    elif '--output-format' in args:
-        from cli_response import cli_result
-        sys.stdout.buffer.write(cli_result(args, {'is_error': False, 'structured_output': data, 'total_cost_usd': 0.01,
-                          'modelUsage': {'fixture-model': {'inputTokens': 60, 'outputTokens': 20,
-                              'cacheReadInputTokens': 30, 'cacheCreationInputTokens': 10, 'costUSD': 0.01}}})['stdout'])
     else:
         from cli_response import cli_result
         sys.stdout.buffer.write(cli_result(args, data)['stdout'])

@@ -115,9 +115,9 @@
 
   // Shared CLI settings. Authenticate/configure the CLI before starting the runner.
   "agent": {
-    // Supported backends: "codex", "claude-code", "opencode", "xxx".
+    // Supported backends: "codex", "opencode", "xxx".
     "backend": "codex",
-    // Command on PATH or executable path. Defaults: codex / claude / opencode / xxx.
+    // Command on PATH or executable path. Defaults: codex / opencode / xxx.
     "executable": "codex",
     // null uses the model selected by the configured CLI.
     "model": null,

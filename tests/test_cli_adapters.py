@@ -14,18 +14,14 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.backends import claude_code
 from src.backends import codex
 from src.contracts.contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS
 from explain import AuditError, Runner
 
 
-ADAPTERS = {'codex': codex, 'claude-code': claude_code}
+ADAPTERS = {'codex': codex}
 REQUIRED_FLAGS = {
     'codex': ['--ephemeral', '--output-schema', '--sandbox', '--json', '--output-last-message'],
-    'claude-code': ['--no-session-persistence', '--json-schema', '--tools',
-                    '--allowedTools', '--disallowedTools', '--permission-mode', '--output-format',
-                    '--verbose', '--include-partial-messages'],
 }
 
 
@@ -44,43 +40,25 @@ class CLIAdapterTests(unittest.TestCase):
                                 self.assertEqual(cmd[cmd.index('--model') + 1], model)
                             else:
                                 self.assertNotIn('--model', cmd)
-                            if backend == 'codex':
-                                self.assertEqual(cmd[1], 'exec')
-                                self.assertEqual(cmd[-1], '-')
-                                self.assertIn('--ephemeral', cmd)
-                                self.assertEqual(cmd[cmd.index('--sandbox') + 1], 'read-only')
-                                self.assertEqual(cmd[cmd.index('--output-schema') + 1], str(schema_path))
-                                self.assertIn('--json', cmd)
-                                self.assertEqual(cmd[cmd.index('--output-last-message') + 1],
-                                                 str(schema_path.with_name('final.response.json')))
-                                self.assertIn('approval_policy="never"', cmd)
-                                self.assertIn('web_search="disabled"', cmd)
-                                self.assertEqual('--skip-git-repo-check' in cmd,
-                                                 True)
-                                self.assertEqual('features.shell_tool=false' in cmd, stage == 'compare')
-                            else:
-                                self.assertEqual(cmd[1], '-p')
-                                self.assertIn('--no-session-persistence', cmd)
-                                self.assertEqual(cmd[cmd.index('--output-format') + 1], 'stream-json')
-                                self.assertIn('--verbose', cmd)
-                                self.assertIn('--include-partial-messages', cmd)
-                                self.assertEqual(json.loads(cmd[cmd.index('--json-schema') + 1]), schema)
-                                self.assertEqual(cmd[cmd.index('--permission-mode') + 1], 'dontAsk')
-                                self.assertEqual(cmd[cmd.index('--disallowedTools') + 1], 'mcp__*')
-                                self.assertEqual(cmd[cmd.index('--tools') + 1],
-                                                 '' if stage == 'compare' else 'Read,Glob,Grep')
-                                self.assertEqual('--allowedTools' in cmd, stage != 'compare')
-                                if stage != 'compare':
-                                    self.assertEqual(cmd[cmd.index('--allowedTools') + 1], 'Read,Glob,Grep')
+                            self.assertEqual(cmd[1], 'exec')
+                            self.assertEqual(cmd[-1], '-')
+                            self.assertIn('--ephemeral', cmd)
+                            self.assertEqual(cmd[cmd.index('--sandbox') + 1], 'read-only')
+                            self.assertEqual(cmd[cmd.index('--output-schema') + 1], str(schema_path))
+                            self.assertIn('--json', cmd)
+                            self.assertEqual(cmd[cmd.index('--output-last-message') + 1],
+                                             str(schema_path.with_name('final.response.json')))
+                            self.assertIn('approval_policy="never"', cmd)
+                            self.assertIn('web_search="disabled"', cmd)
+                            self.assertEqual('--skip-git-repo-check' in cmd, True)
+                            self.assertEqual('features.shell_tool=false' in cmd, stage == 'compare')
 
     def test_help_commands_and_required_flags_are_independent_between_calls(self):
         self.assertEqual(codex.help_command('/configured/codex'), ['/configured/codex', 'exec', '--help'])
-        self.assertEqual(claude_code.help_command('/configured/claude'), ['/configured/claude', '--help'])
         for backend, adapter in ADAPTERS.items():
             for mode in ('git', 'folder'):
                 with self.subTest(backend=backend, mode=mode):
-                    expected = REQUIRED_FLAGS[backend] + (
-                        ['--skip-git-repo-check'] if backend == 'codex' else [])
+                    expected = REQUIRED_FLAGS[backend] + ['--skip-git-repo-check']
                     flags = adapter.required_flags(mode)
                     self.assertEqual(flags, expected)
                     flags.clear()
@@ -88,12 +66,8 @@ class CLIAdapterTests(unittest.TestCase):
 
     def test_parsers_preserve_results_and_metadata(self):
         data = {'report_markdown': '# Report', 'completion_status': 'COMPLETE'}
-        metadata = {'session_id': 'session', 'total_cost_usd': 0.25,
-                    'usage': {'input_tokens': 10}, 'modelUsage': {'chosen-model': {}}}
         outputs = {
             'codex': (data, {}),
-            'claude-code': ({'is_error': False, 'structured_output': data,
-                             'result': 'ignored ordinary text', **metadata}, metadata),
         }
         for backend, (envelope, expected_metadata) in outputs.items():
             with self.subTest(backend=backend):
@@ -104,55 +78,12 @@ class CLIAdapterTests(unittest.TestCase):
         cases = [
             ('codex', '```json\n{}\n```', 'INVALID_JSON', 'result'),
             ('codex', '{"x": 1, "x": 2}', 'INVALID_JSON', 'result'),
-            ('claude-code', '{', 'TRANSPORT_ERROR', 'transport'),
-            ('claude-code', '[]', 'TRANSPORT_ERROR', 'transport'),
-            ('claude-code', '{"is_error": 0}', 'TRANSPORT_ERROR', 'transport'),
-            ('claude-code', '{"is_error": true}', 'BACKEND_ERROR', 'backend'),
-            ('claude-code', '{"is_error": false}', 'INCOMPLETE_OUTPUT', 'result'),
-            ('claude-code', '{"is_error": false, "structured_output": []}', 'INCOMPLETE_OUTPUT', 'result'),
         ]
         for backend, output, kind, layer in cases:
             with self.subTest(backend=backend, output=output), self.assertRaises(ContractError) as caught:
                 ADAPTERS[backend].parse_output(output)
             self.assertEqual(caught.exception.failure_kind, kind)
             self.assertEqual(caught.exception.failure_layer, layer)
-
-    def test_claude_stream_preserves_final_schema_output_and_usage(self):
-        output = (ROOT / 'tests/fixtures/claude_stream.jsonl').read_text()
-        result, metadata = claude_code.parse_output(output)
-        self.assertEqual(result, {'completion_status': 'COMPLETE', 'report_markdown': '# Report'})
-        self.assertEqual(metadata['session_id'], 'fixture-session')
-        metrics = claude_code.collect_metrics(output, 'requested')
-        self.assertEqual(metrics['usage']['total_tokens'], 37)
-        self.assertEqual(metrics['usage']['cost_usd'], 0.1)
-        self.assertEqual(metrics['by_model'][0]['model_actual'], 'fixture-model')
-        self.assertEqual(metrics['usage']['coverage']['total_tokens'], 'complete')
-
-    def test_claude_stream_requires_unambiguous_complete_result(self):
-        result = {'type': 'result', 'is_error': False, 'structured_output': {'value': 1}}
-        prefix = json.dumps({'type': 'system', 'subtype': 'init'}) + '\n'
-        complete = prefix + json.dumps(result)
-        self.assertEqual(claude_code.parse_output(complete + '\n' + json.dumps(result))[0], {'value': 1})
-        for output, kind in (
-                (prefix, 'INCOMPLETE_OUTPUT'),
-                (complete + '\n{', 'TRANSPORT_ERROR'),
-                (complete + '\n' + json.dumps({**result, 'structured_output': {'value': 2}}), 'TRANSPORT_ERROR'),
-                (prefix + json.dumps({'type': 'result', 'is_error': True}), 'BACKEND_ERROR'),
-                (prefix + json.dumps({'type': 'result', 'is_error': False}), 'INCOMPLETE_OUTPUT')):
-            with self.subTest(output=output), self.assertRaises(ContractError) as caught:
-                claude_code.parse_output(output)
-            self.assertEqual(caught.exception.failure_kind, kind)
-
-    def test_claude_stream_error_retains_reported_usage(self):
-        envelope = {'type': 'result', 'subtype': 'error_during_execution', 'is_error': True,
-                    'total_cost_usd': 0.2, 'usage': {'input_tokens': 10, 'output_tokens': 4,
-                    'cache_read_input_tokens': 0, 'cache_creation_input_tokens': 0}}
-        output = '{"type":"system","subtype":"init"}\n' + json.dumps(envelope)
-        with self.assertRaises(ContractError):
-            claude_code.parse_output(output)
-        metrics = claude_code.collect_metrics(output)['usage']
-        self.assertEqual(metrics['total_tokens'], 14)
-        self.assertEqual(metrics['coverage']['total_tokens'], 'partial')
 
     def test_adapters_import_without_orchestrator_in_any_order(self):
         script = '''
@@ -161,13 +92,10 @@ import sys
 for name in sys.argv[1:]:
     importlib.import_module(name)
 from src.backends import codex
-from src.backends import claude_code
 assert codex.parse_output('{}') == ({}, {})
-assert claude_code.parse_output('{"is_error": false, "structured_output": {}}') == ({}, {})
 assert 'explain' not in sys.modules
 '''
-        for order in itertools.permutations(('src.backends.codex', 'src.backends.claude_code',
-                                             'src.contracts.contracts')):
+        for order in itertools.permutations(('src.backends.codex', 'src.contracts.contracts')):
             with self.subTest(order=order):
                 result = subprocess.run([sys.executable, '-B', '-c', script, *order],
                                         cwd=ROOT, capture_output=True, text=True, timeout=10)

@@ -114,7 +114,7 @@ def main(argv=None):
     parser.add_argument('logs', type=Path, help='Directory containing saved attempt logs.')
     parser.add_argument('--attempt', action='append', required=True,
                         help='Relative attempt directory or log file; repeat to select more attempts.')
-    parser.add_argument('--backend', choices=('codex', 'claude-code', 'opencode', 'xxx'), required=True)
+    parser.add_argument('--backend', choices=('codex', 'opencode', 'xxx'), required=True)
     parser.add_argument('--context', type=Path, help='Optional saved source context for native path ownership.')
     parser.add_argument('--output', type=Path, required=True, help='Output prefix; writes .json and .md.')
     args = parser.parse_args(argv)

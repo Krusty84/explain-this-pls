@@ -55,7 +55,7 @@ class OptionalReviewConfigTests(FolderFixture):
 
     def test_all_examples_explicitly_disable_review(self):
         paths = list(Path(__file__).resolve().parents[1].glob('config*.example.jsonc'))
-        self.assertEqual(len(paths), 4)
+        self.assertEqual(len(paths), 3)
         for path in paths:
             with self.subTest(path=path), patch('explain.shutil.which', return_value=sys.executable):
                 cfg = load_config(path)

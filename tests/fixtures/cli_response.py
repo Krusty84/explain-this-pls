@@ -27,15 +27,4 @@ def cli_result(command, data):
                            'part': {'id': 'prt_' + kind, 'sessionID': 'ses_fixture',
                                     'messageID': 'msg_fixture', **part}})
         output = ('\n'.join(json.dumps(event) for event in events) + '\n').encode()
-    elif '--output-format' in command and command[command.index('--output-format') + 1] == 'stream-json':
-        try:
-            envelope = json.loads(output)
-        except ValueError:
-            return {'returncode': 0, 'stdout': output, 'stderr': b''}
-        events = [{'type': 'system', 'subtype': 'init', 'session_id': 'fixture-session'},
-                  {'type': 'stream_event', 'session_id': 'fixture-session', 'event': {
-                      'type': 'message_start', 'message': {'id': 'fixture-message', 'type': 'message',
-                                                         'role': 'assistant', 'content': []}}},
-                  {'type': 'result', 'session_id': 'fixture-session', **envelope}]
-        output = ('\n'.join(json.dumps(event) for event in events) + '\n').encode()
     return {'returncode': 0, 'stdout': output, 'stderr': b''}

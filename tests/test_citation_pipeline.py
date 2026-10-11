@@ -31,7 +31,7 @@ class CitationPipelineTests(test_folder.FolderFixture):
             data['evidence'][0]['quote'] = 'private unmatched source text'
 
     def test_all_backends_continue_shards_synthesis_and_review_with_warnings(self):
-        for backend in ('codex', 'claude-code', 'opencode', 'xxx'):
+        for backend in ('codex', 'opencode', 'xxx'):
             with self.subTest(backend=backend):
                 reporter = Reporter(stdout=io.StringIO(), stderr=io.StringIO(), progress=False)
                 self.addCleanup(reporter.close)

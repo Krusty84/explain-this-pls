@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from explain import AuditError, Repository, Runner, UnsafeRepository, cli_env, load_config, process, repository_lock, slug
 from src.runtime.reporting import Reporter
 from src.backends.opencode_cli import prepare_environment
-from src.backends import claude_code
 from src.backends import codex
 from src.contracts.contracts import ContractError, review_verdict, strict_json, validate_result
 from fixtures.ledger_response import response
@@ -78,14 +77,6 @@ class ContractTests(unittest.TestCase):
     def test_fenced_output_rejected(self):
         with self.assertRaises(ContractError):
             codex.parse_output('```json\n{}\n```')
-    def test_claude_structured_output(self):
-        transport = {'is_error': False, 'structured_output': doc('master', 'abc'), 'session_id': 's'}
-        data, meta = claude_code.parse_output(json.dumps(transport))
-        self.assertEqual(data['branch'], 'master')
-        self.assertEqual(meta['session_id'], 's')
-    def test_claude_error_is_not_success(self):
-        with self.assertRaises(ContractError):
-            claude_code.parse_output('{"is_error":true,"result":"error"}')
     def test_wrong_commit_rejected(self):
         with self.assertRaises(ContractError):
             validate_result('study',doc('master','wrong'),{'branch':'master','source_commit':'abc'})
@@ -432,7 +423,7 @@ class ConfigTests(unittest.TestCase):
     def test_all_examples_load_without_credentials(self):
         root=Path(__file__).resolve().parents[1]
         paths = list(root.glob('config*.example.json*'))
-        self.assertEqual(len(paths), 4)  # Includes the explicit XXX fork profile.
+        self.assertEqual(len(paths), 3)  # Includes the explicit XXX fork profile.
         for path in paths:
             with self.subTest(path=path.name), patch.dict(os.environ,{},clear=True), \
                  patch('explain.shutil.which',return_value=sys.executable):
@@ -459,15 +450,6 @@ class AdapterCommandTests(unittest.TestCase):
         self.assertNotIn('--ignore-user-config',cmd)
         self.assertNotIn('resume',cmd)
         self.assertIn('--skip-git-repo-check',self.command('codex','compare'))
-    def test_claude_tools_and_mcp_are_restricted_with_profile_loaded(self):
-        for stage in ('study','review','compare'):
-            with self.subTest(stage=stage):
-                cmd=self.command('claude-code',stage)
-                self.assertNotIn('--bare',cmd);self.assertNotIn('--setting-sources',cmd)
-                self.assertIn('--no-session-persistence',cmd)
-                self.assertEqual(cmd[cmd.index('--tools')+1],'' if stage=='compare' else 'Read,Glob,Grep')
-                self.assertEqual(cmd[cmd.index('--disallowedTools')+1],'mcp__*')
-                self.assertEqual(cmd[cmd.index('--permission-mode')+1],'dontAsk')
     def test_opencode_overlay_preserves_settings_and_scopes_permissions(self):
         original={'provider':{'custom':{'options':{'baseURL':'https://example.invalid'}}},
             'model':'custom/model','plugin':['auth-plugin'],'instructions':['rules.md'],
@@ -495,7 +477,7 @@ class AdapterCommandTests(unittest.TestCase):
                 prepare_environment(env,'study')
             self.assertEqual(env['OPENCODE_CONFIG_CONTENT'],raw)
     def test_explicit_models_override_cli_default_for_all_backends(self):
-        for backend in ('codex','claude-code','opencode'):
+        for backend in ('codex','opencode'):
             cmd=self.command(backend,model='chosen-model')
             self.assertEqual(cmd[cmd.index('--model')+1],'chosen-model')
     def test_environment_preserves_profiles_path_and_credentials(self):
@@ -503,7 +485,7 @@ class AdapterCommandTests(unittest.TestCase):
             'XDG_CONFIG_HOME':'/custom/config','XDG_DATA_HOME':'/custom/data',
             'XDG_CACHE_HOME':'/custom/cache','XDG_STATE_HOME':'/custom/state',
             'XDG_RUNTIME_DIR':'/custom/runtime','TMPDIR':'/custom/tmp',
-            'CODEX_HOME':'/custom/codex','CLAUDE_CONFIG_DIR':'/custom/claude',
+            'CODEX_HOME':'/custom/codex',
             'OPENCODE_CONFIG_DIR':'/custom/opencode','HTTPS_PROXY':'http://proxy.invalid',
             'OPENAI_API_KEY':'test-existing-key'}
         # Construct the Git runtime before intentionally replacing PATH. This test
@@ -512,7 +494,7 @@ class AdapterCommandTests(unittest.TestCase):
         self.addCleanup(runner.repo.close)
         with patch.dict(os.environ,inherited,clear=True):
             env=cli_env(self.repo_path)
-            for backend in ('codex','claude-code'):
+            for backend in ('codex','opencode'):
                 agent=cfg['_agents']['study'] | {'backend':backend}
                 runner.command('study',self.base,agent,self.base/'schema.json',env)
             prepare_environment(env,'study')
@@ -536,7 +518,7 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
              'AUDIT_TEST_CALL_LOG':str(calls_path),'PYTHONIOENCODING':'utf-8',
              'OPENCODE_CONFIG_CONTENT':json.dumps({'provider':{'custom':{'options':{
                  'baseURL':'https://example.invalid'}}},'plugin':['auth-plugin']})}
-        for backend in ('codex','claude-code','opencode'):
+        for backend in ('codex','opencode'):
             version = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
             env['AUDIT_TEST_CLI_VERSION'] = version
             for check_only in (True,False):
