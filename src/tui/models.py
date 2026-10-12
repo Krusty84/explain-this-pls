@@ -9,7 +9,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Select, Static
 
-from src.runtime.config import load_config, resolve_agent
+from src.runtime.config import STAGES, load_config, resolve_agent
 from src.backends import codex_models
 from src.contracts.contracts import ContractError
 from src.tui.config_edit import save_model
@@ -19,8 +19,13 @@ def model_targets(config, path):
     targets = {}
     if config['agent'].get('backend') == 'codex':
         targets['agent.model'] = resolve_agent(config['agent'], path)
-    targets.update({'stage_agents.' + stage + '.model': agent for stage, agent in config['_agents'].items()
-                    if agent['backend'] == 'codex'})
+    for stage in STAGES:
+        override = config['stage_agents'].get(stage, {})
+        if type(override) is not dict:
+            raise ValueError(f'stage_agents.{stage} must be a JSON object.')
+        agent = config['agent'] | override
+        if agent.get('backend') == 'codex':
+            targets['stage_agents.' + stage + '.model'] = resolve_agent(agent, path)
     return targets
 
 
@@ -29,7 +34,7 @@ class ModelChooser(ModalScreen):
     DEFAULT_CSS = """
     ModelChooser { align: center middle; }
     #model-dialog { width: 95%; height: 90%; max-width: 120; border: round $accent; background: $surface; padding: 0 1; }
-    #model-file, #model-current { height: auto; max-height: 2; }
+    #model-file, #model-scope, #model-current { height: auto; max-height: 2; }
     #model-table { height: 1fr; min-height: 3; }
     #model-status { height: 3; }
     #model-actions { height: 3; }
@@ -54,19 +59,21 @@ class ModelChooser(ModalScreen):
     def compose(self):
         with Vertical(id='model-dialog'):
             yield Static(self.literal('File: ' + str(self.path)), id='model-file')
+            yield Static('Apply Scope', id='model-scope')
             yield Select([(field, field) for field in self.targets], value=self.target,
                          allow_blank=False, id='model-target')
             yield Static('', id='model-current')
             yield DataTable(id='model-table', cursor_type='row', zebra_stripes=True)
             yield Static('', id='model-status')
             with Horizontal(id='model-actions'):
-                yield Button('Check model', id='model-check', disabled=True)
+                yield Button('Check ChatGPT Access', id='model-check', disabled=True)
                 yield Button('Apply', id='model-apply', variant='primary', disabled=True)
                 yield Button('Refresh', id='model-refresh')
                 yield Button('Cancel', id='model-close')
 
     def on_mount(self):
-        self.query_one('#model-table', DataTable).add_columns('Model', 'Name', 'Visibility', 'API', 'Access')
+        self.query_one('#model-table', DataTable).add_columns(
+            'Model', 'Name', 'Visibility', 'Access via API', 'Access via ChatGPT')
         self.load_catalog()
 
     def update_buttons(self):
@@ -132,7 +139,7 @@ class ModelChooser(ModalScreen):
         self.selected = slug
         result = self.verifications.get(slug)
         self.query_one('#model-status', Static).update(self.literal(
-            result['message'] if result else 'Not checked. Check model sends a request and uses your Codex allowance.'))
+            result['message'] if result else 'Not checked. Check ChatGPT Access sends a request and uses your Codex allowance.'))
         self.update_buttons()
 
     def on_data_table_row_highlighted(self, event):

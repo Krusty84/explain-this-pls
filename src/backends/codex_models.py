@@ -62,7 +62,7 @@ async def catalog(executable, *, timeout=30):
             raise ValueError('Codex model catalog contains invalid or duplicate model metadata.')
         slugs.add(row['slug'])
         models.append(row)
-    return models
+    return [model for model in models if model['visibility'] != 'hide']
 
 
 async def check_model(executable, model, *, timeout=60):

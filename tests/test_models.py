@@ -25,7 +25,7 @@ from src.backends import codex_models
 from src.contracts.contracts import jsonc
 from src.tui.app import ExplainApp
 from src.tui.config_edit import replace_model, save_model
-from src.tui.models import ModelChooser
+from src.tui.models import ModelChooser, model_targets
 
 ROOT = Path(__file__).resolve().parents[1]
 MODELS = [dict(slug='public-model', display_name='Public', visibility='list', supported_in_api=False),
@@ -80,14 +80,27 @@ class ModelCLITests(ModelFixture, unittest.TestCase):
             self.assertEqual(stderr, '')
             if arguments[-1:] == ['text']:
                 self.assertIn('Account access has not been checked', stdout)
-                self.assertIn('hidden-model', stdout)
+                self.assertIn('public-model', stdout)
+                self.assertNotIn('hidden-model', stdout)
                 self.assertIn('Supported in API', stdout)
             else:
                 group, = json.loads(stdout)['catalogs']
-                self.assertEqual(group, {'executable': str(self.cli), 'stages': ['study'], 'models': MODELS})
+                self.assertEqual(group, {'executable': str(self.cli), 'stages': ['study'], 'models': MODELS[:1]})
         self.assertEqual([call['args'] for call in self.calls()], [['debug', 'models']] * 3)
         self.assertEqual(self.path.read_bytes(), original)
         self.assertTrue(all(call['cwd'] != str(self.base) for call in self.calls()))
+
+    def test_all_hidden_catalog_is_empty_in_text_and_json(self):
+        self.write_state(models=MODELS[1:])
+        for output in ('text', 'json'):
+            code, stdout, stderr = self.invoke('--output', output)
+            self.assertEqual(code, 0, stderr)
+            self.assertNotIn('hidden-model', stdout)
+            if output == 'text':
+                self.assertIn('No models returned.', stdout)
+            else:
+                self.assertEqual(json.loads(stdout)['catalogs'][0]['models'], [])
+        self.assertEqual([call['args'] for call in self.calls()], [['debug', 'models']] * 2)
 
     def test_unique_executables_and_mixed_backends(self):
         second = self.base / 'second-codex'
@@ -151,15 +164,23 @@ class ModelCLITests(ModelFixture, unittest.TestCase):
 
 
 class ModelBackendTests(ModelFixture, unittest.IsolatedAsyncioTestCase):
-    async def test_catalog_keeps_hidden_and_api_false_ignores_instruction_fields(self):
+    async def test_catalog_filters_hidden_keeps_api_false_and_ignores_instruction_fields(self):
         self.write_state(models=[dict(model, base_instructions='Never expose these instructions.') for model in MODELS])
-        self.assertEqual(await codex_models.catalog(str(self.cli)), MODELS)
+        self.assertEqual(await codex_models.catalog(str(self.cli)), MODELS[:1])
         self.assertEqual([call['args'] for call in self.calls()], [['debug', 'models']])
+
+    async def test_catalog_keeps_unknown_visibility_and_api_support(self):
+        self.write_state(models=[{'slug': 'unknown-model'}, dict(MODELS[1], visibility='HIDE')])
+        self.assertEqual(await codex_models.catalog(str(self.cli)), [
+            dict(slug='unknown-model', display_name='unknown-model', visibility='unknown', supported_in_api=None),
+            dict(MODELS[1], visibility='HIDE')])
 
     async def test_invalid_and_duplicate_catalogs(self):
         for value in ('[]', '{"models": null}', '{"models": [1]}',
                       json.dumps({'models': [MODELS[0], MODELS[0]]}),
-                      json.dumps({'models': [dict(MODELS[0], supported_in_api='yes')]})):
+                      json.dumps({'models': [MODELS[1], MODELS[1]]}),
+                      json.dumps({'models': [dict(MODELS[0], supported_in_api='yes')]}),
+                      json.dumps({'models': [dict(MODELS[1], supported_in_api='yes')]})):
             self.write_state(catalog_output=value)
             with self.assertRaises(ValueError):
                 await codex_models.catalog(str(self.cli))
@@ -277,7 +298,7 @@ class ModelConfigTests(unittest.TestCase):
                  '{\n  "agent": {\n    "backend": "codex", /* trailing comma */\n  },\n}\n',
                  '{"agent":{"backend":"codex"},"stage_agents":{"review":{}}}']
         for text in texts:
-            for field in ('agent.model', 'stage_agents.study.model', 'stage_agents.review.model'):
+            for field in ('agent.model', 'stage_agents.study.model', 'stage_agents.review.model', 'stage_agents.compare.model'):
                 with self.subTest(text=text, field=field):
                     original = jsonc(text)
                     updated = replace_model(text, field, 'selected')
@@ -311,6 +332,25 @@ class ModelConfigTests(unittest.TestCase):
             self.assertEqual(list(Path(directory).glob('*.tmp')), [])
 
 
+class ModelTargetTests(ModelFixture, unittest.TestCase):
+    def test_all_codex_stages_inherit_shared_settings_when_inactive(self):
+        config = load_config(self.path)
+        targets = model_targets(config, self.path)
+        self.assertEqual(list(targets), ['agent.model', 'stage_agents.study.model',
+                                        'stage_agents.review.model', 'stage_agents.compare.model'])
+        self.assertTrue(all(agent['executable'] == str(self.cli) for agent in targets.values()))
+        self.assertEqual(list(config['_agents']), ['study'])
+        self.assertFalse(config['execution']['review_enabled'])
+
+    def test_inactive_codex_overrides_use_their_executable_and_model(self):
+        self.config['agent'] = {'backend': 'xxx', 'executable': sys.executable, 'model': 'shared'}
+        self.config['stage_agents'] = {'review': {'backend': 'codex', 'executable': './' + self.cli.name, 'model': 'review'},
+                                       'compare': {'backend': 'xxx', 'executable': '/missing/cli'}}
+        self.write_config()
+        self.assertEqual(model_targets(load_config(self.path), self.path), {
+            'stage_agents.review.model': {'backend': 'codex', 'executable': str(self.cli), 'model': 'review'}})
+
+
 class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
     def app(self):
         args = Namespace(config=self.path, tui=True, check=False, models=False, trust_repository=False,
@@ -337,7 +377,7 @@ class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
             self.assertTrue(screen.busy)
             self.assertTrue(screen.query_one('#model-apply', Button).disabled)
             await self.ready(pilot, screen)
-            self.assertEqual(screen.query_one('#model-table', DataTable).row_count, 2)
+            self.assertEqual(screen.query_one('#model-table', DataTable).row_count, 1)
             self.write_state(delay_catalog=60, spawn_child=True)
             marker.unlink()
             await pilot.click('#model-refresh')
@@ -351,7 +391,9 @@ class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
             self.assertNotIsInstance(app.screen, ModelChooser)
         ModelBackendTests.assert_process_stopped(self, json.loads(marker.read_text()))
 
-    async def test_hidden_model_requires_manual_check_then_updates_preview(self):
+    async def test_hidden_current_model_selects_visible_model_and_requires_manual_check(self):
+        self.config['agent']['model'] = 'hidden-model'
+        self.write_config()
         original = self.path.read_text()
         app = self.app()
         async with app.run_test(size=(80, 24)) as pilot:
@@ -363,23 +405,91 @@ class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
             await self.ready(pilot, screen)
             self.assertEqual([call['args'] for call in self.calls()], [['debug', 'models']])
             table = screen.query_one('#model-table', DataTable)
-            self.assertEqual(table.row_count, 2)
+            self.assertEqual(table.row_count, 1)
+            self.assertEqual([column.label.plain for column in table.columns.values()],
+                             ['Model', 'Name', 'Visibility', 'Access via API', 'Access via ChatGPT'])
+            self.assertEqual(str(screen.query_one('#model-scope', Static).content), 'Apply Scope')
+            self.assertEqual(str(screen.query_one('#model-check', Button).label), 'Check ChatGPT Access')
+            self.assertIn('Check ChatGPT Access', str(screen.query_one('#model-status', Static).content))
+            for button in screen.query(Button):
+                self.assertTrue(screen.query_one('#model-actions').content_region.contains_region(button.region))
+                self.assertGreaterEqual(button.content_region.width, len(str(button.label)))
             self.assertTrue(screen.query_one('#model-apply', Button).disabled)
             table.focus()
             await pilot.press('down')
-            self.assertEqual(screen.selected, 'hidden-model')
+            self.assertEqual(screen.selected, 'public-model')
             await pilot.click('#model-check')
             await self.ready(pilot, screen)
             self.assertFalse(screen.query_one('#model-apply', Button).disabled)
             await pilot.click('#model-apply')
             await pilot.pause()
             self.assertNotIsInstance(app.screen, ModelChooser)
-            self.assertEqual(jsonc(self.path.read_text())['agent']['model'], 'hidden-model')
-            self.assertIn('hidden-model', str(app.query_one('#config-preview', Static).content))
+            self.assertEqual(jsonc(self.path.read_text())['agent']['model'], 'public-model')
+            self.assertIn('public-model', str(app.query_one('#config-preview', Static).content))
         self.assertIn('"path": "./source"', self.path.read_text())
         self.assertIn('"reports_dir": "./reports"', self.path.read_text())
         self.assertNotEqual(original, self.path.read_text())
         self.assertFalse((self.base / 'reports').exists())
+
+    async def test_hidden_only_and_empty_catalog_disable_check_and_apply(self):
+        original = self.path.read_bytes()
+        app = self.app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.click('#models')
+            screen = app.screen
+            await self.ready(pilot, screen)
+            for models in (MODELS[1:], []):
+                self.write_state(models=models)
+                await pilot.click('#model-refresh')
+                await self.ready(pilot, screen)
+                self.assertEqual(screen.query_one('#model-table', DataTable).row_count, 0)
+                self.assertIsNone(screen.selected)
+                self.assertTrue(screen.query_one('#model-check', Button).disabled)
+                self.assertTrue(screen.query_one('#model-apply', Button).disabled)
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertTrue(all(call['args'] == ['debug', 'models'] for call in self.calls()))
+
+    async def test_apply_creates_inactive_review_and_compare_without_enabling_them(self):
+        for stage in ('review', 'compare'):
+            with self.subTest(stage=stage):
+                self.write_config()
+                original = self.path.read_text() + '// keep\n'
+                self.path.write_text(original)
+                app = self.app()
+                async with app.run_test(size=(80, 24)) as pilot:
+                    await pilot.click('#models')
+                    screen = app.screen
+                    await self.ready(pilot, screen)
+                    screen.query_one('#model-target', Select).value = 'stage_agents.' + stage + '.model'
+                    await pilot.pause()
+                    await self.ready(pilot, screen)
+                    await pilot.click('#model-check')
+                    await self.ready(pilot, screen)
+                    await pilot.click('#model-apply')
+                    await pilot.pause()
+                    self.assertNotIsInstance(app.screen, ModelChooser)
+                self.assertEqual(jsonc(self.path.read_text()),
+                                 dict(self.config, stage_agents={stage: {'model': 'public-model'}}))
+                self.assertTrue(self.path.read_text().endswith('// keep\n'))
+                config = load_config(self.path)
+                self.assertFalse(config['execution']['review_enabled'])
+                self.assertEqual(list(config['_agents']), ['study'])
+
+    async def test_models_button_allows_inactive_codex_with_non_codex_shared_agent(self):
+        self.config['agent'] = {'backend': 'xxx', 'executable': sys.executable}
+        for stage in ('review', 'compare'):
+            with self.subTest(stage=stage):
+                self.config['stage_agents'] = {stage: {'backend': 'codex', 'executable': str(self.cli)}}
+                self.write_config()
+                app = self.app()
+                async with app.run_test(size=(80, 24)) as pilot:
+                    self.assertFalse(app.query_one('#models', Button).disabled)
+                    await pilot.click('#models')
+                    screen = app.screen
+                    self.assertIsInstance(screen, ModelChooser)
+                    await self.ready(pilot, screen)
+                    self.assertEqual(list(screen.targets), ['stage_agents.' + stage + '.model'])
+                    self.assertEqual(screen.selected, 'public-model')
 
     async def test_stage_target_refresh_resets_checks_and_detects_external_change(self):
         app = self.app()

@@ -305,7 +305,8 @@ class ExplainApp(App[int]):
         self.enable_start(config is not None)
         self.query_one('#models', Button).disabled = config is None or not (
             config['agent'].get('backend') == 'codex' or
-            any(agent['backend'] == 'codex' for agent in config['_agents'].values()))
+            any(isinstance(agent, dict) and agent.get('backend') == 'codex'
+                for agent in config['stage_agents'].values()))
         s = self.presenter.display
         lines = ['File: ' + s(self.selected)]
         if config is None:
