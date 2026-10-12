@@ -215,7 +215,9 @@ CommonMark fence. Backticks and tildes are accepted. The info string is exactly
 `plantuml`, case-insensitive, with no parameters. Lists, blockquotes, inline code,
 ordinary text and other fence languages do not supply a required diagram.
 
-Python uses the existing Markdown parser, not a fence substring search. It checks
+Python applies PlantUML checks only within `components` and `data_and_state`.
+Other sections remain subject to the common Markdown and claim-link checks.
+It uses the existing Markdown parser, not a fence substring search. It checks
 exactly one `@startuml` before exactly one `@enduml`, nonempty content other than
 comments, and nonempty links to registered claims. External directives from the
 `!include` family and `!import` are forbidden. Comments and quoted literal
@@ -560,8 +562,10 @@ CP1251, CP1252, CP866 and Latin-1. Without a rule, a recognized Unicode BOM is u
 otherwise strict UTF-8. A compatible BOM is removed before line splitting; a
 conflicting BOM is ENCODING_MISMATCH. Pinned raw file hashes include BOM bytes;
 quote checks follow decoding and existing LF/CRLF normalization. Normalized rules enter
-the frozen review plan and change its identity. Agents receive them as context,
-but CLI reading capabilities are independent; no UTF-8 copies are generated.
+the frozen review plan and change its identity. The rules apply to evidence
+verification. When `source_context` is enabled, they also decode prepared fragments.
+Agents receive the rules as context. Additional file reads depend on the CLI's
+reading capabilities; no UTF-8 copies are generated on disk.
 
 The resolver caches successful reads/decoding only within one call; its unique-byte
 budget also includes files read before a decoding failure. Every repeated

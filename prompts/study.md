@@ -83,7 +83,7 @@ exclude tests, SQL, configuration, generators or third-party code for size alone
 A material claim affects boundaries, execution, data ownership, dependencies,
 constraints, or where a change should be made.
 
-CONFIRMED (human label: supported by cited sources according to the authoring agent): your assessment of this exact scoped statement. This does not
+FACT (human label: supported by cited sources according to the authoring agent): your assessment of this exact scoped statement. This does not
 mean production/runtime verification. HYPOTHESIS: label it at the point of use,
 provide supporting clues and a missing falsifiable check. UNKNOWN: say what was
 investigated, what is unavailable, and why it matters.
@@ -164,9 +164,11 @@ visibly in the diagram and describe missing checks in the corresponding claims' 
 When coverage is partial, show the established portion without inventing components
 or links. If a meaningful diagram cannot be built from the available evidence, explain
 the specific reason and the information to verify in its section and nonempty
-limitations, and use PARTIAL/BLOCKED. Missing diagrams prevent COMPLETE; malformed
-present diagrams fail the contract for every completion status. Do not invent a
-diagram to pass validation. Missing persistent storage alone does not justify
+limitations, and use PARTIAL/BLOCKED. Missing required diagrams prevent COMPLETE.
+Python checks PlantUML structure only in components and data_and_state; malformed
+diagrams there fail the contract for every completion status. The authoring rules
+above also apply to extra diagrams. Do not invent a diagram to pass validation.
+Missing persistent storage alone does not justify
 omitting the data-flow diagram: show applicable inputs, processing, outputs and in-memory state.
 
 ## Output contract
@@ -250,9 +252,10 @@ cannot change it. Initial completion_status and limitations describe that study,
 not permanent limits on later revisions.
 
 source_decoding rules select explicit encodings by common-root-relative path,
-including submodules. They apply only to program evidence verification. Whether
-you can read such files depends on this CLI; no UTF-8 copies are created. Disclose
-decoding gaps and never assume replacement characters are original source text.
+including submodules. They apply to program evidence verification and to prepared
+source fragments when source_context is enabled. Additional file reading depends
+on this CLI; no UTF-8 file copies are created on disk. Disclose decoding gaps and
+never assume replacement characters are original source text.
 
 In Git mode, repository is the original checkout at source_commit for the requested
 branch. Inspect only tracked files in the allowed source inventory and listed

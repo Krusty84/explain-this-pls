@@ -16,10 +16,11 @@ context as evidence beyond the supplied comparison bundle.
 ## Inputs and authority
 
 The bundle's review_enabled determines the required stages (absent means true for
-older inputs). Each branch's workflow_satisfied and required_unresolved_branches
-are computed by the orchestrator from validated published studies, plus review
-when enabled. accepted always means a positively reviewed study; it remains false
-when review is disabled. Preserve
+older inputs). The orchestrator computes workflow_satisfied from validated published
+studies, plus review when enabled. required_unresolved_branches lists branches that
+fail workflow_satisfied in strict mode or processing_satisfied in compromise mode.
+accepted always means a positively reviewed study; it remains false when review is
+disabled. Preserve
 every branch in required_unresolved_branches in your unresolved_branches,
 including an unresolved baseline. You cannot override processing checks, omit a failed
 review because a study exists, or narrow the requested branch list. You may add
@@ -29,11 +30,10 @@ completion_status consistent with these required unresolved inputs.
 In compromise mode, citation_warnings can permit processing to finish while strict
 workflow_satisfied and accepted remain false. Preserve these warnings and explicitly
 mark affected assertions for manual source verification. A QUOTE_MISMATCH never
-confirms inspection coverage or a difference. Such references can accompany only
-REPORTED_UNVERIFIED comparisons, subject to the supplied processing checks. This
-quote-only exception does not excuse other missing or failed inputs.
+confirms inspection coverage or a difference. The completion policy below defines
+the quote-only exception.
 
-In compromise mode, study_material/review_material may contain retained text
+In compromise mode, study_material may contain retained text
 that failed its output contract. Treat it as unvalidated source material with
 explicit caveats; validation_issues are orchestrator diagnostics. The original
 study/review fields contain only strictly validated results. When review is enabled,
@@ -44,15 +44,10 @@ branch and explain missing inputs. Never repair facts or infer absence from gaps
 
 When review_enabled is false, absence of review is intentional and does not by
 itself make a branch unresolved or the comparison PARTIAL. Explicitly disclose
-that no separate review was performed. Use REPORTED_UNVERIFIED for reported
-differences, never CONFIRMED_DIFFERENCE. A COMPLETE comparison in this mode still
-requires all requested studies to satisfy processing checks and every reported
-difference to cite a FACT in each side's selected study. Source evidence must be
-resolved except for the explicit quote-only compromise exception above.
-Reference artifact "study" only. If a side lacks factual support, mark the
-affected branches unresolved and return PARTIAL/BLOCKED. INSUFFICIENT_EVIDENCE
-cannot satisfy processing policy. Hypotheses and missing descriptions cannot
-establish a factual contrast. Successful processing does not verify a difference.
+that no separate review was performed. Never use CONFIRMED_DIFFERENCE; reference
+artifact "study" only. If a side lacks factual support, mark the affected branches
+unresolved and return PARTIAL/BLOCKED. Hypotheses and missing descriptions cannot
+establish a factual contrast.
 
 The bundle contains requested branch names, pinned commit IDs, independently
 created studies/reviews, and processing status. Deltas compare saved filtered
@@ -122,20 +117,37 @@ baseline_statement, branch_statement, evidence_refs, and explanation.
 
 Return unresolved_branches for branches whose comparison is materially prevented by
 missing/failed/inadequate input; include the baseline if its missing evidence affects
-all comparisons. COMPLETE means all requested comparisons are adequately supported
-within the reports-only scope. PARTIAL means useful comparisons exist but required
-input/coverage is missing. BLOCKED means no meaningful baseline comparison is possible.
-Do not report COMPLETE when any required branch fails its enabled-stage checks.
-When review is enabled, Review PASS is necessary but not sufficient to confirm an individual
-contrast. Include concrete limitations for PARTIAL/BLOCKED.
+all comparisons. completion_status is your work-completion assessment, not Python's
+policy verdict. COMPLETE means all requested comparisons are adequately supported
+within the reports-only scope; it requires empty unresolved_branches. PARTIAL means
+useful comparisons exist but required input/coverage is missing. BLOCKED means no
+meaningful baseline comparison is possible. Include concrete limitations for
+PARTIAL/BLOCKED.
 
 Structured evidence_refs must resolve on both sides: branch, artifact ("study"
 or "review"), revision_id, claim_id and review_target_id supplied for that branch's
 selected revision. Two references to one side do not justify a strong contrast.
-For CONFIRMED_DIFFERENCE, each side needs a referenced FACT assessed as SUPPORTED in its review. An accepted
-hypothesis/unknown caveat is not factual support for a strong implementation contrast.
+For CONFIRMED_DIFFERENCE, both inputs must be accepted and each side needs a referenced
+FACT assessed as SUPPORTED in its review. An accepted hypothesis/unknown caveat is
+not factual support for a strong implementation contrast.
 Recovered and incomplete inputs cannot support CONFIRMED_DIFFERENCE.
 Empty evidence_refs are allowed for explicitly insufficient/unverified material.
+
+Strict comparison policy requires COMPLETE, empty unresolved_branches and
+workflow_satisfied for every requested branch. With review enabled, every difference
+must be CONFIRMED_DIFFERENCE. Without review, every difference must be
+REPORTED_UNVERIFIED and cite a FACT in both selected studies, with RESOLVED source
+evidence on both sides.
+
+In compromise mode, COMPLETE processing may continue despite failed strict policy
+only when unresolved quote warnings exist, every requested branch satisfies
+processing_satisfied and unresolved_branches is empty. Each difference must be a
+valid CONFIRMED_DIFFERENCE or REPORTED_UNVERIFIED with referenced FACTs from both
+selected studies and source evidence statuses RESOLVED or QUOTE_MISMATCH. Review
+references remain allowed when review is enabled. References affected by
+QUOTE_MISMATCH can support only REPORTED_UNVERIFIED. Corrected-only warnings,
+INSUFFICIENT_EVIDENCE and unrelated failures do not permit this exception.
+
 Do not return computed fields. Python renders the difference table from JSON;
 do not duplicate it in Markdown. All support is according to the comparing agent,
 using supplied reports only; no source inspection occurs here. Policy satisfaction

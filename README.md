@@ -210,8 +210,7 @@ Review and revision, when enabled, use the resulting study.
 
 **Prepared source context** uses the pinned, filtered inventory and existing decoding
 rules. Study receives a file/symbol map and exact source fragments. Review and
-revision prioritize cited ranges. Comparison and format repair receive no prepared
-source context.
+revision prioritize cited ranges. Comparison receives no prepared source context.
 File order is deterministic; maps use at most one quarter of the budget and snippets
 contain at most 120 complete lines. Omitted data stays visible in a bounded summary.
 Each attempt saves a complete `source-context.manifest.json` with processing status,
@@ -267,12 +266,14 @@ The [commented configuration](config.codex.example.jsonc) describes additional o
 - **Execution limits:** each stage has a one-hour limit by default. With review
   enabled, one correction round and repeat review are allowed after substantive review findings. Adjust
   `execution.stage_timeout_seconds` or `execution.max_revision_rounds` as needed.
-  Revisions and optional response-format retries can increase model usage.
+  Revisions can increase model usage. `structured_output_repair_attempts` is a
+  legacy setting ignored by all backends; the orchestrator sends no format-repair request.
 - **Different agents per stage:** use `stage_agents` to customize study,
   review or comparison. Otherwise the shared agent settings apply.
 - **Legacy encodings:** use `source_decoding.rules` to declare encodings such as CP1251.
-  These rules affect checks of cited source text; the agent must also be able to
-  read the files with its own tools.
+  These rules apply to evidence checks. When `source_context` is enabled, they also
+  decode prepared fragments. Additional file reads depend on the CLI's reading
+  capabilities; no UTF-8 copies are created on disk.
 - **Continuing after errors:** `continue_on_error` defaults to `true`. Set it to
   `false` to stop further agent calls after an error. Detected source changes always
   stop the run.
@@ -455,10 +456,13 @@ is disabled. Existing reports remain unchanged; integrity checks detect changes
 to a published file.
 
 COMPLETE requires a separate, claim-linked PlantUML block in both System components
-and Data and state. Python checks fences, markers, nonempty content and forbidden
-external directives before acceptance and publication, even with Review disabled.
+and Data and state. Python checks PlantUML structure only in these two sections
+(`components` and `data_and_state`): fences, markers, nonempty content, claim links
+and forbidden external directives, even with Review disabled.
 Extra diagrams are allowed. PARTIAL/BLOCKED may omit a diagram with explicit
-limitations and next checks; malformed diagrams still fail validation.
+limitations and next checks; malformed diagrams in these two sections still fail
+validation. Diagrams in other sections remain subject to the common Markdown and
+claim-link checks.
 `program_checks.diagrams` records structure only. Review assesses the components,
 dependencies and data flows against evidence. Viewing diagrams as graphics requires
 a PlantUML-capable viewer; this tool does not compile or render them.

@@ -65,8 +65,10 @@
       // "Pods", "ios/Pods", "Carthage/Checkouts", "vendor", "bin", "Saved"
     ],
   },
-  // Evidence verification only; paths are relative to the common source root.
-  // Most specific path wins; "." selects the whole tree. No agent UTF-8 copies.
+  // Evidence checks; also prepared fragments when source_context is enabled.
+  // Paths are relative to the common source root.
+  // Additional reads depend on CLI capabilities. No UTF-8 copies are created on disk.
+  // Most specific path wins; "." selects the whole tree.
   "source_decoding": {
     "rules": [
       // {"path": "src/legacy", "encoding": "cp1251"}
@@ -93,8 +95,7 @@
     "opencode_format_retries": 2,
     "http_timeout_seconds": 5,
     "api_doc_timeout_seconds": 30,
-    // Explicit opt-in: XXX may send one extra format correction request.
-    // Other backends ignore this setting. The default for omitted settings is 0.
+    // Legacy compatibility key; ignored by all backends. No orchestrator format retry.
     "structured_output_repair_attempts": 1,
   },
 

@@ -19,8 +19,7 @@ Independently check the affected claims. Continuation permission does not confir
 their evidence or coverage; keep unresolved source checks explicit in your report.
 In git mode, the recursive submodules in the context are part of the source scope.
 Inspect their pinned checkout bytes; never initialize, update, fetch or switch
-them. A working submodule may differ from its base/index gitlink. Cite relative
-file paths and the appropriate source ID when verifying evidence.
+them. Cite relative file paths and the appropriate source ID when verifying evidence.
 Never reproduce credentials or secret parameters from repository/submodule URLs.
 
 project_description is user-supplied background, not independent evidence or new
@@ -72,18 +71,20 @@ data-flow diagram must show sources, processing components, stores and recipient
 with directed arrows naming the transferred data and distinguishing reads from writes.
 Missing persistent storage alone does not justify omitting the data-flow diagram.
 
-Python checks required locations, standalone fences, language, boundaries, nonempty
-content, forbidden external directives and registered claim links. Its
-program_checks.diagrams has scope STRUCTURAL_ONLY: it proves neither architectural
-correctness nor successful compilation. Review the canonical frozen Markdown,
+Python checks diagram presence, standalone fences, language, boundaries, nonempty
+content, forbidden external directives and registered claim links only in
+components and data_and_state. Its program_checks.diagrams has scope STRUCTURAL_ONLY:
+it proves neither architectural correctness nor successful compilation.
+Review the canonical frozen Markdown,
 not the published presentation. Do not treat a Python format rejection as an
 architectural finding. Check readable labels in output_language, preservation of
 code names, symbols and IDs, consistency with names in the prose, and a short adjacent
 explanation of the diagram's scope and relationships.
 
-Verify material assertions in nodes, boundaries and relationships against the source,
-report prose and claim_registry. Use the supplied document_locators to check that
-registered claims cover the corresponding diagram occurrences. Check for unsupported
+Verify material assertions in nodes, boundaries and relationships, including extra
+diagrams, against the source, report prose and claim_registry. Use the supplied
+document_locators to check that registered claims cover the corresponding diagram
+occurrences. Check for unsupported
 links, contradictions and missing HYPOTHESIS/UNKNOWN labels or uncertainty. A diagram
 is an assertion to review, not independent evidence.
 
@@ -177,8 +178,9 @@ source areas from the filtered inventory; model relevance notes cannot change
 them. Auxiliary classification and citation diagnostics do not invalidate the
 document. NOT_CITED does not mean NOT_INSPECTED, and Python leaves inspection
 UNVERIFIED. Report concrete omissions from your source review; do not infer them
-from missing citations alone. Encoding rules affect program evidence resolution
-only; actual reading support depends on the CLI.
+from missing citations alone. Encoding rules apply to program evidence resolution
+and to prepared source fragments when source_context is enabled. Additional file
+reading depends on the CLI; no UTF-8 file copies are created on disk.
 
 Return prior_findings: [] for an initial review. For a revised study, assess every
 supplied previous HIGH/MEDIUM finding exactly once using revision_id, finding_id,
