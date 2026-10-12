@@ -20,6 +20,7 @@ from src.runtime.reporting import Reporter
 from src.runtime.execution import response_error
 import test_folder
 from fixtures.study_runner import run_case
+from fixtures.architecture_checks import assert_architecture
 import test_explain as git_fixtures
 
 
@@ -56,9 +57,12 @@ class CitationPipelineTests(test_folder.FolderFixture):
                 document = manifest['study']
                 validate_materialized(document)
                 architecture = (self.runner.run_dir / 'ARCHITECTURE.md').read_text()
-                self.assertTrue(architecture.startswith(document['report_markdown']))
+                assert_architecture(self, self.runner.run_dir, document,
+                                    manifest['study_invocation'], self.runner.cfg['output_language'])
                 self.assertGreater(len(architecture), len(document['report_markdown']))
-                self.assertIn(warnings[0]['evidence_id'], architecture)
+                evidence_id = warnings[0]['evidence_id'].split(':', 1)[1]
+                self.assertIn(f'[{evidence_id}](#source-{evidence_id.lower()})', architecture)
+                self.assertIn('QUOTE_MISMATCH', architecture)
                 self.assertNotIn('private unmatched source text', reporter.stderr.getvalue())
 
     def test_strict_keeps_unmatched_quotes_without_allowing_continuation(self):
@@ -204,4 +208,7 @@ class CitationGitPipelineTests(unittest.TestCase):
                 self.assertTrue(manifest['processing_completed'])
                 self.assertEqual(self.repo.symbolic(), 'master')
                 self.assertEqual(self.repo.head(), self.master)
+                for branch in manifest['branches']:
+                    assert_architecture(self, runner.run_dir / branch['directory'], branch['study'],
+                                        branch['study_invocation'], config['output_language'])
 

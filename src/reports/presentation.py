@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Deterministic English tables, separate from canonical narrative bytes."""
+"""Deterministic presentation, separate from canonical narrative bytes."""
 import html
+import json
 import unicodedata
-from src.contracts.contracts import is_recovered_material, validate_schema
+from src.contracts.contracts import SECTION_KEYS, contract_violation, is_recovered_material, validate_schema
+from src.reports.architecture_format import section_headings
 from src.reports.document_rendering import validate_materialized
 from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
 
@@ -26,7 +28,7 @@ LABELS = {
 
 
 def russian(language):
-    return isinstance(language, str) and language.lower() in ('ru', 'russian', 'русский')
+    return isinstance(language, str) and language.strip().lower() in ('ru', 'russian', 'русский')
 
 
 def cell(value):
@@ -68,10 +70,122 @@ def render_citation_warnings(data, language='English'):
     return '\n'.join(out) + '\n'
 
 
+def _code(value):
+    """Keep untrusted paths literal in Markdown, inline HTML and table cells."""
+    text = ''.join('\\u%04x' % ord(c) if ord(c) < 32 or ord(c) == 127 else c for c in str(value))
+    return '<code>' + ''.join(f'&#{ord(c)};' if c in '\\`*_[]()!#~|' else html.escape(c) for c in text) + '</code>'
+
+
+def _lookup(records, identifier, path):
+    if identifier not in records:
+        raise contract_violation('UNKNOWN_REFERENCE', path)
+    return records[identifier]
+
+
+def _source_path(evidence, resolution, sources):
+    source = sources.get(evidence['source_id'])
+    if source is None:
+        if resolution['status'] != 'UNKNOWN_SOURCE':
+            raise contract_violation('UNKNOWN_REFERENCE', '$.review_plan.sources')
+        return evidence['path']
+    root = source['root']
+    return evidence['path'] if root == '.' else root + '/' + evidence['path']
+
+
+def _status(evidence, resolution, language):
+    status = resolution['status']
+    ru = russian(language)
+    if status == 'RESOLVED':
+        detail = ('локатор разрешён; цитата совпала' if ru else 'locator resolved; quote matched') if evidence['quote'] else (
+            'локатор разрешён; цитата не задана' if ru else 'locator resolved; no quote supplied')
+    elif status == 'QUOTE_MISMATCH':
+        detail = 'цитата не подтверждена' if ru else 'quote not verified'
+    elif status == 'NOT_FOUND':
+        detail = 'исходный файл не найден' if ru else 'source file not found'
+    else:
+        detail = 'локатор не разрешён' if ru else 'locator not resolved'
+    return status + '; ' + detail
+
+
+def render_source_references(block, claims, evidence, resolutions, sources, language='English'):
+    """Follow canonical IDs in first-occurrence order; never inspect authored prose."""
+    refs, limitations, seen = [], [], set()
+    for claim_id in block['claim_ids']:
+        claim = _lookup(claims, claim_id, '$.block_map.claim_ids')
+        if not claim['evidence_ids']:
+            limitations.append(_code(claim_id) + ' (' + claim['epistemic_kind'] + ')')
+        for identifier in claim['evidence_ids']:
+            if identifier in seen:
+                continue
+            seen.add(identifier)
+            entry = _lookup(evidence, identifier, '$.claims.evidence_ids')
+            resolution = _lookup(resolutions, identifier, '$.program_checks.evidence')
+            path = _source_path(entry, resolution, sources)
+            reference = (_code(f"{path}:{entry['start_line']}–{entry['end_line']}") +
+                         f" [{entry['id']}](#source-{entry['id'].lower()})")
+            if resolution['status'] != 'RESOLVED':
+                reference += ' (' + _status(entry, resolution, language) + ')'
+            refs.append(reference)
+    out = []
+    if refs:
+        out.append('*' + ('Источники: ' if russian(language) else 'Sources: ') + ', '.join(refs) + '*')
+    if limitations:
+        out.append('*' + ('Ограничение: нет исходных доказательств для ' if russian(language) else
+                           'Limitation: no source evidence for ') + ', '.join(limitations) + '.*')
+    return '\n\n'.join(out)
+
+
+def render_evidence_index(data, language='English'):
+    """Render locator outcomes and pinned identities without exposing source quotes."""
+    ru = russian(language)
+    resolutions = {entry['id']: entry for entry in data['program_checks']['evidence']}
+    sources = {entry['id']: entry for entry in data['review_plan']['sources']}
+    out = ['### ' + ('Реестр источников' if ru else 'Source registry'), '',
+           '| ' + ('Доказательство | Источник | Файл | Начальная строка | Конечная строка | Статус локатора | Идентичность источника' if ru else
+                    'Evidence | Source | File | Start line | End line | Locator status | Source identity') + ' |',
+           '| --- | --- | --- | --- | --- | --- | --- |']
+    for entry in data['evidence']:
+        resolution = _lookup(resolutions, 'study:' + entry['id'], '$.program_checks.evidence')
+        path = _source_path(entry, resolution, sources)
+        source = sources.get(entry['source_id'])
+        identity = json.dumps(source['identity'], ensure_ascii=False, sort_keys=True, separators=(',', ':')) if source else (
+            'Источник отсутствует' if ru else 'Source missing')
+        values = [f'<a id="source-{entry["id"].lower()}"></a>' + _code(entry['id']), _code(entry['source_id']),
+                  _code(path), str(entry['start_line']), str(entry['end_line']), cell(_status(entry, resolution, language)),
+                  _code(identity)]
+        out.append('| ' + ' | '.join(values) + ' |')
+    return '\n'.join(out) + '\n'
+
+
 def render_architecture(data, language='English'):
-    """Append checks without changing authored bytes or existing line coordinates."""
-    appendix = render_citation_warnings(data, language)
-    return data['report_markdown'] + ('\n\n' + appendix if appendix else '')
+    """Render fixed headings and evidence beside immutable canonical blocks."""
+    headings = section_headings(language)
+    validate_materialized(data)
+    blocks = data['block_map']
+    present = list(dict.fromkeys(block['section_key'] for block in blocks))
+    if len(present) != len(SECTION_KEYS):
+        raise contract_violation('REPORT_SECTION_COUNT_MISMATCH', '$.block_map')
+    if present != list(SECTION_KEYS):
+        raise contract_violation('REPORT_HEADING_ORDER_MISMATCH', '$.block_map')
+    claims = {entry['id']: entry for entry in data['claims']}
+    evidence = {'study:' + entry['id']: entry for entry in data['evidence']}
+    resolutions = {entry['id']: entry for entry in data['program_checks']['evidence']}
+    sources = {entry['id']: entry for entry in data['review_plan']['sources']}
+    # Split on LF only, preserving actual canonical bytes, including bare CR.
+    parts = data['report_markdown'].split('\n')
+    document = [part + '\n' for part in parts[:-1]] + ([parts[-1]] if parts[-1] else [])
+    chunks = []
+    for index, key in enumerate(SECTION_KEYS):
+        chunks.append('## ' + headings[index] + '\n\n')
+        for block in (block for block in blocks if block['section_key'] == key):
+            locator = block['locator']
+            chunks.append(''.join(document[locator['start_line'] - 1:locator['end_line']]) + '\n')
+            references = render_source_references(block, claims, evidence, resolutions, sources, language)
+            if references:
+                chunks.append(references + '\n\n')
+        if key == 'evidence_basis':
+            chunks.append(render_evidence_index(data, language))
+    return ''.join(chunks)
 
 
 def render_coverage(plan, checks=None):

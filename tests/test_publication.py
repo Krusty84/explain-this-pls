@@ -10,7 +10,8 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
-from src.reports.document_rendering import materialize_study, recover_sections
+from src.reports.document_rendering import materialize_study, recover_sections, validate_published_architecture
+from src.reports.presentation import render_architecture
 from unittest.mock import patch
 
 from src.contracts.contracts import ContractError
@@ -95,7 +96,8 @@ class PublicationTests(FolderFixture):
                     self.assertIsNotNone(saved)
                     self.assertEqual(meta['status'], 'SUCCEEDED')
                     self.assertTrue(meta['publication_complete'])
-                    self.assertEqual((runner.run_dir / 'ARCHITECTURE.md').read_text(), saved['report_markdown'])
+                    self.assertEqual((runner.run_dir / 'ARCHITECTURE.md').read_text(),
+                                     render_architecture(saved, runner.cfg['output_language']))
 
     def test_invocation_through_parent_symlink_detects_binding_changes(self):
         alias = self.base / 'alias'
@@ -249,7 +251,13 @@ class PublicationTests(FolderFixture):
         with patch('explain.process', side_effect=self.process_for(data, context)):
             saved, meta = runner.invoke('study', context, runner.run_dir / 'study.logs')
         import hashlib
-        self.assertEqual((runner.run_dir / 'ARCHITECTURE.md').read_bytes(), expected.encode())
+        architecture = (runner.run_dir / 'ARCHITECTURE.md').read_bytes()
+        self.assertEqual(architecture, render_architecture(saved, runner.cfg['output_language']).encode())
+        validate_published_architecture(architecture.decode(), runner.cfg['output_language'])
+        self.assertEqual((runner.run_dir / 'study.original.md').read_bytes(), expected.encode())
+        self.assertEqual(saved['report_markdown'], expected)
+        for block in saved['block_map']:
+            self.assertIn(block['locator']['quote'].encode(), architecture)
         self.assertEqual(saved['review_plan']['document_sha256'], hashlib.sha256(expected.encode()).hexdigest())
         wire = json.loads((runner.run_dir / 'study.logs/attempt-001/extracted.json').read_text())
         model_context = prompt_context((runner.run_dir / 'study.logs/attempt-001/input.prompt.txt').read_bytes())
@@ -264,6 +272,16 @@ class PublicationTests(FolderFixture):
         self.assertEqual(meta['artifact_format'], 'evidence-ledger-inventory-scope-v2-artifacts')
         self.assertEqual(meta['context_format'], 'compact-context')
         self.assertTrue(meta['publication_complete'])
+
+    def test_invalid_published_markdown_is_rejected_before_writing(self):
+        runner, context, data = self.prepare()
+        with patch('explain.process', side_effect=self.process_for(data, context)) as invoked, \
+                patch('explain.render_architecture', return_value='## Unexpected\n'):
+            with self.assertRaises(ContractError):
+                runner.invoke('study', context, runner.run_dir / 'study.logs')
+        invoked.assert_called_once()
+        self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
+        self.assertFalse((runner.run_dir / 'study.json').exists())
 
     def test_forged_review_target_is_not_recovered_even_with_schema_error(self):
         from src.reports.final_report import recoverable_material

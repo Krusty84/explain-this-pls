@@ -10,11 +10,16 @@ LF. A locator includes the block's final LF, never the separator or heading.
 from __future__ import annotations
 import copy
 import json
+from html.parser import HTMLParser
+
+from markdown_it import MarkdownIt
+from markdown_it.rules_block import fence
 
 from src.contracts.contracts import (SECTION_KEYS, SECTIONS, CLAIM, MATERIALIZED_CLAIM, SCHEMAS,
     FOLDER_SCHEMAS, LOCATOR, STRINGS, array, obj, string, validate_schema,
     unique_ids, references, contract_violation, document_contract, STUDY_ADVISORY_KEYS)
 from src.analysis.evidence import canonical, sha, lines
+from src.reports.architecture_format import section_headings
 
 RENDERING_RULE = 'study-blocks-lf'
 BLOCK = obj(id=string(), section_key=string(), section_index={'type': 'integer'},
@@ -33,6 +38,84 @@ MATERIALIZED_SCHEMAS = {mode: materialized_schema(schemas['study'])
     for mode, schemas in (('git', SCHEMAS), ('folder', FOLDER_SCHEMAS))}
 
 
+def _checked_fence(state, start_line, end_line, silent):
+    """Record closure while CommonMark's container offsets are available."""
+    if not fence(state, start_line, end_line, silent):
+        return False
+    if not silent:
+        token = state.tokens[-1]
+        last = token.map[1] - 1
+        pos = state.bMarks[last] + state.tShift[last]
+        end = state.eMarks[last]
+        stop = state.skipCharsStr(pos, token.markup[0])
+        token.meta['closed'] = (last > start_line and not state.is_code_block(last)
+            and state.sCount[last] >= state.blkIndent
+            and stop - pos >= len(token.markup) and state.skipSpaces(stop) == end)
+    return True
+
+
+def _markdown_tokens(markdown):
+    parser = MarkdownIt('commonmark').enable('table')
+    parser.block.ruler.at('fence', _checked_fence,
+                          {'alt': ['paragraph', 'reference', 'blockquote', 'list']})
+    return parser.parse(markdown)
+
+
+class _HTMLHeadings(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.headings = []
+        self.noncanonical_heading = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ('h1', 'h2'):
+            self.headings.append(tag)
+            if self.get_starttag_text() != '<' + tag + '>':
+                self.noncanonical_heading = tag
+
+
+def _markdown_violation(code, location, violation):
+    details = dict(location) if isinstance(location, dict) else {'path': location}
+    path = details.pop('path', '$.report_sections')
+    return contract_violation(code, path, violation=violation, **details)
+
+
+def _validate_markdown_tokens(tokens, location, *, published=False):
+    for token in tokens:
+        if token.type == 'fence' and not token.meta['closed']:
+            raise _markdown_violation('INVALID_MARKDOWN_STRUCTURE', location, 'UNCLOSED_FENCE')
+        if token.type == 'heading_open' and (token.tag == 'h1' or
+                token.tag == 'h2' and (not published or token.level != 0)):
+            raise _markdown_violation('UNEXPECTED_TOP_LEVEL_HEADING', location, token.tag.upper())
+    # Raw HTML can cross token boundaries. Inspect the complete rendered HTML;
+    # escaped code and comments stay literal, including split opening tags.
+    parser = MarkdownIt('commonmark').enable('table')
+    html = _HTMLHeadings()
+    html.feed(parser.renderer.render(tokens, parser.options, {}))
+    expected = ['h2' for token in tokens if token.type == 'heading_open' and token.tag == 'h2']
+    if html.headings != expected or html.noncanonical_heading:
+        heading = 'h1' if 'h1' in html.headings else 'h2'
+        raise _markdown_violation('UNEXPECTED_TOP_LEVEL_HEADING', location, 'HTML_' + heading.upper())
+
+
+def validate_block_markdown(markdown, location):
+    """Reject rendered H1/H2 and unterminated fences, including in containers."""
+    _validate_markdown_tokens(_markdown_tokens(markdown), location)
+
+
+def validate_published_architecture(markdown, language):
+    expected = section_headings(language)
+    tokens = _markdown_tokens(markdown)
+    _validate_markdown_tokens(tokens, '$.ARCHITECTURE.md', published=True)
+    headings = [tokens[i + 1].content for i, token in enumerate(tokens)
+                if token.type == 'heading_open' and token.tag == 'h2']
+    if len(headings) != len(expected):
+        raise contract_violation('REPORT_SECTION_COUNT_MISMATCH', '$.ARCHITECTURE.md',
+                                 expected_count=len(expected), actual_count=len(headings))
+    if tuple(headings) != expected:
+        raise contract_violation('REPORT_HEADING_ORDER_MISMATCH', '$.ARCHITECTURE.md')
+
+
 def validate_sections(sections, claims):
     validate_schema(sections, SECTIONS, '$.report_sections')
     validate_schema(claims, array(CLAIM), '$.claims')
@@ -49,6 +132,8 @@ def validate_sections(sections, claims):
             path = f'$.report_sections[{i}].blocks[{j}]'
             if not block['markdown'].strip():
                 raise contract_violation('EMPTY_BLOCK', path + '.markdown')
+            validate_block_markdown(block['markdown'], dict(path=path + '.markdown',
+                                    section_key=section['key'], block_index=j))
             references(block['claim_ids'], ids, path + '.claim_ids')
             linked.update(block['claim_ids'])
     for i, claim in enumerate(claims):

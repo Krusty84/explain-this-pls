@@ -51,7 +51,9 @@ class ReporterTests(unittest.TestCase):
         self.assertIn('$.subsystems', report)
         self.assertIn('INVALID_ADVISORY_DATA', report)
         self.assertTrue(saved['program_checks']['policy_satisfied'])
-        self.assertEqual(render_architecture(saved), saved['report_markdown'])
+        clean = saved.copy()
+        clean.pop('advisory')
+        self.assertEqual(render_architecture(saved), render_architecture(clean))
 
     def test_output_selection_and_explicit_precedence(self):
         for tty in (False, True):

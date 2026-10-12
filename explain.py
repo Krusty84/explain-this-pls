@@ -45,7 +45,8 @@ from src.reports.final_report import recoverable_material, stage_document, usabl
 from src.analysis.ledger import prepare_result, review_context, continuation_allowed
 from src.analysis.study_normalization import normalize_evidence, normalization_provenance
 from src.analysis.citation_repair import repair_citations
-from src.reports.document_rendering import materialize_study, validate_materialized
+from src.reports.document_rendering import materialize_study, validate_materialized, validate_published_architecture
+from src.reports.architecture_format import resolve_language
 from src.analysis.evidence import source_catalog, SourceChanged, open_source_directory, read_confined, stamp
 from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, validate_schema, response_error, document_contract
 from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
@@ -1113,6 +1114,10 @@ def load_config(path: Path) -> dict:
         'continue_on_error': True, 'stage_agents': {}, 'prompts': {}, 'result_policy': 'compromise'}
     for key, default in defaults.items():
         value.setdefault(key, default)
+    try:
+        resolve_language(value['output_language'])
+    except ValueError as exc:
+        raise AuditError(str(exc), code='INVALID_CONFIG') from exc
     if not isinstance(value['project_description'], str):
         raise AuditError('project_description must be a string.')
     value['project_description'] = value['project_description'].strip()
@@ -1851,6 +1856,8 @@ class Runner:
         def encoded(value):
             return (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
         report = render_architecture(data, self.cfg.get('output_language')) if stage == 'study' else render_stage(stage, data, self.cfg.get('output_language'))
+        if stage == 'study':
+            validate_published_architecture(report, self.cfg.get('output_language'))
         contents = {ARTIFACTS[stage]: report.encode('utf-8'),
                     stage + '.original.md': data['report_markdown'].encode('utf-8'),
                     stage + '.json': encoded(data)}
@@ -1867,8 +1874,9 @@ class Runner:
         expected = {'claim.registry.json': (json.dumps(context['claim_registry'], ensure_ascii=False, indent=2) + '\n').encode(),
             'review.plan.json': (json.dumps(context['review_plan'], ensure_ascii=False, indent=2) + '\n').encode()}
         if context.get('document_strictly_valid'):
-            expected['ARCHITECTURE.md'] = render_architecture(
-                context['architecture_document'], self.cfg.get('output_language')).encode('utf-8')
+            report = render_architecture(context['architecture_document'], self.cfg.get('output_language'))
+            validate_published_architecture(report, self.cfg.get('output_language'))
+            expected['ARCHITECTURE.md'] = report.encode('utf-8')
         for name, content in expected.items():
             try:
                 actual = read_confined(self.run_dir, str((directory / name).relative_to(self.run_dir)), len(content))

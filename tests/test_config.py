@@ -10,6 +10,19 @@ from test_folder import FolderFixture
 
 
 class ConfigTests(FolderFixture):
+    def test_report_language_is_checked_before_backend_lookup(self):
+        for language in ('French', '', None, [], 1):
+            self.value['output_language'] = language
+            with self.subTest(language=language), patch('explain.shutil.which') as which:
+                with self.assertRaises(AuditError) as caught:
+                    self.config()
+                self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
+                which.assert_not_called()
+        for language in ('Russian', 'ru', 'русский', 'English', 'en', 'английский'):
+            self.value['output_language'] = language
+            with self.subTest(language=language):
+                self.assertEqual(self.config()['output_language'], language)
+
     def test_removed_settings_are_unknown_before_backend_lookup(self):
         original = copy.deepcopy(self.value)
         for mode in ('git', 'folder'):

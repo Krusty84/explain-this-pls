@@ -10,7 +10,9 @@ from unittest.mock import patch
 
 from src.contracts.contracts import (ContractError, SCHEMAS, FOLDER_SCHEMAS, has_ledger_structure,
                        validate_result, validate_schema)
-from src.reports.document_rendering import materialize_study, validate_materialized, recover_sections
+from src.reports.document_rendering import (materialize_study, validate_materialized, recover_sections,
+    validate_block_markdown, validate_published_architecture)
+from src.reports.architecture_format import SECTION_TITLES, resolve_language, section_headings
 from src.analysis.evidence import canonical, lines, sha
 from src.analysis.ledger import review_context, verify_review_context, prepare_result
 from src.analysis.study_normalization import normalize_evidence
@@ -159,6 +161,114 @@ class RenderingTests(unittest.TestCase):
             saved = prepare_result('study', self.wire, self.context)
         self.assertEqual(len(saved['claims'][0]['document_locators']), 3)
         self.assertEqual(saved['program_checks']['document_links']['matched'], 1)
+
+
+class MarkdownStructureTests(unittest.TestCase):
+    def test_authored_headings_are_rejected_with_block_coordinates(self):
+        fragments = {
+            '# Title': 'H1', '## Extra section': 'H2',
+            'Title\n===': 'H1', 'Title\n---': 'H2',
+            '> ## Nested': 'H2', '> Title\n> ---': 'H2',
+            '- ## Nested': 'H2', '1. # Nested': 'H1',
+            '<h2>HTML</h2>': 'HTML_H2', 'text <H1 class="x">HTML</H1>': 'HTML_H1',
+            '> <h2>HTML</h2>': 'HTML_H2', '<div>\n<h2>Nested</h2>\n</div>': 'HTML_H2',
+            '<h2\n\nclass=x>Split raw heading</h2>': 'HTML_H2',
+            '<h1\n\n> Split raw heading</h1>': 'HTML_H1',
+        }
+        for fragment, violation in fragments.items():
+            wire = response(dict(branch='main', source_commit='abc'))
+            wire['report_sections'][2]['blocks'][0]['markdown'] = fragment
+            with self.subTest(fragment=fragment), self.assertRaises(ContractError) as caught:
+                materialize_study(wire)
+            self.assertEqual(caught.exception.details, dict(
+                code='UNEXPECTED_TOP_LEVEL_HEADING',
+                path='$.report_sections[2].blocks[0].markdown',
+                section_key='components', block_index=0, violation=violation))
+
+    def test_literals_code_tables_and_lower_headings_are_allowed(self):
+        fragments = [
+            r'\## Escaped heading', '`## Inline heading` and `<h2>inline HTML</h2>`',
+            '### H3\n#### H4\n##### H5\n###### H6',
+            '```plantuml\n## Literal\n<h2>Literal</h2>\n@startuml\nA -> B\n@enduml\n```',
+            'Paragraph\n```\n## Literal after paragraph\n```',
+            '    ## Indented code\n    <h1>code</h1>',
+            '> ```text\n> # Literal\n> ```', '- ~~~~\n  ## Literal\n  ~~~~~',
+            '<!-- <h2>comment</h2> -->', '&lt;h2&gt;escaped HTML&lt;/h2&gt;',
+            'Text <script>const literal = "<h2>";</script> after.',
+            '| A | B |\n|---|---|\n| `## code` | x |',
+        ]
+        for fragment in fragments:
+            with self.subTest(fragment=fragment):
+                validate_block_markdown(fragment, '$.test')
+
+    def test_unclosed_fences_in_containers_are_rejected(self):
+        for fragment in ('```python\nprint(1)', '~~~\n## Literal', 'Paragraph\n```\nUnclosed',
+                '> ```\n> text', '- ```\n  text\n\nOutside',
+                '```\ntext\n    ```', '````\ntext\n```'):
+            with self.subTest(fragment=fragment), self.assertRaises(ContractError) as caught:
+                validate_block_markdown(fragment, '$.test')
+            self.assertEqual(caught.exception.details['code'], 'INVALID_MARKDOWN_STRUCTURE')
+            self.assertEqual(caught.exception.details['violation'], 'UNCLOSED_FENCE')
+        for fragment in ('```\ntext\n```', '~~~\ntext\n~~~~',
+                '> - ```\n>   text\n>   ```', '1. ```\n   text\n   ```'):
+            validate_block_markdown(fragment, '$.test')
+
+    def test_fixed_heading_dictionaries_and_language_aliases(self):
+        self.assertEqual(SECTION_TITLES['Russian'], (
+            'Область исследования', 'Контекст системы', 'Компоненты системы',
+            'Запуск и выполнение', 'Данные и состояние', 'Сквозные механизмы',
+            'Ограничения и особенности legacy', 'Навигация для изменений',
+            'Неизвестные и непроверенные области', 'Основания выводов и источники'))
+        self.assertEqual(SECTION_TITLES['English'], (
+            'Study scope', 'System context', 'System components', 'Startup and execution',
+            'Data and state', 'Cross-cutting mechanisms', 'Constraints and legacy details',
+            'Change navigation', 'Unknown and unverified areas', 'Evidence basis and sources'))
+        for aliases, expected in ((('Russian', 'ru', 'RUSSIAN', 'Русский'), 'Russian'),
+                (('English', 'en', 'ENGLISH', 'Английский'), 'English')):
+            for alias in aliases:
+                self.assertEqual(resolve_language(alias), expected)
+                markdown = '\n\n'.join('## ' + title + '\n\nText.' for title in section_headings(alias))
+                validate_published_architecture(markdown, alias)
+        for invalid in ('German', 'de', '', None, 1):
+            with self.subTest(language=invalid), self.assertRaises(ValueError):
+                resolve_language(invalid)
+
+    def test_published_heading_count_order_and_literal_exceptions(self):
+        headings = section_headings('English')
+        markdown = '\n\n'.join('## ' + title + '\n\nText.' for title in headings)
+        validate_published_architecture(markdown + '\n\n```\n## Literal\n```\n', 'English')
+        for changed, code in (
+            (markdown + '\n\n## Citation warnings', 'REPORT_SECTION_COUNT_MISMATCH'),
+            (markdown.replace('## ' + headings[0], '### ' + headings[0]), 'REPORT_SECTION_COUNT_MISMATCH'),
+            (markdown.replace(headings[0], '1. Author title'), 'REPORT_HEADING_ORDER_MISMATCH'),
+            (markdown.replace(headings[0], headings[1]), 'REPORT_HEADING_ORDER_MISMATCH'),
+            ('# Report\n\n' + markdown, 'UNEXPECTED_TOP_LEVEL_HEADING'),
+            (markdown + '\n\n<h2>Extra</h2>', 'UNEXPECTED_TOP_LEVEL_HEADING'),
+            (markdown + '\n\n<h2\n\nclass=x>Extra</h2>', 'UNEXPECTED_TOP_LEVEL_HEADING'),
+            (markdown + '\n\n> ## Nested', 'UNEXPECTED_TOP_LEVEL_HEADING'),
+            (markdown + '\n\n```\nUnclosed', 'INVALID_MARKDOWN_STRUCTURE'),
+        ):
+            with self.subTest(code=code, markdown=changed), self.assertRaises(ContractError) as caught:
+                validate_published_architecture(changed, 'English')
+            self.assertEqual(caught.exception.details['code'], code)
+
+    def test_arbitrary_author_titles_do_not_define_published_headings(self):
+        from src.reports.presentation import render_architecture
+        wire = response(dict(branch='main', source_commit='abc'))
+        for i, section in enumerate(wire['report_sections']):
+            section['title'] = f'Author title {i} with **markup**'
+        with patch('src.analysis.ledger.resolve_evidence', return_value=[{
+                'id': 'study:E-001', 'status': 'RESOLVED', 'source_id': 'source-001', 'path': 'app.py'}]):
+            document = prepare_result('study', wire, dict(branch='main', source_commit='abc'))
+        original = copy.deepcopy(document)
+        for language in ('Russian', 'English'):
+            published = render_architecture(document, language)
+            validate_published_architecture(published, language)
+            self.assertNotIn('Author title', published)
+            for block in document['block_map']:
+                self.assertIn(block['locator']['quote'], published)
+        self.assertEqual(document, original)
+        self.assertIn('Author title 0 with **markup**', document['report_markdown'])
 
 
 class EvidenceIDTests(unittest.TestCase):

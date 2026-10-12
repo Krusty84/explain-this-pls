@@ -181,7 +181,7 @@ original directory, including excluded paths. Native CLI permissions apply.
 | `folder_mode.path`             | Source directory for folder mode.                                                                                         |
 | `reports_dir`                  | Destination for results; each run gets a separate subfolder.                                                              |
 | `project_description`          | Optional introduction to the system's purpose and history.                                                                |
-| `output_language`              | Report language; defaults to `"Russian"`.                                                                                 |
+| `output_language`              | Report language: `"Russian"` (default) or `"English"`, including supported aliases.                                        |
 | `priority_scenarios`           | Optional workflows or areas to focus on.                                                                                  |
 | `source_context.enabled`       | Boolean; defaults to `true`. Prepare source maps and exact fragments before the model call.                               |
 | `source_context.max_bytes`     | Integer, at least `4096`; defaults to `65536`. Limits the serialized source context, including JSON and omission summary. |
@@ -389,24 +389,49 @@ Start a new run directory. Existing reports are left unchanged.
 
 #### ARCHITECTURE.md — system architecture
 
-The report has ten sections; headings use the configured report language.
+The report has exactly ten numbered H2 sections. Python fixes their names and
+order for Russian and English; model section titles do not select published
+headings. Aliases `ru`, `russian`, `русский`, `en`, `english` and `английский`
+are case-insensitive. Unsupported languages are rejected before a model call.
 
 | Section                           | What it explains                                                             |
 | --------------------------------- | ---------------------------------------------------------------------------- |
-| Scope and evidence basis          | The source studied, exclusions and limits of the investigation.              |
-| System context and overview       | The system's purpose, external boundaries, processes and integrations.       |
-| Component map                     | Main components, responsibilities, dependencies and a PlantUML overview.     |
-| Startup and runtime flows         | How the system starts and how important scenarios execute.                   |
+| Study scope                       | The source studied, exclusions and limits of the investigation.              |
+| System context                    | The system's purpose, external boundaries, processes and integrations.       |
+| System components                 | Main components, responsibilities, dependencies and a PlantUML overview.     |
+| Startup and execution             | How the system starts and how important scenarios execute.                   |
 | Data and state                    | Storage, readers and writers, transactions and a PlantUML data-flow diagram. |
 | Cross-cutting mechanisms          | Configuration, security, error handling, logging and concurrency.            |
-| Constraints and legacy exceptions | Enforced restrictions, documented rules and observed conventions.            |
+| Constraints and legacy details    | Enforced restrictions, documented rules and observed conventions.            |
 | Change navigation                 | Where to start common changes and which related tests to inspect.            |
-| Unknowns and coverage             | Areas studied, gaps and next steps for verification.                         |
-| Evidence basis and limitations    | Why the cited sources support the explanation and what remains uncertain.    |
+| Unknown and unverified areas      | Areas studied, gaps and next steps for verification.                         |
+| Evidence basis and sources        | Why the cited sources support the explanation and what remains uncertain.    |
+
+Every block with linked source evidence is followed by its file paths, inclusive
+line ranges and evidence IDs. IDs link to the source index under H3 in section
+10. Repeated evidence appears once per block, in structured reference order.
+Submodule paths include their source root and retain the pinned source identity.
+Unresolved locators carry explicit status warnings; an empty quote verifies only
+the locator. Missing evidence is not replaced with an invented reference.
+
+`study.json` keeps the structured claims and checks. `study.original.md` keeps the
+canonical report used by Review. Published headings and references preserve each
+authored block and do not change canonical hashes, claim coordinates or the
+Review target. Rendering is local and adds no model call, including when Review
+is disabled. Existing reports remain unchanged; integrity checks detect changes
+to a published file.
 
 The bundled prompts require both diagrams as PlantUML source blocks inside the
 Markdown. Missing evidence must be explained. Viewing them as graphics requires a
 PlantUML-capable viewer; this tool does not render images.
+
+Blocks may use H3–H6 subheadings. Additional H1/H2, including Setext headings,
+headings in containers and raw HTML h1/h2, are rejected outside code. Fenced
+blocks must be closed. Literal headings inside code or escaped text are allowed.
+Invalid structure is reported with its section and block; Python does not rewrite
+it or repeat the architecture study. Under `strict`, publication fails. Under
+`compromise`, eligible source material may be retained as unvalidated material,
+but is not published as a valid `ARCHITECTURE.md`.
 
 #### ARCHITECTURE_REVIEW.md — review results
 
@@ -463,8 +488,11 @@ exhaustive coverage. Project builds and tests are not run.
 Citation warnings identify the evidence ID, source, path, lines, reason and affected
 claims in CLI/TUI output and report tables. `UNRESOLVED` means the citation was not
 verified; `CORRECTED` records a repaired range or common leading indentation. The
-architecture report keeps the authored text and FACT labels unchanged, then adds
-a warning appendix. These labels do not turn an unresolved citation into proof.
+architecture report keeps authored blocks and FACT labels unchanged and shows
+problem statuses beside the linked blocks. Its source index stays in section 10;
+detailed warning tables remain in `study.annotated.md` and `FINAL_REPORT.md`.
+Warnings never create an eleventh H2. These labels do not turn an unresolved
+citation into proof.
 The `strict` policy still rejects unresolved citation failures.
 Under `compromise`, local repair searches only the same pinned file, within three
 lines of each original boundary, and requires a unique match. Internal whitespace,

@@ -13,6 +13,7 @@ from unittest.mock import patch
 from explain import Runner
 from src.runtime.reporting import Reporter
 from fixtures.ledger_response import response
+from fixtures.architecture_checks import assert_architecture
 from test_folder import FolderFixture
 import test_explain as git_fixtures
 
@@ -110,6 +111,10 @@ class RevisionPipelineTests(FolderFixture):
                 for revision in manifest['revisions']:
                     self.assertEqual(revision['study']['review_plan']['coverage_plan'], coverage)
                     self.assertEqual(revision['review']['review_plan']['coverage_plan'], coverage)
+                    assert_architecture(self, self.run_dir / revision['directory'], revision['study'],
+                                        revision['study_invocation'], 'English')
+                    self.assertEqual(revision['review']['target']['document_sha256'],
+                                     revision['study']['review_plan']['document_sha256'])
                 repeated = manifest['revisions'][1]['review']
                 self.assertEqual(repeated['prior_findings'], [{'revision_id': '001', 'finding_id': 'F-001',
                     'status': 'RESOLVED', 'explanation': 'The revised fixture addresses this finding.'}])

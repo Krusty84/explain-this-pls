@@ -20,6 +20,7 @@ from src.backends.opencode_cli import prepare_environment
 from src.backends import codex
 from src.contracts.contracts import ContractError, review_verdict, strict_json, validate_result
 from fixtures.ledger_response import response
+from fixtures.architecture_checks import assert_architecture
 from src.analysis.ledger import review_context, prepare_result
 
 BASE = {'completion_status': 'COMPLETE',
@@ -576,7 +577,9 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                             bindings=json.loads((branch_dir/'revisions/001/review.logs/attempt-001/binding.json').read_text())
                             target=next(mapping['identity'] for mapping in bindings['mappings']
                                         if mapping['id']==review_context['review_target_id'])
-                            self.assertEqual(target['document_sha256'],branch['study_invocation']['report_sha256'])
+                            self.assertEqual(target['document_sha256'],branch['study']['review_plan']['document_sha256'])
+                            assert_architecture(self, branch_dir, branch['study'], branch['study_invocation'],
+                                                cfg.get('output_language', 'Russian'))
                             self.assertEqual(json.loads((branch_dir/'study.json').read_text()),branch['study'])
                             meta=json.loads((branch_dir/'revisions/001/study.logs/invocation.json').read_text())
                             self.assertEqual(meta['stage'],'study')

@@ -20,6 +20,7 @@ from src.contracts.contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS, MODE
 from explain import AuditError, Folder, Runner, load_config, repository_lock
 from test_explain import review
 from fixtures.ledger_response import response as ledger_response
+from fixtures.architecture_checks import assert_architecture
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -445,7 +446,9 @@ class FolderCLIIntegrationTests(FolderFixture):
                         bindings = json.loads((run / 'revisions/001/review.logs/attempt-001/binding.json').read_text())
                         target = next(mapping['identity'] for mapping in bindings['mappings']
                                       if mapping['id'] == review_context['review_target_id'])
-                        self.assertEqual(target['document_sha256'], manifest['study_invocation']['report_sha256'])
+                        self.assertEqual(target['document_sha256'], manifest['study']['review_plan']['document_sha256'])
+                        assert_architecture(self, run, manifest['study'], manifest['study_invocation'],
+                                            self.value.get('output_language', 'Russian'))
                         self.assertEqual(len({call['context']['source_snapshot_id'] for call in invocations}), 1)
                         self.assertEqual(manifest['study_invocation']['stage'], 'study')
                         self.assertNotIn('document', manifest)

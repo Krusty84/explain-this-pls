@@ -103,7 +103,9 @@ Use the following sections, translated into output_language; retain IDs,
 paths, symbols, and enum values. Keep explanations architectural, not file-by-file.
 Use these stable keys in exactly this order: scope, context, components,
 startup_and_flows, data_and_state, cross_cutting, constraints, change_navigation,
-unknowns, evidence_basis. Return unnumbered titles; Python adds heading numbers.
+unknowns, evidence_basis. Return unnumbered titles for the canonical report.
+Python selects the published ARCHITECTURE.md headings from fixed section-key and
+language dictionaries; your title does not override them.
 
 1. Scope and evidence basis: source mode and identity (branch/commit for git,
    directory for folder), static inspection, user-configured exclusions, completion
@@ -169,8 +171,15 @@ This is a section fragment, not a complete response. Preserve all ten thematic
 sections. A block is a coherent paragraph, list, table, fenced code fragment or
 other independent Markdown fragment; multiline content is allowed. Split content
 reasonably by subject and evidence; never pack the report into a single block to
-satisfy links. Do not return report_markdown, block IDs, claim.block_ids, document
-coordinates, quotes of report ranges, or computed provenance. Python serializes
+satisfy links. Inside a block, use only H3–H6 subheadings. Do not include ATX or
+Setext H1/H2 headings, including inside blockquotes or other containers, or raw
+HTML h1/h2 elements outside code. Close every fenced code block. Heading examples
+inside fenced/inline code and escaped heading markers are allowed. Python rejects
+invalid Markdown structure; it does not rewrite headings or repeat the study.
+It adds source references after complete blocks and an evidence index from your
+structured IDs, without changing your prose. Do not return report_markdown,
+block IDs, claim.block_ids, document coordinates, quotes of report ranges, or
+computed provenance. Python serializes
 the document and computes all report locators. Do not write files or calculate hashes. Echo the supplied
 source identity exactly. Do not supply program_checks, accepted or policy verdicts.
 Keep service fingerprints, hashes and binding IDs out of narrative blocks; source

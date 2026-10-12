@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Citation correction sidecars and published appendices remain immutable."""
+"""Citation correction sidecars and published source references remain immutable."""
 import copy
 import io
 import json
@@ -70,8 +70,8 @@ class CitationIntegrityTests(FolderFixture):
                     self.assertEqual(original.read_bytes(), content)
                 self.assertEqual((self.source / 'app.py').read_bytes(), source_bytes)
 
-    def test_review_cannot_change_only_the_citation_appendix(self):
-        runner = Runner(self.config(), self.base / 'review-appendix')
+    def test_review_cannot_change_only_an_inserted_source_reference(self):
+        runner = Runner(self.config(), self.base / 'review-source-reference')
         calls, preserved = [], {}
 
         def process(command, cwd, env, payload, **kwargs):
@@ -85,11 +85,9 @@ class CitationIntegrityTests(FolderFixture):
                 preserved[extracted] = extracted.read_bytes()
                 report = directory / 'ARCHITECTURE.md'
                 text = report.read_text()
-                body = original.read_text()
-                self.assertTrue(text.startswith(body))
-                appendix = text[len(body):]
-                self.assertIn('CORRECTED', appendix)
-                report.write_text(body + appendix.replace('CORRECTED', 'TAMPERED!', 1))
+                reference = '[E-001](#source-e-001)'
+                self.assertIn(reference, text)
+                report.write_text(text.replace(reference, '[E-001](#source-e-999)', 1))
             return cli_result(command, self.model_answer(context))
 
         with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
@@ -102,8 +100,8 @@ class CitationIntegrityTests(FolderFixture):
         for path, content in preserved.items():
             self.assertEqual(path.read_bytes(), content)
 
-    def test_publication_rejects_tampered_appendix_with_unchanged_authored_body(self):
-        runner = Runner(self.config(), self.base / 'publication-appendix')
+    def test_publication_rejects_tampered_source_registry_with_unchanged_canonical_document(self):
+        runner = Runner(self.config(), self.base / 'publication-source-registry')
         inventory, _ = runner.source_inventory()
         context = dict(source_directory=str(self.source), source_fingerprint=inventory['source_fingerprint'])
         destination = runner.run_dir / 'study.logs'
@@ -120,10 +118,9 @@ class CitationIntegrityTests(FolderFixture):
         extracted_path = destination / 'attempt-001/extracted.json'
         extracted = extracted_path.read_bytes()
         expected = report.read_bytes()
-        self.assertTrue(expected.startswith(original))
-        appendix = expected[len(original):]
-        self.assertIn(b'CORRECTED', appendix)
-        tampered = original + appendix.replace(b'CORRECTED', b'TAMPERED!', 1)
+        self.assertIn(b'### Source registry\n', expected)
+        self.assertIn(b'RESOLVED; locator resolved; quote matched', expected)
+        tampered = expected.replace(b'RESOLVED; locator resolved; quote matched', b'TAMPERED; locator resolved; quote matched', 1)
         report.write_bytes(tampered)
         with self.assertRaises(AuditError) as caught:
             runner.publish_result('study', data, destination)

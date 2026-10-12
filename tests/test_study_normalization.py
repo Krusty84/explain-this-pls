@@ -8,6 +8,7 @@ import json
 from fixtures.cli_response import cli_result
 import unittest
 from src.reports.document_rendering import materialize_study, recover_sections
+from fixtures.architecture_checks import assert_architecture
 from unittest.mock import patch
 
 from src.contracts.contracts import ContractError, result_diagnostics, validate_result, strict_json
@@ -257,7 +258,8 @@ class NormalizationPipelineTests(FolderFixture):
                 self.assertEqual(meta['normalization_provenance'], provenance)
                 self.assertEqual(saved['claims'], materialize_study(candidate)['claims'])
                 self.assertEqual(saved['review_plan']['registry_sha256'], sha(canonical(saved['claims'])))
-                self.assertEqual((runner.run_dir / 'ARCHITECTURE.md').read_bytes(), materialize_study(raw)['report_markdown'].encode())
+                self.assertEqual(saved['report_markdown'], materialize_study(raw)['report_markdown'])
+                assert_architecture(self, runner.run_dir, saved, meta, runner.cfg['output_language'])
                 self.assertTrue(meta['publication_complete'])
                 self.assertEqual(saved['program_checks']['semantic_quality'], 'NOT_MEASURED')
                 self.assertEqual('study_normalized' in runner.reporter.stderr.getvalue(), local)

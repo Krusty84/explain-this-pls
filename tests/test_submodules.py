@@ -15,6 +15,9 @@ import unittest
 from unittest.mock import patch
 
 from explain import AuditError, Repository, Runner, UnsafeRepository, load_config
+from fixtures.architecture_checks import assert_architecture
+from fixtures.cli_response import cli_result
+from fixtures.ledger_response import prompt_context, response
 
 ROOT = Path(__file__).resolve().parents[1]
 CHILD = 'vendor/модуль with spaces'
@@ -163,6 +166,38 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
                 for item in delta:
                     self.assertEqual(item['baseline_commit'], self.expected['master'][item['path']]['commit'])
                     self.assertEqual(item['branch_commit'], self.expected['topic'][item['path']]['commit'])
+                run_dir = Path(manifest['final_report']).parent
+                for branch in manifest['branches']:
+                    assert_architecture(self, run_dir / branch['directory'], branch['study'],
+                                        branch['study_invocation'], 'Russian')
+
+    def test_published_submodule_citations_keep_paths_and_pinned_commits(self):
+        self.config['output_language'] = 'English'
+        self.write_config()
+        runner = Runner(load_config(self.config_path), self.base / 'source-references')
+        calls = []
+
+        def answer(command, cwd, env, payload, **kwargs):
+            context = prompt_context(payload)
+            calls.append(context['stage'])
+            data = response(context)
+            if context['stage'] == 'study':
+                data['evidence'] = [dict(id=f'E-{i:03d}', source_id=source['id'], path='app.py',
+                                         start_line=1, end_line=1, quote='')
+                                    for i, source in enumerate(context['sources'], 1)]
+                data['claims'][0]['evidence_ids'] = ['study:' + entry['id'] for entry in data['evidence']]
+            return cli_result(command, data)
+
+        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=answer):
+            manifest, code = runner.run()
+        self.assertEqual(code, 0, manifest.get('diagnostics'))
+        self.assertEqual(calls, ['study', 'review', 'study', 'review', 'compare'])
+        for branch in manifest['branches']:
+            text = assert_architecture(self, runner.run_dir / branch['directory'], branch['study'],
+                                       branch['study_invocation'], 'English')
+            for source in branch['study']['review_plan']['sources'][1:]:
+                self.assertIn(source['root'] + '/app.py', text)
+                self.assertIn(source['identity']['commit'], text)
 
     def test_check_is_byte_for_byte_read_only_and_does_not_call_model(self):
         before = self.state()

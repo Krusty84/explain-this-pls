@@ -1,0 +1,188 @@
+{
+  "completion_status": "COMPLETE",
+  "limitations": [],
+  "branch": "main",
+  "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "evidence": [
+    {
+      "id": "E-001",
+      "source_id": "source-001",
+      "path": "app.py",
+      "start_line": 1,
+      "end_line": 1,
+      "quote": ""
+    },
+    {
+      "id": "E-002",
+      "source_id": "source-002",
+      "path": "worker.py",
+      "start_line": 12,
+      "end_line": 18,
+      "quote": ""
+    },
+    {
+      "id": "E-003",
+      "source_id": "source-001",
+      "path": "config.py",
+      "start_line": 3,
+      "end_line": 5,
+      "quote": "Expected setting"
+    }
+  ],
+  "report_sections": [
+    {
+      "key": "scope",
+      "title": "Model title remains canonical",
+      "blocks": [
+        {
+          "markdown": "The entry point starts the worker.",
+          "claim_ids": [
+            "C-001",
+            "C-002"
+          ]
+        },
+        {
+          "markdown": "Repeated explanation.",
+          "claim_ids": [
+            "C-001"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "context",
+      "title": "context",
+      "blocks": [
+        {
+          "markdown": "Introduction with no registered claim.  \n",
+          "claim_ids": []
+        }
+      ]
+    },
+    {
+      "key": "components",
+      "title": "components",
+      "blocks": [
+        {
+          "markdown": "Repeated explanation.",
+          "claim_ids": [
+            "C-002"
+          ]
+        },
+        {
+          "markdown": "| Component | Role |\n| --- | --- |\n| Worker | Processes jobs |",
+          "claim_ids": [
+            "C-001"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "startup_and_flows",
+      "title": "startup_and_flows",
+      "blocks": [
+        {
+          "markdown": "```plantuml\n@startuml\n## This is diagram text\nActor -> Worker: start\n@enduml\n```",
+          "claim_ids": [
+            "C-001"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "data_and_state",
+      "title": "data_and_state",
+      "blocks": [
+        {
+          "markdown": "Not applicable in this synthetic fixture.",
+          "claim_ids": []
+        }
+      ]
+    },
+    {
+      "key": "cross_cutting",
+      "title": "cross_cutting",
+      "blocks": [
+        {
+          "markdown": "Not applicable in this synthetic fixture.",
+          "claim_ids": []
+        }
+      ]
+    },
+    {
+      "key": "constraints",
+      "title": "constraints",
+      "blocks": [
+        {
+          "markdown": "Not applicable in this synthetic fixture.",
+          "claim_ids": []
+        }
+      ]
+    },
+    {
+      "key": "change_navigation",
+      "title": "change_navigation",
+      "blocks": [
+        {
+          "markdown": "Not applicable in this synthetic fixture.",
+          "claim_ids": []
+        }
+      ]
+    },
+    {
+      "key": "unknowns",
+      "title": "unknowns",
+      "blocks": [
+        {
+          "markdown": "Runtime deployment is unknown.",
+          "claim_ids": [
+            "C-003"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "evidence_basis",
+      "title": "evidence_basis",
+      "blocks": [
+        {
+          "markdown": "Not applicable in this synthetic fixture.",
+          "claim_ids": []
+        }
+      ]
+    }
+  ],
+  "task": "architecture_documentation",
+  "claims": [
+    {
+      "id": "C-001",
+      "statement": "Has an entry point",
+      "scope": "Static source inspection.",
+      "epistemic_kind": "FACT",
+      "evidence_ids": [
+        "study:E-002",
+        "study:E-001"
+      ],
+      "uncertainty": ""
+    },
+    {
+      "id": "C-002",
+      "statement": "Worker processes jobs.",
+      "scope": "Static source inspection.",
+      "epistemic_kind": "FACT",
+      "evidence_ids": [
+        "study:E-001",
+        "study:E-003"
+      ],
+      "uncertainty": ""
+    },
+    {
+      "id": "C-003",
+      "statement": "Runtime deployment is unknown.",
+      "scope": "Static source inspection.",
+      "epistemic_kind": "UNKNOWN",
+      "evidence_ids": [],
+      "uncertainty": "Runtime was not inspected."
+    }
+  ]
+}

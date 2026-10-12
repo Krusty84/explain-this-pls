@@ -41,7 +41,16 @@ coverage statuses. Do not narrow source scope to resolve findings. Use UNVERIFIE
 when inspection cannot be established. Missing citations do not mean NOT_INSPECTED.
 Preserve the section keys, in order: scope, context, components, startup_and_flows,
 data_and_state, cross_cutting, constraints, change_navigation, unknowns, evidence_basis.
-Return unnumbered section titles; the orchestrator renders Markdown and locators.
+Return unnumbered section titles for the canonical report; the orchestrator
+renders Markdown and locators. Python selects the published ARCHITECTURE.md
+headings from fixed section-key and language dictionaries; your title does not
+override them. Inside each block, use only H3–H6 subheadings. Do not include ATX
+or Setext H1/H2 headings, including inside blockquotes or other containers, or raw
+HTML h1/h2 elements outside code. Close every fenced code block. Heading examples
+inside fenced/inline code and escaped heading markers are allowed. Python rejects
+invalid Markdown structure without rewriting headings or requesting another
+study. It adds source references after complete blocks and an evidence index from
+structured IDs, without changing your prose.
 
 Inspect only the supplied snapshot and listed pinned submodules. Do not switch or
 fetch Git state, follow symlinks, execute project code, run tests/builds/scripts,

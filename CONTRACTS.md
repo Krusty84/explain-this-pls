@@ -96,10 +96,14 @@ successful result. Source guards compare state at prescribed boundaries; they
 are not a continuous immutability guarantee. Orchestrator reads do not establish
 which files the agent read.
 
-`ARCHITECTURE.md` starts with the exact UTF-8 bytes of materialized study
-`report_markdown`. When citation warnings exist, a deterministic program appendix
-follows the authored text. Publication hashes include the appendix; authored
-document hashes and locator line numbers remain unchanged.
+`study.json` retains structured judgments and checks; `study.original.md` retains
+canonical `report_markdown` for Review. `ARCHITECTURE.md` is a separate deterministic
+presentation with fixed headings and source references after each linked block.
+It need not start with the canonical document bytes. Rendering never changes
+`report_markdown`, its SHA-256, `document_locators`, the frozen registry or
+`review_target`. Publication hashes cover all published presentation bytes;
+`assert_review_files()` recreates those bytes with the same renderer before use.
+Existing published reports are never rewritten.
 The pure serializer normalizes CRLF to LF in authored blocks,
 preserving internal spaces, tabs, bare CR and Unicode without NFC/NFKC. It writes
 `## N. title` followed by two LF, then each block with a final LF if absent and
@@ -108,8 +112,11 @@ counted while writing, using `evidence.lines()` semantics. Locators cover only
 serialized blocks, including their final LF, never headings or separators.
 Quotes use that same normalized line view of the serialized fragment, including
 the edge case where an authored trailing bare CR touches a program-added LF.
-After materialization no whitespace or newline changes are allowed before hashing,
-review or publication. `study.annotated.md` contains generated checks and the registry.
+After materialization no whitespace or newline changes to canonical text are allowed
+before hashing or review. Publication preserves each serialized authored block
+byte for byte, including tables, diagrams and code fences. Generated elements
+are separate; restoring canonical headings and removing generated elements
+recovers `report_markdown`. `study.annotated.md` contains generated checks and the registry.
 `ARCHITECTURE_REVIEW.md` and `BRANCH_COMPARISON.md` contain generated tables;
 `study.original.md` retains the canonical program assembly of authored blocks.
 `review.original.md` and `compare.original.md` preserve original prose.
@@ -126,6 +133,77 @@ status and encoding, without service hash columns or values. JSON keeps the pinn
 file hashes. Prompts prohibit service fingerprints, hashes and binding IDs in narrative;
 source-system hash semantics and Git commit IDs remain meaningful content.
 No regular-expression cleanup or other postprocessing rewrites authored prose.
+
+### Deterministic architecture publication
+
+Study and Revision share the same pure renderer. Its inputs are canonical
+`report_markdown`, `block_map`, `claims`, `evidence`, `program_checks.evidence`,
+`review_plan.sources` and the report language. It reads no files, uses no network
+and makes no model call. Identical inputs produce identical UTF-8 bytes without
+mutating the Study. One initial Study still runs per pinned source snapshot.
+
+The published document has exactly ten H2 headings, in the section-key order
+below. Python constants define their numbered titles for Russian and English,
+including supported aliases. Other languages without a fixed dictionary are
+configuration errors before any model call. Model `report_sections[].title`
+remains in the wire response and canonical assembly, but never selects a
+published heading.
+
+| section_key | Russian title | English title |
+| --- | --- | --- |
+| `scope` | Область исследования | Study scope |
+| `context` | Контекст системы | System context |
+| `components` | Компоненты системы | System components |
+| `startup_and_flows` | Запуск и выполнение | Startup and execution |
+| `data_and_state` | Данные и состояние | Data and state |
+| `cross_cutting` | Сквозные механизмы | Cross-cutting mechanisms |
+| `constraints` | Ограничения и особенности legacy | Constraints and legacy details |
+| `change_navigation` | Навигация для изменений | Change navigation |
+| `unknowns` | Неизвестные и непроверенные области | Unknown and unverified areas |
+| `evidence_basis` | Основания выводов и источники | Evidence basis and sources |
+
+For each `block_map` record, references follow only
+`claim_ids` → `claims[].evidence_ids` → `evidence` → source catalog.
+They retain first-occurrence order through claims and their evidence lists,
+deduplicate canonical evidence IDs within that block, and appear after the
+complete block with a blank-line separator. Repeated text is never searched or
+matched; the same evidence appears beside every block that links it. No reference
+limit removes available evidence. A block with no claims needs no source reference.
+HYPOTHESIS/UNKNOWN without evidence receive no fabricated source; unresolved
+support remains an explicit limitation. Missing definitions or required relations
+remain strict contract errors, not quote warnings.
+
+Every reference links to a stable internal evidence anchor. The tenth section
+contains an H3 source index (`Реестр источников` in Russian), recording evidence
+ID, source ID, displayed relative file path, inclusive start/end lines and
+locator status. Submodule display paths include `sources[].root`; source identity
+retains its pinned commit. Paths are untrusted data and are escaped for Markdown
+and HTML. External source URLs are not inferred from Git remotes; a verified
+explicit base and a pinned Git commit would be required, with percent-encoded
+path segments.
+
+Reference status comes from the existing resolver results. `RESOLVED` means the
+file/range locator resolved; an empty quote does not establish quote verification.
+`QUOTE_MISMATCH` carries an explicit warning. `OUT_OF_RANGE`, `NOT_FOUND` and
+other resolution failures display their status without claiming verified support.
+Detailed citation-warning tables remain in `study.annotated.md` and
+`FINAL_REPORT.md`. Architecture warnings stay beside their blocks or under H3
+inside the tenth section; they never add an H2.
+
+A pinned CommonMark parser validates every authored block and the final document.
+Blocks may contain H3–H6, paragraphs, lists, tables, inline code, links, quotes
+and closed fenced code including PlantUML. ATX/Setext H1/H2 in any container,
+raw HTML h1/h2 outside code, and unclosed fences are rejected. Literal heading
+markers in fenced/inline code or escaped text remain valid. Diagnostics identify
+the `section_key`, `block_index` and violation type; headings are never renamed,
+removed or converted to text. The final check requires the exact H2 count, titles
+and order before publication, whether Review is enabled or disabled.
+
+`strict` rejects invalid Markdown. `compromise` may retain eligible original
+material through existing recovery, but cannot publish it as a valid
+`ARCHITECTURE.md`. Formatting errors never trigger another architectural Study.
+Presentation changes do not require a new Review; canonical document changes
+always require a new review identity and cannot reuse an earlier Review.
 
 Each file is replaced atomically with private permissions. Multiple files are
 **not** one atomic transaction. A stage is published only after all stage writes
@@ -592,6 +670,10 @@ closed `details.code` values and schema-owned JSON paths distinguish:
 | `MODEL_BINDING_IDENTITY_MISMATCH` | Unknown, foreign, stale or incorrectly scoped model identity |
 | `UNKNOWN_REFERENCE`, `DUPLICATE_REFERENCE` | Non-evidence relations such as finding/claim links |
 | `UNKNOWN_OMISSION_AREA_ID`, `DUPLICATE_OMISSION_AREA_ID` | Unknown or repeated review-plan area |
+| `UNEXPECTED_TOP_LEVEL_HEADING` | Authored block contains a forbidden H1/H2 |
+| `INVALID_MARKDOWN_STRUCTURE` | Authored block has invalid Markdown structure, including an unclosed fence |
+| `REPORT_SECTION_COUNT_MISMATCH` | Published architecture does not have exactly ten H2 headings |
+| `REPORT_HEADING_ORDER_MISMATCH` | Published architecture heading titles or order differ from the fixed dictionary |
 
 Diagnostics never echo arbitrary response values, source content or invalid IDs.
 Paths contain trusted schema keys and numeric indices. Journal IDs are validated
@@ -639,7 +721,8 @@ are allowed for nonmaterial prose; they do not waive the registration requiremen
 
 `src/reports/document_rendering.py` purely produces materialized `report_markdown`, `block_map`
 and claims with `document_locators: [...]`, one exact line range/quote per linked
-block. No Markdown AST, quote search or fuzzy match is used. `report_sections` is
+block. Coordinates are written directly, without quote search or fuzzy match;
+Markdown parsing only validates structure. `report_sections` is
 not retained as a second narrative in the materialized/saved result. Its original
 and normalized objects remain in the private wire artifacts.
 
