@@ -31,9 +31,9 @@ class SingleStudyTests(FolderFixture):
                 self.assertFalse(document['study']['program_checks']['coverage']['completeness_measured'])
                 self.assertTrue(document['study_invocation']['source_tools_enabled'])
                 self.assertEqual(self.calls[-1]['cwd'], self.source)
-                inventory = json.loads(next(self.runner.run_dir.rglob('source.inventory.json')).read_text())
+                inventory = json.loads(next(self.runner.session.run_dir.rglob('source.inventory.json')).read_text())
                 self.assertGreater(sum(e.get('size', 0) for e in inventory['entries']), 262144)
-                self.assertEqual({p.name for p in self.runner.run_dir.rglob('*.plan.json')},
+                self.assertEqual({p.name for p in self.runner.session.run_dir.rglob('*.plan.json')},
                                  {'coverage.plan.json', 'review.plan.json'})
                 self.assertTrue(all(row['stage'] in ('study', 'review')
                                     for row in manifest['metrics']['stages']))

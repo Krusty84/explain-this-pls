@@ -21,7 +21,9 @@ import unittest
 from unittest.mock import patch
 
 import test_explain as fixtures
-from explain import AuditError, Repository, main
+from src.runtime.errors import AuditError
+from src.analysis.repository import Repository
+from src.cli import main
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_WARNING = '[WARN] Running with administrator privileges.'
@@ -50,10 +52,10 @@ class RepositoryTrustTests(unittest.TestCase):
         for euid in (0, 1000):
             for trust in (False, True):
                 with self.subTest(mocked_euid=euid, trust=trust), \
-                        patch('explain.os.geteuid', return_value=euid), \
+                        patch('src.analysis.repository.os.geteuid', return_value=euid), \
                         patch.object(Repository, 'check_ownership'), \
                         patch.dict(os.environ, inherited, clear=True), \
-                        patch('explain.subprocess.run', wraps=subprocess.run) as run:
+                        patch('src.analysis.repository.subprocess.run', wraps=subprocess.run) as run:
                     repo = Repository(alias, trust_repository=trust)
                     self.addCleanup(repo.close)
                     pins = repo.preflight(['master', 'test01'])
@@ -93,7 +95,7 @@ class RepositoryTrustTests(unittest.TestCase):
             for trust in (False, True):
                 repo = Repository(self.repo_path, trust_repository=trust)
                 self.addCleanup(repo.close)
-                with self.subTest(error=error, trust=trust), patch('explain.subprocess.run') as run:
+                with self.subTest(error=error, trust=trust), patch('src.analysis.repository.subprocess.run') as run:
                     run.return_value = subprocess.CompletedProcess([], 128, b'', error.encode())
                     with self.assertRaises(AuditError) as caught:
                         repo.head()
@@ -159,7 +161,7 @@ class StartupCLIIntegrationTests(unittest.TestCase):
         old_handler = signal.getsignal(signal.SIGTERM)
         try:
             with patch('sys.argv', ['explain.py', *args]), \
-                    patch('explain.os.geteuid', return_value=euid), \
+                    patch('src.analysis.repository.os.geteuid', return_value=euid), \
                     patch.object(Repository, 'check_ownership'), \
                     patch.dict(os.environ, self.env, clear=True), \
                     contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -204,7 +206,7 @@ class StartupCLIIntegrationTests(unittest.TestCase):
                 for check in (False, True):
                     for trust in ((False, True) if mode == 'git' else (False,)):
                         with self.subTest(mocked_euid=euid, mode=mode, check=check, trust=trust), \
-                                patch('explain.subprocess.run', wraps=subprocess.run) as run:
+                                patch('src.analysis.repository.subprocess.run', wraps=subprocess.run) as run:
                             result = self.execute_with_mocked_euid(euid, mode, check, trust)
                             # Inspect calls made through main -> Runner -> Repository.
                             commands = [call.args[0] for call in run.call_args_list]

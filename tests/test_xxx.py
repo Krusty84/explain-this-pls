@@ -12,7 +12,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from explain import Runner, load_config
+from src.runtime.runner import Runner
+from src.runtime.config import load_config
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -171,13 +172,13 @@ class XXXTests(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700, str(path))
 
     def test_publication_failure_never_accepts_result(self):
-        import explain
-        original = explain.atomic
+        from src.runtime import artifacts
+        original = artifacts.atomic
         def fail_report(path, data):
             if path.name == 'ARCHITECTURE.md':
                 raise OSError('synthetic publication failure')
             return original(path, data)
-        with patch('explain.atomic', side_effect=fail_report):
+        with patch('src.runtime.artifacts.atomic', side_effect=fail_report):
             manifest, code = self.run_case()
         self.assertEqual(code, 1)
         self.assertFalse(manifest['accepted'])
@@ -265,8 +266,8 @@ class XXXTests(unittest.TestCase):
         self.assertEqual(len(self.prompts()), 2)
 
     def test_fenced_json_completes_publication_with_original_logs(self):
-        import explain
-        process = explain.process
+        from src.runtime import process as process_runtime
+        process = process_runtime.process
         captured = {}
         def capture(*args, **kwargs):
             result = process(*args, **kwargs)
@@ -274,7 +275,7 @@ class XXXTests(unittest.TestCase):
                 captured[kwargs['log_dir'] / 'stdout.log'] = result['stdout']
             return result
         self.env['AUDIT_FAKE_COMPACTIONS'] = '1'
-        with patch('explain.process', side_effect=capture):
+        with patch('src.runtime.process.process', side_effect=capture):
             manifest, code = self.run_case('fences')
         self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
         self.assertEqual([c['context']['stage'] for c in self.prompts()], ['study', 'review'])
@@ -307,10 +308,11 @@ class XXXTests(unittest.TestCase):
             self.assertTrue(json.loads((path.parent / 'validation.json').read_bytes())['valid'])
 
     def test_mixed_stage_agents_keep_other_cli_commands_and_results(self):
-        import explain
+        from src.runtime import process as process_runtime
+        from src.backends import preflight
         from fixtures.cli_response import cli_result
         from fixtures.ledger_response import prompt_context, response
-        original = explain.process
+        original = process_runtime.process
         mock_cli = self.root / 'mock-review'
         mock_cli.write_text('#!' + sys.executable + '\n')
         mock_cli.chmod(0o700)
@@ -323,13 +325,13 @@ class XXXTests(unittest.TestCase):
                 if '--version' in command:
                     return {'returncode': 0, 'stdout': b'2.0.23', 'stderr': b''}
                 if '--help' in command:
-                    flags = explain.CLI_ADAPTERS[backend].required_flags('folder')
+                    flags = preflight.CLI_ADAPTERS[backend].required_flags('folder')
                     return {'returncode': 0, 'stdout': ' '.join(flags).encode(), 'stderr': b''}
                 calls.append(command)
                 data = response(prompt_context(payload))
                 return cli_result(command, data)
             before = len(self.prompts())
-            with patch('explain.process', side_effect=process):
+            with patch('src.runtime.process.process', side_effect=process):
                 manifest, code = self.run_case()
             with self.subTest(backend=backend):
                 self.assertEqual(code, 0, manifest)

@@ -12,7 +12,10 @@ from src.reports.document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 
 from src.contracts.contracts import ContractError, validate_result
-from explain import AuditError, Runner, atomic, load_config
+from src.runtime.errors import AuditError
+from src.runtime.runner import Runner
+from src.runtime.artifacts import atomic
+from src.runtime.config import load_config
 from src.runtime.reporting import Reporter
 from src.model.structured_output import blocked_comparison
 from test_explain import doc, review
@@ -73,7 +76,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         run_dir = self.base / ('run-' + str(len(list(self.base.glob('run-*')))))
         runner = Runner(config, run_dir)
         if backend == 'opencode':
-            runner.versions[backend + ':' + config['_agents']['study']['executable']] = 'opencode v2.0.23'
+            runner.session.versions[backend + ':' + config['_agents']['study']['executable']] = 'opencode v2.0.23'
         calls, originals = [], {}
 
         def process(command, cwd, env, payload, **kwargs):
@@ -90,8 +93,8 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             originals[stage] = copy.deepcopy(outcome)
             return cli_result(command, outcome)
 
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process), \
-                patch('explain.atomic', side_effect=atomic_override or atomic):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process), \
+                patch('src.runtime.artifacts.atomic', side_effect=atomic_override or atomic):
             manifest, code = runner.run()
         self.manifest, self.calls, self.originals, self.run_dir = manifest, calls, originals, run_dir
         return manifest, code
@@ -291,7 +294,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         self.assertEqual(code, 0)
         invoke.assert_not_called()
         self.assertNotIn('final_report', manifest)
-        self.assertFalse((runner.run_dir / 'FINAL_REPORT.md').exists())
+        self.assertFalse((runner.session.run_dir / 'FINAL_REPORT.md').exists())
         self.value['result_policy'] = 'unknown'
         self.config_path.write_text(json.dumps(self.value))
         with self.assertRaisesRegex(AuditError, 'result_policy'):
@@ -344,7 +347,7 @@ class CompromiseGit(unittest.TestCase):
         if single:
             config['git_mode']['branches'] = ['master']
         runner = Runner(config, self.base / 'run')
-        original_restore = runner.repo.close
+        original_restore = runner.session.repo.close
         def restore(*args):
             result = original_restore(*args)
             if restore_failure:
@@ -362,8 +365,8 @@ class CompromiseGit(unittest.TestCase):
             if stage == 'review':
                 semantic_failure(data)
             return cli_result(command, data)
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process), \
-                patch.object(runner.repo, 'close', side_effect=restore):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process), \
+                patch.object(runner.session.repo, 'close', side_effect=restore):
             manifest, code = runner.run()
         self.assertEqual(self.repo.symbolic(), 'master')
         self.assertEqual(self.repo.head(), self.master)
@@ -462,7 +465,7 @@ class CompromiseNative(unittest.TestCase):
         for scenario in ('foreign-session', 'delete-failed'):
             with self.assertRaises(ContractError):
                 self.stage('xxx', scenario)
-            self.assertTrue(self.last_runner.critical_failure)
+            self.assertTrue(self.last_runner.session.critical_failure)
             self.assertFalse((self.destination.parent / 'study.material.json').exists())
 
 
@@ -492,13 +495,13 @@ class NativeFinalPipeline(unittest.TestCase):
                     self.assertIn('review_material', manifest['revisions'][0])
 
     def test_cleanup_failure_remains_fatal_even_with_a_study(self):
-        import explain
-        original_process = explain.process
+        from src.runtime import process as process_runtime
+        original_process = process_runtime.process
         def failed_delete(command, *args, **kwargs):
             if command[1:3] == ['session', 'delete'] and kwargs.get('context', {}).get('stage') == 'review':
                 return {'returncode': 1, 'stdout': b'', 'stderr': b'cleanup failed'}
             return original_process(command, *args, **kwargs)
-        with patch('explain.process', side_effect=failed_delete):
+        with patch('src.runtime.process.process', side_effect=failed_delete):
             manifest, code = self.run_case('material-review')
         self.assertEqual((manifest['status'], code), ('FAILED', 1))
         self.assertTrue(manifest['critical_failure'])

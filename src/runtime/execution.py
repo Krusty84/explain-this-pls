@@ -2,10 +2,16 @@
 # SPDX-License-Identifier: MIT
 
 """Monotonic execution budgets. Cleanup and source guards use separate budgets."""
-import math
+import contextlib
+import fcntl
+import os
+import tempfile
 import time
-
+import math
+from pathlib import Path
 from src.contracts.contracts import response_error
+from src.runtime.errors import AuditError
+from src.runtime.artifacts import digest
 
 DEFAULT_EXECUTION = {'stage_timeout_seconds': 3600, 'idle_timeout_seconds': None,
                      'review_enabled': False,
@@ -66,3 +72,22 @@ class Budget:
         # Activity cannot revive an already expired budget.
         self.check()
         self.last_activity = self.clock()
+
+
+@contextlib.contextmanager
+def repository_lock(repo: Path):
+    repo = repo.resolve()
+    base = Path(tempfile.gettempdir()).resolve() / f'architecture-audit-locks-{os.getuid()}'
+    base.mkdir(mode=0o700, exist_ok=True)
+    if base.is_symlink() or base.stat().st_uid != os.getuid() or base.stat().st_mode & 0o077:
+        raise AuditError('Unsafe lock directory')
+    path = base / (digest(str(repo).encode()) + '.lock')
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise AuditError('Another architecture audit holds this repository lock.') from exc
+        yield
+    finally:
+        os.close(fd)

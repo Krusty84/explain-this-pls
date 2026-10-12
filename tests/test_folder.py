@@ -17,7 +17,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.contracts.contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS, MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS, jsonc, validate_result
-from explain import AuditError, Folder, Runner, load_config, repository_lock
+from src.runtime.errors import AuditError
+from src.analysis.folder import Folder
+from src.runtime.runner import Runner
+from src.runtime.config import load_config
+from src.runtime.execution import repository_lock
 from test_explain import review
 from fixtures.ledger_response import response as ledger_response
 from fixtures.architecture_checks import assert_architecture
@@ -122,10 +126,10 @@ class ModeConfigTests(FolderFixture):
         git = {'repository': './source', 'branches': ['master', 'customer'], 'baseline_branch': 'master'}
         self.value.update(mode='git', git_mode=git, folder_mode={'path': None})
         grouped = self.config()
-        self.assertEqual(Runner(grouped, self.base / 'run').source_path, self.source)
+        self.assertEqual(Runner(grouped, self.base / 'run').session.source_path, self.source)
         self.value.pop('mode'); self.value.pop('git_mode'); self.value.pop('folder_mode')
         self.value.update(git)
-        with patch('explain.process') as process, self.assertRaisesRegex(AuditError, 'Unknown configuration keys'):
+        with patch('src.runtime.process.process') as process, self.assertRaisesRegex(AuditError, 'Unknown configuration keys'):
             self.config()
         process.assert_not_called()
 
@@ -167,7 +171,7 @@ class ModeConfigTests(FolderFixture):
                 self.value = jsonc(path.read_text())
                 self.value['mode'] = 'folder'
                 self.value['folder_mode']['path'] = str(self.source)
-                with patch('explain.shutil.which', return_value=sys.executable):
+                with patch('src.runtime.config.shutil.which', return_value=sys.executable):
                     self.assertEqual(set(self.config()['_agents']), {'study'})
 
 
@@ -241,7 +245,7 @@ class FolderInventoryTests(FolderFixture):
                 changed = True
                 (self.source / 'app.py').write_text('changed while hashing')
             return data
-        with patch('explain.os.read', side_effect=changing_read):
+        with patch('src.analysis.folder.os.read', side_effect=changing_read):
             with self.assertRaisesRegex(AuditError, 'changed while fingerprinting'):
                 Folder(self.source).snapshot()
 
@@ -298,7 +302,7 @@ class FolderPipelineTests(FolderFixture):
             if stage == 'review' and mutate_review:
                 (self.source / 'app.py').unlink()
             return cli_result(command, data) | {'duration_seconds': 0}
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=response):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=response):
             manifest, code = runner.run()
         return manifest, code, stages
 
@@ -334,10 +338,10 @@ class FolderPipelineTests(FolderFixture):
 
     def test_change_before_invocation_prevents_model_call(self):
         runner = Runner(self.config(), self.base / 'run')
-        fingerprint = runner.folder.snapshot()['source_fingerprint']
+        fingerprint = runner.session.folder.snapshot()['source_fingerprint']
         (self.source / 'app.py').write_text('changed before stage')
         context = {'source_directory': str(self.source), 'source_fingerprint': fingerprint}
-        with patch('explain.process') as process:
+        with patch('src.runtime.process.process') as process:
             with self.assertRaisesRegex(AuditError, 'Source folder changed'):
                 runner.invoke('study', context, self.base / 'run/study.logs')
             process.assert_not_called()

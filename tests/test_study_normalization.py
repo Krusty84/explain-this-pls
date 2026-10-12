@@ -13,7 +13,10 @@ from unittest.mock import patch
 
 from src.contracts.contracts import ContractError, result_diagnostics, validate_result, strict_json
 from src.analysis.evidence import canonical, sha, SourceChanged
-from explain import AuditError, Folder, Runner, atomic
+from src.runtime.errors import AuditError
+from src.analysis.folder import Folder
+from src.runtime.runner import Runner
+from src.runtime.artifacts import atomic
 from src.analysis.ledger import prepare_result, review_context
 from src.runtime.reporting import Reporter, diagnostic
 from src.analysis.study_normalization import normalize_evidence, normalization_provenance, RULE
@@ -170,19 +173,19 @@ class NormalizationPipelineTests(FolderFixture):
                     wire['claims'][0]['evidence_ids'] = ['E-002', 'E-001']
                     wire['findings'] = [dict(id='F-001', severity='LOW', type='SCOPE_MISMATCH', claim_ids=['C-001'],
                         location='C-001', evidence_ids=['E-002'], impact='Synthetic', proposed_correction='Synthetic')]
-                    runner.cfg['_agents']['review']['backend'] = backend
+                    runner.session.cfg['_agents']['review']['backend'] = backend
                     def answer(command, cwd, env, payload, **kwargs):
                         model_data = model_wire(wire, prompt_context(payload), ctx)
                         return cli_result(command, model_data)
-                    with patch('explain.process', side_effect=answer) as process:
-                        saved, meta = runner.invoke('review', ctx, runner.run_dir / 'review.logs')
+                    with patch('src.runtime.process.process', side_effect=answer) as process:
+                        saved, meta = runner.invoke('review', ctx, runner.session.run_dir / 'review.logs')
                     self.assertEqual(process.call_count, 1)
                     self.assertTrue(meta['publication_complete'])
                     self.assertTrue(saved['program_checks']['policy_satisfied'])
                     self.assertEqual(doc, original)
                     self.assertEqual(saved['claims'][0]['evidence_ids'], ['review:E-002', 'study:E-001'])
                     self.assertEqual(saved['findings'][0]['evidence_ids'], ['review:E-002'])
-                    attempt = runner.run_dir / 'review.logs/attempt-001'
+                    attempt = runner.session.run_dir / 'review.logs/attempt-001'
                     self.assertEqual(json.loads((attempt / 'expanded.json').read_text()), wire)
                     self.assertEqual(meta['normalization_provenance']['replacement_count'], 3)
 
@@ -196,12 +199,12 @@ class NormalizationPipelineTests(FolderFixture):
                 wire = response(ctx)
                 wire['evidence'][0]['id'] = 'review:E-01'
                 wire['claims'][0]['evidence_ids'] = ['review:E-01', 'study:E-001']
-                runner.cfg['_agents']['review']['backend'] = backend
+                runner.session.cfg['_agents']['review']['backend'] = backend
                 def answer(command, cwd, env, payload, **kwargs):
                     model_data = model_wire(wire, prompt_context(payload), ctx)
                     return cli_result(command, model_data)
-                with patch('explain.process', side_effect=answer) as process:
-                    saved, meta = runner.invoke('review', ctx, runner.run_dir / 'review.logs')
+                with patch('src.runtime.process.process', side_effect=answer) as process:
+                    saved, meta = runner.invoke('review', ctx, runner.session.run_dir / 'review.logs')
                 self.assertEqual(process.call_count, 1)
                 self.assertTrue(saved['program_checks']['policy_satisfied'])
                 self.assertEqual(doc, original)
@@ -217,7 +220,7 @@ class NormalizationPipelineTests(FolderFixture):
         self.addCleanup(reporter.close)
         runner = Runner(cfg, self.base / ('run-' + str(len(list(self.base.glob('run-*'))))), reporter=reporter)
         if backend == 'opencode':
-            runner.versions[backend + ':' + cfg['_agents']['study']['executable']] = 'opencode v2.0.23'
+            runner.session.versions[backend + ':' + cfg['_agents']['study']['executable']] = 'opencode v2.0.23'
         context = {'source_directory': str(self.source),
                    'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
         data = response(context)
@@ -228,8 +231,8 @@ class NormalizationPipelineTests(FolderFixture):
         def process(command, cwd, env, payload, **kwargs):
             model_data = model_wire(data, prompt_context(payload), context)
             return cli_result(command, model_data)
-        with patch('explain.process', side_effect=process):
-            return runner.invoke('study', context, runner.run_dir / 'study.logs')
+        with patch('src.runtime.process.process', side_effect=process):
+            return runner.invoke('study', context, runner.session.run_dir / 'study.logs')
 
     def test_both_cli_backends_preserve_extracted_and_publish_provenance(self):
         for backend in ('codex', 'opencode'):
@@ -237,7 +240,7 @@ class NormalizationPipelineTests(FolderFixture):
                 runner, context, raw = self.prepare(backend, local=local)
                 original = copy.deepcopy(raw)
                 saved, meta = self.invoke(runner, context, raw)
-                attempt = runner.run_dir / 'study.logs/attempt-001'
+                attempt = runner.session.run_dir / 'study.logs/attempt-001'
                 extracted_bytes = (attempt / 'extracted.json').read_bytes()
                 extracted = strict_json(extracted_bytes.decode())
                 expanded = strict_json((attempt / 'expanded.json').read_text())
@@ -259,10 +262,10 @@ class NormalizationPipelineTests(FolderFixture):
                 self.assertEqual(saved['claims'], materialize_study(candidate)['claims'])
                 self.assertEqual(saved['review_plan']['registry_sha256'], sha(canonical(saved['claims'])))
                 self.assertEqual(saved['report_markdown'], materialize_study(raw)['report_markdown'])
-                assert_architecture(self, runner.run_dir, saved, meta, runner.cfg['output_language'])
+                assert_architecture(self, runner.session.run_dir, saved, meta, runner.session.cfg['output_language'])
                 self.assertTrue(meta['publication_complete'])
                 self.assertEqual(saved['program_checks']['semantic_quality'], 'NOT_MEASURED')
-                self.assertEqual('study_normalized' in runner.reporter.stderr.getvalue(), local)
+                self.assertEqual('study_normalized' in runner.session.reporter.stderr.getvalue(), local)
 
     def test_contract_failure_after_normalization_has_candidate_diagnostic(self):
         for policy in ('strict', 'compromise'):
@@ -276,14 +279,14 @@ class NormalizationPipelineTests(FolderFixture):
                 self.assertIsNone(saved)
                 self.assertIn('UNKNOWN_REFERENCE', meta['usable_material']['contract_failure']['message'])
                 self.assertNotIn('UNKNOWN_EVIDENCE_REFERENCE', json.dumps(meta['usable_material']['validation_issues']))
-            attempt = runner.run_dir / 'study.logs/attempt-001'
+            attempt = runner.session.run_dir / 'study.logs/attempt-001'
             validation = strict_json((attempt / 'validation.json').read_text())
             self.assertFalse(validation['valid'])
             self.assertEqual(validation['validated_object'], 'normalized.json')
             self.assertEqual(validation['normalization_provenance']['replacement_count'], 1)
             self.assertEqual(validation['error']['details']['path'], '$.report_sections[0].blocks[0].claim_ids[0]')
             self.assertNotIn('SECRET_LOCATOR', json.dumps(validation))
-            self.assertFalse((runner.run_dir / 'study.json').exists())
+            self.assertFalse((runner.session.run_dir / 'study.json').exists())
 
     def test_large_string_claims_retained_without_conversion_or_acceptance(self):
         for policy in ('strict', 'compromise'):
@@ -298,15 +301,15 @@ class NormalizationPipelineTests(FolderFixture):
                 material = meta['usable_material']
                 self.assertEqual(material['report_markdown'], recover_sections(data['report_sections']))
                 self.assertNotIn('claims', material)
-                runner.manifest = {}
-                runner.store_stage({}, 'study', None, meta, context)
+                runner.session.manifest = {}
+                runner.pipeline.store_stage({}, 'study', None, meta, context)
                 self.assertIn('Text retained; policy checks not completed. Agent self-assessment: COMPLETE.',
-                              runner.reporter.stderr.getvalue())
-            attempt = runner.run_dir / 'study.logs/attempt-001'
+                              runner.session.reporter.stderr.getvalue())
+            attempt = runner.session.run_dir / 'study.logs/attempt-001'
             self.assertEqual(strict_json((attempt / 'extracted.json').read_text()),
                              model_wire(data, prompt_context((attempt / 'input.prompt.txt').read_bytes()), context))
             self.assertFalse((attempt / 'normalized.json').exists())
-            self.assertFalse((runner.run_dir / 'study.json').exists())
+            self.assertFalse((runner.session.run_dir / 'study.json').exists())
 
     def test_required_artifact_writes_and_source_guards_cannot_publish(self):
         for policy in ('strict', 'compromise'):
@@ -318,15 +321,15 @@ class NormalizationPipelineTests(FolderFixture):
                             '"valid": true' in str(content) or '"status": "SUCCEEDED"' in str(content)):
                         raise OSError('synthetic disk failure')
                     atomic(path, content)
-                with patch('explain.atomic', side_effect=fail), self.assertRaises(OSError):
+                with patch('src.runtime.artifacts.atomic', side_effect=fail), self.assertRaises(OSError):
                     self.invoke(runner, context, data)
-                meta = strict_json((runner.run_dir / 'study.logs/invocation.json').read_text())
+                meta = strict_json((runner.session.run_dir / 'study.logs/invocation.json').read_text())
                 self.assertFalse(meta['publication_complete'])
                 self.assertEqual(meta['status'], 'FAILED')
             runner, context, data = self.prepare(policy=policy)
             with patch('src.analysis.ledger.resolve_evidence', side_effect=SourceChanged), self.assertRaises(AuditError):
                 self.invoke(runner, context, data)
-            self.assertFalse((runner.run_dir / 'study.json').exists())
+            self.assertFalse((runner.session.run_dir / 'study.json').exists())
 
     def test_normalization_does_not_satisfy_evidence_or_completion_policy(self):
         for mutation in ('missing-evidence-file', 'unsafe-path', 'source-quote', 'unknown-source', 'partial'):

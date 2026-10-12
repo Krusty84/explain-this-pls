@@ -9,7 +9,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Select, Static
 
-from explain import load_config, resolve_agent
+from src.runtime.config import load_config, resolve_agent
 from src.backends import codex_models
 from src.contracts.contracts import ContractError
 from src.tui.config_edit import save_model

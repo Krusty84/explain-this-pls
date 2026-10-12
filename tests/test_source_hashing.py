@@ -10,7 +10,10 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
-from explain import AuditError, Folder, Runner, load_config
+from src.runtime.errors import AuditError
+from src.analysis.folder import Folder
+from src.runtime.runner import Runner
+from src.runtime.config import load_config
 from src.analysis.evidence import SourceChanged, resolve_evidence
 from src.analysis.git_sources import tracked_paths
 from src.contracts.contracts import validate_schema
@@ -59,7 +62,7 @@ class FolderHashingTests(FolderFixture):
                     return cli_result(command, data)
 
                 with hashed_payloads() as hashes, patch.object(runner, 'check_cli', return_value={}), \
-                        patch('explain.process', side_effect=process), \
+                        patch('src.runtime.process.process', side_effect=process), \
                         patch.object(Folder, 'snapshot', autospec=True, side_effect=Folder.snapshot) as snapshots:
                     manifest, code = runner.run(check_only=check)
                 self.assertEqual(code, 0, manifest['errors'])
@@ -219,7 +222,7 @@ class RecursiveHashingTests(RecursiveFixture, unittest.TestCase):
             return cli_result(command, data)
 
         with hashed_payloads() as hashes, patch.object(runner, 'check_cli', return_value={}), \
-                patch('explain.process', side_effect=process):
+                patch('src.runtime.process.process', side_effect=process):
             manifest, code = runner.run()
         self.assertEqual(code, 0, manifest['errors'])
         self.assertIn('compare', stages)

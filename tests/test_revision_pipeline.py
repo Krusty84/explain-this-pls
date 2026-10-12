@@ -10,7 +10,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from explain import Runner
+from src.runtime.runner import Runner
 from src.runtime.reporting import Reporter
 from fixtures.ledger_response import response
 from fixtures.architecture_checks import assert_architecture
@@ -59,7 +59,7 @@ class RevisionPipelineTests(FolderFixture):
             originals[(stage, context.get('revision_id'))] = copy.deepcopy(outcome)
             return cli_result(command, outcome)
 
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process):
             manifest, code = runner.run()
         self.runner, self.run_dir = runner, run_dir
         self.calls, self.originals = calls, originals
@@ -139,7 +139,7 @@ class RevisionPipelineTests(FolderFixture):
         def change(stage, context, data):
             observed.append(err.getvalue())
             return initial_finding(stage, context, data)
-        with patch('explain.NullReporter', return_value=reporter):
+        with patch('src.runtime.session.NullReporter', return_value=reporter):
             manifest, code = self.run_case(change)
         self.assertEqual(code, 0)
         paths = [self.run_dir / 'revisions/001/ARCHITECTURE.md',
@@ -178,7 +178,7 @@ class RevisionPipelineTests(FolderFixture):
                 self.addCleanup(reporter.close)
                 def change(stage, context, data):
                     return (data | {'unexpected': True} if recovered else 'invalid_json') if stage == 'study' else data
-                with patch('explain.NullReporter', return_value=reporter):
+                with patch('src.runtime.session.NullReporter', return_value=reporter):
                     manifest, code = self.run_case(change, policy='compromise')
                 self.assertNotEqual(code, 0)
                 expected = []
@@ -460,14 +460,14 @@ class RevisionGitPipelineTests(unittest.TestCase):
                         if context['stage'] == 'study' and context['branch'] == 'master':
                             data['unexpected'] = True
                         elif context['stage'] == 'compare':
-                            first = runner.manifest['branches'][0]
-                            directory = runner.run_dir / first['directory']
+                            first = runner.session.manifest['branches'][0]
+                            directory = runner.session.run_dir / first['directory']
                             if location == 'revision':
                                 directory = directory / 'revisions' / '001'
                             with (directory / name).open('ab') as stream:
                                 stream.write(b'\nTAMPERED\n')
                         return cli_result(command, data)
-                    with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
+                    with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process):
                         manifest, code = runner.run()
                     self.assertIn('compare', calls)
                     self.assertIsNone(manifest['branches'][0]['study'])
@@ -488,11 +488,11 @@ class RevisionGitPipelineTests(unittest.TestCase):
             context = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n', 1)[1]
                                  .split('\n\n# Required final JSON Schema', 1)[0])
             if context['stage'] == 'compare':
-                first = runner.manifest['branches'][0]
-                with (runner.run_dir / first['directory'] / 'coverage.plan.json').open('ab') as stream:
+                first = runner.session.manifest['branches'][0]
+                with (runner.session.run_dir / first['directory'] / 'coverage.plan.json').open('ab') as stream:
                     stream.write(b'\nTAMPERED\n')
             return cli_result(command, response(context))
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process):
             manifest, code = runner.run()
         self.assertEqual((code, manifest['status'], manifest['critical_failure']), (1, 'FAILED', True))
         self.assertFalse(manifest['publication_complete'])
@@ -520,7 +520,7 @@ class RevisionGitPipelineTests(unittest.TestCase):
                     data['report_sections'][0]['blocks'][0]['markdown'] = 'Revised master behavior\n'
             if stage == 'compare':
                 prompt = payload.decode()
-                for published in runner.manifest['branches']:
+                for published in runner.session.manifest['branches']:
                     self.assertIn(published['source_commit'], prompt)
                     for artifact in ('study', 'review'):
                         document = published[artifact]
@@ -541,7 +541,7 @@ class RevisionGitPipelineTests(unittest.TestCase):
                     branch_statement='Test branch behavior', evidence_refs=refs,
                     explanation='The fixture contrasts the two supplied accepted reports.')]
             return cli_result(command, data)
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process):
             manifest, code = runner.run()
         self.assertEqual((code, manifest['status']), (0, 'COMPLETE'))
         self.assertEqual(len(calls), 7)
@@ -567,9 +567,9 @@ class RevisionGitPipelineTests(unittest.TestCase):
         paths = []
         for branch in manifest['branches']:
             for revision in branch['revisions']:
-                paths.extend(runner.run_dir / revision['directory'] / name
+                paths.extend(runner.session.run_dir / revision['directory'] / name
                              for name in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md'))
-        paths.append(runner.run_dir / 'comparison/BRANCH_COMPARISON.md')
+        paths.append(runner.session.run_dir / 'comparison/BRANCH_COMPARISON.md')
         self.assertEqual([line for line in err.getvalue().splitlines() if line.startswith('      Report: ')],
                          ['      Report: ' + str(path) for path in paths])
         self.assertEqual(self.repo.symbolic(), 'master')

@@ -8,7 +8,10 @@ import unittest
 from unittest.mock import patch
 
 from src.contracts.contracts import ContractError
-from explain import AuditError, Folder, Runner, save_json
+from src.runtime.errors import AuditError
+from src.analysis.folder import Folder
+from src.runtime.runner import Runner
+from src.runtime.artifacts import save_json
 from fixtures.ledger_response import response, prompt_context
 from test_folder import FolderFixture
 import test_explain as git_fixtures
@@ -31,7 +34,7 @@ class PrivateChainRecoveryTests(FolderFixture):
                 runner = Runner(self.config() | {'result_policy': 'compromise'}, self.base / filename)
                 context = {'source_directory': str(self.source),
                            'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
-                original = runner.validate_attempt
+                original = runner.invoker.validator.validate_attempt
                 changed = []
                 def process(command, cwd, env, payload, **kwargs):
                     wire = response(prompt_context(payload))
@@ -47,15 +50,15 @@ class PrivateChainRecoveryTests(FolderFixture):
                         corrupt_json(target)
                         changed.append(target)
                         raise
-                with patch('explain.process', side_effect=process), \
-                        patch.object(runner, 'validate_attempt', side_effect=validate), \
+                with patch('src.runtime.process.process', side_effect=process), \
+                        patch.object(runner.invoker.validator, 'validate_attempt', side_effect=validate), \
                         self.assertRaises(AuditError) as caught:
-                    runner.invoke('study', context, runner.run_dir / 'study.logs')
+                    runner.invoke('study', context, runner.session.run_dir / 'study.logs')
                 self.assertEqual(len(changed), 1)
                 self.assertEqual(caught.exception.failure_layer, 'integrity')
-                self.assertTrue(runner.critical_failure)
-                self.assertFalse((runner.run_dir / 'study.material.json').exists())
-                self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
+                self.assertTrue(runner.session.critical_failure)
+                self.assertFalse((runner.session.run_dir / 'study.material.json').exists())
+                self.assertFalse((runner.session.run_dir / 'ARCHITECTURE.md').exists())
 
     def test_wrong_xxx_task_never_retries_or_retains_material(self):
         for policy in ('strict', 'compromise'):
@@ -71,11 +74,11 @@ class PrivateChainRecoveryTests(FolderFixture):
                 wire['task'] = 'architecture_comparison'
                 return wire, {}
             with patch('src.backends.xxx.invoke', side_effect=invoke), self.assertRaises(ContractError) as caught:
-                runner.invoke('study', context, runner.run_dir / 'study.logs')
+                runner.invoke('study', context, runner.session.run_dir / 'study.logs')
             self.assertEqual(caught.exception.details.get('code'), 'TASK_IDENTITY_MISMATCH')
             self.assertEqual(len(calls), 1)
-            self.assertFalse((runner.run_dir / 'study.material.json').exists())
-            self.assertFalse((runner.run_dir / 'study.logs/attempt-002').exists())
+            self.assertFalse((runner.session.run_dir / 'study.material.json').exists())
+            self.assertFalse((runner.session.run_dir / 'study.logs/attempt-002').exists())
 
     def test_review_cannot_change_published_study_conversion_chain(self):
         for filename in ('extracted.json', 'expanded.json', 'normalized.json', 'normalization.json',
@@ -87,10 +90,10 @@ class PrivateChainRecoveryTests(FolderFixture):
                     context = prompt_context(payload)
                     calls.append(context['stage'])
                     if context['stage'] == 'review':
-                        corrupt_json(runner.run_dir / 'revisions/001/study.logs/attempt-001' / filename)
+                        corrupt_json(runner.session.run_dir / 'revisions/001/study.logs/attempt-001' / filename)
                     return cli_result(command, response(context))
                 with patch.object(runner, 'check_cli', return_value={}), \
-                        patch('explain.process', side_effect=process):
+                        patch('src.runtime.process.process', side_effect=process):
                     manifest, code = runner.run()
                 self.assertEqual(calls, ['study', 'review'])
                 self.assertEqual((code, manifest['status'], manifest['critical_failure']), (1, 'FAILED', True))
@@ -115,13 +118,13 @@ class PrivateChainCompareTests(unittest.TestCase):
                     context = prompt_context(payload)
                     calls.append(context['stage'])
                     if context['stage'] == 'compare':
-                        branch = runner.manifest['branches'][0]
-                        target = (runner.run_dir / branch['directory'] / 'revisions' /
+                        branch = runner.session.manifest['branches'][0]
+                        target = (runner.session.run_dir / branch['directory'] / 'revisions' /
                                   branch['selected_revision'] / 'study.logs/attempt-001' / filename)
                         corrupt_json(target)
                     return cli_result(command, response(context))
                 with patch.object(runner, 'check_cli', return_value={}), \
-                        patch('explain.process', side_effect=process):
+                        patch('src.runtime.process.process', side_effect=process):
                     manifest, code = runner.run()
                 self.assertIn('compare', calls)
                 self.assertEqual((code, manifest['status'], manifest['critical_failure']), (1, 'FAILED', True))

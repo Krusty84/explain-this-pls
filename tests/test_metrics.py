@@ -11,7 +11,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from explain import Runner
+from src.runtime.runner import Runner
 from src.backends import codex
 from src.contracts.contracts import response_error
 from src.runtime.metrics import RunMetrics, measurement, number, sum_usage, usage
@@ -87,7 +87,7 @@ class PipelineMetricsTests(FolderFixture):
         def answer(command, cwd, env, payload, **kwargs):
             context = prompt_context(payload)
             return cli_result(command, initial_finding(context['stage'], context, response(context)))
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=answer):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=answer):
             manifest, code = runner.run()
         self.assertEqual(code, 0)
         metrics = manifest['metrics']
@@ -95,7 +95,7 @@ class PipelineMetricsTests(FolderFixture):
         self.assertEqual(metrics['usage']['total_tokens'], 480)
         self.assertEqual([r['stage'] for r in metrics['stages']], ['study', 'review', 'revise', 'review'])
         self.assertEqual(err.getvalue().count('Tokens: 120'), 4)
-        self.assertEqual(json.loads((runner.run_dir / 'manifest.json').read_text())['metrics'], metrics)
+        self.assertEqual(json.loads((runner.session.run_dir / 'manifest.json').read_text())['metrics'], metrics)
         self.assertNotIn('Total usage:', Path(manifest['final_report']).read_text())
 
     def test_errors_timeouts_and_interruptions_retain_cli_usage(self):
@@ -107,7 +107,7 @@ class PipelineMetricsTests(FolderFixture):
                 cfg['continue_on_error'] = False
                 runner = Runner(cfg, self.base / (backend + failure))
                 if backend == 'opencode':
-                    runner.versions[backend + ':' + cfg['_agents']['study']['executable']] = 'opencode v2.0.23'
+                    runner.session.versions[backend + ':' + cfg['_agents']['study']['executable']] = 'opencode v2.0.23'
                 def answer(command, cwd, env, payload, **kwargs):
                     context = prompt_context(payload)
                     data = response(context)
@@ -124,7 +124,7 @@ class PipelineMetricsTests(FolderFixture):
                     if failed and failure == 'exit':
                         result['returncode'] = 17
                     return result
-                with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=answer):
+                with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=answer):
                     manifest, code = runner.run()
                 with self.subTest(backend=backend, failure=failure):
                     self.assertNotEqual(code, 0)
@@ -134,7 +134,7 @@ class PipelineMetricsTests(FolderFixture):
                     self.assertEqual(metrics['stages'][-1]['status'], 'FAILED')
                     if backend == 'codex' and failure in ('timeout', 'interrupt'):
                         self.assertEqual(metrics['usage']['coverage']['total_tokens'], 'partial')
-                    attempt = json.loads((runner.run_dir / 'revisions/001/study.logs/attempt-001/invocation.json').read_text())
+                    attempt = json.loads((runner.session.run_dir / 'revisions/001/study.logs/attempt-001/invocation.json').read_text())
                     self.assertEqual(attempt['metrics']['attempts'], 1)
                     self.assertGreaterEqual(attempt['metrics']['duration_seconds'], 0)
 

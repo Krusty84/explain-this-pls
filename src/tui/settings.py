@@ -5,7 +5,7 @@
 import json
 from pathlib import Path
 
-from explain import atomic
+from src.runtime.artifacts import atomic
 
 
 def config_directory(value):

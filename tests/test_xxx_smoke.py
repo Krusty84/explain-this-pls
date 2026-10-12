@@ -11,7 +11,8 @@ import sys
 import tempfile
 import unittest
 
-from explain import Runner, load_config
+from src.runtime.runner import Runner
+from src.runtime.config import load_config
 
 ROOT = Path(__file__).resolve().parents[1]
 

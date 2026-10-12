@@ -76,7 +76,7 @@ class AdvisoryIndependenceTests(FolderFixture):
 
             with self.subTest(valid_pointer=valid_pointer):
                 manifest, code = self.run_case(large=False, policy='strict', review=True, change=change)
-                inventory = json.loads((self.runner.run_dir / 'source.inventory.json').read_text())
+                inventory = json.loads((self.runner.session.run_dir / 'source.inventory.json').read_text())
                 inventories.append(inventory)
                 plans.append(manifest['coverage_plan'])
                 paths = {entry['path'] for entry in inventory['entries'] if entry['type'] == 'file'}
@@ -130,5 +130,5 @@ class AdvisoryIndependenceTests(FolderFixture):
         self.assertEqual(document['completion_status'], 'PARTIAL')
         self.assertEqual(document['limitations'], ['Runtime behavior remains unverified.'])
         self.assertEqual(document['claims'][0]['id'], 'C-001')
-        self.assertTrue((self.runner.run_dir / 'study.json').exists())
-        self.assertTrue((self.runner.run_dir / 'ARCHITECTURE.md').exists())
+        self.assertTrue((self.runner.session.run_dir / 'study.json').exists())
+        self.assertTrue((self.runner.session.run_dir / 'ARCHITECTURE.md').exists())

@@ -10,7 +10,9 @@ import time
 import unittest
 from unittest.mock import patch
 
-from explain import AuditError, Runner, check_read_loop, cli_env, process
+from src.runtime.errors import AuditError
+from src.runtime.runner import Runner
+from src.runtime.process import check_read_loop, cli_env, process
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
 from fixtures.xxx_protocol import transcript
@@ -46,7 +48,7 @@ class PreparedContextTests(FolderFixture):
                 if 'source_context' in call['context']:
                     self.assertLessEqual(len(json.dumps(call['context']['source_context'],
                                                         ensure_ascii=False).encode()), 65536)
-            manifests = list(self.runner.run_dir.rglob('source-context.manifest.json'))
+            manifests = list(self.runner.session.run_dir.rglob('source-context.manifest.json'))
             self.assertEqual(len(manifests), len(self.calls))
         self.assertTrue(all(context == contexts[0] for context in contexts))
 
@@ -86,13 +88,13 @@ class PreparedContextTests(FolderFixture):
                 self.fail('The repeated results must stop the stage.')
             return result
 
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=answer):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=answer):
             manifest, code = runner.run()
         self.assertNotEqual(code, 0)
         self.assertEqual(calls, ['study'])
         self.assertEqual(manifest['coverage_plan']['origin'], 'SOURCE_INVENTORY')
-        self.assertEqual(json.loads((runner.run_dir / 'coverage.plan.json').read_text()), manifest['coverage_plan'])
-        attempts = list(runner.run_dir.rglob('attempt-*/invocation.json'))
+        self.assertEqual(json.loads((runner.session.run_dir / 'coverage.plan.json').read_text()), manifest['coverage_plan'])
+        attempts = list(runner.session.run_dir.rglob('attempt-*/invocation.json'))
         failed = next(json.loads(path.read_text()) for path in attempts
                       if json.loads(path.read_text())['status'] == 'FAILED')
         self.assertEqual(failed['error']['code'], 'NO_PROGRESS')
@@ -142,13 +144,13 @@ class PreparedContextTests(FolderFixture):
                 self.fail('The repeated results must stop XXX.')
             return {'returncode': 0, 'stdout': output.encode(), 'stderr': b''}
 
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=answer):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=answer):
             manifest, code = runner.run()
         self.assertNotEqual(code, 0)
         self.assertEqual(calls, ['study'])
         self.assertEqual(service_calls, ['export', 'delete'])
         self.assertEqual(exports, {})
-        failed = json.loads(next(runner.run_dir.rglob('study.logs/attempt-001/invocation.json')).read_text())
+        failed = json.loads(next(runner.session.run_dir.rglob('study.logs/attempt-001/invocation.json')).read_text())
         self.assertEqual(failed['error']['code'], 'NO_PROGRESS')
         self.assertEqual(failed['session_cleanup'], 'deleted')
         self.assertEqual(failed['tool_observation']['calls'], 51)

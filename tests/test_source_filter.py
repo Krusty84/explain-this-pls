@@ -9,7 +9,9 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from explain import AuditError, Folder, Runner, UnsafeRepository
+from src.runtime.errors import AuditError, UnsafeRepository
+from src.analysis.folder import Folder
+from src.runtime.runner import Runner
 from src.analysis.coverage_plan import build_coverage_plan, inventory_summary
 from src.analysis.evidence import resolve_evidence, _read_confined
 from src.analysis.git_sources import tracked_paths, ignored_paths, inventory_delta
@@ -38,7 +40,7 @@ class SourceFilterConfigTests(FolderFixture):
         invalid += [{'exclude_paths': ['build', 'build']}]
         for value in invalid:
             self.value['source_filter'] = value
-            with self.subTest(value=value), patch('explain.shutil.which') as which:
+            with self.subTest(value=value), patch('src.runtime.config.shutil.which') as which:
                 with self.assertRaises(AuditError) as caught:
                     self.config()
                 self.assertEqual(caught.exception.code, 'INVALID_CONFIG')

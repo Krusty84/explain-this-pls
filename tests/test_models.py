@@ -19,7 +19,8 @@ from unittest.mock import patch
 
 from textual.widgets import Button, DataTable, Select, Static
 
-from explain import load_config, main
+from src.runtime.config import load_config
+from src.cli import main
 from src.backends import codex_models
 from src.contracts.contracts import jsonc
 from src.tui.app import ExplainApp
@@ -65,7 +66,7 @@ class ModelFixture:
 class ModelCLITests(ModelFixture, unittest.TestCase):
     def invoke(self, *arguments):
         stdout, stderr = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), patch('explain.run_audit') as audit:
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), patch('src.cli.run_audit') as audit:
             code = main(['--config', str(self.path), '--models', *arguments])
             audit.assert_not_called()
         self.assertFalse((self.base / 'reports').exists())

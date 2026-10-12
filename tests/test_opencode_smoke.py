@@ -12,7 +12,8 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from explain import Runner, load_config
+from src.runtime.runner import Runner
+from src.runtime.config import load_config
 from fixtures.ledger_response import prompt_context, response
 
 

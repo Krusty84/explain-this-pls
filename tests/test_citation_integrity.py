@@ -9,7 +9,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from explain import AuditError, Runner, run_audit, save_json
+from src.runtime.errors import AuditError
+from src.runtime.runner import Runner
+from src.runtime.audit import run_audit
+from src.runtime.artifacts import save_json
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
 from src.runtime.reporting import Reporter
@@ -35,7 +38,7 @@ class CitationIntegrityTests(FolderFixture):
                 runner = Runner(self.config(), self.base / filename)
                 calls, originals = [], {}
                 source_bytes = (self.source / 'app.py').read_bytes()
-                attempt = runner.run_dir / 'revisions/001/study.logs/attempt-001'
+                attempt = runner.session.run_dir / 'revisions/001/study.logs/attempt-001'
 
                 def process(command, cwd, env, payload, **kwargs):
                     context = prompt_context(payload)
@@ -59,7 +62,7 @@ class CitationIntegrityTests(FolderFixture):
                     return cli_result(command, self.model_answer(context))
 
                 with patch.object(runner, 'check_cli', return_value={}), \
-                        patch('explain.process', side_effect=process):
+                        patch('src.runtime.process.process', side_effect=process):
                     manifest, code = runner.run()
                 self.assertEqual(calls, ['study', 'review'])
                 self.assertEqual((code, manifest['status'], manifest['critical_failure']), (1, 'FAILED', True))
@@ -78,7 +81,7 @@ class CitationIntegrityTests(FolderFixture):
             context = prompt_context(payload)
             calls.append(context['stage'])
             if context['stage'] == 'review':
-                directory = runner.run_dir / 'revisions/001'
+                directory = runner.session.run_dir / 'revisions/001'
                 original = directory / 'study.original.md'
                 preserved[original] = original.read_bytes()
                 extracted = directory / 'study.logs/attempt-001/extracted.json'
@@ -90,7 +93,7 @@ class CitationIntegrityTests(FolderFixture):
                 report.write_text(text.replace(reference, '[E-001](#source-e-999)', 1))
             return cli_result(command, self.model_answer(context))
 
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process):
             manifest, code = runner.run()
         self.assertEqual(calls, ['study', 'review'])
         self.assertEqual((code, manifest['status'], manifest['critical_failure']), (1, 'FAILED', True))
@@ -102,18 +105,18 @@ class CitationIntegrityTests(FolderFixture):
 
     def test_publication_rejects_tampered_source_registry_with_unchanged_canonical_document(self):
         runner = Runner(self.config(), self.base / 'publication-source-registry')
-        inventory, _ = runner.source_inventory()
+        inventory, _ = runner.session.source_inventory()
         context = dict(source_directory=str(self.source), source_fingerprint=inventory['source_fingerprint'])
-        destination = runner.run_dir / 'study.logs'
+        destination = runner.session.run_dir / 'study.logs'
 
         def process(command, cwd, env, payload, **kwargs):
             return cli_result(command, self.model_answer(prompt_context(payload)))
 
-        with patch('explain.process', side_effect=process):
+        with patch('src.runtime.process.process', side_effect=process):
             data, meta = runner.invoke('study', context, destination)
         self.assertTrue(meta['publication_complete'])
-        report = runner.run_dir / 'ARCHITECTURE.md'
-        original_path = runner.run_dir / 'study.original.md'
+        report = runner.session.run_dir / 'ARCHITECTURE.md'
+        original_path = runner.session.run_dir / 'study.original.md'
         original = original_path.read_bytes()
         extracted_path = destination / 'attempt-001/extracted.json'
         extracted = extracted_path.read_bytes()
@@ -123,7 +126,7 @@ class CitationIntegrityTests(FolderFixture):
         tampered = expected.replace(b'RESOLVED; locator resolved; quote matched', b'TAMPERED; locator resolved; quote matched', 1)
         report.write_bytes(tampered)
         with self.assertRaises(AuditError) as caught:
-            runner.publish_result('study', data, destination)
+            runner.publisher.publish_result('study', data, destination)
         self.assertEqual(caught.exception.failure_layer, 'publication')
         self.assertEqual(report.read_bytes(), tampered)
         self.assertEqual(original_path.read_bytes(), original)
@@ -156,12 +159,12 @@ class CitationIntegrityTests(FolderFixture):
                     result = original_run(runner, check_only)
                     if failure == 'late_close':
                         completed.append(copy.deepcopy(result[0]))
-                        runner.repo = SimpleNamespace(close=Mock(side_effect=OSError('Late cleanup failed')))
+                        runner.session.repo = SimpleNamespace(close=Mock(side_effect=OSError('Late cleanup failed')))
                     return result
 
                 with patch.object(Runner, 'check_cli', return_value={}), \
                         patch.object(Runner, 'run', autospec=True, side_effect=run), \
-                        patch('explain.process', side_effect=model), patch('explain.save_json', side_effect=write):
+                        patch('src.runtime.process.process', side_effect=model), patch('src.runtime.artifacts.save_json', side_effect=write):
                     code = run_audit(args, reporter)
                 self.assertEqual(len(completed), 1)
                 self.assertEqual(completed[0]['status'], 'COMPLETE_WITH_WARNINGS')

@@ -20,7 +20,7 @@ from unittest.mock import Mock, patch
 
 from textual.widgets import Button, DataTable, Input, Static, TabbedContent
 
-from explain import main
+from src.cli import main
 from src.runtime.metrics import usage
 from src.runtime.reporting import Reporter
 from src.tui.app import ExplainApp, FolderChooser, WorkerMessage
@@ -75,7 +75,7 @@ class TuiRoutingTests(unittest.TestCase):
         for args in ([], ['--tui'], ['--check'], ['--tui', '--output', 'json'], ['--tui', '--output', 'text']):
             with self.subTest(args=args), patch('sys.stdin.isatty', return_value=False), \
                     contextlib.redirect_stderr(io.StringIO()) as stderr, \
-                    patch('explain.run_audit') as audit, self.assertRaises(SystemExit) as exc:
+                    patch('src.cli.run_audit') as audit, self.assertRaises(SystemExit) as exc:
                 main(args)
             self.assertEqual(exc.exception.code, 2)
             self.assertIn('usage:', stderr.getvalue())
@@ -85,7 +85,7 @@ class TuiRoutingTests(unittest.TestCase):
         for args in ([], ['--tui'], ['--tui', '--config', 'project.jsonc']):
             with self.subTest(args=args), patch('sys.stdin.isatty', return_value=True), \
                     patch('sys.stdout.isatty', return_value=True), patch.dict(os.environ, {'TERM': 'xterm'}), \
-                    patch('src.tui.app.launch', return_value=130) as launch, patch('explain.run_audit') as audit:
+                    patch('src.tui.app.launch', return_value=130) as launch, patch('src.cli.run_audit') as audit:
                 self.assertEqual(main(args), 130)
                 launch.assert_called_once()
                 audit.assert_not_called()

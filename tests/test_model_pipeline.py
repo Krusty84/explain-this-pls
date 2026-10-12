@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from src.analysis.evidence import canonical, sha
-from explain import Runner
+from src.runtime.runner import Runner
 from fixtures.ledger_response import response, prompt_context
 from test_folder import FolderFixture
 from test_revision_pipeline import initial_finding
@@ -40,7 +40,7 @@ class HashlessPipelineTests(FolderFixture):
                 data = change(runner, context, data)
             calls.append((context, payload.decode(), data))
             return cli_result(command, data)
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process):
             manifest, code = runner.run()
         return runner, manifest, code, calls
 
@@ -62,7 +62,7 @@ class HashlessPipelineTests(FolderFixture):
             self.assertNotIn('source_fingerprint', raw)
             if context['stage'] == 'review':
                 self.assertNotIn('target', raw)
-        attempts = list(runner.run_dir.rglob('attempt-001'))
+        attempts = list(runner.session.run_dir.rglob('attempt-001'))
         self.assertEqual(len(attempts), 4)
         for attempt in attempts:
             raw = json.loads((attempt / 'extracted.json').read_text())
@@ -87,13 +87,13 @@ class HashlessPipelineTests(FolderFixture):
     def test_model_cannot_change_its_private_binding_file(self):
         def change(runner, context, data):
             if context['stage'] == 'study':
-                path = runner.run_dir / 'revisions/001/study.logs/attempt-001/binding.json'
+                path = runner.session.run_dir / 'revisions/001/study.logs/attempt-001/binding.json'
                 path.write_bytes(path.read_bytes() + b'\nchanged\n')
             return data
         runner, manifest, code, calls = self.execute_case(change)
         self.assertEqual((code, manifest['status'], manifest['critical_failure']), (1, 'FAILED', True))
         self.assertFalse(manifest['publication_complete'])
-        self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
+        self.assertFalse((runner.session.run_dir / 'ARCHITECTURE.md').exists())
         self.assertEqual([c['stage'] for c, _, _ in calls], ['study'])
         self.assertTrue(any(d.get('failure_layer') == 'integrity' for d in manifest['diagnostics']))
 
@@ -108,7 +108,7 @@ class HashlessPipelineTests(FolderFixture):
         self.assertIsNone(manifest['study'])
         self.assertNotIn('study_material', manifest['revisions'][0])
         self.assertEqual([c['stage'] for c, _, _ in calls], ['study'])
-        self.assertFalse((runner.run_dir / 'revisions/001/study.material.json').exists())
+        self.assertFalse((runner.session.run_dir / 'revisions/001/study.material.json').exists())
 
 
 class HashlessXXXTests(unittest.TestCase):

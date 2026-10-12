@@ -13,7 +13,11 @@ from unittest.mock import patch
 
 from src.contracts.contracts import ContractError, SCHEMAS, schema_diagnostics, strict_json, validate_result
 from src.runtime.execution import Budget, execution_settings
-from explain import AuditError, Folder, Runner, atomic, load_config
+from src.runtime.errors import AuditError
+from src.analysis.folder import Folder
+from src.runtime.runner import Runner
+from src.runtime.artifacts import atomic
+from src.runtime.config import load_config
 from src.backends import xxx
 from src.backends.json_response import json_object_response
 from src.model.structured_output import blocked_comparison, required_unresolved
@@ -83,11 +87,11 @@ class XXXOutputTests(unittest.TestCase):
         config['execution'] = {'structured_output_repair_attempts': repairs, **(settings or {})}
         destination = self.root / f'case-{len(list(self.root.glob("case-*")))}' / (stage + '.logs')
         runner = Runner(config, destination.parent)
-        runner.versions[backend + ':' + str(self.cli)] = '1.2.27'
+        runner.session.versions[backend + ':' + str(self.cli)] = '1.2.27'
         context = {'source_mode': 'folder', 'source_directory': str(self.source),
                    'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
         if stage == 'review':
-            context = runner.freeze_review(materialize_study(response(context)), context, destination.parent)
+            context = runner.publisher.freeze_review(materialize_study(response(context)), context, destination.parent)
         self.destination, self.last_runner = destination, runner
         with patch.dict(os.environ, self.env | {'AUDIT_FAKE_CASE': scenario}):
             return runner.invoke(stage, context, destination)

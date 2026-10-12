@@ -21,7 +21,8 @@ from unittest.mock import patch
 import test_explain as fixtures
 import test_startup as startup
 import test_submodules as recursive
-from explain import AuditError, GitRuntime, Repository, UnsafeRepository
+from src.runtime.errors import AuditError, UnsafeRepository
+from src.analysis.repository import GitRuntime, Repository
 
 
 class VersionTests(unittest.TestCase):
@@ -155,17 +156,17 @@ class HeadTests(unittest.TestCase):
                 head.unlink()
                 head.write_bytes(original)
             return real_open(path, *args, **kwargs)
-        with patch('explain.os.open', side_effect=substitute):
+        with patch('src.analysis.repository.os.open', side_effect=substitute):
             with self.assertRaisesRegex(UnsafeRepository, 'HEAD changed while opening'):
                 self.repo.symbolic_ref()
         def mutate(fd):
             info = real_fstat(fd)
             head.write_bytes(original)
             return info
-        with patch('explain.os.fstat', side_effect=mutate):
+        with patch('src.analysis.repository.os.fstat', side_effect=mutate):
             with self.assertRaisesRegex(UnsafeRepository, 'HEAD changed while reading'):
                 self.repo.symbolic_ref()
-        with patch('explain.os.open', side_effect=PermissionError('injected permission denial')):
+        with patch('src.analysis.repository.os.open', side_effect=PermissionError('injected permission denial')):
             with self.assertRaisesRegex(UnsafeRepository, 'Cannot read HEAD.*permission denial'):
                 self.repo.symbolic_ref()
 
@@ -430,7 +431,7 @@ print(base)
                     before = {str(p): p.read_bytes() for p in self.path.rglob('*') if p.is_file()}
                     for check in (True, False):
                         # The real runner is always UID 0; it never changes user.
-                        with patch('explain.subprocess.run', wraps=subprocess.run) as commands:
+                        with patch('src.analysis.repository.subprocess.run', wraps=subprocess.run) as commands:
                             with self.assertRaisesRegex(AuditError, 'ownership mismatch'):
                                 Repository(self.path).preflight(['master', 'topic'])
                         denied_checkout = self.path if target in (self.path, self.path / '.git') else child

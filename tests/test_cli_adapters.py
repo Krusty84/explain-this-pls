@@ -16,7 +16,8 @@ sys.path.insert(0, str(ROOT))
 
 from src.backends import codex
 from src.contracts.contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS
-from explain import AuditError, Runner
+from src.runtime.errors import AuditError
+from src.runtime.runner import Runner
 
 
 ADAPTERS = {'codex': codex}
@@ -124,7 +125,7 @@ class CLIPreflightTests(unittest.TestCase):
                     {'returncode': 0, 'stdout': b'fixture 1.0\n', 'stderr': b'startup warning'},
                     {'returncode': 0, 'stdout': b'CLI help\n', 'stderr': ' '.join(flags).encode()},
                 ]
-                with patch('explain.process', side_effect=responses) as process:
+                with patch('src.runtime.process.process', side_effect=responses) as process:
                     result = runner.check_cli()
                 self.assertEqual(process.call_count, 2)
                 self.assertEqual(process.call_args_list[0].args[0], ['/configured/agent', '--version'])
@@ -132,7 +133,7 @@ class CLIPreflightTests(unittest.TestCase):
                                  ['/configured/agent', *(['exec'] if backend == 'codex' else []), '--help'])
                 key = backend + ':/configured/agent'
                 self.assertEqual(result, {key: {'version': 'fixture 1.0', 'required_flags': flags}})
-                self.assertEqual(runner.versions, {key: 'fixture 1.0'})
+                self.assertEqual(runner.session.versions, {key: 'fixture 1.0'})
 
     def test_missing_required_options_still_fail_before_invocation(self):
         for backend in ADAPTERS:
@@ -145,14 +146,14 @@ class CLIPreflightTests(unittest.TestCase):
                         {'returncode': 0, 'stdout': ' '.join(f for f in flags if f != missing).encode(),
                          'stderr': b''},
                     ]
-                    with patch('explain.process', side_effect=responses) as process, \
+                    with patch('src.runtime.process.process', side_effect=responses) as process, \
                             self.assertRaises(AuditError) as caught:
                         runner.check_cli()
                     self.assertEqual(process.call_count, 2)
                     self.assertEqual(caught.exception.code, 'BACKEND_INCOMPATIBLE')
                     self.assertEqual(caught.exception.failure_kind, 'BACKEND_INCOMPATIBLE')
                     self.assertEqual(caught.exception.failure_layer, 'compatibility')
-                    self.assertEqual(runner.versions, {})
+                    self.assertEqual(runner.session.versions, {})
 
 
 if __name__ == '__main__':

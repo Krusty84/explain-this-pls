@@ -9,7 +9,7 @@ import signal
 import sys
 import threading
 
-from explain import run_audit
+from src.runtime.audit import run_audit
 from src.runtime.reporting import Reporter, existing_file
 
 

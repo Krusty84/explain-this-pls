@@ -145,7 +145,8 @@ class LedgerTests(unittest.TestCase):
             return original(path, flags, *args, **kwargs)
         with patch('src.analysis.evidence.os.open', side_effect=replace_component):
             self.assertNotEqual(self.resolved(study(self.context)['evidence'][0] | {'path': 'dir/passwd'})['status'], 'RESOLVED')
-        from explain import Folder, AuditError
+        from src.analysis.folder import Folder
+        from src.runtime.errors import AuditError
         # Inventory must also retain canonical authorization when a root ancestor
         # is replaced after construction; it must not resolve the new symlink.
         ancestor = self.root / 'ancestor'; ancestor.mkdir()

@@ -13,10 +13,11 @@ import unittest
 
 from src.contracts.contracts import ContractError
 from src.runtime.execution import Budget, execution_settings
-from explain import cli_env, process
+from src.runtime.process import cli_env, process
 from unittest.mock import patch
 from src.contracts.contracts import response_error
-from explain import AuditError, Runner
+from src.runtime.errors import AuditError
+from src.runtime.runner import Runner
 import test_explain as fixtures
 
 
@@ -86,9 +87,9 @@ class TimeoutRestorationTests(unittest.TestCase):
         config['git_mode']['branches'] = ['master']
         config.update(continue_on_error=False)
         runner = Runner(config, self.base / 'timeout-run')
-        self.addCleanup(runner.repo.close)
+        self.addCleanup(runner.session.repo.close)
         with patch.object(runner, 'check_cli', return_value={}), \
-                patch('explain.process', side_effect=response_error('STAGE_TIMEOUT', 'execution', 'Expired.')):
+                patch('src.runtime.process.process', side_effect=response_error('STAGE_TIMEOUT', 'execution', 'Expired.')):
             manifest, code = runner.run()
         self.assertEqual(code, 1)
         self.assertEqual(manifest['status'], 'FAILED')
@@ -103,10 +104,10 @@ class TimeoutRestorationTests(unittest.TestCase):
         config['git_mode']['branches'] = ['master']
         config.update(continue_on_error=False)
         runner = Runner(config, self.base / 'no-progress-run')
-        self.addCleanup(runner.repo.close)
+        self.addCleanup(runner.session.repo.close)
         stopped = AuditError('Fixture read loop.', code='NO_PROGRESS',
                              failure_kind='NO_PROGRESS', failure_layer='execution')
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=stopped):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=stopped):
             manifest, code = runner.run()
         self.assertEqual(code, 1)
         self.assertTrue(manifest['restoration']['restored'])

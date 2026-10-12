@@ -97,14 +97,17 @@ def markdown(report):
 
 
 def save_report(output, report):
-    from explain import atomic, save_json
+    from src.runtime.artifacts import atomic, save_json
     save_json(output / 'comparison.json', report)
     atomic(output / 'comparison.md', markdown(report).encode('utf-8'))
 
 
 def run_comparison(config, baseline, facts, output, *, repetitions=1, live=False):
     """No model subprocess is launched unless live=True is explicitly supplied."""
-    from explain import AuditError, Runner, overlap, repository_lock, save_json
+    from src.runtime.errors import AuditError
+    from src.runtime.runner import Runner
+    from src.runtime.artifacts import overlap, save_json
+    from src.runtime.execution import repository_lock
     if type(repetitions) is not int or repetitions < 1:
         raise ValueError('Repetitions must be a positive integer.')
     stage, context = frozen_inputs(baseline, config)
@@ -138,20 +141,20 @@ def run_comparison(config, baseline, facts, output, *, repetitions=1, live=False
     report['invariants']['prompt_files'] = templates
     context_seal = sha(canonical(context))
     report['status'] = 'running'
-    runner.manifest = report
+    runner.session.manifest = report
     prepared_git = False
     try:
-        with repository_lock(source_path) if runner.repo else nullcontext():
+        with repository_lock(source_path) if runner.session.repo else nullcontext():
             try:
-                if runner.repo:
-                    pins = runner.repo.preflight([context['branch']])
+                if runner.session.repo:
+                    pins = runner.session.repo.preflight([context['branch']])
                     prepared_git = True
                     if pins[context['branch']] != context['source_commit']:
                         raise ValueError('Baseline source commit changed.')
-                    runner.repo.checkout(context['source_commit'])
-                    if source_catalog(context | {'submodules': runner.repo.submodules(context['source_commit'], verified=True)}) != context['coverage_plan']['sources']:
+                    runner.session.repo.checkout(context['source_commit'])
+                    if source_catalog(context | {'submodules': runner.session.repo.submodules(context['source_commit'], verified=True)}) != context['coverage_plan']['sources']:
                         raise ValueError('Baseline submodule identities changed.')
-                inventory, metadata = runner.source_inventory()
+                inventory, metadata = runner.session.source_inventory()
                 if inventory != context['_inventory']:
                     raise ValueError('Baseline source inventory changed.')
                 report['fact_source_checks'] = check_facts(facts, context, metadata)
@@ -159,21 +162,21 @@ def run_comparison(config, baseline, facts, output, *, repetitions=1, live=False
                 save_report(output, report)
                 for repetition in range(1, repetitions + 1):
                     for variant, source_enabled, guard_enabled in VARIANTS:
-                        current, _ = runner.source_inventory()
+                        current, _ = runner.session.source_inventory()
                         if current != inventory or sha(canonical(context)) != context_seal:
                             raise ValueError('Frozen experiment input changed.')
-                        runner.assert_coverage_file(context)
+                        runner.publisher.assert_coverage_file(context)
                         if any(sha((output / name).read_bytes()) != expected for name, expected in sealed_files.items()):
                             raise ValueError('Frozen experiment file changed.')
                         if any(sha(Path(path).read_bytes()) != expected for path, expected in templates.items()):
                             raise ValueError('Prompt template changed during comparison.')
                         if runner.check_cli() != baseline_versions:
                             raise ValueError('CLI version or capabilities changed during comparison.')
-                        runner.cfg = copy.deepcopy(baseline_config)
-                        runner.cfg['source_context']['enabled'] = source_enabled
-                        runner.cfg['execution']['read_loop_guard'] = guard_enabled
-                        runner.execution = copy.deepcopy(runner.cfg['execution'])
-                        runner.source_context.settings = copy.deepcopy(runner.cfg['source_context'])
+                        runner.session.cfg = copy.deepcopy(baseline_config)
+                        runner.session.cfg['source_context']['enabled'] = source_enabled
+                        runner.session.cfg['execution']['read_loop_guard'] = guard_enabled
+                        runner.session.execution = copy.deepcopy(runner.session.cfg['execution'])
+                        runner.session.source_context.settings = copy.deepcopy(runner.session.cfg['source_context'])
                         directory = output / variant / str(repetition)
                         destination = directory / (stage + '.logs')
                         result, meta = None, {}
@@ -197,30 +200,30 @@ def run_comparison(config, baseline, facts, output, *, repetitions=1, live=False
                             'result_path': str(directory / (stage + '.json')) if result is not None else None}
                         report['attempts'].append(row)
                         save_report(output, report)
-                        after, _ = runner.source_inventory()
+                        after, _ = runner.session.source_inventory()
                         if after != inventory:
                             raise ValueError('Source inventory changed during comparison.')
-                        if runner.repo:
-                            runner.assert_source()
+                        if runner.session.repo:
+                            runner.session.assert_source()
                         actual = meta.get('model_actual')
                         if actual and model_actual is not None and actual != model_actual:
                             raise ValueError('Reported model identity changed during comparison.')
                         if actual:
                             model_actual = actual
-                        if failure and (runner.critical_failure or getattr(failure, 'failure_layer', None) in ('integrity', 'cleanup')):
+                        if failure and (runner.session.critical_failure or getattr(failure, 'failure_layer', None) in ('integrity', 'cleanup')):
                             raise failure
                 report['status'] = 'complete'
             finally:
                 if prepared_git:
-                    report['restoration'] = runner.repo.restore()
+                    report['restoration'] = runner.session.repo.restore()
                     if not report['restoration']['restored']:
                         raise ValueError('Git restoration failed.')
     except BaseException as exc:
         report.update(status='failed', error=str(exc) or type(exc).__name__)
         raise
     finally:
-        if runner.repo:
-            runner.repo.close()
+        if runner.session.repo:
+            runner.session.repo.close()
         save_report(output, report)
     return report
 

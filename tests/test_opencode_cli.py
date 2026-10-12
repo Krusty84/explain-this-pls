@@ -8,7 +8,9 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from explain import AuditError, Folder, Runner
+from src.runtime.errors import AuditError
+from src.analysis.folder import Folder
+from src.runtime.runner import Runner
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
 from src.backends import opencode_cli as adapter
@@ -258,7 +260,7 @@ class OpenCodeAcceptanceTests(FolderFixture):
                 agent = config['_agents']['study']
                 agent['backend'] = 'opencode'
                 runner = Runner(config, self.base / ('study-' + policy))
-                runner.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
+                runner.session.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
                 context = {'source_directory': str(self.source),
                            'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
                 original = {}
@@ -268,8 +270,8 @@ class OpenCodeAcceptanceTests(FolderFixture):
                     wire['exclusions'] = [dict(path='src/generated/', reason='Generated fixture.')]
                     original.update(wire)
                     return cli_result(command, wire)
-                with patch('explain.process', side_effect=process) as mocked:
-                    data, meta = runner.invoke('study', context, runner.run_dir / 'study.logs')
+                with patch('src.runtime.process.process', side_effect=process) as mocked:
+                    data, meta = runner.invoke('study', context, runner.session.run_dir / 'study.logs')
                 self.assertEqual(mocked.call_count, 1)
                 self.assertTrue(meta['publication_complete'])
                 plan = data['review_plan']['coverage_plan']
@@ -291,7 +293,7 @@ class OpenCodeAcceptanceTests(FolderFixture):
                 agent = config['_agents']['study']
                 agent['backend'] = 'opencode'
                 runner = Runner(config, self.base / f'invalid-export-{index}')
-                runner.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
+                runner.session.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
                 context = {'source_directory': str(self.source),
                            'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
                 captured = {}
@@ -310,15 +312,15 @@ class OpenCodeAcceptanceTests(FolderFixture):
                         captured.update(export=exported, raw=raw)
                     (kwargs['log_dir'] / 'stdout.log').write_bytes(raw)
                     return {'returncode': 0, 'stdout': raw, 'stderr': b''}
-                with patch('explain.process', side_effect=process) as mocked, self.assertRaises(ContractError) as caught:
-                    runner.invoke('study', context, runner.run_dir / 'study.logs')
+                with patch('src.runtime.process.process', side_effect=process) as mocked, self.assertRaises(ContractError) as caught:
+                    runner.invoke('study', context, runner.session.run_dir / 'study.logs')
                 self.assertEqual(caught.exception.failure_kind, 'INVALID_JSON')
                 self.assertEqual(mocked.call_count, 2)
-                attempt = runner.run_dir / 'study.logs/attempt-001'
+                attempt = runner.session.run_dir / 'study.logs/attempt-001'
                 meta = json.loads((attempt / 'invocation.json').read_text())
                 self.assertEqual(meta['status'], 'FAILED')
                 self.assertFalse(meta['publication_complete'])
-                self.assertFalse((runner.run_dir / 'study.json').exists())
+                self.assertFalse((runner.session.run_dir / 'study.json').exists())
                 self.assertFalse((attempt / 'extracted.json').exists())
                 self.assertEqual((attempt / 'stdout.log').read_bytes(), captured['raw'])
                 self.assertEqual(json.loads((attempt / 'session-export/stdout.log').read_bytes()), captured['export'])
@@ -342,7 +344,7 @@ class OpenCodeAcceptanceTests(FolderFixture):
                 agent = config['_agents']['study']
                 agent['backend'] = 'opencode'
                 runner = Runner(config, self.base / f'intro-{fenced}')
-                runner.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
+                runner.session.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
                 context = {'source_directory': str(self.source),
                            'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
                 captured = {}
@@ -353,8 +355,8 @@ class OpenCodeAcceptanceTests(FolderFixture):
                     captured.update(text=text, raw=result['stdout'])
                     (kwargs['log_dir'] / 'stdout.log').write_bytes(result['stdout'])
                     return result
-                with patch('explain.process', side_effect=process) as mocked:
-                    data, meta = runner.invoke('study', context, runner.run_dir / 'study.logs')
+                with patch('src.runtime.process.process', side_effect=process) as mocked:
+                    data, meta = runner.invoke('study', context, runner.session.run_dir / 'study.logs')
                 self.assertEqual(mocked.call_count, 1)
                 self.assertTrue(meta['publication_complete'])
                 attempt = Path(meta['artifact_directory'])
@@ -368,23 +370,23 @@ class OpenCodeAcceptanceTests(FolderFixture):
         agent = config['_agents']['study']
         agent['backend'] = 'opencode'
         runner = Runner(config, self.base / 'failed-export')
-        runner.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
+        runner.session.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
         context = {'source_directory': str(self.source),
                    'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
         replies = [{'returncode': 0, 'stdout': output(transcript({})[:-1]).encode(), 'stderr': b''},
                    {'returncode': 1, 'stdout': b'', 'stderr': b'Export failed'}]
-        with patch('explain.process', side_effect=replies) as mocked, self.assertRaises(ContractError) as caught:
-            runner.invoke('study', context, runner.run_dir / 'study.logs')
+        with patch('src.runtime.process.process', side_effect=replies) as mocked, self.assertRaises(ContractError) as caught:
+            runner.invoke('study', context, runner.session.run_dir / 'study.logs')
         self.assertEqual(caught.exception.failure_kind, 'INCOMPLETE_OUTPUT')
         self.assertEqual(mocked.call_count, 2)
-        self.assertFalse((runner.run_dir / 'study.json').exists())
+        self.assertFalse((runner.session.run_dir / 'study.json').exists())
 
     def test_missing_finish_exports_once_without_repeating_the_model_call(self):
         config = self.config() | {'result_policy': 'strict'}
         agent = config['_agents']['study']
         agent['backend'] = 'opencode'
         runner = Runner(config, self.base / 'export')
-        runner.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
+        runner.session.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
         context = {'source_directory': str(self.source),
                    'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
         exported = None
@@ -397,8 +399,8 @@ class OpenCodeAcceptanceTests(FolderFixture):
             wire = response(prompt_context(payload))
             exported = session_export(wire, command[command.index('--agent') + 1])
             return {'returncode': 0, 'stdout': output(transcript(wire)[:-1]).encode(), 'stderr': b''}
-        with patch('explain.process', side_effect=process) as mocked:
-            data, meta = runner.invoke('study', context, runner.run_dir / 'study.logs')
+        with patch('src.runtime.process.process', side_effect=process) as mocked:
+            data, meta = runner.invoke('study', context, runner.session.run_dir / 'study.logs')
         self.assertEqual(mocked.call_count, 2)
         self.assertTrue(meta['publication_complete'])
         self.assertEqual(meta['provider_metadata']['completion_source'], 'session_export')
@@ -414,7 +416,7 @@ class OpenCodeAcceptanceTests(FolderFixture):
                 ('opencode v2.0.23', ['--format', '--model', '--agent'], True)):
             responses = [{'returncode': 0, 'stdout': version.encode(), 'stderr': b''},
                          {'returncode': 0, 'stdout': ' '.join(flags).encode(), 'stderr': b''}]
-            with self.subTest(version=version, flags=flags), patch('explain.process', side_effect=responses) as call:
+            with self.subTest(version=version, flags=flags), patch('src.runtime.process.process', side_effect=responses) as call:
                 if error:
                     with self.assertRaises((AuditError, ContractError)): runner.check_cli()
                 else:
@@ -431,7 +433,7 @@ class OpenCodeAcceptanceTests(FolderFixture):
                 agent = config['_agents']['study']
                 agent['backend'] = 'opencode'
                 runner = Runner(config, self.base / f'{fenced}-{failure}')
-                runner.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
+                runner.session.versions['opencode:' + agent['executable']] = 'opencode v2.0.23'
                 context = {'source_directory': str(self.source),
                            'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
                 def process(command, cwd, env, payload, **kwargs):
@@ -446,20 +448,20 @@ class OpenCodeAcceptanceTests(FolderFixture):
                     (kwargs['log_dir'] / 'stdout.log').write_bytes(result['stdout'])
                     if failure == 'exit': result['returncode'] = 1
                     return result
-                with patch('explain.process', side_effect=process) as mocked:
+                with patch('src.runtime.process.process', side_effect=process) as mocked:
                     if failure is None:
-                        data, meta = runner.invoke('study', context, runner.run_dir / 'study.logs')
+                        data, meta = runner.invoke('study', context, runner.session.run_dir / 'study.logs')
                         self.assertTrue(meta['publication_complete'])
                         self.assertIsNone(meta['model_actual'])
                         self.assertNotIn('native_envelope_valid', meta)
                     else:
                         with self.assertRaises((ContractError, AuditError)) as caught:
-                            runner.invoke('study', context, runner.run_dir / 'study.logs')
+                            runner.invoke('study', context, runner.session.run_dir / 'study.logs')
                         expected = {'schema': 'SCHEMA_ERROR', 'identity': 'IDENTITY_MISMATCH', 'exit': 'BACKEND_ERROR'}
                         self.assertEqual(caught.exception.failure_kind, expected[failure])
-                        self.assertFalse((runner.run_dir / 'study.json').exists())
+                        self.assertFalse((runner.session.run_dir / 'study.json').exists())
                     self.assertEqual(mocked.call_count, 1)
-                attempt = runner.run_dir / 'study.logs/attempt-001'
+                attempt = runner.session.run_dir / 'study.logs/attempt-001'
                 meta = json.loads((attempt / 'invocation.json').read_text())
                 self.assertEqual('response_normalization' in meta.get('provider_metadata', {}), fenced and failure != 'exit')
                 if fenced and failure != 'exit':

@@ -5,7 +5,7 @@
 import copy
 from unittest.mock import patch
 
-from explain import AuditError
+from src.runtime.errors import AuditError
 from test_folder import FolderFixture
 
 
@@ -13,7 +13,7 @@ class ConfigTests(FolderFixture):
     def test_report_language_is_checked_before_backend_lookup(self):
         for language in ('French', '', None, [], 1):
             self.value['output_language'] = language
-            with self.subTest(language=language), patch('explain.shutil.which') as which:
+            with self.subTest(language=language), patch('src.runtime.config.shutil.which') as which:
                 with self.assertRaises(AuditError) as caught:
                     self.config()
                 self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
@@ -33,7 +33,7 @@ class ConfigTests(FolderFixture):
                         'branches': ['main'], 'baseline_branch': 'main'})
                     self.value['agent']['backend'] = backend
                     self.value[key] = value
-                    with self.subTest(mode=mode, backend=backend, key=key), patch('explain.process') as process:
+                    with self.subTest(mode=mode, backend=backend, key=key), patch('src.runtime.process.process') as process:
                         with self.assertRaisesRegex(AuditError, 'Unknown configuration keys:.*' + key):
                             self.config()
                         process.assert_not_called()
@@ -51,7 +51,7 @@ class ConfigTests(FolderFixture):
                     self.value['agent']['backend'] = 'unsupported-backend'
                 else:
                     self.value['stage_agents'] = {target: {'backend': 'unsupported-backend'}}
-                with self.subTest(mode=mode, target=target), patch('explain.process') as process:
+                with self.subTest(mode=mode, target=target), patch('src.runtime.process.process') as process:
                     with self.assertRaisesRegex(AuditError, '^Unsupported backend: unsupported-backend$'):
                         self.config()
                     process.assert_not_called()
@@ -73,13 +73,13 @@ class ConfigTests(FolderFixture):
                    {'max_bytes': 4096.0}, {'max_bytes': '65536'}, {'max_bytes': None}]
         for value in invalid:
             self.value = copy.deepcopy(original) | {'source_context': value}
-            with self.subTest(value=value), patch('explain.shutil.which') as which:
+            with self.subTest(value=value), patch('src.runtime.config.shutil.which') as which:
                 with self.assertRaises(AuditError):
                     self.config()
                 which.assert_not_called()
         for value in (None, 0, 1, 'true', [], {}):
             self.value = copy.deepcopy(original) | {'execution': {'read_loop_guard': value}}
-            with self.subTest(read_loop_guard=value), patch('explain.shutil.which') as which:
+            with self.subTest(read_loop_guard=value), patch('src.runtime.config.shutil.which') as which:
                 with self.assertRaises(AuditError):
                     self.config()
                 which.assert_not_called()
@@ -88,7 +88,7 @@ class ConfigTests(FolderFixture):
         original = copy.deepcopy(self.value)
         for key in ('mode', 'folder_mode'):
             self.value = {k: v for k, v in original.items() if k != key}
-            with self.subTest(key=key), patch('explain.process') as process:
+            with self.subTest(key=key), patch('src.runtime.process.process') as process:
                 with self.assertRaisesRegex(AuditError, 'Missing configuration'):
                     self.config()
                 process.assert_not_called()
@@ -99,7 +99,7 @@ class ConfigTests(FolderFixture):
         for mode in ('git', 'folder'):
             for key, value in source.items():
                 self.value = original | {'mode': mode, 'git_mode': source, key: value}
-                with self.subTest(mode=mode, key=key), patch('explain.process') as process:
+                with self.subTest(mode=mode, key=key), patch('src.runtime.process.process') as process:
                     with self.assertRaisesRegex(AuditError, 'Unknown configuration keys:.*' + key):
                         self.config()
                     process.assert_not_called()
@@ -109,7 +109,7 @@ class ConfigTests(FolderFixture):
         for section in ('stage_agents', 'prompts'):
             self.value = copy.deepcopy(base)
             self.value[section] = {'catalog': {} if section == 'stage_agents' else './missing.md'}
-            with self.subTest(section=section), patch('explain.process') as process:
+            with self.subTest(section=section), patch('src.runtime.process.process') as process:
                 with self.assertRaisesRegex(AuditError, 'Remove ' + section + r'\.catalog') as caught:
                     self.config()
                 self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
@@ -133,7 +133,7 @@ class ConfigTests(FolderFixture):
                       {'rules': [{'path': '../outside', 'encoding': 'utf-8'}]},
                       {'rules': [{'path': '.', 'encoding': 'cp1251'}] * 2}):
             self.value['source_decoding'] = value
-            with self.subTest(value=value), patch('explain.process') as process:
+            with self.subTest(value=value), patch('src.runtime.process.process') as process:
                 with self.assertRaises(AuditError) as caught:
                     self.config()
                 self.assertEqual(caught.exception.code, 'INVALID_CONFIG')

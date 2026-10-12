@@ -19,7 +19,7 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, DirectoryTree, Footer, Header, Input, Static, TabbedContent, TabPane
 
-from explain import ROOT, load_config
+from src.runtime.config import ROOT, load_config
 from src.contracts.contracts import ContractError
 from src.runtime.reporting import Reporter, diagnostic, duration, metric_value, safe_text
 from src.tui.settings import config_directory, config_files, read_settings, save_settings

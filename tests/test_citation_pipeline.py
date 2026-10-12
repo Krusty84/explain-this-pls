@@ -9,7 +9,8 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from explain import AuditError, Runner
+from src.runtime.errors import AuditError
+from src.runtime.runner import Runner
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
 from src.analysis.evidence import canonical, sha
@@ -56,9 +57,9 @@ class CitationPipelineTests(test_folder.FolderFixture):
                 self.assertEqual(self.calls[-1]['context']['architecture_document']['program_checks']['citation_warnings'], warnings)
                 document = manifest['study']
                 validate_materialized(document)
-                architecture = (self.runner.run_dir / 'ARCHITECTURE.md').read_text()
-                assert_architecture(self, self.runner.run_dir, document,
-                                    manifest['study_invocation'], self.runner.cfg['output_language'])
+                architecture = (self.runner.session.run_dir / 'ARCHITECTURE.md').read_text()
+                assert_architecture(self, self.runner.session.run_dir, document,
+                                    manifest['study_invocation'], self.runner.session.cfg['output_language'])
                 self.assertGreater(len(architecture), len(document['report_markdown']))
                 evidence_id = warnings[0]['evidence_id'].split(':', 1)[1]
                 self.assertIn(f'[{evidence_id}](#source-{evidence_id.lower()})', architecture)
@@ -97,7 +98,7 @@ class CitationPipelineTests(test_folder.FolderFixture):
         self.assertEqual(code, 0, manifest.get('diagnostics'))
         self.assertEqual(manifest['status'], 'COMPLETE_WITH_WARNINGS')
         self.assertFalse(manifest['study']['program_checks']['policy_satisfied'])
-        self.assertTrue((self.runner.run_dir / 'ARCHITECTURE.md').exists())
+        self.assertTrue((self.runner.session.run_dir / 'ARCHITECTURE.md').exists())
         meta = manifest['study_invocation']
         attempt = Path(meta['artifact_directory'])
         details = json.loads((attempt / 'quote-diagnostics.json').read_text())
@@ -129,7 +130,7 @@ class CitationPipelineTests(test_folder.FolderFixture):
         for kind in ('range', 'indent'):
             with self.subTest(kind=kind):
                 runner = Runner(self.config(), self.base / ('correct-' + kind))
-                inventory, _ = runner.source_inventory()
+                inventory, _ = runner.session.source_inventory()
                 context = dict(source_directory=str(self.source), source_fingerprint=inventory['source_fingerprint'])
                 calls = []
                 def answer(command, cwd, env, payload, **kwargs):
@@ -140,8 +141,8 @@ class CitationPipelineTests(test_folder.FolderFixture):
                     data['evidence'][0]['id'] = 'E-1'
                     calls.append(copy.deepcopy(data))
                     return cli_result(command, data)
-                with patch('explain.process', side_effect=answer):
-                    data, meta = runner.invoke('study', context, runner.run_dir / 'study.logs')
+                with patch('src.runtime.process.process', side_effect=answer):
+                    data, meta = runner.invoke('study', context, runner.session.run_dir / 'study.logs')
                 self.assertEqual(len(calls), 1)
                 self.assertTrue(data['program_checks']['policy_satisfied'])
                 self.assertEqual(data['program_checks']['citation_warnings'][0]['action'], 'CORRECTED')
@@ -195,7 +196,7 @@ class CitationGitPipelineTests(unittest.TestCase):
                             explanation='The baseline citation needs manual verification.')]
                     return cli_result(command, data)
 
-                with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=answer):
+                with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=answer):
                     manifest, code = runner.run()
                 self.assertEqual((code, manifest['status']), (0, 'COMPLETE_WITH_WARNINGS'), manifest.get('diagnostics'))
                 self.assertEqual(calls[-1]['stage'], 'compare')
@@ -209,6 +210,6 @@ class CitationGitPipelineTests(unittest.TestCase):
                 self.assertEqual(self.repo.symbolic(), 'master')
                 self.assertEqual(self.repo.head(), self.master)
                 for branch in manifest['branches']:
-                    assert_architecture(self, runner.run_dir / branch['directory'], branch['study'],
+                    assert_architecture(self, runner.session.run_dir / branch['directory'], branch['study'],
                                         branch['study_invocation'], config['output_language'])
 

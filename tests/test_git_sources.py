@@ -14,7 +14,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from explain import Repository, Folder, UnsafeRepository, Runner, load_config, run_audit
+from src.analysis.repository import Repository
+from src.analysis.folder import Folder
+from src.runtime.errors import UnsafeRepository
+from src.runtime.runner import Runner
+from src.runtime.config import load_config
+from src.runtime.audit import run_audit
 from src.analysis.git_sources import tracked_paths
 from src.analysis.evidence import resolve_evidence
 from src.runtime.reporting import Reporter

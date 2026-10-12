@@ -15,7 +15,10 @@ from src.reports.presentation import render_architecture
 from unittest.mock import patch
 
 from src.contracts.contracts import ContractError
-from explain import AuditError, Folder, Runner, atomic
+from src.runtime.errors import AuditError
+from src.analysis.folder import Folder
+from src.runtime.runner import Runner
+from src.runtime.artifacts import atomic
 from src.runtime.reporting import Reporter
 from test_folder import FolderFixture
 from fixtures.ledger_response import response, model_wire, prompt_context
@@ -76,28 +79,28 @@ class PublicationTests(FolderFixture):
                 if policy == 'compromise':
                     data['claims'] = 'invalid'
                 destination = alias / policy / 'study.logs'
-                with patch('explain.process', side_effect=self.process_for(data, context)):
+                with patch('src.runtime.process.process', side_effect=self.process_for(data, context)):
                     saved, meta = runner.invoke('study', context, destination)
-                attempt = runner.run_dir / 'study.logs/attempt-001'
+                attempt = runner.session.run_dir / 'study.logs/attempt-001'
                 self.assertEqual(meta['artifact_directory'], str(attempt))
                 self.assertTrue((destination / 'attempt-001').samefile(attempt))
                 summary = json.loads((destination / 'invocation.json').read_text())
                 self.assertEqual(summary['artifact_directory'], str(attempt))
-                self.assertFalse(runner.critical_failure)
+                self.assertFalse(runner.session.critical_failure)
                 if policy == 'compromise':
                     self.assertIsNone(saved)
                     self.assertEqual(meta['status'], 'PARTIAL')
                     self.assertTrue(meta['material_retained'])
                     self.assertEqual(meta['recovery_source_attempt'], str(attempt))
-                    material = json.loads((runner.run_dir / 'study.material.json').read_text())
+                    material = json.loads((runner.session.run_dir / 'study.material.json').read_text())
                     self.assertEqual(material, meta['usable_material'])
-                    self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
+                    self.assertFalse((runner.session.run_dir / 'ARCHITECTURE.md').exists())
                 else:
                     self.assertIsNotNone(saved)
                     self.assertEqual(meta['status'], 'SUCCEEDED')
                     self.assertTrue(meta['publication_complete'])
-                    self.assertEqual((runner.run_dir / 'ARCHITECTURE.md').read_text(),
-                                     render_architecture(saved, runner.cfg['output_language']))
+                    self.assertEqual((runner.session.run_dir / 'ARCHITECTURE.md').read_text(),
+                                     render_architecture(saved, runner.session.cfg['output_language']))
 
     def test_invocation_through_parent_symlink_detects_binding_changes(self):
         alias = self.base / 'alias'
@@ -116,21 +119,21 @@ class PublicationTests(FolderFixture):
                         binding.rename(original)
                         binding.symlink_to(original)
                     return self.result(command, response(prompt_context(payload)))
-                with patch('explain.process', side_effect=process) as invoked:
+                with patch('src.runtime.process.process', side_effect=process) as invoked:
                     with self.assertRaises(AuditError) as caught:
                         runner.invoke('study', context, alias / change / 'study.logs')
                 invoked.assert_called_once()
                 self.assertEqual(caught.exception.code, 'MODEL_BINDING_CHANGED')
-                self.assertTrue(runner.critical_failure)
-                self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
+                self.assertTrue(runner.session.critical_failure)
+                self.assertFalse((runner.session.run_dir / 'ARCHITECTURE.md').exists())
 
     def test_attempts_are_immutable_and_validation_precedes_publication(self):
         runner, context, data = self.prepare()
-        destination = runner.run_dir / 'study.logs'
-        with patch('explain.process', side_effect=self.process_for(data, context)):
+        destination = runner.session.run_dir / 'study.logs'
+        with patch('src.runtime.process.process', side_effect=self.process_for(data, context)):
             runner.invoke('study', context, destination)
         first = {p.name: p.read_bytes() for p in (destination / 'attempt-001').iterdir()}
-        with patch('explain.process', side_effect=self.process_for(data | {'unexpected_field': True}, context)):
+        with patch('src.runtime.process.process', side_effect=self.process_for(data | {'unexpected_field': True}, context)):
             with self.assertRaises(ContractError):
                 runner.invoke('study', context, destination)
         self.assertEqual(first, {p.name: p.read_bytes() for p in (destination / 'attempt-001').iterdir()})
@@ -139,35 +142,35 @@ class PublicationTests(FolderFixture):
         self.assertEqual(summary['status'], 'FAILED')
         self.assertEqual(summary['error']['failure_kind'], 'SCHEMA_ERROR')
         self.assertIn('unexpected_field', (destination / 'attempt-002/extracted.json').read_text())
-        self.assertNotIn('unexpected_field', (runner.run_dir / 'study.json').read_text())
-        for path in runner.run_dir.rglob('*'):
+        self.assertNotIn('unexpected_field', (runner.session.run_dir / 'study.json').read_text())
+        for path in runner.session.run_dir.rglob('*'):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700 if path.is_dir() else 0o600)
 
     def test_first_invalid_result_never_publishes(self):
         runner, context, data = self.prepare()
-        with patch('explain.process', side_effect=self.process_for(data | {'source_fingerprint': 'wrong'}, context)):
+        with patch('src.runtime.process.process', side_effect=self.process_for(data | {'source_fingerprint': 'wrong'}, context)):
             with self.assertRaises(ContractError):
-                runner.invoke('study', context, runner.run_dir / 'study.logs')
-        self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
-        self.assertFalse((runner.run_dir / 'study.json').exists())
+                runner.invoke('study', context, runner.session.run_dir / 'study.logs')
+        self.assertFalse((runner.session.run_dir / 'ARCHITECTURE.md').exists())
+        self.assertFalse((runner.session.run_dir / 'study.json').exists())
 
     def test_recovered_material_cannot_replace_a_previously_frozen_registry(self):
         from src.reports.final_report import recoverable_material
         runner, context, data = self.prepare()
-        with patch('explain.process', side_effect=self.process_for(data, context)):
-            runner.invoke('study', context, runner.run_dir / 'study.logs')
-        frozen = {name: (runner.run_dir / name).read_bytes()
+        with patch('src.runtime.process.process', side_effect=self.process_for(data, context)):
+            runner.invoke('study', context, runner.session.run_dir / 'study.logs')
+        frozen = {name: (runner.session.run_dir / name).read_bytes()
                   for name in ('ARCHITECTURE.md', 'claim.registry.json', 'review.plan.json', 'study.json')}
         material = recoverable_material('study', data | {'claims': 'invalid'}, context, 'folder', {})
-        with self.assertRaises(AuditError) as caught: runner.freeze_review(material, context, runner.run_dir)
+        with self.assertRaises(AuditError) as caught: runner.publisher.freeze_review(material, context, runner.session.run_dir)
         self.assertEqual(caught.exception.code, 'REVIEW_TARGET_CHANGED')
-        self.assertEqual(frozen, {name: (runner.run_dir / name).read_bytes() for name in frozen})
+        self.assertEqual(frozen, {name: (runner.session.run_dir / name).read_bytes() for name in frozen})
 
     def test_publication_write_failure_never_accepts_manifest(self):
         runner, context, data = self.prepare()
         err = io.StringIO()
-        runner.reporter = Reporter(stdout=io.StringIO(), stderr=err, progress=False)
-        self.addCleanup(runner.reporter.close)
+        runner.session.reporter = Reporter(stdout=io.StringIO(), stderr=err, progress=False)
+        self.addCleanup(runner.session.reporter.close)
         def process(command, cwd, env, payload, **kwargs):
             supplied = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n')[1]
                                   .split('\n\n# Required final JSON Schema')[0])
@@ -176,40 +179,40 @@ class PublicationTests(FolderFixture):
             if path.name == 'study.json':
                 raise OSError('fixture disk full')
             atomic(path, content)
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process), \
-                patch('explain.atomic', side_effect=fail_report_json):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process), \
+                patch('src.runtime.artifacts.atomic', side_effect=fail_report_json):
             manifest, code = runner.run()
         self.assertEqual(code, 1)
         self.assertEqual(manifest['status'], 'FAILED')
         self.assertFalse(manifest['accepted'])
         self.assertFalse(manifest['publication_complete'])
         self.assertIsNone(manifest['study'])
-        summary = json.loads((runner.run_dir / 'revisions/001/study.logs/invocation.json').read_text())
+        summary = json.loads((runner.session.run_dir / 'revisions/001/study.logs/invocation.json').read_text())
         self.assertEqual(summary['status'], 'FAILED')
-        self.assertTrue((runner.run_dir / 'revisions/001/ARCHITECTURE.md').is_file())
-        self.assertNotIn('      Report: ' + str(runner.run_dir / 'revisions/001/ARCHITECTURE.md'), err.getvalue())
+        self.assertTrue((runner.session.run_dir / 'revisions/001/ARCHITECTURE.md').is_file())
+        self.assertNotIn('      Report: ' + str(runner.session.run_dir / 'revisions/001/ARCHITECTURE.md'), err.getvalue())
 
     def test_coverage_plan_is_hashed_private_and_immutable(self):
         import hashlib
         runner, _, _ = self.prepare()
         def process(command, cwd, env, payload, **kwargs):
             return self.result(command, response(prompt_context(payload)))
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process) as invoked:
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process) as invoked:
             manifest, code = runner.run()
         self.assertEqual(code, 0)
         self.assertEqual(invoked.call_count, 2)
-        path = runner.run_dir / 'coverage.plan.json'
+        path = runner.session.run_dir / 'coverage.plan.json'
         blob = path.read_bytes()
         meta = manifest['study_invocation']
         self.assertTrue(meta['publication_complete'])
         self.assertEqual(meta['artifact_hashes'][path.name], {'sha256': hashlib.sha256(blob).hexdigest(), 'bytes': len(blob)})
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
-        self.assertFalse((runner.run_dir / 'catalog.json').exists())
-        self.assertFalse((runner.run_dir / 'SUBSYSTEM_CATALOG.md').exists())
+        self.assertFalse((runner.session.run_dir / 'catalog.json').exists())
+        self.assertFalse((runner.session.run_dir / 'SUBSYSTEM_CATALOG.md').exists())
         self.assertFalse(any('catalog' in key for key in manifest))
         path.write_bytes(blob + b'changed')
         with self.assertRaises(AuditError) as caught:
-            runner.assert_revision_files(manifest)
+            runner.publisher.assert_revision_files(manifest)
         self.assertEqual(caught.exception.code, 'COVERAGE_PLAN_CHANGED')
 
     def test_coverage_write_or_metadata_failure_never_announces_report(self):
@@ -222,16 +225,16 @@ class PublicationTests(FolderFixture):
                 def process(command, cwd, env, payload, **kwargs):
                     return self.result(command, response(prompt_context(payload)))
                 def fail_write(path, content):
-                    if failure == 'corrupt_alias' and path == runner.run_dir / 'coverage.plan.json':
+                    if failure == 'corrupt_alias' and path == runner.session.run_dir / 'coverage.plan.json':
                         return atomic(path, content + b'changed')
-                    if ((failure == 'coverage' and path == runner.run_dir / 'revisions/001/coverage.plan.json') or
-                            (failure == 'alias' and path == runner.run_dir / 'coverage.plan.json') or
-                            (failure == 'metadata' and path == runner.run_dir / 'revisions/001/study.logs/invocation.json'
+                    if ((failure == 'coverage' and path == runner.session.run_dir / 'revisions/001/coverage.plan.json') or
+                            (failure == 'alias' and path == runner.session.run_dir / 'coverage.plan.json') or
+                            (failure == 'metadata' and path == runner.session.run_dir / 'revisions/001/study.logs/invocation.json'
                              and json.loads(content).get('publication_complete'))):
                         raise OSError('fixture disk full')
                     atomic(path, content)
-                with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process) as invoked, \
-                        patch('explain.atomic', side_effect=fail_write):
+                with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process) as invoked, \
+                        patch('src.runtime.artifacts.atomic', side_effect=fail_write):
                     manifest, code = runner.run()
                 self.assertEqual(code, 1)
                 self.assertFalse(manifest['publication_complete'])
@@ -248,21 +251,21 @@ class PublicationTests(FolderFixture):
         # Canonicalize authored CRLF; retain final blank lines.
         data['report_sections'][0]['blocks'][0]['markdown'] += '\r\n'
         expected = materialize_study(data)['report_markdown']
-        with patch('explain.process', side_effect=self.process_for(data, context)):
-            saved, meta = runner.invoke('study', context, runner.run_dir / 'study.logs')
+        with patch('src.runtime.process.process', side_effect=self.process_for(data, context)):
+            saved, meta = runner.invoke('study', context, runner.session.run_dir / 'study.logs')
         import hashlib
-        architecture = (runner.run_dir / 'ARCHITECTURE.md').read_bytes()
-        self.assertEqual(architecture, render_architecture(saved, runner.cfg['output_language']).encode())
-        validate_published_architecture(architecture.decode(), runner.cfg['output_language'], canonical=saved)
-        self.assertEqual((runner.run_dir / 'study.original.md').read_bytes(), expected.encode())
+        architecture = (runner.session.run_dir / 'ARCHITECTURE.md').read_bytes()
+        self.assertEqual(architecture, render_architecture(saved, runner.session.cfg['output_language']).encode())
+        validate_published_architecture(architecture.decode(), runner.session.cfg['output_language'], canonical=saved)
+        self.assertEqual((runner.session.run_dir / 'study.original.md').read_bytes(), expected.encode())
         self.assertEqual(saved['report_markdown'], expected)
         for block in saved['block_map']:
             self.assertIn(block['locator']['quote'].encode(), architecture)
         self.assertEqual(saved['review_plan']['document_sha256'], hashlib.sha256(expected.encode()).hexdigest())
-        wire = json.loads((runner.run_dir / 'study.logs/attempt-001/extracted.json').read_text())
-        model_context = prompt_context((runner.run_dir / 'study.logs/attempt-001/input.prompt.txt').read_bytes())
+        wire = json.loads((runner.session.run_dir / 'study.logs/attempt-001/extracted.json').read_text())
+        model_context = prompt_context((runner.session.run_dir / 'study.logs/attempt-001/input.prompt.txt').read_bytes())
         self.assertEqual(wire, model_wire(data, model_context, context))
-        self.assertEqual(json.loads((runner.run_dir / 'study.logs/attempt-001/expanded.json').read_text()), data)
+        self.assertEqual(json.loads((runner.session.run_dir / 'study.logs/attempt-001/expanded.json').read_text()), data)
         self.assertNotIn('program_checks', wire)
         for field in ('contract_id', 'artifact_format', 'context_format'):
             self.assertNotIn(field, wire)
@@ -275,13 +278,13 @@ class PublicationTests(FolderFixture):
 
     def test_invalid_published_markdown_is_rejected_before_writing(self):
         runner, context, data = self.prepare()
-        with patch('explain.process', side_effect=self.process_for(data, context)) as invoked, \
-                patch('explain.render_architecture', return_value='## Unexpected\n'):
+        with patch('src.runtime.process.process', side_effect=self.process_for(data, context)) as invoked, \
+                patch('src.reports.publication.render_architecture', return_value='## Unexpected\n'):
             with self.assertRaises(ContractError):
-                runner.invoke('study', context, runner.run_dir / 'study.logs')
+                runner.invoke('study', context, runner.session.run_dir / 'study.logs')
         invoked.assert_called_once()
-        self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
-        self.assertFalse((runner.run_dir / 'study.json').exists())
+        self.assertFalse((runner.session.run_dir / 'ARCHITECTURE.md').exists())
+        self.assertFalse((runner.session.run_dir / 'study.json').exists())
 
     def test_lost_moved_or_changed_diagram_is_rejected_before_publication(self):
         for defect in ('lost', 'moved', 'changed', 'closing_fence'):
@@ -304,17 +307,17 @@ class PublicationTests(FolderFixture):
                         published += '\n' + diagram + '\n'
                     return published
 
-                with patch('explain.process', side_effect=self.process_for(data, context)) as invoked, \
-                        patch('explain.render_architecture', side_effect=render):
+                with patch('src.runtime.process.process', side_effect=self.process_for(data, context)) as invoked, \
+                        patch('src.reports.publication.render_architecture', side_effect=render):
                     with self.assertRaises(ContractError) as caught:
-                        runner.invoke('study', context, runner.run_dir / 'study.logs')
+                        runner.invoke('study', context, runner.session.run_dir / 'study.logs')
                 invoked.assert_called_once()
                 self.assertIn(caught.exception.details['code'],
                               ('REQUIRED_DIAGRAM_MISSING', 'DIAGRAM_PUBLICATION_MISMATCH'))
                 if defect == 'closing_fence':
                     self.assertEqual(caught.exception.details['code'], 'DIAGRAM_PUBLICATION_MISMATCH')
-                self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
-                self.assertFalse((runner.run_dir / 'study.json').exists())
+                self.assertFalse((runner.session.run_dir / 'ARCHITECTURE.md').exists())
+                self.assertFalse((runner.session.run_dir / 'study.json').exists())
 
     def test_forged_review_target_is_not_recovered_even_with_schema_error(self):
         from src.reports.final_report import recoverable_material
@@ -330,25 +333,25 @@ class PublicationTests(FolderFixture):
                           result_diagnostics('review', review, ctx, 'folder')))
 
     def test_changed_document_or_frozen_files_cannot_receive_old_review(self):
-        from explain import AuditError
+        from src.runtime.errors import AuditError
         runner, context, data = self.prepare()
-        with patch('explain.process', side_effect=self.process_for(data, context)):
-            saved, _ = runner.invoke('study', context, runner.run_dir / 'study.logs')
-        ctx = runner.freeze_review(saved, context, runner.run_dir)
+        with patch('src.runtime.process.process', side_effect=self.process_for(data, context)):
+            saved, _ = runner.invoke('study', context, runner.session.run_dir / 'study.logs')
+        ctx = runner.publisher.freeze_review(saved, context, runner.session.run_dir)
         for name in ('ARCHITECTURE.md', 'claim.registry.json', 'review.plan.json'):
-            path = runner.run_dir / name
+            path = runner.session.run_dir / name
             original = path.read_bytes()
             path.write_bytes(original + b' ')
-            with self.assertRaises(AuditError): runner.assert_review_files(ctx, runner.run_dir)
+            with self.assertRaises(AuditError): runner.publisher.assert_review_files(ctx, runner.session.run_dir)
             path.write_bytes(original)
         raw = response(ctx)
         def tamper(command, cwd, env, payload, **kwargs):
-            (runner.run_dir / 'ARCHITECTURE.md').write_text('changed during review')
+            (runner.session.run_dir / 'ARCHITECTURE.md').write_text('changed during review')
             return self.result(command, model_wire(raw, prompt_context(payload), ctx))
-        with patch('explain.process', side_effect=tamper), self.assertRaises(AuditError):
-            runner.invoke('review', ctx, runner.run_dir / 'review.logs')
-        self.assertFalse((runner.run_dir / 'review.json').exists())
-        meta = json.loads((runner.run_dir / 'review.logs/invocation.json').read_text())
+        with patch('src.runtime.process.process', side_effect=tamper), self.assertRaises(AuditError):
+            runner.invoke('review', ctx, runner.session.run_dir / 'review.logs')
+        self.assertFalse((runner.session.run_dir / 'review.json').exists())
+        meta = json.loads((runner.session.run_dir / 'review.logs/invocation.json').read_text())
         self.assertFalse(meta['publication_complete'])
 
 

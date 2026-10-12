@@ -22,7 +22,8 @@ from unittest.mock import patch
 from src.contracts.contracts import ContractError
 from src.runtime.execution import Budget
 from src.runtime.metrics import RunMetrics
-from explain import Runner
+from src.runtime.session import RunSession
+from src.model.invocation import ModelInvoker
 from src.runtime.reporting import Reporter, SPINNER, cell_width
 import test_xxx as xxx_fixtures
 import test_reporting as cli_fixtures
@@ -154,10 +155,10 @@ class ProgressTests(unittest.TestCase):
 
     def test_runner_only_announces_existing_report_and_escapes_its_path(self):
         r = self.reporter(tty=False, mode='json', progress=False)
-        runner = Runner.__new__(Runner)
-        runner.reporter, runner.mode, runner.source_path = r, 'git', Path('/source')
-        runner.metrics = RunMetrics(r.clock)
-        runner.cfg = {'_agents': {'study': {'backend': 'codex'}}}
+        session = RunSession.__new__(RunSession)
+        session.reporter, session.mode, session.source_path = r, 'git', Path('/source')
+        session.metrics = RunMetrics(r.clock)
+        session.cfg = {'_agents': {'study': {'backend': 'codex'}}}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / '深い\n\x1b[31m.md'
             for exists in (False, True):
@@ -165,7 +166,7 @@ class ProgressTests(unittest.TestCase):
                     path.write_text('report')
                 self.err.seek(0)
                 self.err.truncate()
-                runner.stage_finished('study', {}, {'completion_status': 'PARTIAL'}, self.now,
+                session.stage_finished('study', {}, {'completion_status': 'PARTIAL'}, self.now,
                                       report_path=path)
                 text = self.err.getvalue()
                 self.assertEqual('      Report: ' in text, exists)
@@ -185,12 +186,12 @@ class ProgressTests(unittest.TestCase):
 
     def test_runner_context_retries_and_next_stage_reset(self):
         r = self.reporter()
-        runner = Runner.__new__(Runner)
-        runner.reporter, runner.mode, runner.source_path = r, 'git', Path('/source/name')
-        runner.metrics = RunMetrics(r.clock)
-        runner.cfg = {'_agents': {stage: {'backend': backend} for stage, backend in
+        session = RunSession.__new__(RunSession)
+        session.reporter, session.mode, session.source_path = r, 'git', Path('/source/name')
+        session.metrics = RunMetrics(r.clock)
+        session.cfg = {'_agents': {stage: {'backend': backend} for stage, backend in
                       (('study', 'xxx'), ('review', 'codex'), ('compare', 'opencode'))}}
-        started = runner.stage_started('study', {'branch': 'topic'})
+        started = session.stage_started('study', {'branch': 'topic'})
         self.assertEqual(started, r._progress.started)
         state = r._progress
         self.tick(r, 1)
@@ -201,16 +202,16 @@ class ProgressTests(unittest.TestCase):
         r.emit('stage_recovered', message='Partial material retained')
         self.assertIs(r._progress, state)
         self.assertEqual(r._progress.started, started)
-        runner.stage_finished('study', {'branch': 'topic'}, {'completion_status': 'COMPLETE'}, started)
-        runner.mode = 'folder'
-        started = runner.stage_started('review', {})
+        session.stage_finished('study', {'branch': 'topic'}, {'completion_status': 'COMPLETE'}, started)
+        session.mode = 'folder'
+        started = session.stage_started('review', {})
         self.assertIn('[RUN] name / Reviewing report…  ⠋ 00:00', self.err.getvalue())
-        runner.stage_finished('review', {}, {'completion_status': 'COMPLETE', 'verdict': 'INCONCLUSIVE'}, started)
+        session.stage_finished('review', {}, {'completion_status': 'COMPLETE', 'verdict': 'INCONCLUSIVE'}, started)
         self.assertIn('name / Report review may be incomplete. See details below.', self.err.getvalue())
-        runner.mode = 'git'
-        started = runner.stage_started('compare', {})
+        session.mode = 'git'
+        started = session.stage_started('compare', {})
         self.assertIn('[RUN] Comparing branch reports…  ⠋ 00:00', self.err.getvalue())
-        runner.stage_finished('compare', {}, {'completion_status': 'BLOCKED'}, started)
+        session.stage_finished('compare', {}, {'completion_status': 'BLOCKED'}, started)
         self.assertIsNone(r._progress)
 
     def test_plain_waiting_and_cli_activity_share_one_schedule(self):
@@ -606,13 +607,13 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         with patch.dict(os.environ, {'TERM': 'xterm', 'NO_COLOR': '1'}):
             r = ManualReporter(stderr=Terminal(), stdout=io.StringIO(), clock=lambda: now[0])
         self.addCleanup(r.close)
-        original = Runner._invoke_once
+        original = ModelInvoker._invoke_once
         def invoke(runner, stage, *args, **kwargs):
             attempts.append((stage, r._progress.started, 0))
             now[0] += 1.25
             r._tick_progress(r._progress)
             return original(runner, stage, *args, **kwargs)
-        with patch.object(Runner, '_invoke_once', invoke):
+        with patch.object(ModelInvoker, '_invoke_once', invoke):
             manifest, code = self.run_case('schema-extra', reporter=r)
         self.assertEqual(code, 1, manifest)
         self.assertEqual(attempts, [('study', 100, 0)])
@@ -693,9 +694,11 @@ class CLIProgressIntegrationTests(unittest.TestCase):
 import sys, time
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-import explain
-owner, method = ((explain.Folder, 'snapshot') if sys.argv[2] == 'folder'
-                 else (explain.Repository, 'preflight'))
+from src.analysis.folder import Folder
+from src.analysis.repository import Repository
+from src.cli import main
+owner, method = ((Folder, 'snapshot') if sys.argv[2] == 'folder'
+                 else (Repository, 'preflight'))
 gate = Path(sys.argv[3])
 original = getattr(owner, method)
 def delayed(*args, **kwargs):
@@ -707,7 +710,7 @@ def delayed(*args, **kwargs):
     return original(*args, **kwargs)
 setattr(owner, method, delayed)
 sys.argv = ['explain.py', *sys.argv[4:]]
-sys.exit(explain.main())
+sys.exit(main())
 '''
         self.env.update(TERM='xterm', NO_COLOR='1')
         for mode in ('folder', 'git'):

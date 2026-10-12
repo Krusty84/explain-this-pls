@@ -21,7 +21,11 @@ import unittest
 from unittest.mock import Mock, patch
 
 from src.contracts.contracts import ContractError, jsonc
-from explain import AuditError, Runner, UnsafeRepository, cli_env, load_config, main, process
+from src.runtime.errors import AuditError, UnsafeRepository
+from src.runtime.runner import Runner
+from src.runtime.process import cli_env, process
+from src.runtime.config import load_config
+from src.cli import main
 from src.runtime.reporting import NullReporter, Reporter, duration, output_mode, safe_text
 from src.analysis.ledger import prepare_result
 from src.reports.presentation import render_architecture, render_stage
@@ -480,10 +484,10 @@ class ProcessReportingTests(unittest.TestCase):
         selector.select.side_effect = select
         def read(fd, size):
             return b'private bytes' if active and current[0] == 20 else b''
-        with patch('explain.subprocess.Popen', return_value=p) as spawn, \
-                patch('explain.selectors.DefaultSelector', return_value=selector), \
-                patch('explain.os.set_blocking'), patch('explain.os.read', side_effect=read), \
-                patch('explain.os.killpg') as kill:
+        with patch('src.runtime.process.subprocess.Popen', return_value=p) as spawn, \
+                patch('src.runtime.process.selectors.DefaultSelector', return_value=selector), \
+                patch('src.runtime.process.os.set_blocking'), patch('src.runtime.process.os.read', side_effect=read), \
+                patch('src.runtime.process.os.killpg') as kill:
             result = process(['fake'], Path('/tmp'), {}, reporter=r, clock=clock,
                              context={'branch': 'master', 'stage': 'study', 'backend': 'opencode'})
         self.assertTrue(spawn.call_args.kwargs['close_fds'])
@@ -584,7 +588,7 @@ print(json.dumps(inherited))
                 stream = real_fdopen(*args, **kwargs)
                 opened.append(stream)
                 return stream
-            with patch('explain.os.fdopen', side_effect=track), self.assertRaises(FileNotFoundError):
+            with patch('src.runtime.process.os.fdopen', side_effect=track), self.assertRaises(FileNotFoundError):
                 process(['/no/such/cli'], root, cli_env(root), log_dir=root)
             self.assertEqual(len(opened), 2)
             self.assertTrue(all(stream.closed for stream in opened))
@@ -1046,7 +1050,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         for _ in range(2):
             out, err = io.StringIO(), io.StringIO()
             with patch('sys.argv', ['explain.py', *args]), patch.dict(os.environ, self.env, clear=True), \
-                    contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), patch('explain.Reporter', side_effect=factory):
+                    contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), patch('src.cli.Reporter', side_effect=factory):
                 self.assertEqual(main(), 0)
             data = json.loads(out.getvalue())
             records = [json.loads(x) for x in (Path(data['manifest']).parent / 'run.log').read_text().splitlines()]

@@ -14,7 +14,13 @@ import unittest
 from src.reports.document_rendering import materialize_study, recover_sections
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from explain import AuditError, Repository, Runner, UnsafeRepository, cli_env, load_config, process, repository_lock, slug
+from src.runtime.errors import AuditError, UnsafeRepository
+from src.analysis.repository import Repository
+from src.runtime.runner import Runner
+from src.runtime.process import cli_env, process
+from src.runtime.config import load_config
+from src.runtime.execution import repository_lock
+from src.runtime.artifacts import slug
 from src.runtime.reporting import Reporter
 from src.backends.opencode_cli import prepare_environment
 from src.backends import codex
@@ -235,7 +241,7 @@ class RepoFixture(unittest.TestCase):
                         if stage=='review':data['verdict']='INCONCLUSIVE'
                     return data,meta
                 fake.invoke=change_result
-                with patch.object(fake.repo,'delta',side_effect=AssertionError('Unexpected comparison')):
+                with patch.object(fake.session.repo,'delta',side_effect=AssertionError('Unexpected comparison')):
                     result,code=fake.run()
                 self.assertEqual((result['status'],code),(status,expected_code))
                 self.assertNotIn('comparison',result)
@@ -292,10 +298,10 @@ class FakeRunner(Runner):
         self.calls.append((stage,copy.deepcopy(context)))
         if stage=='study':
             assert 'architecture_document' not in context and 'branches' not in context
-            assert (self.source_path / '.git').exists()
-            assert self.repo.head() == context['source_commit']
-            assert self.repo.symbolic_ref() is None
-            assert context['branch'] in (self.source_path/'app.py').read_text()
+            assert (self.session.source_path / '.git').exists()
+            assert self.session.repo.head() == context['source_commit']
+            assert self.session.repo.symbolic_ref() is None
+            assert context['branch'] in (self.session.source_path/'app.py').read_text()
             if context['branch']==self.fail_branch:raise AuditError('simulated CLI failure', code='CLI_FAILED', failure_layer='backend')
             data=response(dict(context, stage=stage))
         elif stage=='review':
@@ -311,7 +317,7 @@ class FakeRunner(Runner):
             if unresolved:data.update(completion_status='PARTIAL',limitations=['missing input'])
         validate_result(stage,data,context)
         data = prepare_result(stage, data, context)
-        self.publish_result(stage, data, destination)
+        self.publisher.publish_result(stage, data, destination)
         from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT
         return data,{'TEST_ONLY':'mock invocation', 'publication_complete': True,
                      'contract_id': CONTRACT_ID, 'artifact_format': ARTIFACT_FORMAT}
@@ -425,7 +431,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(len(paths), 3)  # Includes the explicit XXX fork profile.
         for path in paths:
             with self.subTest(path=path.name), patch.dict(os.environ,{},clear=True), \
-                 patch('explain.shutil.which',return_value=sys.executable):
+                 patch('src.runtime.config.shutil.which',return_value=sys.executable):
                 cfg=load_config(path)
                 self.assertTrue(cfg['project_description'])
                 self.assertEqual(cfg['_agents']['study']['model'], cfg['agent'].get('model'))
@@ -438,7 +444,7 @@ class AdapterCommandTests(unittest.TestCase):
     def command(self,backend,stage='study',env=None,model=None):
         cfg=self.config();runner=Runner(cfg,self.base/'reports'/'run')
         agent=cfg['_agents'][stage];agent.update(backend=backend,model=model)
-        return runner.command(stage,self.base,agent,self.base/'schema.json',env if env is not None else {})
+        return runner.invoker.command(stage,self.base,agent,self.base/'schema.json',env if env is not None else {})
     def test_codex_uses_native_read_only_and_existing_config(self):
         cmd=self.command('codex')
         self.assertEqual(cmd[cmd.index('--sandbox')+1],'read-only')
@@ -490,12 +496,12 @@ class AdapterCommandTests(unittest.TestCase):
         # Construct the Git runtime before intentionally replacing PATH. This test
         # checks child environment preservation, not Git discovery in a fake PATH.
         cfg=self.config(); runner=Runner(cfg,self.base/'reports'/'env-run')
-        self.addCleanup(runner.repo.close)
+        self.addCleanup(runner.session.repo.close)
         with patch.dict(os.environ,inherited,clear=True):
             env=cli_env(self.repo_path)
             for backend in ('codex','opencode'):
                 agent=cfg['_agents']['study'] | {'backend':backend}
-                runner.command('study',self.base,agent,self.base/'schema.json',env)
+                runner.invoker.command('study',self.base,agent,self.base/'schema.json',env)
             prepare_environment(env,'study')
             for key,value in inherited.items():self.assertEqual(env[key],value)
             self.assertNotIn('CODEX_API_KEY',env)

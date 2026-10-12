@@ -7,7 +7,8 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from explain import Runner, process as real_process
+from src.runtime.runner import Runner
+from src.runtime.process import process as real_process
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import response, prompt_context
 from fixtures.xxx_protocol import transcript
@@ -24,7 +25,7 @@ def run_case(self, *, backend='codex', large=True, change=None, review=False,
     self.value['agent']['backend'] = backend
     cfg = self.config()
     runner = Runner(cfg, self.base / f'run-{len(list(self.base.glob("run-*")))}', reporter=reporter)
-    runner.versions[backend + ':' + cfg['_agents']['study']['executable']] = '2.0.0' if backend == 'opencode' else 'fixture'
+    runner.session.versions[backend + ':' + cfg['_agents']['study']['executable']] = '2.0.0' if backend == 'opencode' else 'fixture'
     calls, exports = [], {}
     selectors = subsystem_paths or paths
 
@@ -54,7 +55,7 @@ def run_case(self, *, backend='codex', large=True, change=None, review=False,
         return cli_result(command, data)
 
     with patch.dict(os.environ, {'AUDIT_TEST_SUBSYSTEM_PATHS': json.dumps(selectors)}), \
-            patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
+            patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process):
         manifest, code = runner.run()
     self.runner, self.calls, self.manifest = runner, calls, manifest
     return manifest, code

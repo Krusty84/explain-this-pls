@@ -29,7 +29,7 @@ def main(argv=None):
     else:
         if not all((args.config, args.baseline, args.facts, args.output)) or args.assessments:
             parser.error('An experiment requires --config, --baseline, --facts and --output.')
-        from explain import load_config
+        from src.runtime.config import load_config
         report = run_comparison(load_config(args.config), args.baseline, read_json(args.facts), args.output,
                                 repetitions=args.repetitions, live=args.live)
     print(report['status'])

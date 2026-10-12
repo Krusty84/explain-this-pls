@@ -8,7 +8,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from explain import Runner
+from src.runtime.runner import Runner
 from src.reports.document_rendering import _markdown_tokens, recover_sections
 from fixtures.architecture_checks import assert_architecture
 from fixtures.cli_response import cli_result
@@ -32,7 +32,7 @@ class ArchitectureFolderPipelineTests(FolderFixture):
                         self.assertEqual([c['context']['stage'] for c in self.calls],
                                          ['study', 'review'] if review else ['study'])
                         study = manifest['study']
-                        assert_architecture(self, self.runner.run_dir, study,
+                        assert_architecture(self, self.runner.session.run_dir, study,
                                             manifest['study_invocation'], language)
                         if review:
                             context = self.calls[-1]['context']
@@ -48,7 +48,7 @@ class ArchitectureFolderPipelineTests(FolderFixture):
                 manifest, code = self.run_case(large=False, policy=policy, change=change)
                 self.assertNotEqual(code, 0)
                 self.assertEqual([c['context']['stage'] for c in self.calls], ['study'])
-                self.assertFalse(list(self.runner.run_dir.rglob('ARCHITECTURE.md')))
+                self.assertFalse(list(self.runner.session.run_dir.rglob('ARCHITECTURE.md')))
                 revision = manifest['revisions'][0]
                 error = revision['study_invocation']['error']
                 self.assertEqual(error['details']['code'], 'UNEXPECTED_TOP_LEVEL_HEADING')
@@ -82,7 +82,7 @@ class ArchitectureFolderPipelineTests(FolderFixture):
                     self.assertNotEqual(code, 0)
                     self.assertFalse(manifest['accepted'])
                     self.assertEqual([call['context']['stage'] for call in self.calls], ['study'])
-                    self.assertFalse(list(self.runner.run_dir.rglob('ARCHITECTURE.md')))
+                    self.assertFalse(list(self.runner.session.run_dir.rglob('ARCHITECTURE.md')))
                     revision = manifest['revisions'][0]
                     self.assertIsNone(revision['study'])
                     invocation = revision['study_invocation']
@@ -120,8 +120,8 @@ class ArchitectureFolderPipelineTests(FolderFixture):
                 self.assertEqual(study['program_checks']['diagrams']['missing_sections'], ['data_and_state'])
                 self.assertFalse(study['program_checks']['diagrams']['complete'])
                 self.assertFalse(study['program_checks']['policy_satisfied'])
-                self.assertEqual((self.runner.run_dir / 'study.original.md').read_text(), study['report_markdown'])
-                published = (self.runner.run_dir / 'ARCHITECTURE.md').read_text()
+                self.assertEqual((self.runner.session.run_dir / 'study.original.md').read_text(), study['report_markdown'])
+                published = (self.runner.session.run_dir / 'ARCHITECTURE.md').read_text()
                 tokens = _markdown_tokens(published)
                 headings = [(token.tag, tokens[i + 1].content) for i, token in enumerate(tokens)
                             if token.type == 'heading_open']
@@ -153,13 +153,13 @@ class ArchitectureGitPipelineTests(unittest.TestCase):
                     calls.append(copy.deepcopy(context))
                     return cli_result(command, response(context))
 
-                with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=answer):
+                with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=answer):
                     manifest, code = runner.run()
                 self.assertEqual(code, 0, manifest.get('diagnostics'))
                 self.assertEqual([c['stage'] for c in calls],
                                  ['study'] if len(branches) == 1 else ['study', 'study', 'compare'])
                 for branch in manifest['branches']:
-                    assert_architecture(self, runner.run_dir / branch['directory'], branch['study'],
+                    assert_architecture(self, runner.session.run_dir / branch['directory'], branch['study'],
                                         branch['study_invocation'], language)
                 self.assertEqual(self.repo.symbolic(), 'master')
                 self.assertEqual(self.repo.head(), self.master)

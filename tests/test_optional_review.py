@@ -10,7 +10,9 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from explain import AuditError, Runner, load_config
+from src.runtime.errors import AuditError
+from src.runtime.runner import Runner
+from src.runtime.config import load_config
 from src.contracts.contracts import accepted, workflow_satisfied
 from src.reports.final_report import render_final_report
 from src.runtime.reporting import Reporter
@@ -57,7 +59,7 @@ class OptionalReviewConfigTests(FolderFixture):
         paths = list(Path(__file__).resolve().parents[1].glob('config*.example.jsonc'))
         self.assertEqual(len(paths), 3)
         for path in paths:
-            with self.subTest(path=path), patch('explain.shutil.which', return_value=sys.executable):
+            with self.subTest(path=path), patch('src.runtime.config.shutil.which', return_value=sys.executable):
                 cfg = load_config(path)
                 self.assertFalse(cfg['execution']['review_enabled'])
                 self.assertNotIn('review', cfg['_agents'])
@@ -80,7 +82,7 @@ class PipelineMixin:
                 data = change(context, data)
             return cli_result(command, data)
 
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=process):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process):
             manifest, code = runner.run()
         self.calls, self.run_dir, self.manifest = calls, directory, manifest
         self.reporter, self.stdout = reporter, stdout

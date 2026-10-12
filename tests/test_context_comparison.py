@@ -11,7 +11,11 @@ from unittest.mock import patch
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
 
-from explain import AuditError, Folder, Runner, save_json, process as real_process
+from src.runtime.errors import AuditError
+from src.analysis.folder import Folder
+from src.runtime.runner import Runner
+from src.runtime.artifacts import save_json
+from src.runtime.process import process as real_process
 from src.analysis.coverage_plan import build_coverage_plan
 from src.runtime.context_comparison import apply_assessments, frozen_inputs, run_comparison
 from test_folder import FolderFixture
@@ -50,7 +54,7 @@ class ContextComparisonTests(FolderFixture):
         contexts, options = [], []
         def invoke(runner, stage, context, destination):
             contexts.append(copy.deepcopy(context))
-            options.append((runner.cfg['source_context']['enabled'], runner.execution['read_loop_guard']))
+            options.append((runner.session.cfg['source_context']['enabled'], runner.session.execution['read_loop_guard']))
             result = {'completion_status': 'COMPLETE', 'program_checks': {'evidence_counts': {'RESOLVED': 1}}}
             return result, {'publication_complete': True, 'duration_seconds': 1.5, 'model_actual': 'fixed-model'}
         with patch.object(Runner, 'check_cli', return_value={'fixture': {'version': '1.0'}}), \
@@ -72,7 +76,7 @@ class ContextComparisonTests(FolderFixture):
             prompts.append(context)
             return cli_result(command, response(context))
         with patch.object(Runner, 'check_cli', return_value={'version': '1'}), \
-                patch('explain.process', side_effect=process):
+                patch('src.runtime.process.process', side_effect=process):
             report = run_comparison(config, baseline, facts, self.base / 'pipeline', live=True)
         self.assertEqual([p['stage'] for p in prompts], ['study'] * 3)
         self.assertEqual(['source_context' in p for p in prompts], [False, False, True])
@@ -177,16 +181,16 @@ class GitContextComparisonTests(unittest.TestCase):
         baseline = fixture.base / 'frozen'
         setup = Runner(config, baseline)
         try:
-            pins = setup.repo.preflight(['test01'])
-            setup.repo.checkout(pins['test01'])
-            inventory, _ = setup.source_inventory()
+            pins = setup.session.repo.preflight(['test01'])
+            setup.session.repo.checkout(pins['test01'])
+            inventory, _ = setup.session.source_inventory()
             context = {'branch': 'test01', 'source_commit': pins['test01'], 'repository': str(fixture.repo_path)}
             coverage = build_coverage_plan(inventory, context)
             for name, value in [('source.inventory.json', inventory), ('coverage.plan.json', coverage)]:
                 save_json(baseline / name, value)
         finally:
-            setup.repo.restore()
-            setup.repo.close()
+            setup.session.repo.restore()
+            setup.session.repo.close()
         facts = [{'id': 'F-001', 'statement': 'The function returns the branch label.', 'evidence': [
             {'id': 'E-001', 'source_id': 'source-001', 'path': 'app.py', 'start_line': 1, 'end_line': 1,
              'quote': 'test01'}]}]
@@ -199,7 +203,7 @@ class GitContextComparisonTests(unittest.TestCase):
             self.assertEqual(context['source_commit'], pins['test01'])
             return cli_result(command, response(context))
         with patch.object(Runner, 'check_cli', return_value={'version': '1'}), \
-                patch('explain.process', side_effect=process):
+                patch('src.runtime.process.process', side_effect=process):
             report = run_comparison(config, baseline, facts, fixture.base / 'comparison', live=True)
         self.assertEqual(seen, [pins['test01']] * 3)
         self.assertEqual([r['outcome'] for r in report['attempts']], ['successful'] * 3)

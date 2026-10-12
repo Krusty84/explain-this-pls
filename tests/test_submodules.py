@@ -14,7 +14,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from explain import AuditError, Repository, Runner, UnsafeRepository, load_config
+from src.runtime.errors import AuditError, UnsafeRepository
+from src.analysis.repository import Repository
+from src.runtime.runner import Runner
+from src.runtime.config import load_config
 from fixtures.architecture_checks import assert_architecture
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
@@ -188,12 +191,12 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
                 data['claims'][0]['evidence_ids'] = ['study:' + entry['id'] for entry in data['evidence']]
             return cli_result(command, data)
 
-        with patch.object(runner, 'check_cli', return_value={}), patch('explain.process', side_effect=answer):
+        with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=answer):
             manifest, code = runner.run()
         self.assertEqual(code, 0, manifest.get('diagnostics'))
         self.assertEqual(calls, ['study', 'review', 'study', 'review', 'compare'])
         for branch in manifest['branches']:
-            text = assert_architecture(self, runner.run_dir / branch['directory'], branch['study'],
+            text = assert_architecture(self, runner.session.run_dir / branch['directory'], branch['study'],
                                        branch['study_invocation'], 'English')
             for source in branch['study']['review_plan']['sources'][1:]:
                 self.assertIn(source['root'] + '/app.py', text)
@@ -269,12 +272,12 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
         self.config['git_mode']['baseline_branch'] = 'topic'
         self.write_config()
         runner = Runner(load_config(self.config_path), self.base / 'partial-switch')
-        original = runner.repo.switch_node
+        original = runner.session.repo.switch_node
         def switch(path, commit, ref=None, **kwargs):
             original(path, commit, ref, **kwargs)
             if path == CHILD and not kwargs.get('restoring'):
                 raise OSError('Interrupted after child checkout')
-        with patch.object(runner, 'check_cli', return_value={}), patch.object(runner.repo, 'switch_node', side_effect=switch):
+        with patch.object(runner, 'check_cli', return_value={}), patch.object(runner.session.repo, 'switch_node', side_effect=switch):
             manifest, code = runner.run()
         self.assertEqual(code, 1)
         self.assertEqual(manifest['branches'], [])
