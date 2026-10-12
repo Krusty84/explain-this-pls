@@ -20,7 +20,7 @@ from src.reports.final_report import recoverable_material
 from src.analysis.ledger import prepare_result
 from src.analysis.evidence import source_catalog, SourceChanged
 from src.model.model_context import CONTEXT_FORMAT
-from src.analysis.source_context import source_context_settings, serialize_source_context
+from src.analysis.source_context import serialize_source_context
 from src.analysis.coverage_plan import inventory_summary, build_coverage_plan
 from src.runtime.errors import AuditError, UnsafeRepository
 from src.runtime.artifacts import now, digest, private_directory, neutral_temporary_base, append_observation
@@ -145,8 +145,6 @@ class ModelInvoker:
         context_json = json.dumps(projected, ensure_ascii=False)
         if 'source_context' in projected:
             transmitted = len(serialize_source_context(projected['source_context']).encode('utf-8'))
-            if transmitted > source_context_settings(self.session.cfg.get('source_context'))['max_bytes']:
-                raise AuditError('Projected source context exceeds its byte budget.', failure_layer='integrity')
             if preparation is not None:
                 preparation = dict(preparation, transmitted_bytes=transmitted)
         schema = binding.schema

@@ -136,9 +136,7 @@ class FolderHashingTests(FolderFixture):
                 self.assertNotIn('fragment_sha256', result)
                 validate_schema(result, RESOLUTION)
                 validate_schema(result | {'fragment_sha256': 'legacy'}, RESOLUTION)
-            with patch('src.analysis.evidence.MAX_FILE_BYTES', 1):
-                limited = resolve_evidence('study', [pointer], context, files, expected_metadata=folder.metadata)
-            self.assertEqual(limited[0]['status'], 'LIMIT_EXCEEDED')
+                validate_schema(result | {'status': 'LIMIT_EXCEEDED'}, RESOLUTION)
             (self.source / 'app.py').write_text('changed before evidence\n')
             with self.assertRaises(SourceChanged):
                 resolve_evidence('study', [pointer], context, files, expected_metadata=folder.metadata)

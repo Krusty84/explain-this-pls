@@ -60,7 +60,7 @@
       // "Pods", "ios/Pods", "Carthage/Checkouts", "vendor", "bin", "Saved"
     ]
   },
-  // Evidence checks; also prepared fragments when source_context is enabled.
+  // Evidence checks; also symbol-map decoding when source_context is enabled.
   // Paths are relative to the common source root.
   // Additional reads depend on CLI capabilities. No UTF-8 copies are created on disk.
   // Most specific path wins; "." selects the whole tree.
@@ -79,10 +79,9 @@
     // Optional exact output of this executable's --version, not its upstream version.
     "expected_version": null
   },
-  // Prompt budget includes the map, exact snippets, JSON and omission summary.
+  // Full index-only file/symbol map. Implementations use native read-only tools.
   "source_context": {
-    "enabled": true,
-    "max_bytes": 65536
+    "enabled": true
   },
   "execution": {
     // Stop only after 50 confirmed repeated tool results spanning 120 seconds.

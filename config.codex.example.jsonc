@@ -65,7 +65,7 @@
       // "Pods", "ios/Pods", "Carthage/Checkouts", "vendor", "bin", "Saved"
     ],
   },
-  // Evidence checks; also prepared fragments when source_context is enabled.
+  // Evidence checks; also symbol-map decoding when source_context is enabled.
   // Paths are relative to the common source root.
   // Additional reads depend on CLI capabilities. No UTF-8 copies are created on disk.
   // Most specific path wins; "." selects the whole tree.
@@ -77,10 +77,9 @@
 
   // One monotonic budget per stage. null disables the optional idle deadline.
   // opencode_format_retries is retained for compatibility and has no effect.
-  // Prompt budget includes the map, exact snippets, JSON and omission summary.
+  // Full index-only file/symbol map. Implementations use native read-only tools.
   "source_context": {
     "enabled": true,
-    "max_bytes": 65536,
   },
   "execution": {
     // Stop only after 50 confirmed repeated tool results spanning 120 seconds.

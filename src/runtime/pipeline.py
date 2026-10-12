@@ -78,7 +78,7 @@ class SourcePipeline:
         if not review_enabled:
             item['review_skipped'] = 'disabled_by_config'
         context = dict(context, review_enabled=review_enabled, source_decoding=self.session.cfg.get('source_decoding', {'rules': []}),
-                       source_decoding_access='Decoding rules apply to program evidence checks and, when source_context is enabled, prepared source fragments; additional file reading depends on the CLI. No UTF-8 file copies are created on disk.')
+                       source_decoding_access='Decoding rules apply to program evidence checks and, when source_context is enabled, the source index. Native file reading depends on the CLI; report an analysis gap if the original encoding cannot be read exactly. No UTF-8 file copies are created on disk.')
         item['revisions'] = []
 
         def guard(stage_context):

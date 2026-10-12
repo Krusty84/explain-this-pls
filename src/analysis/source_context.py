@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Run-local structural navigation and exact, bounded source delivery.
+"""Run-local structural navigation over the complete pinned source inventory.
 
 Only pinned inventory entries are read. Symbol maps are navigation, never evidence.
 No source imports, parser configuration, plugins or project commands are executed.
@@ -20,13 +20,12 @@ import re
 import sys
 import time
 
-from src.analysis.evidence import (MAX_FILE_BYTES, PointerError, SourceChanged, _read_confined,
-                                   canonical, lines, sha, source_catalog, valid_path)
+from src.analysis.evidence import (PointerError, SourceChanged, _read_confined,
+                                   canonical, sha, source_catalog, valid_path)
 from src.analysis.source_decoding import decode_source, normalize_source_decoding, SourceDecodeError, BOMS
 
 AST_GREP_VERSION = '0.50.0'
-MAX_FRAGMENT_LINES = 120
-PARSER_REVISION = 1
+PARSER_REVISION = 2
 LANGUAGES = {'.py': 'python', '.pyi': 'python', '.js': 'javascript', '.mjs': 'javascript',
              '.cjs': 'javascript', '.jsx': 'jsx', '.ts': 'typescript', '.mts': 'typescript',
              '.cts': 'typescript', '.tsx': 'tsx', '.go': 'go', '.c': 'c', '.h': 'header',
@@ -37,14 +36,12 @@ LANGUAGES = {'.py': 'python', '.pyi': 'python', '.js': 'javascript', '.mjs': 'ja
 def source_context_settings(value=None):
     if value is None:
         value = {}
-    if type(value) is not dict or set(value) - {'enabled', 'max_bytes'}:
-        raise ValueError('source_context accepts enabled and max_bytes only.')
-    enabled, maximum = value.get('enabled', True), value.get('max_bytes', 65536)
+    if type(value) is not dict or set(value) - {'enabled'}:
+        raise ValueError('source_context accepts enabled only.')
+    enabled = value.get('enabled', True)
     if type(enabled) is not bool:
         raise ValueError('source_context.enabled must be a JSON boolean.')
-    if type(maximum) is not int or maximum < 4096:
-        raise ValueError('source_context.max_bytes must be an integer of at least 4096.')
-    return {'enabled': enabled, 'max_bytes': maximum}
+    return {'enabled': enabled}
 
 
 def serialize_source_context(value):
@@ -191,17 +188,24 @@ def _native_symbols(text, language):
         if kind == 'impl':
             name = (_field_text(node, 'trait') + ' for ' if node.field('trait') else '') + (
                 _field_text(node, 'type') or '')
-        if kind in ('import', 'export'):
-            # Full syntax remains in snippets; this label only identifies navigation.
+        if kind == 'import':
+            # Full syntax remains in source files; this label only identifies navigation.
             name = (_field_text(node, 'source') or _field_text(node, 'path') or
                     ' '.join(c.text() for c in node.children() if c.is_named() and
                              c.kind() not in ('class_declaration', 'function_declaration', 'lexical_declaration',
                                               'interface_declaration', 'type_alias_declaration'))) or kind
-            if kind == 'export' and name == 'export':
-                declaration = next((c for c in node.children() if _field_text(c, 'name')), None)
-                variable = node.find(kind='variable_declarator')
-                name = (_field_text(declaration, 'name') if declaration else
-                        _field_text(variable, 'name') if variable else 'default')
+        elif kind == 'export':
+            children = node.children()
+            declaration = next((c for c in children if _field_text(c, 'name')), None)
+            variable = next((c for child in children if child.kind() in ('lexical_declaration', 'variable_declaration')
+                             for c in child.children() if c.kind() == 'variable_declarator'), None)
+            clause = next((c for c in children if c.kind() in ('export_clause', 'identifier')), None)
+            # Anonymous exports must not put implementation bodies in map labels.
+            name = (_field_text(node, 'source') or _field_text(node, 'path') or
+                    (_field_text(declaration, 'name') if declaration else None) or
+                    (_field_text(variable, 'name') if variable else None) or
+                    (clause.text() if clause else None) or
+                    ('default' if any(c.kind() == 'default' for c in children) else 'export'))
         if not name and kind:
             name = _declarator(node)
         if kind and name:
@@ -242,7 +246,8 @@ def parse_symbols(path, text):
     """Parse already decoded source; return records, parser and map completeness."""
     language = LANGUAGES.get(Path(path).suffix.lower())
     if language is None:
-        return {'symbols': [], 'parser': None, 'map_status': 'unavailable', 'map_reason': 'unknown_language'}
+        return {'symbols': [], 'parser': None, 'language': None,
+                'map_status': 'unavailable', 'map_reason': 'unknown_language'}
     parser = 'python-ast:' + '.'.join(map(str, sys.version_info[:3])) if language == 'python' else 'ast-grep-py:' + _parser_version()
     try:
         if language == 'python':
@@ -260,35 +265,6 @@ def parse_symbols(path, text):
                 map_reason='parse_error' if errors else None)
 
 
-def _subtract(start, end, delivered):
-    remaining = [(start, end)]
-    for left, right in delivered:
-        remaining = [(a, b) for lo, hi in remaining for a, b in
-                     ((lo, min(hi, left - 1)), (max(lo, right + 1), hi)) if a <= b]
-    return remaining
-
-
-def _merge(ranges):
-    merged = []
-    for start, end in sorted(ranges):
-        if merged and start <= merged[-1][1] + 1 and end - merged[-1][0] + 1 <= MAX_FRAGMENT_LINES:
-            merged[-1][1] = max(merged[-1][1], end)
-        else:
-            merged.append([start, end])
-    return merged
-
-
-def _pointers(value):
-    if isinstance(value, dict):
-        if all(k in value for k in ('source_id', 'path', 'start_line', 'end_line')):
-            yield value
-        for child in value.values():
-            yield from _pointers(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from _pointers(child)
-
-
 class SourceContextBuilder:
     def __init__(self, settings=None):
         self.settings = source_context_settings(settings)
@@ -301,37 +277,39 @@ class SourceContextBuilder:
         root = context.get('source_directory', context.get('repository'))
         cached = self.cache.get(key)
         if cached:
-            _read_confined(root, relative, MAX_FILE_BYTES, expected=cached['identity'], pinned=metadata, read=False)
+            _read_confined(root, relative, expected=cached['identity'], pinned=metadata, read=False)
             return copy.deepcopy(cached)
-        record = dict(status='unavailable', parser=None, map_status='unavailable', symbols=[], source_lines=[],
-                      text_reason=None, map_reason=None, prepared_bytes=0, encoding=None, identity=None)
+        language = LANGUAGES.get(Path(relative).suffix.lower())
+        record = dict(status='unavailable', parser=None, language=None if language == 'header' else language,
+                      map_status='unavailable', symbols=[], map_reason=None, prepared_bytes=0,
+                      encoding=None, identity=None, total_lines=None)
         try:
-            blob, identity = _read_confined(root, relative, MAX_FILE_BYTES, pinned=metadata)
+            blob, identity = _read_confined(root, relative, pinned=metadata)
             if metadata is None and sha(blob) != expected_files[relative]:
                 raise SourceChanged('Prepared source bytes differ from the pinned source inventory.')
             record['identity'] = identity
             text, record['encoding'] = decode_source(blob, relative, decoding)
             if '\x00' in text:
-                record['text_reason'] = record['map_reason'] = 'binary_content'
+                record['map_reason'] = 'binary_content'
             else:
                 record.update(parse_symbols(relative, text))
-                record.update(status='processed', source_lines=lines(text), prepared_bytes=len(text.encode('utf-8')))
+                record.update(status='processed', total_lines=text.count('\n') + int(bool(text) and not text.endswith('\n')),
+                              prepared_bytes=len(text.encode('utf-8')))
         except SourceDecodeError as exc:
+            record['encoding'] = exc.encoding
             binary = (b'\x00' in blob and not any(blob.startswith(bom) for bom, _ in BOMS) and
                       not (exc.encoding or '').startswith(('utf-16', 'utf-32')))
-            record['text_reason'] = record['map_reason'] = 'binary_content' if binary else 'decoding_error'
-        except PointerError as exc:
-            record['text_reason'] = record['map_reason'] = ('file_size_limit' if str(exc) == 'LIMIT_EXCEEDED' else 'read_error')
-        except OSError:
-            record['text_reason'] = record['map_reason'] = 'read_error'
+            record['map_reason'] = 'binary_content' if binary else 'decoding_error'
+        except (PointerError, OSError):
+            record['map_reason'] = 'read_error'
         if record['identity']:
             self.cache[key] = copy.deepcopy(record)
         return record
 
     def prepare(self, stage, context, expected_files=None, *, expected_metadata=None):
         started = time.monotonic()
-        manifest = dict(stage=stage, enabled=self.settings['enabled'], files=[], prepared_bytes=0,
-                        transmitted_bytes=0, duration_seconds=0)
+        manifest = dict(stage=stage, enabled=self.settings['enabled'], mode='index-only', files=[],
+                        prepared_bytes=0, transmitted_bytes=0, transmitted_text_bytes=0, duration_seconds=0)
         if (not self.settings['enabled'] or stage not in ('study', 'review', 'revise') or
                 context.get('correction_prompt')):
             manifest['reason'] = 'disabled' if not self.settings['enabled'] else 'stage_without_sources'
@@ -357,149 +335,19 @@ class SourceContextBuilder:
         records.sort(key=lambda r: (r['source_id'], r['path']))
         for record in records:
             record.update(self._read(record.pop('entry'), context, expected_files, expected_metadata, snapshot, decoding))
-            record['delivered'] = []
-            record['map_sent'] = 0
-        payload = {'files': [], 'fragments': [], 'omissions': {}}
-        maximum = self.settings['max_bytes']
-        map_limit = maximum // 4
-        # One entry per file per cycle; symbols retain source declaration order.
-        active, map_paths = [], set()
+        incomplete = [r for r in records if r['map_status'] != 'complete']
+        payload = dict(mode='index-only', files=[
+            {k: r[k] for k in ('source_id', 'path', 'parser', 'language', 'encoding', 'total_lines',
+                               'map_status', 'map_reason', 'symbols')} for r in records], fragments=[],
+            omissions=dict(maps=len(incomplete),
+                           reasons=dict(sorted(Counter(r['map_reason'] for r in incomplete if r['map_reason']).items())),
+                           incomplete=bool(incomplete)))
         for record in records:
-            item = {k: record[k] for k in ('source_id', 'path', 'parser', 'map_status')}
-            item['symbols'] = record['symbols'][:1]
-            if _size({'files': payload['files'] + [item]}) > map_limit:
-                item['symbols'] = []
-                if _size({'files': payload['files'] + [item]}) > map_limit:
-                    continue
-            payload['files'].append(item)
-            record['map_sent'] = len(item['symbols'])
-            active.append((record, item))
-            map_paths.add((record['source_id'], record['path']))
-        positions = [len(item['symbols']) for _, item in active]
-        while any(pos < len(r['symbols']) for pos, (r, _) in zip(positions, active)):
-            for index, (record, item) in enumerate(active):
-                if positions[index] >= len(record['symbols']):
-                    continue
-                symbol = record['symbols'][positions[index]]
-                positions[index] += 1
-                item['symbols'].append(symbol)
-                if _size({'files': payload['files']}) > map_limit:
-                    item['symbols'].pop()
-                else:
-                    record['map_sent'] += 1
-
-        for record, item in active:
-            if record['map_sent'] < len(record['symbols']) and item['map_status'] == 'complete':
-                item['map_status'] = 'partial'
-        map_omissions = sum(r['map_sent'] < len(r['symbols']) or (r['source_id'], r['path']) not in map_paths
-                            for r in records)
-        reason_counts = Counter()
-        omitted_files = omitted_ranges = fragment_bytes = 0
-        envelope_bytes = _size(payload) - _size(payload['fragments']) - _size(payload['omissions'])
-
-        def measure(record):
-            nonlocal omitted_files, omitted_ranges, fragment_bytes
-            old = record.get('_delivery_stats', (0, 0, 0, set()))
-            missing = _subtract(1, len(record['source_lines']), record['delivered']) if record['source_lines'] else []
-            fragments = [dict(source_id=record['source_id'], path=record['path'], start_line=start, end_line=end,
-                              text=''.join(record['source_lines'][start - 1:end]))
-                         for start, end in record['delivered']]
-            reasons = {reason for reason in (record['map_reason'], record['text_reason']) if reason}
-            if missing:
-                reasons.add('budget')
-            if record['map_sent'] < len(record['symbols']) or (record['source_id'], record['path']) not in map_paths:
-                reasons.add('budget')
-            new = (int(bool(missing or record['text_reason'])), len(missing),
-                   sum(_size(f) + 2 for f in fragments), reasons)
-            omitted_files += new[0] - old[0]
-            omitted_ranges += new[1] - old[1]
-            fragment_bytes += new[2] - old[2]
-            reason_counts.subtract(old[3])
-            reason_counts.update(new[3])
-            record['_delivery_stats'], record['_fragments'] = new, fragments
-            payload['omissions'] = dict(files=omitted_files, ranges=omitted_ranges, maps=map_omissions,
-                                        reasons={k: v for k, v in sorted(reason_counts.items()) if v > 0},
-                                        incomplete=bool(omitted_files or map_omissions or +reason_counts))
-
-        def payload_size():
-            # A nonempty JSON list costs sum(item bytes + comma-space); the
-            # opening and closing brackets replace the final comma-space.
-            return envelope_bytes + max(2, fragment_bytes) + _size(payload['omissions'])
-
-        for record in records:
-            measure(record)
-        if not records:
-            payload['omissions'] = dict(files=0, ranges=0, maps=0, reasons={}, incomplete=False)
-        turn_bytes = max(128, (maximum - payload_size()) // max(1, len(records)))
-
-        def add(record, start, end, *, fair=False):
-            limit = min(maximum, payload_size() + turn_bytes) if fair else maximum
-            for left, right in _subtract(start, min(end, len(record['source_lines'])), record['delivered']):
-                right = min(right, left + MAX_FRAGMENT_LINES - 1)
-                old = record['delivered']
-                low, high, best = left, right, None
-                while low <= high:
-                    middle = (low + high) // 2
-                    record['delivered'] = _merge(old + [[left, middle]])
-                    measure(record)
-                    if payload_size() <= limit:
-                        best, low = record['delivered'], middle + 1
-                    else:
-                        high = middle - 1
-                record['delivered'] = best if best is not None else old
-                measure(record)
-
-        if stage in ('review', 'revise') or context.get('prompt_variant') == 'revise':
-            by_path = {(r['source_id'], r['path']): r for r in records}
-            for pointer in _pointers({k: v for k, v in context.items() if k not in ('_inventory', 'source_context')}):
-                record = by_path.get((pointer['source_id'], pointer['path']))
-                start, end = pointer['start_line'], pointer['end_line']
-                if record and type(start) is int and type(end) is int and 1 <= start <= end:
-                    for left in range(start, min(end, len(record['source_lines'])) + 1, MAX_FRAGMENT_LINES):
-                        add(record, left, min(end, left + MAX_FRAGMENT_LINES - 1))
-        candidates = []
-        for record in records:
-            symbols = sorted(record['symbols'], key=lambda s: (s['kind'] != 'import', s['start_line']))
-            windows = [(s['start_line'], min(s['end_line'], s['start_line'] + MAX_FRAGMENT_LINES - 1)) for s in symbols]
-            windows.extend((start, min(start + MAX_FRAGMENT_LINES - 1, len(record['source_lines'])))
-                           for start in range(1, len(record['source_lines']) + 1, MAX_FRAGMENT_LINES))
-            candidates.append(iter(windows))
-        def cycle(queues, fair):
-            active_indices = list(range(len(records)))
-            while active_indices:
-                next_indices = []
-                for index in active_indices:
-                    candidate = next(queues[index], None)
-                    if candidate is not None:
-                        add(records[index], *candidate, fair=fair and len(active_indices) > 1)
-                        next_indices.append(index)
-                active_indices = next_indices
-        cycle(candidates, True)
-        # Reconsider residual windows without the per-turn fair share once
-        # every file has had its turn; small peers can leave capacity free.
-        remaining = []
-        for record in records:
-            windows = [(start, min(end, start + MAX_FRAGMENT_LINES - 1))
-                       for left, end in _subtract(1, len(record['source_lines']), record['delivered'])
-                       for start in range(left, end + 1, MAX_FRAGMENT_LINES)]
-            remaining.append(iter(windows))
-        cycle(remaining, False)
-        payload['fragments'] = [fragment for record in records for fragment in record['_fragments']]
-        for record in records:
-            item = {k: record[k] for k in ('source_id', 'path', 'relative', 'status', 'parser', 'map_status',
-                                           'map_reason', 'text_reason', 'encoding', 'prepared_bytes')}
-            item.update(total_lines=len(record['source_lines']) if record['status'] == 'processed' else None,
-                        map_omission_reason=('budget' if record['map_sent'] < len(record['symbols']) or
-                                             (record['source_id'], record['path']) not in map_paths else record['map_reason']),
-                        symbols=len(record['symbols']),
-                        symbols_transmitted=record['map_sent'], transmitted_ranges=record['delivered'],
-                        omitted_ranges=_subtract(1, len(record['source_lines']), record['delivered']) if record['source_lines'] else [],
-                        transmitted_text_bytes=sum(len(''.join(record['source_lines'][a - 1:b]).encode('utf-8'))
-                                                   for a, b in record['delivered']))
-            if item['omitted_ranges'] and not item['text_reason']:
-                item['text_reason'] = 'budget'
+            item = {k: record[k] for k in ('source_id', 'path', 'relative', 'status', 'parser', 'language',
+                                           'map_status', 'map_reason', 'encoding', 'prepared_bytes', 'total_lines')}
+            item.update(symbols=len(record['symbols']), symbols_transmitted=len(record['symbols']),
+                        transmitted_text_bytes=0)
             manifest['files'].append(item)
         manifest.update(prepared_bytes=sum(r['prepared_bytes'] for r in records), transmitted_bytes=_size(payload),
                         map_bytes=_size({'files': payload['files']}), duration_seconds=time.monotonic() - started)
-        assert manifest['transmitted_bytes'] <= maximum
         return payload, manifest

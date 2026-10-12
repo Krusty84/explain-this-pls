@@ -6,9 +6,9 @@ Analyzes legacy code and explains how the damn thing actually works.
 
 explain-this-pls uses your coding agent to document an existing codebase, with an
 optional separate review of documented claims against the code. Review is disabled
-by default. Analyze a
-folder, study a Git branch, or compare several branches. Agents are instructed to
-read the code without running the project's builds or tests.
+by default. Analyze a folder, study a Git branch, or compare several branches.
+Agents are instructed to read the code without running the project's builds or
+tests.
 
 ## Features
 
@@ -120,8 +120,7 @@ For folder analysis, replace the source settings with:
 Keep the report and agent settings. Folder mode creates the architecture report
 and, when enabled, a review without requiring Git; `git_mode` settings are ignored.
 
-Set `source_filter` to remove files before hashing, inventory, study navigation,
-coverage planning, and study assignments. Omitted settings preserve existing behavior:
+Use `source_filter` to exclude files or directories from analysis:
 
 ```json
 "source_filter": {
@@ -130,47 +129,14 @@ coverage planning, and study assignments. Omitted settings preserve existing beh
 }
 ```
 
-`exclude_paths` applies in both modes, including each Git branch checkout. Use exact,
-case-sensitive paths relative to the common source root, with `/` separators.
-An entry excludes that file or directory and its descendants. `build` does not match
-`builder` or `packages/web/build`. Add nested paths explicitly. Absolute paths, empty
-components, `.`, `..`, backslashes, duplicates, and glob patterns are rejected.
-Use `.gitignore` for patterns. Configured exclusions take precedence over negation.
+Add exact paths relative to the source root to `exclude_paths`. A directory entry
+also excludes its contents. Set `follow_gitignore` to `true` to use `.gitignore`
+rules in Folder mode. Git mode still includes tracked files unless you exclude
+them explicitly. There are no default artifact exclusions; review the commented
+examples before adding paths.
 
-`follow_gitignore` accepts only a JSON boolean. Set it to `true` for Folder mode
-to read root and nested `.gitignore` files, even without a `.git` directory.
-Rules use their containing directory as the base and support wildcards, anchors,
-directory rules, and negation through
-[pathspec](https://python-path-specification.readthedocs.io/en/v0.12.1/readme.html).
-An ignored parent directory is pruned; a negation for a child cannot reopen it.
-Rule files inside pruned directories and symbolic-link rule files are not read.
-Explicitly excluding a `.gitignore` file in Folder mode disables that rule file.
-A `.gitignore` that ignores itself remains active as filter metadata.
-Folder mode has no index, so rules apply to every matching source file.
-
-This flag controls additional Folder filtering. It does not disable Git's existing
-ignore handling. Git still includes tracked files unless `exclude_paths` removes
-them, and excludes ignored untracked files. Git's existing rule and submodule
-control-file checks remain active throughout the run.
-
-The four example configs contain optional exclusions for Java, JS/TS, C/C++, Rust,
-Go, Python, and Swift. All entries are commented out. Review them before use:
-names such as `target`, `build`, and `dist` are shared across ecosystems and can
-contain required code or resources. There is no framework detection or default
-artifact exclusion list.
-
-Run artifacts record filter settings and excluded paths or pruned roots, with
-`CONFIG` or `GITIGNORE` origins. Folder `source.inventory.json` also records active
-rule-file hashes and the matching rule's file and line. Git `source.inventory.json`
-also records filter exclusions. The manifest records pinned commits, recursive
-checkout plans, switch attempts, and verified restoration results.
-Only `source_filter` and Git rules exclude source files. Agent relevance notes
-cannot change the inventory or evidence checks.
-Active Folder rule files are pinned even when a rule edit would not change selection.
-Changes confined to excluded source content do not invalidate a filtered Folder snapshot.
-
-Filtering is not a security boundary. Direct CLI file tools can still access the
-original directory, including excluded paths. Native CLI permissions apply.
+Exclusions define the analysis scope. Agent file tools can still access excluded
+paths in the original directory.
 
 #### Main settings
 
@@ -181,11 +147,8 @@ original directory, including excluded paths. Native CLI permissions apply.
 | `folder_mode.path`          | Source directory for folder mode.                                                                                         |
 | `reports_dir`               | Destination for results; each run gets a separate subfolder.                                                              |
 | `project_description`       | Optional introduction to the system's purpose and history.                                                                |
-| `output_language`           | Report language: `"Russian"` (default) or `"English"`, including supported aliases.                                       |
+| `output_language`           | Report language: `"Russian"` (default) or `"English"`.                                                                    |
 | `priority_scenarios`        | Optional workflows or areas to focus on.                                                                                  |
-| `source_context.enabled`    | Boolean; defaults to `true`. Prepare source maps and exact fragments before the model call.                               |
-| `source_context.max_bytes`  | Integer, at least `4096`; defaults to `65536`. Limits the serialized source context, including JSON and omission summary. |
-| `execution.read_loop_guard` | Boolean; defaults to `true`. Stop sustained repeated tool results; `false` keeps observation metrics.                     |
 
 #### Agent settings
 
@@ -200,48 +163,7 @@ in this configuration.
 
 #### Optional settings
 
-**Initial study** runs once per folder or selected Git branch, with source tools enabled.
-The pinned, filtered inventory defines its scope. Python creates a deterministic
-coverage plan from that inventory for Study, Review and all revisions. Study returns
-architecture sections, claims, evidence, completion status and limitations.
-Component boundaries, file relevance and investigation gaps belong in the report.
-Agent classification errors cannot reject a valid document or remove source files.
-Review and revision, when enabled, use the resulting study.
-
-**Prepared source context** uses the pinned, filtered inventory and existing decoding
-rules. Study receives a file/symbol map and exact source fragments. Review and
-revision prioritize cited ranges. Comparison receives no prepared source context.
-File order is deterministic; maps use at most one quarter of the budget and snippets
-contain at most 120 complete lines. Omitted data stays visible in a bounded summary.
-Each attempt saves a complete `source-context.manifest.json` with processing status,
-parser, ranges, omission reasons, sizes and preparation time.
-
-Python uses the standard `ast` parser. The pinned `ast-grep-py` package supplies
-JavaScript, TypeScript, JSX/TSX, Go, C/C++, Java, Rust and Swift grammars, including
-SwiftUI through Swift. No project code or parser configuration is executed.
-Other text formats and syntax errors retain text reading. A symbol map and delivery
-of text do not establish inspection or prove a behavioral claim.
-
-**Read-loop protection** observes completed tool results only. It stops the owned
-process group with `NO_PROGRESS` after at least 50 consecutive confirmed repeats
-spanning at least 120 seconds. New material, errors, incomplete or ambiguous results
-reset the streak. Model prose, reasoning and stderr do not affect it. The first tool
-read of a prepared fragment remains valid. No model retry or format repair follows
-this stop; existing source checks, cleanup and independent-part continuation apply.
-Stage and idle timeouts remain active.
-
-Attempt metrics separate delivered lines, tool-read lines, exact repeats, model
-requests and token usage. `tool-events.jsonl` records completed calls with monotonic
-observation times for replay. Missing measurements carry an availability reason;
-partial telemetry is not evidence of a loop. These private logs can contain source text.
-
-OpenCode V2 and XXX/OpenCode V1 observe completed native tools and supported numbered
-Read output. XXX retains its separate session ownership and deletion checks. Codex
-uses completed items and exact shell command/result comparisons; shell source-line
-coordinates and model request counts are unavailable.
-Unknown output formats retain conservative partial metrics.
-
-**Review is opt-in.** In any existing JSON or JSONC configuration, enable it with:
+**Review is opt-in.** Enable it to check the architecture report against the code:
 
 ```json
 {
@@ -252,31 +174,18 @@ Unknown output formats retain conservative partial metrics.
 }
 ```
 
-Set `execution.review_enabled` to `false` or omit it to run study,
-followed by comparison when several Git branches are selected. Without review,
-no revision round runs and review-agent settings and review/revision prompts are
-inactive. A successful run can be `COMPLETE`, with an explicit notice that no
-separate review was performed. Comparison remains available; differences are
-reported as unverified and need factual references from both selected studies.
-Existing configurations without this setting now skip review; add `true` to
-retain the previous workflow. No CLI flag is needed.
+Without this setting, each folder or branch gets an architecture study. Multiple
+Git branches also get a comparison. Review can trigger one correction round and
+a repeat review, which can increase model usage. Earlier report versions remain
+available.
 
-The [commented configuration](config.codex.example.jsonc) describes additional options:
+The [commented configuration](config.codex.example.jsonc) describes other options:
 
-- **Execution limits:** each stage has a one-hour limit by default. With review
-  enabled, one correction round and repeat review are allowed after substantive review findings. Adjust
-  `execution.stage_timeout_seconds` or `execution.max_revision_rounds` as needed.
-  Revisions can increase model usage. `structured_output_repair_attempts` is a
-  legacy setting ignored by all backends; the orchestrator sends no format-repair request.
-- **Different agents per stage:** use `stage_agents` to customize study,
-  review or comparison. Otherwise the shared agent settings apply.
-- **Legacy encodings:** use `source_decoding.rules` to declare encodings such as CP1251.
-  These rules apply to evidence checks. When `source_context` is enabled, they also
-  decode prepared fragments. Additional file reads depend on the CLI's reading
-  capabilities; no UTF-8 copies are created on disk.
+- **Stage timeouts:** `execution.stage_timeout_seconds` defaults to one hour.
+- **Different agents per stage:** use `stage_agents` for study, review or comparison.
+- **Legacy encodings:** use `source_decoding.rules` for encodings such as CP1251.
 - **Continuing after errors:** `continue_on_error` defaults to `true`. Set it to
-  `false` to stop further agent calls after an error. Detected source changes always
-  stop the run.
+  `false` to stop further agent calls after an error. Source changes always stop the run.
 
 #### Custom prompts
 
@@ -295,49 +204,29 @@ To use the interactive interface, run without arguments:
 python3 explain.py
 ```
 
-On first launch, select the folder containing your configurations. The app saves
-its absolute path in `explain.config` beside `explain.py`; that local settings file
-is excluded from Git. This installation directory must be writable to save the
-preference. Use **Change folder** to select another location later, or **Refresh**
-after editing or adding configs. The picker lists JSON/JSONC files directly inside
-the selected folder and excludes example configs and subfolders.
+On first launch, select the folder containing your JSON/JSONC configurations.
+The app remembers this folder. Use **Change folder** to choose another location,
+or **Refresh** after editing or adding configs.
 
-Select a config to see its source, branches, agents, review setting and report
-destination. **Check setup** checks the local prerequisites; **Run** starts the
-analysis. Selecting a file alone does not call a model. Invalid configs display
-their validation error and cannot start.
+Select a config to preview its source, branches, agents, review setting and report
+destination. Invalid configs show validation errors and cannot run. Use **Check
+setup** to check prerequisites, then **Run** to start analysis. Selecting a config
+alone does not call a model.
 
-For a configuration with Codex agents, **Models** opens the model catalog.
-**Apply Scope** selects `agent.model` or a Codex stage's
-`stage_agents.<stage>.model`: study, review or compare. Inactive stages remain
-selectable; setting their model does not enable them. Stage settings inherit
-the shared agent settings unless overridden. Models with `visibility: hide`
-are omitted. **Access via API** shows API support; **Access via ChatGPT** shows
-the result of an explicit check. **Check ChatGPT Access** checks that Codex is
-signed in with ChatGPT and sends a short, ephemeral, read-only request using the
-selected model. This request uses your Codex allowance. **Apply** becomes available
-only after a successful response. Other errors leave access unverified; the specific
-ChatGPT-account unsupported-model error marks the model unavailable.
+For Codex agents, **Models** lets you choose a model for the shared agent or an
+individual stage through **Apply Scope**. Use **Check ChatGPT Access**, then
+**Apply** after a successful check. The access check makes a short model request
+and uses your Codex allowance.
+Refresh before applying if you changed the config in another editor.
 
-**Apply** updates only the selected model field, creates a missing stage section
-when needed, and preserves JSONC comments, formatting and other settings.
-**Refresh** reloads the config and catalog and clears access checks; changing the
-target field also clears them. If an external
-editor changes the file, refresh before applying. **Cancel**, Escape or Ctrl+C
-closes the dialog and stops a pending catalog request or model check.
-Catalog requests time out after 30 seconds; model checks after 60 seconds.
-
-The **Steps** table retains completed stages and revisions while showing the
-active step, elapsed time, attempts, tokens and agent-estimated cost. Select a row
-for agent/model details, diagnostics and complete report paths. Scroll horizontally
-to see additional columns on narrow terminals. The **Final result** table stays
-open after completion, with the outcome, totals and paths. Use **Configs** to
-return to configuration selection. Reports remain in their existing Markdown/JSON
-formats; the TUI shows summaries and paths.
+The **Steps** table shows progress, elapsed time and available usage estimates.
+Select a row for details and report paths. Scroll horizontally for additional
+columns on narrow terminals. **Final result** stays open after completion with
+the outcome, totals and paths. **Configs** returns to configuration selection.
 
 Use **Cancel** or Ctrl+C to stop a run and wait for cleanup. **Quit** also waits
-for cleanup when analysis is active. Use Tab, arrow keys and Enter for keyboard
-navigation. No-argument launches and `--tui` require an interactive terminal.
+for cleanup when analysis is active. Use Tab, arrow keys and Enter to navigate.
+The interactive interface requires a terminal.
 
 To open a particular config without changing the saved folder:
 
@@ -362,18 +251,7 @@ python3 explain.py --config config.jsonc --models --output text
 python3 explain.py --config config.jsonc --models --output json
 ```
 
-The output groups catalogs by the executable and active stages. It includes each
-visible model's `slug`, `display_name`, `visibility` and `supported_in_api`;
-models with `visibility: hide` are omitted from text and JSON. These fields
-do not confirm access through ChatGPT; `supported_in_api` describes API support.
-`--output auto` uses text in a terminal and JSON otherwise. `--models` cannot be
-combined with `--check` or `--tui` and creates no audit reports. To check a model
-yourself, use your configured Codex executable:
-
-```sh
-codex exec --ephemeral --sandbox read-only --skip-git-repo-check \
-  --model MODEL 'Ответь только OK. Не используй инструменты.'
-```
+Use the interactive **Models** dialog to check access.
 
 Then start the analysis:
 
@@ -387,10 +265,6 @@ summary shows the outcome and paths to the results.
 
 Use `--no-progress` to hide the spinner and waiting messages, `--output json` for a
 script-friendly summary, or `python3 explain.py --help` to see all options.
-In the TUI, `--no-progress` disables elapsed-time refresh while keeping stage
-updates, and `--verbose` adds diagnostic detail. `--tui --check` limits actions to
-setup checks; `--trust-repository` retains its existing meaning. Explicit
-`--output text` and `--output json` cannot be combined with `--tui`.
 
 ### Read the results
 
@@ -407,109 +281,10 @@ Each run saves results in a new subfolder of `reports_dir`. Start with these fil
 and `ARCHITECTURE_REVIEW.md` are under `branches/<branch-id>/`, and the comparison,
 when applicable, is under `comparison/`. In folder mode, the architecture report
 and review are directly in the run folder.
-`coverage.plan.json` records deterministic directory groups from the filtered
-inventory. Study, Review and Revision share the same plan. Citation diagnostics
-also appear in the consolidated report: `NOT_CITED` means no resolved citation,
-not `NOT_INSPECTED`. File inspection remains `UNVERIFIED` by Python.
 
-Catalog configuration keys and old artifact formats are unsupported. Remove
-`stage_agents.catalog` and `prompts.catalog`. Custom Study prompts must use the
-current document contract; subsystem, exclusion and coverage arrays are no longer
-required. The artifact format is `evidence-ledger-required-diagrams-v3-artifacts`.
-Start a new run directory. Existing reports are left unchanged.
-
-#### FINAL_REPORT.md — consolidated results
-
-- **Run summary:** overall status and limitations affecting the results.
-- **Results for each branch or folder:** document versions, review findings,
-  source citation diagnostics and the full architecture and review text. Additional revision
-  material appears when available.
-- **Comparison:** differences between branches and the agent's detailed explanation,
-  or a note explaining why comparison is unavailable or unnecessary.
-- **Run diagnostics:** errors encountered during analysis.
-
-#### ARCHITECTURE.md — system architecture
-
-The report has exactly ten numbered H2 sections. Python fixes their names and
-order for Russian and English; model section titles do not select published
-headings. Aliases `ru`, `russian`, `русский`, `en`, `english` and `английский`
-are case-insensitive. Unsupported languages are rejected before a model call.
-
-| Section                        | What it explains                                                             |
-| ------------------------------ | ---------------------------------------------------------------------------- |
-| Study scope                    | The source studied, exclusions and limits of the investigation.              |
-| System context                 | The system's purpose, external boundaries, processes and integrations.       |
-| System components              | Main components, responsibilities, dependencies and a PlantUML overview.     |
-| Startup and execution          | How the system starts and how important scenarios execute.                   |
-| Data and state                 | Storage, readers and writers, transactions and a PlantUML data-flow diagram. |
-| Cross-cutting mechanisms       | Configuration, security, error handling, logging and concurrency.            |
-| Constraints and legacy details | Enforced restrictions, documented rules and observed conventions.            |
-| Change navigation              | Where to start common changes and which related tests to inspect.            |
-| Unknown and unverified areas   | Areas studied, gaps and next steps for verification.                         |
-| Evidence basis and sources     | Why the cited sources support the explanation and what remains uncertain.    |
-
-Every block with linked source evidence is followed by its file paths, inclusive
-line ranges and evidence IDs. IDs link to the source index under H3 in section 10. Repeated evidence appears once per block, in structured reference order.
-Submodule paths include their source root and retain the pinned source identity.
-Unresolved locators carry explicit status warnings; an empty quote verifies only
-the locator. Missing evidence is not replaced with an invented reference.
-
-`study.json` keeps the structured claims and checks. `study.original.md` keeps the
-canonical report used by Review. Published headings and references preserve each
-authored block and do not change canonical hashes, claim coordinates or the
-Review target. Rendering is local and adds no model call, including when Review
-is disabled. Existing reports remain unchanged; integrity checks detect changes
-to a published file.
-
-COMPLETE requires a separate, claim-linked PlantUML block in both System components
-and Data and state. Python checks PlantUML structure only in these two sections
-(`components` and `data_and_state`): fences, markers, nonempty content, claim links
-and forbidden external directives, even with Review disabled.
-Extra diagrams are allowed. PARTIAL/BLOCKED may omit a diagram with explicit
-limitations and next checks; malformed diagrams in these two sections still fail
-validation. Diagrams in other sections remain subject to the common Markdown and
-claim-link checks.
-`program_checks.diagrams` records structure only. Review assesses the components,
-dependencies and data flows against evidence. Viewing diagrams as graphics requires
-a PlantUML-capable viewer; this tool does not compile or render them.
-
-Blocks may use H3–H6 subheadings. Additional H1/H2, including Setext headings,
-headings in containers and raw HTML h1/h2, are rejected outside code. Fenced
-blocks must be closed. Literal headings inside code or escaped text are allowed.
-Invalid structure is reported with its section and block; Python does not rewrite
-it or repeat the architecture study. Under `strict`, publication fails. Under
-`compromise`, eligible source material may be retained as unvalidated material,
-but is not published as a valid `ARCHITECTURE.md`.
-
-#### ARCHITECTURE_REVIEW.md — review results
-
-- **Checks and assessments:** review outcome, limitations and how many of the
-  report's registered claims were checked.
-- **Claim assessments:** conclusions about individual statements and their cited evidence.
-- **Source references:** files and lines used to support the review.
-- **Omission search:** areas checked for missing architectural information.
-- **Findings:** problems, their impact and proposed corrections; later reviews also
-  show whether earlier findings were resolved.
-
-The agent's written explanation is included in `FINAL_REPORT.md` and saved
-separately as `review.original.md` alongside the review.
-
-#### BRANCH_COMPARISON.md — branch differences
-
-This file contains processing checks, limitations and a table of reported
-differences with the agent's assessment and rationale. Comparison uses the existing
-studies and reviews.
-
-The agent's detailed comparison in `FINAL_REPORT.md` and
-`comparison/compare.original.md` covers:
-
-- **Executive comparison:** the main differences and important caveats.
-- **Inputs and comparability:** branches, available reports and coverage gaps.
-- **Baseline architecture:** a summary of the reference branch.
-- **Each other branch:** changes, unchanged aspects, consequences and uncertainty.
-- **Cross-branch matrix:** capabilities and components compared across branches.
-- **Documentation defects:** gaps in the reports distinguished from code differences.
-- **Open questions:** follow-up checks needed to resolve uncertainty.
+Review findings and citation warnings appear in `FINAL_REPORT.md`. Reports include
+references to source files and lines. PlantUML diagrams are included as source;
+use a PlantUML-capable viewer to display them.
 
 ### Understand the outcome
 
@@ -518,130 +293,16 @@ By default, useful partial results are kept even if a stage fails
 in the final report. If a revision is produced, the results identify the selected
 version and retain earlier material.
 
-Both `strict` and `compromise` publish structurally valid studies with valid source
-identity and evidence regardless of auxiliary classification errors. Those errors
-are diagnostics. A valid `PARTIAL` study retains its claims and limitations, while
-its completion status still prevents a complete workflow result. Required document,
-evidence and source-integrity failures retain their strict checks.
-
 - **COMPLETE:** checks for all enabled stages passed, review is required only when enabled.
-- **COMPLETE_WITH_WARNINGS:** processing completed under `compromise` with citation warnings. Strict evidence quality and acceptance remain separate from permission to continue.
+- **COMPLETE_WITH_WARNINGS:** processing completed with citation warnings; read them before relying on the affected claims.
 - **PARTIAL:** useful material is available, with unresolved issues or missing required review checks.
-- **FAILED:** no usable report material was produced, or a critical error prevented completion.
+- **FAILED:** no usable material, a critical failure, or a required-stage error
+  under `strict`. Earlier valid reports may still be available.
 
 Read the limitations and findings before relying on the reports. Source references
 and automated review help assess the explanations, but do not prove correctness or
-exhaustive coverage. Project builds and tests are not run.
+exhaustive coverage.
 
-Citation warnings identify the evidence ID, source, path, lines, reason and affected
-claims in CLI/TUI output and report tables. `UNRESOLVED` means the citation was not
-verified; `CORRECTED` records a repaired range or common leading indentation. The
-architecture report keeps authored blocks and FACT labels unchanged and shows
-problem statuses beside the linked blocks. Its source index stays in section 10;
-detailed warning tables remain in `study.annotated.md` and `FINAL_REPORT.md`.
-Warnings never create an eleventh H2. These labels do not turn an unresolved
-citation into proof.
-The `strict` policy still rejects unresolved citation failures.
-Under `compromise`, local repair searches only the same pinned file, within three
-lines of each original boundary, and requires a unique match. Internal whitespace,
-identifiers and values are never approximated. Original responses remain unchanged;
-private attempt files retain corrections and full diffs. No extra model call is made.
-
-For response formats, validation rules and artifact storage details, see
+For implementation, validation, storage and development tools, see
+[ARCHITECTURE.md](ARCHITECTURE.md). For response formats and evidence rules, see
 [CONTRACTS.md](CONTRACTS.md).
-
-### Replay completed tool calls
-
-Replay selected attempts without starting a model:
-
-```sh
-python scripts/replay_tool_observation.py /path/to/logs \
-  --attempt study.logs/attempt-001 --backend opencode \
-  --output /path/to/replay
-```
-
-Repeat `--attempt` to select more attempts. The command prefers `tool-events.jsonl`
-and falls back to `stdout.log`. It writes JSON and Markdown with the possible stop
-time, call number, streak, metrics and observation limits. Optional `--context`
-accepts saved orchestration context for source ownership and prompt delivery.
-Recorded monotonic times reproduce the live rule. Native wall-clock timestamps
-provide weaker evidence; logs without timestamps cannot establish the time threshold.
-Tests use small fixtures and need no external report directory.
-
-### Compare source context and loop protection
-
-`compare_read_context.py` compares one study using an existing
-`source.inventory.json` and `coverage.plan.json`. Point
-`--baseline` at the directory containing these files. The tool reuses the frozen
-scope supplied by a completed Study. It uses the normal study prompt,
-source checks, result validation, publication and Git restoration.
-
-First save significant facts with source references in a JSON file, for example:
-
-```json
-[
-  {
-    "id": "F-001",
-    "statement": "The parser rejects an empty request.",
-    "evidence": [
-      {
-        "id": "E-001",
-        "source_id": "source-001",
-        "path": "parser.py",
-        "start_line": 12,
-        "end_line": 15,
-        "quote": ""
-      }
-    ]
-  }
-]
-```
-
-Use actual source references. The tool checks them before the first model call.
-An empty quote checks the coordinates only. Fact support requires human assessment.
-
-```sh
-python compare_read_context.py --config config.jsonc \
-  --baseline /path/to/saved/source-report --facts /path/to/facts.json \
-  --output /path/to/new/comparison --repetitions 3
-```
-
-This command saves the experiment plan without calling a model. Add `--live` and
-choose a new output directory to run it. Each attempt runs one study. Review and
-revision are outside the experiment scope.
-
-Each repetition runs three variants in sequence:
-
-| Variant   | Tool observation | Automatic stop | Prepared context |
-| --------- | ---------------- | -------------- | ---------------- |
-| `observe` | On               | Off            | Off              |
-| `guard`   | On               | On             | Off              |
-| `context` | On               | On             | On               |
-
-The source snapshot, assignments, configured model, prompt templates, validation
-settings and timeouts stay fixed. A source, template, CLI version or reported
-model change stops the comparison. CLI profile settings and an unreported actual
-model remain external limitations. No model calls run in ordinary tests.
-
-`comparison.json` and `comparison.md` separate successful, interrupted and failed
-attempts. An early stop measures prevented waste; it is not a faster successful
-study. Citation resolution counts do not establish factual correctness. Fact
-coverage remains `unavailable` until a human supplies an assessment for each fact:
-
-```json
-[
-  {
-    "variant": "context",
-    "repetition": 1,
-    "facts": [{ "id": "F-001", "status": "supported", "claim_ids": ["C-001"] }]
-  }
-]
-```
-
-Statuses are `supported`, `omitted`, `unsupported` or `unassessed`. Apply them
-without model calls:
-
-```sh
-python compare_read_context.py --summarize /path/to/comparison/comparison.json \
-  --assessments /path/to/assessments.json
-```

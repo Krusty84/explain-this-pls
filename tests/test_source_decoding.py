@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from src.analysis import evidence
-from src.analysis.evidence import SourceChanged, resolve_evidence, read_confined
+from src.analysis.evidence import PointerError, SourceChanged, resolve_evidence, read_confined
 from src.analysis.source_decoding import normalize_source_decoding, decode_source
 
 
@@ -140,19 +140,20 @@ class SourceDecodingTests(unittest.TestCase):
             resolve_evidence('study', pointers[:1], self.context)
         self.assertEqual(decodes.call_count, 2)
 
-    def test_33_unique_megabyte_files_exceed_total_limit(self):
-        blob = b'x\n' * (512 * 1024)
+    def test_33_unique_megabyte_files_are_resolved(self):
+        blob = b'x' * (1024 * 1024)
         pointers = []
         for i in range(33):
             path = f'file-{i:03d}'
             (self.root / path).write_bytes(blob)
             pointers.append(self.pointer | {'id': f'E-{i:03d}', 'path': path})
         results = resolve_evidence('study', pointers, self.context)
-        self.assertEqual([result['status'] for result in results], ['RESOLVED'] * 32 + ['LIMIT_EXCEEDED'])
+        self.assertEqual([result['status'] for result in results], ['RESOLVED'] * 33)
+        self.assertEqual(sum(result['fragment_bytes'] for result in results), len(blob) * 33)
 
-    def test_failed_decode_is_not_cached_and_unique_read_budget_is_not_recharged(self):
+    def test_failed_decode_is_not_cached(self):
         (self.root / 'app.py').write_bytes(b'\xff')
-        with patch('src.analysis.evidence.MAX_TOTAL_BYTES', 1), patch('src.analysis.evidence.decode_source', wraps=decode_source) as decodes:
+        with patch('src.analysis.evidence.decode_source', wraps=decode_source) as decodes:
             results = resolve_evidence('study', [self.pointer, self.pointer | {'id': 'E-002'}], self.context)
         self.assertEqual([result['status'] for result in results], ['DECODE_ERROR', 'DECODE_ERROR'])
         self.assertEqual(decodes.call_count, 2)
@@ -221,6 +222,36 @@ class SourceDecodingTests(unittest.TestCase):
             return original(name, flags, *args, **kwargs)
         with patch('src.analysis.evidence.os.open', side_effect=replace_on_second_open), self.assertRaises(SourceChanged):
             resolve_evidence('study', [self.pointer, self.pointer | {'id': 'E-002'}], self.context)
+
+    def test_confined_reads_default_to_full_file_and_retain_explicit_artifact_limits(self):
+        blob = b'x' * 70000
+        (self.root / 'app.py').write_bytes(blob)
+        self.assertEqual(read_confined(self.root, 'app.py'), blob)
+        self.assertEqual(read_confined(self.root, 'app.py', len(blob)), blob)
+        with self.assertRaisesRegex(PointerError, '^LIMIT_EXCEEDED$'):
+            read_confined(self.root, 'app.py', len(blob) - 1)
+
+    def test_full_source_reads_reject_growth_and_truncation(self):
+        path = self.root / 'app.py'
+        original = os.read
+        for mutation in ('growth', 'truncation'):
+            with self.subTest(mutation=mutation):
+                path.write_bytes(b'x' * 70000)
+                changed = []
+
+                def change(fd, size):
+                    data = original(fd, size)
+                    if data and not changed:
+                        changed.append(True)
+                        if mutation == 'growth':
+                            with path.open('ab') as stream:
+                                stream.write(b'grown')
+                        else:
+                            path.write_bytes(b'x')
+                    return data
+
+                with patch('src.analysis.evidence.os.read', side_effect=change), self.assertRaises(SourceChanged):
+                    resolve_evidence('study', [self.pointer], self.context)
 
 
 if __name__ == '__main__':

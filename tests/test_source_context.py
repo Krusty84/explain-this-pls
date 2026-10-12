@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from src.analysis.evidence import SourceChanged, lines, sha, stamp
-from src.analysis.source_context import (MAX_FRAGMENT_LINES, SourceContextBuilder, parse_symbols,
+from src.analysis.source_context import (SourceContextBuilder, parse_symbols,
                                          serialize_source_context, source_context_settings)
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'source_context'
@@ -109,6 +109,13 @@ class SymbolsTests(unittest.TestCase):
         result = parse_symbols('x.py', '@decorator\nasync def run():\n    return "Л"')
         self.assertEqual(result['symbols'], [dict(name='run', kind='async_function', parent=None, start_line=1, end_line=3)])
 
+    def test_native_nested_and_export_ranges_remain_navigation(self):
+        result = parse_symbols('x.js', 'export class Box {\n  run() {\n    function inner() {}\n  }\n}\n')
+        actual = {(s['name'], s['kind'], s['parent'], s['start_line'], s['end_line'])
+                  for s in result['symbols']}
+        self.assertEqual(actual, {('Box', 'export', None, 1, 5), ('Box', 'class', None, 1, 5),
+                                  ('run', 'method', 'Box', 2, 4), ('inner', 'function', 'Box.run', 3, 3)})
+
 
 class ContextTests(unittest.TestCase):
     def setUp(self):
@@ -127,36 +134,39 @@ class ContextTests(unittest.TestCase):
         return dict(source_mode='folder', source_directory=str(self.root), source_fingerprint='pinned',
                     _inventory={'entries': entries, 'source_fingerprint': 'pinned'})
 
-    def assert_complete_accounting(self, payload, manifest):
+    def assert_complete_index(self, payload, manifest):
+        self.assertEqual(payload['mode'], 'index-only')
+        self.assertEqual(payload['fragments'], [])
+        self.assertEqual(manifest['mode'], 'index-only')
+        self.assertEqual(manifest['transmitted_bytes'], len(serialize_source_context(payload).encode('utf-8')))
+        indexed = {(item['source_id'], item['path']): item for item in payload['files']}
+        self.assertEqual(len(indexed), len(manifest['files']))
         for record in manifest['files']:
-            if record['total_lines'] is None:
-                self.assertTrue(record['text_reason'])
-                continue
-            delivered = set()
-            for fragment in payload['fragments']:
-                if (fragment['source_id'], fragment['path']) != (record['source_id'], record['path']):
-                    continue
-                numbers = set(range(fragment['start_line'], fragment['end_line'] + 1))
-                self.assertFalse(delivered & numbers)
-                self.assertLessEqual(len(numbers), MAX_FRAGMENT_LINES)
-                delivered |= numbers
-            omitted = {n for start, end in record['omitted_ranges'] for n in range(start, end + 1)}
-            self.assertFalse(delivered & omitted)
-            self.assertEqual(delivered | omitted, set(range(1, record['total_lines'] + 1)))
+            item = indexed[(record['source_id'], record['path'])]
+            self.assertEqual(record['symbols'], len(item['symbols']))
+            self.assertEqual(record['symbols_transmitted'], len(item['symbols']))
+            self.assertEqual(record['transmitted_text_bytes'], 0)
+            self.assertNotIn('transmitted_ranges', record)
+            self.assertNotIn('omitted_ranges', record)
+            self.assertNotIn('map_omission_reason', record)
+            for key in ('parser', 'language', 'encoding', 'total_lines', 'map_status', 'map_reason'):
+                self.assertEqual(item[key], record[key])
+        self.assertEqual(payload['omissions']['maps'], sum(f['map_status'] != 'complete' for f in payload['files']))
+        self.assertEqual(payload['omissions']['incomplete'], bool(payload['omissions']['maps']))
+        self.assertNotIn('budget', payload['omissions']['reasons'])
 
-    def test_exact_budget_fairness_and_deterministic_inventory_order(self):
+    def test_complete_symbols_and_deterministic_inventory_order(self):
         context = self.context({'a.py': ''.join(f'def f{i}():\n    return "{i}"\n' for i in range(800)),
                                 'b.py': 'import os\ndef useful():\n    return 1\n', 'c.unknown': 'plain text\n' * 500})
-        builder = SourceContextBuilder({'max_bytes': 4096})
+        builder = SourceContextBuilder()
         payload, manifest = builder.prepare('study', context)
         reordered = copy.deepcopy(context)
         reordered['_inventory']['entries'].reverse()
         self.assertEqual(payload, builder.prepare('study', reordered)[0])
-        self.assertLessEqual(len(serialize_source_context(payload).encode()), 4096)
-        self.assertLessEqual(manifest['map_bytes'], 1024)
-        self.assertEqual(manifest['transmitted_bytes'], len(json.dumps(payload, ensure_ascii=False).encode()))
-        self.assertEqual({f['path'] for f in payload['fragments']}, {'a.py', 'b.py', 'c.unknown'})
-        self.assert_complete_accounting(payload, manifest)
+        self.assertGreater(manifest['transmitted_bytes'], 4096)
+        self.assertEqual({f['path']: len(f['symbols']) for f in payload['files']},
+                         {'a.py': 800, 'b.py': 2, 'c.unknown': 0})
+        self.assert_complete_index(payload, manifest)
 
     def test_exact_decoding_coordinates_and_final_line(self):
         context = self.context({'unicode.py': codecs.BOM_UTF8 + 'def привет():\r\n    return "🍒"'.encode(),
@@ -164,28 +174,92 @@ class ContextTests(unittest.TestCase):
                                 'utf16.txt': codecs.BOM_UTF16_LE + 'Hello\r\nworld'.encode('utf-16-le')})
         context['source_decoding'] = {'rules': [{'path': 'old.txt', 'encoding': 'cp1251'}]}
         payload, manifest = SourceContextBuilder().prepare('study', context)
-        actual = {f['path']: f['text'] for f in payload['fragments']}
-        self.assertEqual(actual, {'unicode.py': 'def привет():\n    return "🍒"', 'old.txt': 'Привет\nмир',
-                                  'utf16.txt': 'Hello\nworld'})
-        self.assert_complete_accounting(payload, manifest)
+        actual = {f['path']: f for f in payload['files']}
+        self.assertEqual(actual['unicode.py']['symbols'],
+                         [dict(name='привет', kind='function', parent=None, start_line=1, end_line=2)])
+        self.assertEqual({p: f['total_lines'] for p, f in actual.items()},
+                         {'unicode.py': 2, 'old.txt': 2, 'utf16.txt': 2})
+        self.assertEqual(actual['old.txt']['encoding'], 'cp1251')
+        self.assertEqual(actual['utf16.txt']['encoding'], 'utf-16-le')
+        self.assertNotIn('🍒', serialize_source_context(payload))
+        self.assert_complete_index(payload, manifest)
 
-    def test_text_fallback_empty_binary_decode_limit_and_long_line(self):
+    def test_empty_binary_decode_error_unknown_language_and_long_line(self):
         context = self.context({'empty.py': '', 'bad.py': 'def broken(:\n', 'binary.bin': b'a\x00b',
                                 'decode.txt': b'\xffinvalid', 'image.png': b'\x89PNG\x00', 'long.txt': 'x' * 9000 + '\nsecond\n',
-                                'later.txt': 'kept\n', 'large.txt': 'y' * 200})
-        with patch('src.analysis.source_context.MAX_FILE_BYTES', 100):
-            _, capped = SourceContextBuilder().prepare('study', context)
-        self.assertEqual(next(r for r in capped['files'] if r['path'] == 'large.txt')['text_reason'], 'file_size_limit')
-        payload, manifest = SourceContextBuilder({'max_bytes': 4096}).prepare('study', context)
-        records = {r['path']: r for r in manifest['files']}
-        self.assertEqual(records['binary.bin']['text_reason'], 'binary_content')
-        self.assertEqual(records['image.png']['text_reason'], 'binary_content')
-        self.assertEqual(records['decode.txt']['text_reason'], 'decoding_error')
+                                'later.txt': 'kept\n'})
+        payload, manifest = SourceContextBuilder().prepare('study', context)
+        records = {r['path']: r for r in payload['files']}
+        self.assertEqual(set(records), {'empty.py', 'bad.py', 'binary.bin', 'decode.txt', 'image.png', 'long.txt', 'later.txt'})
+        self.assertEqual(records['binary.bin']['map_reason'], 'binary_content')
+        self.assertEqual(records['image.png']['map_reason'], 'binary_content')
+        self.assertEqual(records['decode.txt']['map_reason'], 'decoding_error')
         self.assertEqual(records['bad.py']['map_reason'], 'parse_error')
-        self.assertTrue(any(f['path'] == 'bad.py' for f in payload['fragments']))
-        self.assertTrue(any(f['path'] == 'later.txt' for f in payload['fragments']))
+        self.assertEqual(records['long.txt']['map_reason'], 'unknown_language')
+        self.assertEqual(records['long.txt']['total_lines'], 2)
         self.assertEqual(records['empty.py']['total_lines'], 0)
-        self.assert_complete_accounting(payload, manifest)
+        self.assertEqual(records['empty.py']['map_status'], 'complete')
+        for path in ('binary.bin', 'image.png', 'decode.txt'):
+            self.assertIsNone(records[path]['total_lines'])
+        self.assert_complete_index(payload, manifest)
+
+    def test_native_partial_map_and_missing_parser_keep_file_records(self):
+        context = self.context({'broken.js': 'const broken = ;\nfunction intact() {}\n'})
+        payload, manifest = SourceContextBuilder().prepare('study', context)
+        self.assertEqual(payload['files'][0]['map_status'], 'partial')
+        self.assertIn('intact', {s['name'] for s in payload['files'][0]['symbols']})
+        self.assert_complete_index(payload, manifest)
+        with patch('src.analysis.source_context._native_symbols', side_effect=ImportError):
+            payload, manifest = SourceContextBuilder().prepare('study', context)
+        self.assertEqual(payload['files'][0]['map_reason'], 'parser_unavailable')
+        self.assertEqual(payload['files'][0]['total_lines'], 2)
+        self.assert_complete_index(payload, manifest)
+
+    def test_export_labels_keep_navigation_without_implementation_text(self):
+        cases = {
+            'arrow.js': ('export default () => "PRIVATE_ARROW_BODY";\n', 'default'),
+            'class.js': ('export default class { run() { return "PRIVATE_CLASS_BODY"; } }\n', 'default'),
+            'named.js': ('export function exported() { return "PRIVATE_NAMED_BODY"; }\n', 'exported'),
+            'variable.js': ('export const worker = () => "PRIVATE_CONST_BODY";\n', 'worker'),
+            'clause.js': ('const value = "PRIVATE_ALIAS_BODY";\nexport { value as alias };\n', '{ value as alias }'),
+            'identifier.js': ('const chosen = "PRIVATE_IDENTIFIER_BODY";\nexport default chosen;\n', 'chosen'),
+            'reexport.js': ('export { remote as local } from "dependency";\n', '"dependency"'),
+        }
+        context = self.context({path: source for path, (source, _) in cases.items()})
+        builder = SourceContextBuilder()
+        payload, manifest = builder.prepare('study', context)
+        for item in payload['files']:
+            with self.subTest(path=item['path']):
+                self.assertEqual(item['map_status'], 'complete')
+                self.assertEqual([s['name'] for s in item['symbols'] if s['kind'] == 'export'],
+                                 [cases[item['path']][1]])
+        self.assertNotIn('PRIVATE_', serialize_source_context(payload))
+        self.assertNotIn('PRIVATE_', json.dumps(list(builder.cache.values()), ensure_ascii=False))
+        self.assert_complete_index(payload, manifest)
+
+    def test_large_file_has_no_index_byte_limit(self):
+        source = '#' + 'x' * (8 * 1024 * 1024) + '\ndef large():\n    return "private body"\n'
+        context = self.context({'large.py': source})
+        payload, manifest = SourceContextBuilder().prepare('study', context)
+        self.assertEqual(payload['files'][0]['symbols'],
+                         [dict(name='large', kind='function', parent=None, start_line=2, end_line=3)])
+        self.assertEqual(manifest['prepared_bytes'], len(source.encode()))
+        self.assertNotIn('private body', serialize_source_context(payload))
+        self.assert_complete_index(payload, manifest)
+
+    def test_every_file_and_symbol_is_indexed_in_large_projects(self):
+        for count in (1000, 5000):
+            with self.subTest(files=count):
+                context = self.context({f'area{i % 10}/file{i:05d}.js':
+                    f'import dependency from "module{i}";\nfunction function{i}() {{ return {i}; }}\n'
+                    for i in range(count)})
+                payload, manifest = SourceContextBuilder().prepare('study', context)
+                self.assertEqual(len(payload['files']), count)
+                self.assertEqual({f['path'] for f in payload['files']},
+                                 {e['path'] for e in context['_inventory']['entries']})
+                self.assertEqual(sum(len(f['symbols']) for f in payload['files']), count * 2)
+                self.assertEqual(payload['omissions'], {'maps': 0, 'reasons': {}, 'incomplete': False})
+                self.assert_complete_index(payload, manifest)
 
     def test_snapshot_mutation_is_not_omission_and_cache_validates_identity(self):
         context = self.context({'x.py': 'def original(): pass\n'})
@@ -200,13 +274,27 @@ class ContextTests(unittest.TestCase):
         with self.assertRaises(SourceChanged):
             SourceContextBuilder().prepare('study', context)
 
+    def test_cache_keeps_only_index_metadata_and_payload_is_independent(self):
+        context = self.context({'x.py': 'def main():\n    return "private source body"\n'})
+        builder = SourceContextBuilder()
+        first, _ = builder.prepare('study', context)
+        first['files'][0]['symbols'][0]['name'] = 'changed'
+        cached, manifest = builder.prepare('review', context)
+        self.assertEqual(cached['files'][0]['symbols'][0]['name'], 'main')
+        for record in builder.cache.values():
+            self.assertNotIn('source_lines', record)
+            self.assertNotIn('text', record)
+        self.assertNotIn('private source body', json.dumps(list(builder.cache.values()), ensure_ascii=False))
+        self.assertNotIn('private source body', serialize_source_context(cached))
+        self.assert_complete_index(cached, manifest)
+
     def test_pinned_read_reuses_hash_and_rejects_mid_read_mutation(self):
         context = self.context({'x.py': 'def original(): pass\n'})
         path = self.root / 'x.py'
         metadata = {'.': stamp(self.root.stat()), 'x.py': stamp(path.stat())}
         with patch('src.analysis.source_context.sha', side_effect=AssertionError('Source rehashed')):
             payload, _ = SourceContextBuilder().prepare('study', context, expected_metadata=metadata)
-        self.assertTrue(payload['fragments'])
+        self.assertEqual(payload['files'][0]['symbols'][0]['name'], 'original')
         original_read = os.read
 
         def mutate(fd, count):
@@ -240,7 +328,7 @@ class ContextTests(unittest.TestCase):
         context.update(repository=str(self.root), branch='main', source_commit='a',
                        submodules=[{'path': 'sub', 'expected_commit': 'b'}, {'path': 'sub/nested', 'expected_commit': 'c'}])
         payload, _ = SourceContextBuilder().prepare('study', context)
-        self.assertEqual({(f['source_id'], f['path']) for f in payload['fragments']},
+        self.assertEqual({(f['source_id'], f['path']) for f in payload['files']},
                          {('source-001', 'file.py'), ('source-002', 'file.py'), ('source-003', 'file.py')})
 
     def test_disabled_compare_and_repair(self):
@@ -249,60 +337,37 @@ class ContextTests(unittest.TestCase):
         for stage, extra in [('compare', {}), ('repair', {})]:
             self.assertIsNone(SourceContextBuilder().prepare(stage, context | extra)[0])
 
-    def test_review_prioritizes_citations_and_never_executes_source(self):
+    def test_review_and_revise_keep_same_index_and_never_execute_source(self):
         context = self.context({'a.py': 'raise RuntimeError("must not execute")\n' * 400})
+        builder = SourceContextBuilder()
+        expected, _ = builder.prepare('study', context)
         context['study'] = {'evidence': [dict(source_id='source-001', path='a.py', start_line=390, end_line=392)]}
-        payload, manifest = SourceContextBuilder({'max_bytes': 4096}).prepare('review', context)
-        actual = {n for f in payload['fragments'] for n in range(f['start_line'], f['end_line'] + 1)}
-        self.assertTrue({390, 391, 392} <= actual)
-        self.assert_complete_accounting(payload, manifest)
-
-    def test_plain_text_round_robin_and_many_file_map(self):
-        context = self.context({'a.txt': ('a' * 90 + '\n') * 120,
-                                'b.txt': ('b' * 90 + '\n') * 120, 'c.txt': 'last file\n'})
-        payload, manifest = SourceContextBuilder({'max_bytes': 4096}).prepare('study', context)
-        self.assertEqual({f['path'] for f in payload['fragments']}, {'a.txt', 'b.txt', 'c.txt'})
-        self.assert_complete_accounting(payload, manifest)
-        context = self.context({f'file{i:03d}.py': f'def f{i}(): pass\n' for i in range(100)})
-        payload, _ = SourceContextBuilder({'max_bytes': 4096}).prepare('study', context)
-        self.assertTrue(payload['files'])
-        self.assertTrue(any(item['symbols'] for item in payload['files']))
-        self.assertGreater(payload['omissions']['maps'], 0)
-        self.assertIn('budget', payload['omissions']['reasons'])
+        for stage in ('review', 'revise'):
+            payload, manifest = builder.prepare(stage, context)
+            self.assertEqual(payload, expected)
+            self.assert_complete_index(payload, manifest)
+        context['prompt_variant'] = 'revise'
+        self.assertEqual(builder.prepare('study', context)[0], expected)
 
     def test_large_symbol_does_not_hide_small_later_symbol(self):
         context = self.context({'a.py': 'def ' + 'a' * 1500 + '(): pass\ndef small(): pass\n'})
-        payload, _ = SourceContextBuilder({'max_bytes': 4096}).prepare('study', context)
-        self.assertEqual([s['name'] for f in payload['files'] for s in f['symbols']], ['small'])
+        payload, _ = SourceContextBuilder().prepare('study', context)
+        self.assertEqual([s['name'] for f in payload['files'] for s in f['symbols']], ['a' * 1500, 'small'])
 
-    def test_remaining_text_uses_capacity_after_small_peer_finishes(self):
-        context = self.context({'a.txt': ('line ' * 10 + '\n') * 100, 'b.txt': 'tiny\n'})
-        payload, manifest = SourceContextBuilder({'max_bytes': 8192}).prepare('study', context)
-        self.assertEqual(manifest['files'][0]['omitted_ranges'], [])
-        self.assertEqual(manifest['files'][1]['omitted_ranges'], [])
-        self.assert_complete_accounting(payload, manifest)
-
-    def test_revise_variant_prioritizes_citations(self):
-        context = self.context({'a.txt': ('material ' * 20 + '\n') * 300})
-        context.update(prompt_variant='revise', study={'evidence': [
-            dict(source_id='source-001', path='a.txt', start_line=299, end_line=300)]})
-        payload, _ = SourceContextBuilder({'max_bytes': 4096}).prepare('study', context)
-        self.assertTrue(any(f['start_line'] <= 299 <= f['end_line'] for f in payload['fragments']))
-
-    def test_every_delivered_line_is_literal_source(self):
+    def test_source_comments_and_bodies_are_absent_from_index(self):
         source = ''.join(f'# quote \\" and slash \\ number {i} 🍒\n' for i in range(350)) + 'last'
         context = self.context({'notes.md': source, 'module.py': 'def f():\n    return 1\n'})
-        payload, manifest = SourceContextBuilder({'max_bytes': 4096}).prepare('study', context)
-        source_lines = {'notes.md': lines(source), 'module.py': ['def f():\n', '    return 1\n']}
-        for fragment in payload['fragments']:
-            self.assertEqual(fragment['text'], ''.join(source_lines[fragment['path']][fragment['start_line'] - 1:fragment['end_line']]))
-        self.assert_complete_accounting(payload, manifest)
-        self.assertLessEqual(manifest['transmitted_bytes'], 4096)
+        payload, manifest = SourceContextBuilder().prepare('study', context)
+        self.assertNotIn('🍒', serialize_source_context(payload))
+        self.assertNotIn('return 1', serialize_source_context(payload))
+        self.assertEqual({f['path']: f['total_lines'] for f in payload['files']},
+                         {'notes.md': 351, 'module.py': 2})
+        self.assert_complete_index(payload, manifest)
 
     def test_configuration_is_strict(self):
-        self.assertEqual(source_context_settings(), {'enabled': True, 'max_bytes': 65536})
-        for value in [{'enabled': 1}, {'enabled': 'false'}, {'max_bytes': True}, {'max_bytes': 4095},
-                      {'max_bytes': 4096.0}, {'unknown': True}, []]:
+        self.assertEqual(source_context_settings(), {'enabled': True})
+        self.assertEqual(source_context_settings({'enabled': False}), {'enabled': False})
+        for value in [{'enabled': 1}, {'enabled': 'false'}, {'max_bytes': 65536}, {'unknown': True}, []]:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 source_context_settings(value)
 

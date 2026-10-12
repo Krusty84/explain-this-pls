@@ -7,7 +7,7 @@ from difflib import unified_diff
 from os.path import commonprefix
 import re
 
-from src.analysis.evidence import (MAX_FILE_BYTES, _read_confined, _resolve_with_sources,
+from src.analysis.evidence import (_read_confined, _resolve_with_sources,
                                    canonical, resolve_evidence, sha, source_catalog)
 
 RULE = 'LOCAL_CITATION_REPAIR'
@@ -139,7 +139,7 @@ def repair_citations(stage, value, context, expected_files=None, *, expected_met
 
         def assert_sources():
             for relative in sorted(touched):
-                _read_confined(root, relative, MAX_FILE_BYTES, expected=sources[relative]['identity'],
+                _read_confined(root, relative, expected=sources[relative]['identity'],
                                pinned=expected_metadata, read=False)
 
         assert_sources()

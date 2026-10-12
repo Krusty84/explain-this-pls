@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Bounded, descriptor-relative source locators. Resolution never implies support.
+"""Descriptor-relative source locators. Resolution never implies support.
 
 Explicit rules or a Unicode BOM select strict decoding; UTF-8 is the default.
 Lines split on LF only, CRLF normalized to LF, final unterminated line retained.
@@ -18,13 +18,6 @@ from pathlib import Path
 import re
 import stat
 from src.analysis.source_decoding import normalize_source_decoding, decode_source, SourceDecodeError
-
-MAX_RECORD_BYTES = 16 * 1024
-MAX_FILE_BYTES = 8 * 1024 * 1024
-MAX_RANGE_LINES = 200
-MAX_FRAGMENT_BYTES = 64 * 1024
-MAX_TOTAL_BYTES = 32 * 1024 * 1024  # unique source paths read within one resolver call
-MAX_EVIDENCE = 256
 
 
 class SourceChanged(RuntimeError):
@@ -91,16 +84,17 @@ def open_source_directory(root):
         raise
 
 
-def read_confined(root, relative, limit):
+def read_confined(root, relative, limit=None):
     return _read_confined(root, relative, limit)[0]
 
 
-def _read_confined(root, relative, limit, *, expected=None, pinned=None, read=True):
+def _read_confined(root, relative, limit=None, *, expected=None, pinned=None, read=True):
     """Walk absolute root and relative components with openat + O_NOFOLLOW.
 
     Directory handles stay open until final validation. Component replacement
     cannot redirect a subsequent open to an outside tree, including during races.
     Root is the orchestrator's canonical absolute path, never a model path.
+    Source reads omit limit; artifact callers can bound their expected byte size.
     """
     fds, chain, identity = [], [], []
     try:
@@ -136,14 +130,14 @@ def _read_confined(root, relative, limit, *, expected=None, pinned=None, read=Tr
             fd = child
         if stamp(before) != stamp(os.fstat(fd)):
             raise SourceChanged('Source changed before evidence read.')
-        if read and before.st_size > limit:
+        if read and limit is not None and before.st_size > limit:
             raise PointerError('LIMIT_EXCEEDED')
         data = bytearray()
         if read:
-            while chunk := os.read(fd, min(65536, limit + 1 - len(data))):
+            while chunk := os.read(fd, min(65536, before.st_size + 1 - len(data))):
                 data.extend(chunk)
-                if len(data) > limit:
-                    raise SourceChanged('Source grew beyond the pinned evidence read size.')
+                if len(data) > before.st_size:
+                    raise SourceChanged('Source grew beyond its initial file size.')
         for parent, name, child, before, full_stamp in chain:
             # Unpinned ancestors can change due to unrelated /tmp peers. Source
             # directories use the full pinned stamp; Git preparation pins identity.
@@ -178,17 +172,15 @@ def _resolve_with_sources(stage, pointers, context, expected_files=None, *, expe
                           if e['type'] == 'file'}
     root = context.get('source_directory', context.get('repository'))
     decoding = normalize_source_decoding(context.get('source_decoding'))
-    results, total, cache, read_paths, file_hashes = [], 0, {}, {}, {}
+    results, cache, read_paths, file_hashes = [], {}, {}, {}
     if expected_metadata is not None and expected_files is None:
         raise ValueError('Pinned evidence requires source-file hashes.')
-    for index, pointer in enumerate(pointers):
+    for pointer in pointers:
         result = {k: pointer.get(k) for k in ('source_id', 'path', 'start_line', 'end_line')}
         result.update(id=stage + ':' + str(pointer.get('id', '')), source_identity=None,
                       file_sha256=None, encoding=None, status='INVALID_POINTER')
         results.append(result)
         try:
-            if index >= MAX_EVIDENCE or len(canonical(pointer)) > MAX_RECORD_BYTES:
-                raise PointerError('LIMIT_EXCEEDED')
             source = catalog.get(pointer.get('source_id'))
             if source is None:
                 raise PointerError('UNKNOWN_SOURCE')
@@ -199,8 +191,6 @@ def _resolve_with_sources(stage, pointers, context, expected_files=None, *, expe
             start, end = pointer.get('start_line'), pointer.get('end_line')
             if type(start) is not int or type(end) is not int or start < 1 or end < start:
                 raise PointerError('INVALID_POINTER')
-            if end - start + 1 > MAX_RANGE_LINES:
-                raise PointerError('LIMIT_EXCEEDED')
             relative = path if source['root'] == '.' else source['root'] + '/' + path
             owners = [s for s in catalog.values() if s['root'] == '.' or relative.startswith(s['root'] + '/')]
             if max(owners, key=lambda s: len(s['root']))['id'] != source['id']:
@@ -213,15 +203,13 @@ def _resolve_with_sources(stage, pointers, context, expected_files=None, *, expe
                 raise PointerError('NOT_FOUND')
             if relative in cache:
                 cached = cache[relative]
-                _read_confined(root, relative, MAX_FILE_BYTES, expected=read_paths[relative],
+                _read_confined(root, relative, expected=read_paths[relative],
                                pinned=expected_metadata, read=False)
                 source_lines, result['file_sha256'], result['encoding'] = cached
             else:
-                limit = MAX_FILE_BYTES if relative in read_paths else min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total)
-                blob, identity = _read_confined(root, relative, limit, expected=read_paths.get(relative),
+                blob, identity = _read_confined(root, relative, expected=read_paths.get(relative),
                                                pinned=expected_metadata)
                 if relative not in read_paths:
-                    total += len(blob)
                     read_paths[relative] = identity
                 if relative not in file_hashes:
                     file_hashes[relative] = (expected_files[relative] if expected_metadata is not None else sha(blob))
@@ -241,8 +229,6 @@ def _resolve_with_sources(stage, pointers, context, expected_files=None, *, expe
                 raise PointerError('OUT_OF_RANGE')
             fragment = ''.join(source_lines[start - 1:end])
             encoded = fragment.encode('utf-8')
-            if len(encoded) > MAX_FRAGMENT_BYTES:
-                raise PointerError('LIMIT_EXCEEDED')
             quote = pointer.get('quote', '')
             if quote and (not isinstance(quote, str) or quote.replace('\r\n', '\n') not in fragment):
                 raise PointerError('QUOTE_MISMATCH')

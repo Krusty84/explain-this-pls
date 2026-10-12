@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from src.contracts.contracts import ContractError, validate_result, SCHEMAS, validate_schema, accepted
-from src.analysis.evidence import resolve_evidence, SourceChanged, MAX_FILE_BYTES, open_source_directory
+from src.analysis.evidence import resolve_evidence, SourceChanged, open_source_directory
 from src.analysis.ledger import freeze_plan, prepare_result, review_context, CONTRACT_ID, ARTIFACT_FORMAT
 from src.reports.presentation import render_stage, label
 from src.reports.final_report import render_final_report, recoverable_material
@@ -156,15 +156,19 @@ class LedgerTests(unittest.TestCase):
         ancestor.symlink_to('/etc', target_is_directory=True)
         with self.assertRaises(AuditError): scanner.snapshot()
 
-    def test_decoding_and_limits(self):
+    def test_decoding_and_large_files(self):
         for blob in ['Привет\r\nмир'.encode(), 'Привет\nмир'.encode(), b'last']:
             (self.root / 'app.py').write_bytes(blob)
             self.assertEqual(self.resolved()['status'], 'RESOLVED')
             self.assertEqual(self.resolved()['file_sha256'], hashlib.sha256(blob).hexdigest())
         (self.root / 'app.py').write_bytes(b'\xff')
         self.assertEqual(self.resolved()['status'], 'DECODE_ERROR')
-        (self.root / 'app.py').write_bytes(b'x' * (MAX_FILE_BYTES + 1))
-        self.assertEqual(self.resolved()['status'], 'LIMIT_EXCEEDED')
+        blob = b'x' * (8 * 1024 * 1024 + 1)
+        (self.root / 'app.py').write_bytes(blob)
+        result = self.resolved()
+        self.assertEqual(result['status'], 'RESOLVED')
+        self.assertEqual(result['fragment_bytes'], len(blob))
+        self.assertEqual(result['file_sha256'], hashlib.sha256(blob).hexdigest())
 
     def prepared(self):
         data = study(self.context)
@@ -265,20 +269,20 @@ class LedgerTests(unittest.TestCase):
         response['findings'][0]['claim_ids'] = ['C-999']
         with self.assertRaises(ContractError): validate_result('review', response, ctx)
 
-    def test_all_evidence_limits_are_explicit(self):
+    def test_source_volume_does_not_limit_valid_evidence(self):
         pointer = study(self.context)['evidence'][0]
         (self.root / 'app.py').write_bytes(b'x\n' * 201)
-        self.assertEqual(self.resolved(pointer | {'end_line': 201})['status'], 'LIMIT_EXCEEDED')
-        self.assertEqual(self.resolved(pointer | {'quote': 'x' * 17000})['status'], 'LIMIT_EXCEEDED')
+        self.assertEqual(self.resolved(pointer | {'end_line': 201})['status'], 'RESOLVED')
+        self.assertEqual(self.resolved(pointer | {'end_line': 202})['status'], 'OUT_OF_RANGE')
         (self.root / 'app.py').write_bytes(b'x' * 65537)
-        self.assertEqual(self.resolved()['status'], 'LIMIT_EXCEEDED')
-        (self.root / 'app.py').write_bytes(b'1234\n')
-        with patch('src.analysis.evidence.MAX_TOTAL_BYTES', 5):
-            result = resolve_evidence('study', [pointer, pointer | {'id': 'E-002'}], self.context)
-        self.assertEqual([e['status'] for e in result], ['RESOLVED', 'RESOLVED'])
-        with patch('src.analysis.evidence.MAX_EVIDENCE', 1):
-            result = resolve_evidence('study', [pointer, pointer | {'id': 'E-002'}], self.context)
-        self.assertEqual(result[-1]['status'], 'LIMIT_EXCEEDED')
+        result = self.resolved(pointer | {'quote': 'x' * 17000})
+        self.assertEqual(result['status'], 'RESOLVED')
+        self.assertEqual(result['fragment_bytes'], 65537)
+        self.assertEqual(self.resolved(pointer | {'quote': 'y' * 17000})['status'], 'QUOTE_MISMATCH')
+        pointers = [pointer | {'id': f'E-{index:03d}'} for index in range(257)]
+        results = resolve_evidence('study', pointers, self.context)
+        self.assertEqual(len(results), len(pointers))
+        self.assertTrue(all(result['status'] == 'RESOLVED' for result in results))
 
     def test_unresolved_locator_never_passes_study_or_review_policy(self):
         for change in ({'path': 'invented.py'}, {'source_id': 'unknown'}, {'end_line': 100}, {'quote': 'wrong'}):

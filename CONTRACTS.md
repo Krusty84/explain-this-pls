@@ -536,11 +536,12 @@ pinning. Evidence snippets are not hashed. `quote`
 may be `""`; otherwise it must equal that complete normalized range exactly.
 There is no fuzzy correction. Document quotes must be nonblank and exact.
 
-Limits per stage: 256 evidence records; 16 KiB canonical JSON per record; 8 MiB
-per file; 200 lines and 64 KiB per fragment; 32 MiB total unique file bytes read
-per resolver call (successful cache hits do not count again). Reaching/exceeding a limit that prevents full resolution gives
-`LIMIT_EXCEEDED`, never successful resolution of truncated data. No source fragment
-is copied into generated tables. Model-supplied quotes remain in private wire data.
+Source resolution has no program limits on file size, range length, fragment or
+record size, record count, or total bytes read. It reads complete source files
+and checks full requested ranges without truncation. Path, snapshot, hash, range
+and quote checks still apply. Stage timeouts and native CLI/model limits remain.
+No source fragment is copied into generated tables. Model-supplied quotes remain
+in private wire data.
 
 Each resolution stores namespaced ID, source identity, path, range, pinned raw file
 hash, used encoding and status. Unavailable file hashes remain null. New resolutions
@@ -548,9 +549,11 @@ omit `fragment_sha256`; saved schemas accept it as optional legacy data so older
 reports remain readable. `RESOLVED` means only
 that the locator resolved. Other statuses distinguish `INVALID_POINTER`,
 `UNKNOWN_SOURCE`, `SOURCE_SCOPE_MISMATCH`, `UNSAFE_PATH`, `NOT_FOUND`,
-`ACCESS_DENIED`, `READ_ERROR`, `OUT_OF_RANGE`, `DECODE_ERROR`, `ENCODING_MISMATCH`, `QUOTE_MISMATCH`,
-`LIMIT_EXCEEDED`. Bad/inaccessible pointers prevent positive policy acceptance
-without discarding an otherwise well-formed report. A real fragment may be
+`ACCESS_DENIED`, `READ_ERROR`, `OUT_OF_RANGE`, `DECODE_ERROR`, `ENCODING_MISMATCH`
+and `QUOTE_MISMATCH`. `LIMIT_EXCEEDED` remains valid for historical results; new
+source resolution does not emit it for source volume. Bad/inaccessible pointers
+prevent positive policy acceptance without discarding an otherwise well-formed
+report. A real fragment may be
 irrelevant to its architecture claim; the resolver never assigns `SUPPORTED`.
 
 `source_decoding.rules` contains `{path, encoding}` rules relative to the common
@@ -563,12 +566,12 @@ otherwise strict UTF-8. A compatible BOM is removed before line splitting; a
 conflicting BOM is ENCODING_MISMATCH. Pinned raw file hashes include BOM bytes;
 quote checks follow decoding and existing LF/CRLF normalization. Normalized rules enter
 the frozen review plan and change its identity. The rules apply to evidence
-verification. When `source_context` is enabled, they also decode prepared fragments.
-Agents receive the rules as context. Additional file reads depend on the CLI's
-reading capabilities; no UTF-8 copies are generated on disk.
+verification. When `source_context` is enabled, they also decode files for the
+symbol map. Agents receive the rules and the map's used encoding. Native file
+reads depend on the CLI's capabilities; no UTF-8 copies are generated on disk.
+Agents must report a gap if they cannot read the original text exactly.
 
-The resolver caches successful reads/decoding only within one call; its unique-byte
-budget also includes files read before a decoding failure. Every repeated
+The resolver caches successful reads/decoding only within one call. Every repeated
 reference still walks the path with O_NOFOLLOW and checks component identity and
 file state. Replacement, mutation or disappearance raises SourceChanged rather
 than silently reading a newer version. Cache data never crosses stages, attempts
@@ -576,6 +579,26 @@ or branches. The initial inventory hashes and metadata pins do span all stages a
 revisions of that snapshot. Standalone resolver calls without metadata pins hash
 each distinct file once within the call, including files that fail decoding.
 Generated reports, prompts, registries and plans retain their artifact hashes.
+
+## Prepared source navigation
+
+Enabled source context uses `mode: "index-only"` and `fragments: []`. Study,
+Review and Revision receive every regular file from the pinned, filtered inventory
+and every declaration found by the selected parser. File entries identify the
+source, relative path, parser version, language, encoding, line count and map
+status; unavailable values are null. Unknown languages, partial parses and read
+failures remain visible. Comparison receives no source map.
+
+Maps are ordered deterministically and are not cut to a size quota. The run-local
+cache holds only maps and metadata and validates pinned state before reuse.
+The manifest records completeness, reasons, preparation time and transfer size;
+`transmitted_text_bytes` is zero. A full map can be larger than the source text.
+
+The map provides navigation, not source implementations or proof of inspection.
+Agents must read implementations with native read-only tools, check relationships
+and cite source. Index-only delivery adds no read or delivered source lines to
+tool-observation metrics. Backend capacity failures remain explicit without
+silent truncation.
 
 ## Evidence ID normalization and diagnostics
 

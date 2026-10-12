@@ -157,22 +157,27 @@ class CitationRepairTests(unittest.TestCase):
         candidate, _ = self.repair(self.pointer(1, 1, '        target'))
         self.assertEqual(candidate['evidence'][0]['quote'], '    target')
 
-    def test_out_of_range_decode_and_read_limits_remain_failures(self):
+    def test_out_of_range_and_decode_errors_remain_failures(self):
         self.source('target\n')
         _, journal = self.repair(self.pointer(1, 2, 'target'))
         self.assertEqual(journal['changes'], [])
         self.assertEqual(journal['diagnostics'], [])
-        with patch('src.analysis.evidence.MAX_FILE_BYTES', 1):
-            _, journal = self.repair(self.pointer(1, 1, 'other'))
-        self.assertEqual(journal['changes'], [])
         self.source(b'\xff')
         _, journal = self.repair(self.pointer(1, 1, 'target'))
         self.assertEqual(journal['changes'], [])
 
-    def test_repaired_range_must_pass_ordinary_line_limit(self):
+    def test_repaired_range_can_exceed_200_lines(self):
         self.source('target\n' + 'body\n' * 200)
-        _, journal = self.repair(self.pointer(2, 201, 'target'))
-        self.assertEqual(journal['changes'], [])
+        candidate, journal = self.repair(self.pointer(2, 201, 'target'))
+        self.assertEqual(candidate['evidence'][0], self.pointer(1, 201, 'target'))
+        self.assertEqual(journal['changes'][0]['reason'], 'NEARBY_EXACT_QUOTE')
+
+    def test_large_quote_and_fragment_can_be_repaired(self):
+        body = 'x' * 65537
+        self.source('  ' + body + '\n')
+        candidate, journal = self.repair(self.pointer(1, 1, '    ' + body + '\n'))
+        self.assertEqual(candidate['evidence'][0]['quote'], '  ' + body + '\n')
+        self.assertEqual(journal['changes'][0]['reason'], 'UNIFORM_LEADING_INDENT')
 
     def test_only_mismatched_index_is_journaled_and_ids_stay_unchanged(self):
         self.source('first\n    second\n')

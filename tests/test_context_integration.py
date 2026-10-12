@@ -33,24 +33,54 @@ class PreparedContextTests(FolderFixture):
     run_case = run_case
 
     def test_same_preparation_all_backends_and_source_scope(self):
+        declarations = 1000
+        (self.source / 'api.js').write_text('export class Service {\n  run() { return "private body"; }\n}\n' +
+            ''.join(f'function operation{i:04d}() {{ return "private function body"; }}\n'
+                    for i in range(declarations)))
+        (self.base / 'outside.py').write_text('def excluded(): pass\n')
+        original_seed = ToolObserver.seed_prompt
+        seeded = []
+
+        def seed(observer, fragments):
+            original_seed(observer, fragments)
+            seeded.append((fragments, observer.counts['prompt_lines'], dict(observer.delivered)))
+
         contexts = []
         for backend in ('codex', 'opencode', 'xxx'):
-            manifest, code = self.run_case(backend=backend)
+            with patch.object(ToolObserver, 'seed_prompt', autospec=True, side_effect=seed):
+                manifest, code = self.run_case(backend=backend)
             self.assertEqual(code, 0, manifest.get('diagnostics'))
             contexts.append([call['context'].get('source_context') for call in self.calls])
             for call in self.calls:
                 context = call['context']
-                fragments = context['source_context']['fragments']
-                assigned = {p.name for p in self.source.glob('*.py')}
-                self.assertTrue(fragments)
-                self.assertTrue(all(f['path'] in assigned for f in fragments))
-            for call in self.calls:
-                if 'source_context' in call['context']:
-                    self.assertLessEqual(len(json.dumps(call['context']['source_context'],
-                                                        ensure_ascii=False).encode()), 65536)
+                index = context['source_context']
+                self.assertEqual(index['mode'], 'index-only')
+                self.assertEqual(index['fragments'], [])
+                self.assertGreater(len(json.dumps(index, ensure_ascii=False).encode()), 65536)
+                assigned = {p.name for p in self.source.iterdir() if p.is_file()}
+                self.assertEqual({f['path'] for f in index['files']}, assigned)
+                self.assertEqual(index['omissions'], {'maps': 0, 'reasons': {}, 'incomplete': False})
+                native = next(f for f in index['files'] if f['path'] == 'api.js')
+                self.assertEqual(native['language'], 'javascript')
+                self.assertTrue(native['parser'].startswith('ast-grep-py:'))
+                actual = {(s['name'], s['kind'], s['parent']) for s in native['symbols']}
+                self.assertEqual(actual, {('Service', 'export', None), ('Service', 'class', None), ('run', 'method', 'Service')} |
+                                 {(f'operation{i:04d}', 'function', None) for i in range(declarations)})
+                self.assertEqual(len(native['symbols']), declarations + 3)
+                self.assertEqual(sum(len(f['symbols']) for f in index['files']), declarations + 3 + len(assigned) - 1)
+                self.assertNotIn('private body', json.dumps(index))
+                self.assertNotIn('private function body', json.dumps(index))
             manifests = list(self.runner.session.run_dir.rglob('source-context.manifest.json'))
             self.assertEqual(len(manifests), len(self.calls))
+            for path in manifests:
+                preparation = json.loads(path.read_text())
+                self.assertEqual(preparation['mode'], 'index-only')
+                self.assertEqual(preparation['transmitted_text_bytes'], 0)
+                self.assertTrue(all(f['symbols'] == f['symbols_transmitted'] for f in preparation['files']))
         self.assertTrue(all(context == contexts[0] for context in contexts))
+        self.assertEqual(len(seeded), sum(len(context) for context in contexts))
+        self.assertTrue(all(fragments == [] and lines == 0 and delivered == {}
+                            for fragments, lines, delivered in seeded))
 
     def test_disabled_context_and_projection_exclusions(self):
         self.value['source_context'] = {'enabled': False}
