@@ -1857,7 +1857,7 @@ class Runner:
             return (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
         report = render_architecture(data, self.cfg.get('output_language')) if stage == 'study' else render_stage(stage, data, self.cfg.get('output_language'))
         if stage == 'study':
-            validate_published_architecture(report, self.cfg.get('output_language'))
+            validate_published_architecture(report, self.cfg.get('output_language'), canonical=data)
         contents = {ARTIFACTS[stage]: report.encode('utf-8'),
                     stage + '.original.md': data['report_markdown'].encode('utf-8'),
                     stage + '.json': encoded(data)}
@@ -1875,7 +1875,8 @@ class Runner:
             'review.plan.json': (json.dumps(context['review_plan'], ensure_ascii=False, indent=2) + '\n').encode()}
         if context.get('document_strictly_valid'):
             report = render_architecture(context['architecture_document'], self.cfg.get('output_language'))
-            validate_published_architecture(report, self.cfg.get('output_language'))
+            validate_published_architecture(report, self.cfg.get('output_language'),
+                                            canonical=context['architecture_document'])
             expected['ARCHITECTURE.md'] = report.encode('utf-8')
         for name, content in expected.items():
             try:

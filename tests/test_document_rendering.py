@@ -46,7 +46,8 @@ class RenderingTests(unittest.TestCase):
         self.assertTrue(has_ledger_structure('study', saved))
         doc_lines = lines(saved['report_markdown'])
         for claim in saved['claims']:
-            self.assertEqual(len(claim['document_locators']), len(fragments))
+            self.assertEqual(len(claim['document_locators']), len(fragments) +
+                             (2 if claim['id'] == 'C-001' else 0))
             for fragment, loc in zip(fragments, claim['document_locators']):
                 serialized = fragment.replace('\r\n', '\n')
                 if not serialized.endswith('\n'): serialized += '\n'
@@ -93,7 +94,8 @@ class RenderingTests(unittest.TestCase):
             data = copy.deepcopy(self.wire)
             if mutation == 'unknown': data['report_sections'][0]['blocks'][0]['claim_ids'] = ['C-999']
             if mutation == 'repeat': data['report_sections'][0]['blocks'][0]['claim_ids'] *= 2
-            if mutation == 'unbound': data['report_sections'][0]['blocks'][0]['claim_ids'] = []
+            if mutation == 'unbound':
+                data['claims'].append(data['claims'][0] | {'id': 'C-002'})
             if mutation == 'duplicate': data['claims'] *= 2
             if mutation == 'order': data['report_sections'].reverse()
             if mutation == 'empty': data['report_sections'][0]['blocks'] = []
@@ -159,7 +161,7 @@ class RenderingTests(unittest.TestCase):
         with patch('src.analysis.ledger.resolve_evidence', return_value=[{
                 'id': 'study:E-001', 'status': 'RESOLVED', 'source_id': 'source-001', 'path': 'app.py'}]):
             saved = prepare_result('study', self.wire, self.context)
-        self.assertEqual(len(saved['claims'][0]['document_locators']), 3)
+        self.assertEqual(len(saved['claims'][0]['document_locators']), 5)
         self.assertEqual(saved['program_checks']['document_links']['matched'], 1)
 
 
@@ -227,7 +229,9 @@ class MarkdownStructureTests(unittest.TestCase):
                 (('English', 'en', 'ENGLISH', 'Английский'), 'English')):
             for alias in aliases:
                 self.assertEqual(resolve_language(alias), expected)
-                markdown = '\n\n'.join('## ' + title + '\n\nText.' for title in section_headings(alias))
+                markdown = '\n\n'.join('## ' + title + '\n\n' +
+                    ('```plantuml\n@startuml\nA --> B\n@enduml\n```' if i in (2, 4) else 'Text.')
+                    for i, title in enumerate(section_headings(alias)))
                 validate_published_architecture(markdown, alias)
         for invalid in ('German', 'de', '', None, 1):
             with self.subTest(language=invalid), self.assertRaises(ValueError):
@@ -235,7 +239,9 @@ class MarkdownStructureTests(unittest.TestCase):
 
     def test_published_heading_count_order_and_literal_exceptions(self):
         headings = section_headings('English')
-        markdown = '\n\n'.join('## ' + title + '\n\nText.' for title in headings)
+        markdown = '\n\n'.join('## ' + title + '\n\n' +
+            ('```plantuml\n@startuml\nA --> B\n@enduml\n```' if i in (2, 4) else 'Text.')
+            for i, title in enumerate(headings))
         validate_published_architecture(markdown + '\n\n```\n## Literal\n```\n', 'English')
         for changed, code in (
             (markdown + '\n\n## Citation warnings', 'REPORT_SECTION_COUNT_MISMATCH'),

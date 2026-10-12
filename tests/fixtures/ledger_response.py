@@ -11,9 +11,18 @@ SECTION_KEYS = ('scope', 'context', 'components', 'startup_and_flows', 'data_and
 
 
 def sections(markdown='C-001: Has an entry point\n'):
-    return [dict(key=key, title='Report: configured-model' if i == 0 else key,
-                 blocks=[dict(markdown=markdown if i == 0 else 'Not applicable in this synthetic fixture.',
-                              claim_ids=['C-001'] if i == 0 else [])]) for i, key in enumerate(SECTION_KEYS)]
+    result = [dict(key=key, title='Report: configured-model' if i == 0 else key,
+                   blocks=[dict(markdown=markdown if i == 0 else 'Not applicable in this synthetic fixture.',
+                                claim_ids=['C-001'] if i == 0 else [])]) for i, key in enumerate(SECTION_KEYS)]
+    diagrams = {
+        'components': 'component Application\ncomponent "Entry point" as Entry\nApplication --> Entry : starts',
+        'data_and_state': 'rectangle "Entry point" as Entry\nrectangle Output\nEntry --> Output : produces',
+    }
+    for section in result:
+        if section['key'] in diagrams:
+            section['blocks'].append(dict(markdown='```plantuml\n@startuml\n' + diagrams[section['key']] +
+                                          '\n@enduml\n```', claim_ids=['C-001']))
+    return result
 
 def scope(context):
     plan = context.get('coverage_plan')

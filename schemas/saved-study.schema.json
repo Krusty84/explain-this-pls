@@ -431,6 +431,64 @@
           ],
           "additionalProperties": false
         },
+        "diagrams": {
+          "type": "object",
+          "properties": {
+            "required_sections": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "components",
+                  "data_and_state"
+                ]
+              },
+              "enum": [
+                [
+                  "components",
+                  "data_and_state"
+                ]
+              ]
+            },
+            "present_sections": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "components",
+                  "data_and_state"
+                ]
+              }
+            },
+            "missing_sections": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "components",
+                  "data_and_state"
+                ]
+              }
+            },
+            "complete": {
+              "type": "boolean"
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "STRUCTURAL_ONLY"
+              ]
+            }
+          },
+          "required": [
+            "required_sections",
+            "present_sections",
+            "missing_sections",
+            "complete",
+            "scope"
+          ],
+          "additionalProperties": false
+        },
         "coverage": {
           "type": "object",
           "properties": {
@@ -559,6 +617,7 @@
         "meaning",
         "evidence_counts",
         "document_links",
+        "diagrams",
         "coverage"
       ],
       "additionalProperties": false
@@ -700,7 +759,7 @@
             "artifact_format": {
               "type": "string",
               "enum": [
-                "evidence-ledger-inventory-scope-v2-artifacts"
+                "evidence-ledger-required-diagrams-v3-artifacts"
               ]
             },
             "origin": {

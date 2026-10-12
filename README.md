@@ -174,26 +174,26 @@ original directory, including excluded paths. Native CLI permissions apply.
 
 #### Main settings
 
-| Field                          | Purpose                                                                                                                   |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `mode`                         | Analyze Git branches (`"git"`) or a directory (`"folder"`).                                                               |
-| `git_mode`                     | Source repository, local branches and the baseline branch.                                                                |
-| `folder_mode.path`             | Source directory for folder mode.                                                                                         |
-| `reports_dir`                  | Destination for results; each run gets a separate subfolder.                                                              |
-| `project_description`          | Optional introduction to the system's purpose and history.                                                                |
-| `output_language`              | Report language: `"Russian"` (default) or `"English"`, including supported aliases.                                        |
-| `priority_scenarios`           | Optional workflows or areas to focus on.                                                                                  |
-| `source_context.enabled`       | Boolean; defaults to `true`. Prepare source maps and exact fragments before the model call.                               |
-| `source_context.max_bytes`     | Integer, at least `4096`; defaults to `65536`. Limits the serialized source context, including JSON and omission summary. |
-| `execution.read_loop_guard`    | Boolean; defaults to `true`. Stop sustained repeated tool results; `false` keeps observation metrics.                     |
+| Field                       | Purpose                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                      | Analyze Git branches (`"git"`) or a directory (`"folder"`).                                                               |
+| `git_mode`                  | Source repository, local branches and the baseline branch.                                                                |
+| `folder_mode.path`          | Source directory for folder mode.                                                                                         |
+| `reports_dir`               | Destination for results; each run gets a separate subfolder.                                                              |
+| `project_description`       | Optional introduction to the system's purpose and history.                                                                |
+| `output_language`           | Report language: `"Russian"` (default) or `"English"`, including supported aliases.                                       |
+| `priority_scenarios`        | Optional workflows or areas to focus on.                                                                                  |
+| `source_context.enabled`    | Boolean; defaults to `true`. Prepare source maps and exact fragments before the model call.                               |
+| `source_context.max_bytes`  | Integer, at least `4096`; defaults to `65536`. Limits the serialized source context, including JSON and omission summary. |
+| `execution.read_loop_guard` | Boolean; defaults to `true`. Stop sustained repeated tool results; `false` keeps observation metrics.                     |
 
 #### Agent settings
 
-| Field              | Purpose                                                                                 |
-| ------------------ | --------------------------------------------------------------------------------------- |
-| `agent.backend`    | Coding agent: `codex`, `opencode` (V2), or `xxx` (OpenCode 1.2.27).      |
+| Field              | Purpose                                                                       |
+| ------------------ | ----------------------------------------------------------------------------- |
+| `agent.backend`    | Coding agent: `codex`, `opencode` (V2), or `xxx` (OpenCode 1.2.27).           |
 | `agent.executable` | CLI command or path; defaults to `codex`, `opencode`, or `xxx`, respectively. |
-| `agent.model`      | Optional model name; omit it or use `null` for the CLI's configured model.              |
+| `agent.model`      | Optional model name; omit it or use `null` for the CLI's configured model.    |
 
 The tool uses your CLI's existing login and settings. No separate API key is needed
 in this configuration.
@@ -355,12 +355,12 @@ setup checks; `--trust-repository` retains its existing meaning. Explicit
 
 Each run saves results in a new subfolder of `reports_dir`. Start with these files:
 
-| Report                   | Contents                                                                              |
-| ------------------------ | ------------------------------------------------------------------------------------- |
-| `FINAL_REPORT.md`        | Start here: studies, reviews, comparison and limitations in one document.             |
-| `ARCHITECTURE.md`        | How the system works, with component and data-flow diagrams.                          |
-| `ARCHITECTURE_REVIEW.md` | Tables of review assessments, source references, findings and gaps.                   |
-| `BRANCH_COMPARISON.md`   | A table of differences from the baseline, for two or more Git branches.               |
+| Report                   | Contents                                                                  |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `FINAL_REPORT.md`        | Start here: studies, reviews, comparison and limitations in one document. |
+| `ARCHITECTURE.md`        | How the system works, with component and data-flow diagrams.              |
+| `ARCHITECTURE_REVIEW.md` | Tables of review assessments, source references, findings and gaps.       |
+| `BRANCH_COMPARISON.md`   | A table of differences from the baseline, for two or more Git branches.   |
 
 `FINAL_REPORT.md` is directly in the run folder. In Git mode, `ARCHITECTURE.md`
 and `ARCHITECTURE_REVIEW.md` are under `branches/<branch-id>/`, and the comparison,
@@ -374,7 +374,7 @@ not `NOT_INSPECTED`. File inspection remains `UNVERIFIED` by Python.
 Catalog configuration keys and old artifact formats are unsupported. Remove
 `stage_agents.catalog` and `prompts.catalog`. Custom Study prompts must use the
 current document contract; subsystem, exclusion and coverage arrays are no longer
-required. The artifact format is `evidence-ledger-inventory-scope-v2-artifacts`.
+required. The artifact format is `evidence-ledger-required-diagrams-v3-artifacts`.
 Start a new run directory. Existing reports are left unchanged.
 
 #### FINAL_REPORT.md — consolidated results
@@ -394,22 +394,21 @@ order for Russian and English; model section titles do not select published
 headings. Aliases `ru`, `russian`, `русский`, `en`, `english` and `английский`
 are case-insensitive. Unsupported languages are rejected before a model call.
 
-| Section                           | What it explains                                                             |
-| --------------------------------- | ---------------------------------------------------------------------------- |
-| Study scope                       | The source studied, exclusions and limits of the investigation.              |
-| System context                    | The system's purpose, external boundaries, processes and integrations.       |
-| System components                 | Main components, responsibilities, dependencies and a PlantUML overview.     |
-| Startup and execution             | How the system starts and how important scenarios execute.                   |
-| Data and state                    | Storage, readers and writers, transactions and a PlantUML data-flow diagram. |
-| Cross-cutting mechanisms          | Configuration, security, error handling, logging and concurrency.            |
-| Constraints and legacy details    | Enforced restrictions, documented rules and observed conventions.            |
-| Change navigation                 | Where to start common changes and which related tests to inspect.            |
-| Unknown and unverified areas      | Areas studied, gaps and next steps for verification.                         |
-| Evidence basis and sources        | Why the cited sources support the explanation and what remains uncertain.    |
+| Section                        | What it explains                                                             |
+| ------------------------------ | ---------------------------------------------------------------------------- |
+| Study scope                    | The source studied, exclusions and limits of the investigation.              |
+| System context                 | The system's purpose, external boundaries, processes and integrations.       |
+| System components              | Main components, responsibilities, dependencies and a PlantUML overview.     |
+| Startup and execution          | How the system starts and how important scenarios execute.                   |
+| Data and state                 | Storage, readers and writers, transactions and a PlantUML data-flow diagram. |
+| Cross-cutting mechanisms       | Configuration, security, error handling, logging and concurrency.            |
+| Constraints and legacy details | Enforced restrictions, documented rules and observed conventions.            |
+| Change navigation              | Where to start common changes and which related tests to inspect.            |
+| Unknown and unverified areas   | Areas studied, gaps and next steps for verification.                         |
+| Evidence basis and sources     | Why the cited sources support the explanation and what remains uncertain.    |
 
 Every block with linked source evidence is followed by its file paths, inclusive
-line ranges and evidence IDs. IDs link to the source index under H3 in section
-10. Repeated evidence appears once per block, in structured reference order.
+line ranges and evidence IDs. IDs link to the source index under H3 in section 10. Repeated evidence appears once per block, in structured reference order.
 Submodule paths include their source root and retain the pinned source identity.
 Unresolved locators carry explicit status warnings; an empty quote verifies only
 the locator. Missing evidence is not replaced with an invented reference.
@@ -421,9 +420,14 @@ Review target. Rendering is local and adds no model call, including when Review
 is disabled. Existing reports remain unchanged; integrity checks detect changes
 to a published file.
 
-The bundled prompts require both diagrams as PlantUML source blocks inside the
-Markdown. Missing evidence must be explained. Viewing them as graphics requires a
-PlantUML-capable viewer; this tool does not render images.
+COMPLETE requires a separate, claim-linked PlantUML block in both System components
+and Data and state. Python checks fences, markers, nonempty content and forbidden
+external directives before acceptance and publication, even with Review disabled.
+Extra diagrams are allowed. PARTIAL/BLOCKED may omit a diagram with explicit
+limitations and next checks; malformed diagrams still fail validation.
+`program_checks.diagrams` records structure only. Review assesses the components,
+dependencies and data flows against evidence. Viewing diagrams as graphics requires
+a PlantUML-capable viewer; this tool does not compile or render them.
 
 Blocks may use H3–H6 subheadings. Additional H1/H2, including Setext headings,
 headings in containers and raw HTML h1/h2, are rejected outside code. Fenced

@@ -85,7 +85,7 @@ class CitationPresentationTests(unittest.TestCase):
             for claims in (['C-001'], ['C-002'], ['C-001'])]
         rendered = render_architecture(presentation_data(wire))
         refs = [line for line in rendered.splitlines() if line.startswith('*Sources:')]
-        self.assertEqual(len(refs), 3)
+        self.assertEqual(len(refs), 5)
         self.assertIn('[E-001]', refs[0]); self.assertIn('[E-002]', refs[1])
         self.assertEqual(refs[0], refs[2])
         self.assertNotIn('[E-001]', refs[1])

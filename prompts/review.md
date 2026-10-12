@@ -72,9 +72,12 @@ data-flow diagram must show sources, processing components, stores and recipient
 with directed arrows naming the transferred data and distinguishing reads from writes.
 Missing persistent storage alone does not justify omitting the data-flow diagram.
 
-Check that each diagram is a self-contained fenced Markdown code block labeled
-plantuml, with complete @startuml/@enduml source and built-in syntax without includes
-or external dependencies. Check readable labels in output_language, preservation of
+Python checks required locations, standalone fences, language, boundaries, nonempty
+content, forbidden external directives and registered claim links. Its
+program_checks.diagrams has scope STRUCTURAL_ONLY: it proves neither architectural
+correctness nor successful compilation. Review the canonical frozen Markdown,
+not the published presentation. Do not treat a Python format rejection as an
+architectural finding. Check readable labels in output_language, preservation of
 code names, symbols and IDs, consistency with names in the prose, and a short adjacent
 explanation of the diagram's scope and relationships.
 
@@ -84,12 +87,12 @@ registered claims cover the corresponding diagram occurrences. Check for unsuppo
 links, contradictions and missing HYPOTHESIS/UNKNOWN labels or uncertainty. A diagram
 is an assertion to review, not independent evidence.
 
-A missing required diagram without a valid explanation is MEDIUM / MATERIAL_OMISSION;
-a violation of the required diagram format is MEDIUM / CONTRACT_VIOLATION. Assess
-factual errors using the normal findings and severity rules below. For partial
+A missing required diagram without a valid explanation is MEDIUM / MATERIAL_OMISSION.
+Assess factual errors using the normal findings and severity rules below. For partial
 coverage, check that the established portion is shown where possible. If no meaningful
-diagram can be produced, require a specific explanation in its section and limitations
-and an appropriate PARTIAL/BLOCKED completion status. Treat justified access limits as
+diagram can be produced, require a specific explanation in its section and limitations,
+the information to verify, and an appropriate PARTIAL/BLOCKED completion status.
+Assess the explanation from evidence, not keywords. Treat justified access limits as
 research limitations, not fabricated findings.
 
 Review diagram source text without running PlantUML or a rendering service. Do not

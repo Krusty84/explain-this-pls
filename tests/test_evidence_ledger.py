@@ -235,8 +235,12 @@ class LedgerTests(unittest.TestCase):
             elif mutation == 'partial_area':
                 response['omission_search'][0].update(status='PARTIALLY_INSPECTED', limitation='Search budget.')
             else:
-                doc = study(self.context); doc['claims'] = []
+                doc = study(self.context)
+                doc.update(claims=[], completion_status='PARTIAL', limitations=['No registered claims were established.'])
                 doc['report_sections'][0]['blocks'][0]['claim_ids'] = []
+                for section in doc['report_sections']:
+                    if section['key'] in ('components', 'data_and_state'):
+                        section['blocks'] = section['blocks'][:1]
                 ctx = review_context(prepare_result('study', doc, self.context), self.context)
                 response = review(ctx)
             validate_result('review', response, ctx)

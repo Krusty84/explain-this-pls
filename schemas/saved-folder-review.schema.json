@@ -887,7 +887,7 @@
             "artifact_format": {
               "type": "string",
               "enum": [
-                "evidence-ledger-inventory-scope-v2-artifacts"
+                "evidence-ledger-required-diagrams-v3-artifacts"
               ]
             },
             "origin": {

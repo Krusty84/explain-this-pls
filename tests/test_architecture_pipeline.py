@@ -3,10 +3,13 @@
 
 """Publication structure does not change Study calls or canonical Review inputs."""
 import copy
+import json
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 from explain import Runner
+from src.reports.document_rendering import _markdown_tokens, recover_sections
 from fixtures.architecture_checks import assert_architecture
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
@@ -52,6 +55,81 @@ class ArchitectureFolderPipelineTests(FolderFixture):
                 if policy == 'compromise':
                     self.assertTrue(revision['study_invocation']['material_retained'])
                     self.assertFalse(revision['study_material']['strict_valid'])
+
+    def test_required_diagram_failures_do_not_publish_or_repeat_study(self):
+        for policy in ('strict', 'compromise'):
+            for defect in ('components', 'data_and_state', 'both', 'wrong_section', 'boundary', 'include'):
+                with self.subTest(policy=policy, defect=defect):
+                    authored = {}
+
+                    def change(runner, context, data):
+                        sections = {section['key']: section for section in data['report_sections']}
+                        missing = ('components', 'data_and_state') if defect == 'both' else (defect,)
+                        for key in missing:
+                            if key in sections:
+                                sections[key]['blocks'] = [dict(markdown='The diagram is unavailable.', claim_ids=[])]
+                        if defect == 'wrong_section':
+                            sections['startup_and_flows']['blocks'] += sections['components']['blocks']
+                            sections['components']['blocks'] = [dict(markdown='The diagram is unavailable.', claim_ids=[])]
+                        if defect in ('boundary', 'include'):
+                            diagram = next(block for block in sections['components']['blocks']
+                                           if '```plantuml' in block['markdown'])
+                            diagram['markdown'] = diagram['markdown'].replace('@enduml', '' if defect == 'boundary'
+                                                                             else '!include private.puml\n@enduml')
+                        authored.update(copy.deepcopy(data))
+
+                    manifest, code = self.run_case(large=False, policy=policy, change=change)
+                    self.assertNotEqual(code, 0)
+                    self.assertFalse(manifest['accepted'])
+                    self.assertEqual([call['context']['stage'] for call in self.calls], ['study'])
+                    self.assertFalse(list(self.runner.run_dir.rglob('ARCHITECTURE.md')))
+                    revision = manifest['revisions'][0]
+                    self.assertIsNone(revision['study'])
+                    invocation = revision['study_invocation']
+                    expected_code = ('INVALID_PLANTUML_BOUNDARY' if defect == 'boundary' else
+                                     'FORBIDDEN_PLANTUML_DIRECTIVE' if defect == 'include' else
+                                     'REQUIRED_DIAGRAM_MISSING')
+                    self.assertEqual(invocation['error']['details']['code'], expected_code)
+                    attempt = Path(invocation['artifact_directory'])
+                    raw = json.loads((attempt / 'extracted.json').read_text())
+                    self.assertEqual(raw['report_sections'], authored['report_sections'])
+                    self.assertEqual(raw['claims'], authored['claims'])
+                    if policy == 'compromise':
+                        self.assertTrue(invocation['material_retained'])
+                        material = revision['study_material']
+                        self.assertFalse(material['strict_valid'])
+                        self.assertFalse(material.get('program_checks', {}).get('policy_satisfied', False))
+                        self.assertEqual(material['report_markdown'], recover_sections(authored['report_sections']))
+
+    def test_partial_diagram_omission_preserves_authored_material(self):
+        def change(runner, context, data):
+            data.update(completion_status='PARTIAL', limitations=['Data ownership must be checked.'])
+            section = next(section for section in data['report_sections'] if section['key'] == 'data_and_state')
+            section['blocks'] = [dict(markdown='Data ownership must be checked before a diagram can be built.',
+                                      claim_ids=[])]
+
+        for language in ('Russian', 'English'):
+            with self.subTest(language=language):
+                self.value['output_language'] = language
+                manifest, code = self.run_case(large=False, change=change)
+                self.assertNotEqual(code, 0)
+                self.assertFalse(manifest['accepted'])
+                self.assertEqual([call['context']['stage'] for call in self.calls], ['study'])
+                study = manifest['study']
+                self.assertEqual(study['completion_status'], 'PARTIAL')
+                self.assertEqual(study['program_checks']['diagrams']['missing_sections'], ['data_and_state'])
+                self.assertFalse(study['program_checks']['diagrams']['complete'])
+                self.assertFalse(study['program_checks']['policy_satisfied'])
+                self.assertEqual((self.runner.run_dir / 'study.original.md').read_text(), study['report_markdown'])
+                published = (self.runner.run_dir / 'ARCHITECTURE.md').read_text()
+                tokens = _markdown_tokens(published)
+                headings = [(token.tag, tokens[i + 1].content) for i, token in enumerate(tokens)
+                            if token.type == 'heading_open']
+                notice = ('Обязательная диаграмма отсутствует' if language == 'Russian' else
+                          'Required diagram missing')
+                self.assertEqual(sum(tag == 'h2' for tag, _ in headings), 10)
+                self.assertEqual(sum(tag == 'h2' for tag, _ in headings[:headings.index(('h3', notice))]), 5)
+                self.assertNotIn(notice, study['report_markdown'])
 
 
 class ArchitectureGitPipelineTests(unittest.TestCase):

@@ -24,6 +24,16 @@ Repeated explanation.
 
 *Sources: <code>vendor/worker/worker.py:12–18</code> [E-002](#source-e-002), <code>app.py:1–1</code> [E-001](#source-e-001)*
 
+```plantuml
+@startuml
+component "Entry point" as Entry
+component Worker
+Entry --> Worker : starts
+@enduml
+```
+
+*Sources: <code>vendor/worker/worker.py:12–18</code> [E-002](#source-e-002), <code>app.py:1–1</code> [E-001](#source-e-001), <code>config.py:3–5</code> [E-003](#source-e-003) (QUOTE_MISMATCH; quote not verified)*
+
 ## 4. Startup and execution
 
 ```plantuml
@@ -38,6 +48,18 @@ Actor -> Worker: start
 ## 5. Data and state
 
 Not applicable in this synthetic fixture.
+
+```plantuml
+@startuml
+queue Jobs
+component Worker
+database State
+Jobs --> Worker : jobs
+Worker --> State : updates
+@enduml
+```
+
+*Sources: <code>app.py:1–1</code> [E-001](#source-e-001), <code>config.py:3–5</code> [E-003](#source-e-003) (QUOTE_MISMATCH; quote not verified)*
 
 ## 6. Cross-cutting mechanisms
 

@@ -10,6 +10,7 @@ LF. A locator includes the block's final LF, never the separator or heading.
 from __future__ import annotations
 import copy
 import json
+import re
 from html.parser import HTMLParser
 
 from markdown_it import MarkdownIt
@@ -26,6 +27,7 @@ BLOCK = obj(id=string(), section_key=string(), section_index={'type': 'integer'}
             block_index={'type': 'integer'}, claim_ids=STRINGS, locator=LOCATOR)
 PROVENANCE = obj(rule=string(RENDERING_RULE), normalized_sha256=string(),
                  document_sha256=string(), registry_sha256=string(), block_map_sha256=string())
+REQUIRED_DIAGRAMS = {'components': 'component_overview', 'data_and_state': 'data_flow'}
 
 
 def materialized_schema(wire):
@@ -61,6 +63,116 @@ def _markdown_tokens(markdown):
     return parser.parse(markdown)
 
 
+def _is_plantuml(token):
+    info = token.info.split()
+    return token.type == 'fence' and bool(info) and info[0].lower() == 'plantuml'
+
+
+def _fence_source(markdown, token):
+    # Match CommonMark's CR/LF line coordinates while retaining the source bytes.
+    source_lines = re.split(r'(?<=\n)|(?<=\r)(?!\n)', markdown)
+    return ''.join(source_lines[token.map[0]:token.map[1]])
+
+
+def _plantuml_lines(content):
+    """Remove comments and mask quoted literals for local directive checks only."""
+    in_comment = False
+    for line in content.splitlines():
+        active, i = [], 0
+        while i < len(line):
+            if in_comment:
+                end = line.find("'/", i)
+                if end < 0:
+                    break
+                in_comment, i = False, end + 2
+            elif line.startswith("/'", i):
+                in_comment, i = True, i + 2
+            elif line[i] == "'":
+                break
+            elif line[i] == '"':
+                active.append('""')
+                i += 1
+                while i < len(line):
+                    char = line[i]
+                    i += 1
+                    if char == '\\' and i < len(line):
+                        i += 1
+                    elif char == '"':
+                        break
+            else:
+                active.append(line[i])
+                i += 1
+        yield ''.join(active).strip()
+
+
+def _validate_plantuml(token, location):
+    if token.level != 0 or token.info.strip().lower() != 'plantuml' or not token.meta['closed']:
+        raise contract_violation('INVALID_PLANTUML_FENCE', **location)
+    active = list(_plantuml_lines(token.content))
+    starts = [i for i, line in enumerate(active) if re.match(r'(?i)^@startuml(?:\s|$)', line)]
+    ends = [i for i, line in enumerate(active) if re.match(r'(?i)^@enduml(?:\s|$)', line)]
+    if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+        raise contract_violation('INVALID_PLANTUML_BOUNDARY', **location)
+    if any(re.match(r'(?i)^!(?:include\w*|import)\b', line) for line in active):
+        raise contract_violation('FORBIDDEN_PLANTUML_DIRECTIVE', **location)
+    if not any(active[starts[0] + 1:ends[0]]):
+        raise contract_violation('EMPTY_PLANTUML_DIAGRAM', **location)
+
+
+def _inspect_diagram_records(records, claims):
+    registered = {claim['id'] for claim in claims}
+    present = set()
+    for key, block_index, markdown, claim_ids, path in records:
+        if key not in REQUIRED_DIAGRAMS:
+            continue
+        tokens = _markdown_tokens(markdown)
+        diagrams = [token for token in tokens if _is_plantuml(token)]
+        if not diagrams:
+            continue
+        location = dict(path=path, section_key=key, diagram_type=REQUIRED_DIAGRAMS[key],
+                        block_index=block_index)
+        if (len(tokens) != 1 or len(diagrams) != 1
+                or markdown.strip() != _fence_source(markdown, diagrams[0]).strip()):
+            raise contract_violation('INVALID_PLANTUML_FENCE', **location)
+        _validate_plantuml(diagrams[0], location)
+        if not claim_ids or not set(claim_ids) <= registered:
+            raise contract_violation('UNLINKED_REQUIRED_DIAGRAM', **location)
+        present.add(key)
+    return dict(required_sections=list(REQUIRED_DIAGRAMS),
+                present_sections=[key for key in REQUIRED_DIAGRAMS if key in present],
+                missing_sections=[key for key in REQUIRED_DIAGRAMS if key not in present],
+                complete=len(present) == len(REQUIRED_DIAGRAMS), scope='STRUCTURAL_ONLY')
+
+
+def _require_diagrams(inspection, completion_status, locations):
+    if completion_status == 'COMPLETE' and inspection['missing_sections']:
+        key = inspection['missing_sections'][0]
+        raise contract_violation('REQUIRED_DIAGRAM_MISSING', locations[key],
+                                 section_key=key, diagram_type=REQUIRED_DIAGRAMS[key])
+    return inspection
+
+
+def inspect_required_diagrams(sections, claims, *, completion_status=None):
+    """Inspect authored blocks without mutation, I/O or architectural inference."""
+    records = [(section['key'], j, block['markdown'], block['claim_ids'],
+                f'$.report_sections[{i}].blocks[{j}].markdown')
+               for i, section in enumerate(sections) for j, block in enumerate(section['blocks'])]
+    locations = {key: next((f'$.report_sections[{i}].blocks' for i, section in enumerate(sections)
+                           if section['key'] == key), '$.report_sections') for key in REQUIRED_DIAGRAMS}
+    return _require_diagrams(_inspect_diagram_records(records, claims), completion_status, locations)
+
+
+def inspect_materialized_diagrams(value, *, completion_status=None):
+    """Read blocks by validated coordinates, including repeated identical blocks."""
+    document = lines(value['report_markdown'])
+    records = [(block['section_key'], block['block_index'],
+                ''.join(document[block['locator']['start_line'] - 1:block['locator']['end_line']]),
+                block['claim_ids'], f'$.block_map[{i}].locator')
+               for i, block in enumerate(value['block_map'])]
+    return _require_diagrams(_inspect_diagram_records(records, value['claims']), completion_status,
+                             {key: '$.block_map' for key in REQUIRED_DIAGRAMS})
+
+
 class _HTMLHeadings(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -81,9 +193,23 @@ def _markdown_violation(code, location, violation):
 
 
 def _validate_markdown_tokens(tokens, location, *, published=False):
+    section_index, diagram_index = -1, 0
     for token in tokens:
+        if token.type == 'heading_open' and token.tag == 'h2' and token.level == 0:
+            section_index += 1
+            diagram_index = 0
         if token.type == 'fence' and not token.meta['closed']:
+            if _is_plantuml(token):
+                details = dict(location) if isinstance(location, dict) else {'path': location}
+                if published and 0 <= section_index < len(SECTION_KEYS):
+                    key = SECTION_KEYS[section_index]
+                    if key in REQUIRED_DIAGRAMS:
+                        details.update(section_key=key, diagram_type=REQUIRED_DIAGRAMS[key],
+                                       block_index=diagram_index)
+                raise _markdown_violation('INVALID_PLANTUML_FENCE', details, 'UNCLOSED_FENCE')
             raise _markdown_violation('INVALID_MARKDOWN_STRUCTURE', location, 'UNCLOSED_FENCE')
+        if _is_plantuml(token):
+            diagram_index += 1
         if token.type == 'heading_open' and (token.tag == 'h1' or
                 token.tag == 'h2' and (not published or token.level != 0)):
             raise _markdown_violation('UNEXPECTED_TOP_LEVEL_HEADING', location, token.tag.upper())
@@ -103,7 +229,7 @@ def validate_block_markdown(markdown, location):
     _validate_markdown_tokens(_markdown_tokens(markdown), location)
 
 
-def validate_published_architecture(markdown, language):
+def validate_published_architecture(markdown, language, *, canonical=None):
     expected = section_headings(language)
     tokens = _markdown_tokens(markdown)
     _validate_markdown_tokens(tokens, '$.ARCHITECTURE.md', published=True)
@@ -114,6 +240,34 @@ def validate_published_architecture(markdown, language):
                                  expected_count=len(expected), actual_count=len(headings))
     if tuple(headings) != expected:
         raise contract_violation('REPORT_HEADING_ORDER_MISMATCH', '$.ARCHITECTURE.md')
+    diagrams = {key: [] for key in REQUIRED_DIAGRAMS}
+    section_index = -1
+    for token in tokens:
+        if token.type == 'heading_open' and token.tag == 'h2':
+            section_index += 1
+        key = SECTION_KEYS[section_index] if section_index >= 0 else None
+        if key in diagrams and _is_plantuml(token):
+            _validate_plantuml(token, dict(path='$.ARCHITECTURE.md', section_key=key,
+                diagram_type=REQUIRED_DIAGRAMS[key], block_index=len(diagrams[key])))
+            diagrams[key].append(_fence_source(markdown, token))
+    present = [key for key in diagrams if diagrams[key]]
+    inspection = dict(required_sections=list(REQUIRED_DIAGRAMS), present_sections=present,
+        missing_sections=[key for key in diagrams if not diagrams[key]],
+        complete=len(present) == len(REQUIRED_DIAGRAMS), scope='STRUCTURAL_ONLY')
+    if canonical is not None:
+        validate_materialized(canonical)
+        canonical_diagrams = {key: [] for key in REQUIRED_DIAGRAMS}
+        document = lines(canonical['report_markdown'])
+        for block in canonical['block_map']:
+            key = block['section_key']
+            if key in canonical_diagrams:
+                fragment = ''.join(document[block['locator']['start_line'] - 1:block['locator']['end_line']])
+                canonical_diagrams[key].extend(_fence_source(fragment, token)
+                    for token in _markdown_tokens(fragment) if _is_plantuml(token))
+        if diagrams != canonical_diagrams or inspection != inspect_materialized_diagrams(canonical):
+            raise contract_violation('DIAGRAM_PUBLICATION_MISMATCH', '$.ARCHITECTURE.md')
+    return _require_diagrams(inspection, canonical['completion_status'] if canonical else 'COMPLETE',
+                             {key: '$.ARCHITECTURE.md' for key in REQUIRED_DIAGRAMS})
 
 
 def validate_sections(sections, claims):
@@ -122,6 +276,7 @@ def validate_sections(sections, claims):
     ids = unique_ids(claims, r'C-[0-9]{3,}', '$.claims')
     if [s['key'] for s in sections] != list(SECTION_KEYS):
         raise contract_violation('SECTION_ORDER_MISMATCH', '$.report_sections')
+    inspect_required_diagrams(sections, claims)
     linked = set()
     for i, section in enumerate(sections):
         if not section['title'].strip() or any(c in section['title'] for c in '\r\n'):
@@ -199,8 +354,6 @@ def validate_materialized(value):
                      if k not in ('program_checks', 'review_plan', 'normalization_provenance', 'revision_id', 'registry_diff', 'advisory')}, schema)
     document = lines(value['report_markdown'])
     ids = unique_ids(value['claims'], r'C-[0-9]{3,}', '$.claims')
-    for i, block in enumerate(value['block_map']):
-        references(block['claim_ids'], ids, f'$.block_map[{i}].claim_ids')
     for i, claim in enumerate(value['claims']):
         locators = claim['document_locators']
         expected = [b['locator'] for b in value['block_map'] if claim['id'] in b['claim_ids']]
@@ -225,6 +378,14 @@ def validate_materialized(value):
                         ('block_map_sha256', sha(canonical(value['block_map'])))):
         if provenance[key] != actual:
             raise contract_violation('MATERIALIZATION_HASH_MISMATCH', '$.materialization_provenance.' + key)
+    inspection = inspect_materialized_diagrams(value, completion_status=value['completion_status'])
+    for i, block in enumerate(value['block_map']):
+        references(block['claim_ids'], ids, f'$.block_map[{i}].claim_ids')
+    if value['completion_status'] != 'COMPLETE' and not any(item.strip() for item in value['limitations']):
+        raise contract_violation('MISSING_LIMITATIONS', '$.limitations')
+    checks = value.get('program_checks')
+    if type(checks) is dict and 'diagrams' in checks and checks['diagrams'] != inspection:
+        raise contract_violation('DIAGRAM_CHECKS_MISMATCH', '$.program_checks.diagrams')
 
 
 def recover_sections(value):

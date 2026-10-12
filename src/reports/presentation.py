@@ -7,7 +7,7 @@ import json
 import unicodedata
 from src.contracts.contracts import SECTION_KEYS, contract_violation, is_recovered_material, validate_schema
 from src.reports.architecture_format import section_headings
-from src.reports.document_rendering import validate_materialized
+from src.reports.document_rendering import validate_materialized, inspect_materialized_diagrams
 from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
 
 LABELS = {
@@ -161,6 +161,7 @@ def render_architecture(data, language='English'):
     """Render fixed headings and evidence beside immutable canonical blocks."""
     headings = section_headings(language)
     validate_materialized(data)
+    missing_diagrams = inspect_materialized_diagrams(data)['missing_sections']
     blocks = data['block_map']
     present = list(dict.fromkeys(block['section_key'] for block in blocks))
     if len(present) != len(SECTION_KEYS):
@@ -183,6 +184,12 @@ def render_architecture(data, language='English'):
             references = render_source_references(block, claims, evidence, resolutions, sources, language)
             if references:
                 chunks.append(references + '\n\n')
+        if key in missing_diagrams:
+            chunks.append(('### Обязательная диаграмма отсутствует\n\n'
+                           'Исследование не завершено. Причины и необходимые проверки указаны в разделе и ограничениях.\n\n'
+                           if russian(language) else
+                           '### Required diagram missing\n\n'
+                           'The study is incomplete. See this section and the limitations for the missing checks.\n\n'))
         if key == 'evidence_basis':
             chunks.append(render_evidence_index(data, language))
     return ''.join(chunks)

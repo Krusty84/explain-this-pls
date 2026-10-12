@@ -133,7 +133,7 @@ them with boilerplate. The report may be useful and incomplete; never fake compl
 
 ## Required PlantUML diagrams
 
-Include two overview diagrams in the existing report sections:
+For COMPLETE, include at least one overview diagram in each required section:
 
 - components: a component diagram showing system boundaries, the main components
   and dependencies, and external integrations where present.
@@ -141,25 +141,33 @@ Include two overview diagrams in the existing report sections:
   stores and recipients. Use directed arrows labeled with the data being transferred,
   and distinguish reads from writes.
 
-Put each diagram in its own report_sections[].blocks[] record as a fenced Markdown
-code block labeled plantuml, containing the complete source from @startuml to @enduml.
-Use built-in PlantUML syntax without includes or external dependencies. Each diagram
-must be self-contained. Use output_language for human-readable labels while preserving
+Put each diagram in its own report_sections[].blocks[] record containing only one
+closed, top-level CommonMark fence. Use backticks or tildes and the info string
+plantuml, case-insensitive, without parameters. Do not put the fence in a list,
+blockquote or another container, or combine it with prose in the same record.
+Include exactly one @startuml followed by exactly one @enduml, with nonempty
+diagram content between them; comments alone do not count. Use built-in PlantUML
+syntax without external include/import directives, including !include,
+!includeurl, !include_once, !include_many and !import. Extra diagrams are allowed;
+a diagram in another section cannot replace either required diagram.
+Use output_language for human-readable labels while preserving
 code names, symbols and IDs; keep component names consistent with the report prose.
-Provide a short adjacent explanation of the diagram's scope and relationships.
+Provide a short adjacent explanation in a separate block.
 Return diagram source in the report only; do not create .puml or image files, run a
 renderer or contact a rendering service.
 
 Register every material assertion shown by nodes, boundaries and relationships in
-claims, and link the corresponding IDs through the diagram block's claim_ids. Reuse
-existing claim IDs for the same assertions. Mark HYPOTHESIS/UNKNOWN visibly in the
-diagram and describe the missing checks in the corresponding claims' uncertainty.
+claims, and link at least one registered ID through each diagram block's nonempty
+claim_ids. Reuse existing claim IDs for the same assertions. Mark HYPOTHESIS/UNKNOWN
+visibly in the diagram and describe missing checks in the corresponding claims' uncertainty.
 
 When coverage is partial, show the established portion without inventing components
 or links. If a meaningful diagram cannot be built from the available evidence, explain
-the specific reason in its section and limitations, and use PARTIAL/BLOCKED as
-appropriate. Missing persistent storage alone does not justify omitting the data-flow
-diagram: show applicable inputs, processing, outputs and in-memory state.
+the specific reason and the information to verify in its section and nonempty
+limitations, and use PARTIAL/BLOCKED. Missing diagrams prevent COMPLETE; malformed
+present diagrams fail the contract for every completion status. Do not invent a
+diagram to pass validation. Missing persistent storage alone does not justify
+omitting the data-flow diagram: show applicable inputs, processing, outputs and in-memory state.
 
 ## Output contract
 

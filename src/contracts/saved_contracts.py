@@ -54,12 +54,18 @@ CITATION_WARNING = obj(evidence_id=string(), source_id=string(), path=string(),
 CITATION_WARNING['properties'].update(original_start_line={'type': 'integer'},
                                       original_end_line={'type': 'integer'}, branch=string())
 DOCUMENT_LINKS = obj(registered=INTEGER, matched=INTEGER, scope=string('REGISTERED_CLAIMS_ONLY'))
+DIAGRAM_CHECKS = obj(required_sections=dict(array(string('components', 'data_and_state')),
+    enum=[['components', 'data_and_state']]),
+    present_sections=array(string('components', 'data_and_state')),
+    missing_sections=array(string('components', 'data_and_state')),
+    complete={'type': 'boolean'}, scope=string('STRUCTURAL_ONLY'))
 BASE_CHECKS = dict(execution=string('COMPLETED'), contract=string('VALID'), source=string('MATCHED_AT_BOUNDARIES',
     'NOT_INSPECTED_IN_COMPARISON'), evidence=array(RESOLUTION), policy_satisfied={'type': 'boolean'},
     semantic_quality=string('NOT_MEASURED'), completion_self_assessment={
         'type': ['string', 'null'], 'enum': ['COMPLETE', 'PARTIAL', 'BLOCKED', None]}, meaning=string())
 CHECKS = {
     'study': obj(**BASE_CHECKS, evidence_counts=mapping(INTEGER), document_links=DOCUMENT_LINKS,
+        diagrams=DIAGRAM_CHECKS,
         coverage=obj(expected_ids=STRINGS, cited_ids=STRINGS, not_cited_ids=STRINGS, unverified_ids=STRINGS,
             metadata_verified_empty_paths=STRINGS, reported_by=string('ORCHESTRATOR'),
             completeness_measured={'type': 'boolean'})),

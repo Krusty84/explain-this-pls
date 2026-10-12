@@ -11,8 +11,14 @@ from src.reports.presentation import render_architecture
 def assert_architecture(test, directory, study, invocation, language):
     published = (directory / 'ARCHITECTURE.md').read_bytes()
     canonical = study['report_markdown'].encode('utf-8')
-    validate_published_architecture(published.decode('utf-8'), language)
-    test.assertEqual(published, render_architecture(study, language).encode('utf-8'))
+    validate_published_architecture(published.decode('utf-8'), language, canonical=study)
+    rendered = render_architecture(study, language)
+    test.assertEqual(published, rendered.encode('utf-8'))
+    test.assertEqual(rendered, render_architecture(study, language))
+    if study['completion_status'] == 'COMPLETE':
+        test.assertTrue(study['program_checks']['diagrams']['complete'])
+        test.assertEqual(study['program_checks']['diagrams']['present_sections'],
+                         ['components', 'data_and_state'])
     test.assertEqual((directory / 'study.original.md').read_bytes(), canonical)
     test.assertEqual(study['review_plan']['document_sha256'], hashlib.sha256(canonical).hexdigest())
     test.assertEqual(invocation['artifact_hashes']['ARCHITECTURE.md'],

@@ -7,7 +7,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from src.contracts.contracts import ContractError, SECTION_KEYS
+from src.contracts.contracts import ContractError
+from fixtures.ledger_response import sections
 from src.reports.final_report import render_final_report
 from src.analysis.ledger import prepare_result, review_context
 from src.reports.presentation import render_stage
@@ -29,9 +30,7 @@ class HashlessMarkdownTests(unittest.TestCase):
             limitations=[], evidence=evidence,
             claims=[dict(id='C-001', statement='The source computes SHA-256.', scope='Static source.',
                          epistemic_kind='FACT', evidence_ids=['study:E-001'], uncertainty='')],
-            report_sections=[dict(key=key, title=key, blocks=[dict(
-                markdown=self.narrative if i == 0 else 'No additional fixture details.',
-                claim_ids=['C-001'] if i == 0 else [])]) for i, key in enumerate(SECTION_KEYS)]),
+            report_sections=sections(self.narrative)),
             self.context)
         context = review_context(self.study, self.context)
         self.review = prepare_result('review', dict(task='architecture_review',

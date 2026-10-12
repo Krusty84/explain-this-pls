@@ -64,7 +64,7 @@ def obj(**properties: dict) -> dict:
 # additionalProperties. Local semantic checks enforce nonblank strings, bounds
 # and graph constraints regardless of a backend's JSON Schema dialect.
 CONTRACT_ID = 'evidence-ledger'
-ARTIFACT_FORMAT = 'evidence-ledger-inventory-scope-v2-artifacts'
+ARTIFACT_FORMAT = 'evidence-ledger-required-diagrams-v3-artifacts'
 STRINGS = array(string())
 STATUS = string('COMPLETE', 'PARTIAL', 'BLOCKED')
 BASE = dict(completion_status=STATUS, report_markdown=string(), limitations=STRINGS)
@@ -455,12 +455,14 @@ def validate_result(stage, value, context, mode='git'):
         evidence_ids = {stage + ':' + e['id'] for e in value['evidence']}
         unique_ids(value['claims'], r'C-[0-9]{3,}', '$.claims')
     if stage == 'study':
-        from src.reports.document_rendering import validate_sections
+        from src.reports.document_rendering import validate_sections, inspect_required_diagrams
         validate_sections(value['report_sections'], value['claims'])
         for i, claim in enumerate(value['claims']):
             references(claim['evidence_ids'], evidence_ids, f'$.claims[{i}].evidence_ids', namespaces={'study'})
             if claim['epistemic_kind'] != 'FACT' and not claim['uncertainty'].strip():
                 raise ContractError('Hypothesis/unknown requires a concrete missing check or limitation')
+        inspect_required_diagrams(value['report_sections'], value['claims'],
+                                  completion_status=value['completion_status'])
         if context.get('previous_revision'):
             from src.analysis.revisions import registry_diff
             registry_diff(context['previous_revision']['study'], value)

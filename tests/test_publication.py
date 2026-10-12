@@ -26,7 +26,7 @@ class PublicationTests(FolderFixture):
         directory = self.base / 'existing-run'
         directory.mkdir()
         supported = {'contract_id': 'evidence-ledger',
-                     'artifact_format': 'evidence-ledger-inventory-scope-v2-artifacts', 'accepted': True}
+                     'artifact_format': 'evidence-ledger-required-diagrams-v3-artifacts', 'accepted': True}
         for name in ('claim.registry.json', 'review.plan.json', 'study.json', 'ARCHITECTURE.md'):
             (directory / name).write_bytes(b'existing artifact bytes')
         for field in ('contract_id', 'artifact_format'):
@@ -253,7 +253,7 @@ class PublicationTests(FolderFixture):
         import hashlib
         architecture = (runner.run_dir / 'ARCHITECTURE.md').read_bytes()
         self.assertEqual(architecture, render_architecture(saved, runner.cfg['output_language']).encode())
-        validate_published_architecture(architecture.decode(), runner.cfg['output_language'])
+        validate_published_architecture(architecture.decode(), runner.cfg['output_language'], canonical=saved)
         self.assertEqual((runner.run_dir / 'study.original.md').read_bytes(), expected.encode())
         self.assertEqual(saved['report_markdown'], expected)
         for block in saved['block_map']:
@@ -269,7 +269,7 @@ class PublicationTests(FolderFixture):
             self.assertNotIn(field, saved)
             self.assertNotIn(field, saved['review_plan'])
         self.assertEqual(meta['contract_id'], 'evidence-ledger')
-        self.assertEqual(meta['artifact_format'], 'evidence-ledger-inventory-scope-v2-artifacts')
+        self.assertEqual(meta['artifact_format'], 'evidence-ledger-required-diagrams-v3-artifacts')
         self.assertEqual(meta['context_format'], 'compact-context')
         self.assertTrue(meta['publication_complete'])
 
@@ -282,6 +282,39 @@ class PublicationTests(FolderFixture):
         invoked.assert_called_once()
         self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
         self.assertFalse((runner.run_dir / 'study.json').exists())
+
+    def test_lost_moved_or_changed_diagram_is_rejected_before_publication(self):
+        for defect in ('lost', 'moved', 'changed', 'closing_fence'):
+            with self.subTest(defect=defect):
+                runner = Runner(self.config(), self.base / ('diagram-' + defect))
+                context = {'source_directory': str(self.source),
+                           'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
+                data = response(context)
+
+                def render(study, language):
+                    published = render_architecture(study, language)
+                    diagram = next(block['locator']['quote'] for block in study['block_map']
+                                   if block['section_key'] == 'components' and '```plantuml' in block['locator']['quote'])
+                    if defect == 'changed':
+                        return published.replace(diagram, diagram.replace('@enduml', "' Changed\n@enduml"), 1)
+                    if defect == 'closing_fence':
+                        return published.replace(diagram, diagram.replace('@enduml\n```', '@enduml\n````'), 1)
+                    published = published.replace(diagram, '', 1)
+                    if defect == 'moved':
+                        published += '\n' + diagram + '\n'
+                    return published
+
+                with patch('explain.process', side_effect=self.process_for(data, context)) as invoked, \
+                        patch('explain.render_architecture', side_effect=render):
+                    with self.assertRaises(ContractError) as caught:
+                        runner.invoke('study', context, runner.run_dir / 'study.logs')
+                invoked.assert_called_once()
+                self.assertIn(caught.exception.details['code'],
+                              ('REQUIRED_DIAGRAM_MISSING', 'DIAGRAM_PUBLICATION_MISMATCH'))
+                if defect == 'closing_fence':
+                    self.assertEqual(caught.exception.details['code'], 'DIAGRAM_PUBLICATION_MISMATCH')
+                self.assertFalse((runner.run_dir / 'ARCHITECTURE.md').exists())
+                self.assertFalse((runner.run_dir / 'study.json').exists())
 
     def test_forged_review_target_is_not_recovered_even_with_schema_error(self):
         from src.reports.final_report import recoverable_material

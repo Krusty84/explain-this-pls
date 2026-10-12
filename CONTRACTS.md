@@ -57,7 +57,7 @@ Unsupported results are rejected without modifying their artifacts.
 | `completion_status`, narrative, claims, evidence pointers, findings, assessments, relevance observations, omission-search activity | Agent; completion is a self-assessment |
 | Transport completion/error/timeout/interruption and cleanup | Backend adapter and runner |
 | Expected source identities, review target, contract/artifact identifiers in invocation metadata and manifest | Orchestrator |
-| `program_checks` (including coverage checks), `verdict`, frozen plan, hashes, file distribution, reverse links, tables | Python, after local wire validation |
+| `program_checks` (including coverage and diagram checks), `verdict`, frozen plan, hashes, file distribution, reverse links, tables | Python, after local wire validation |
 | `model_requested` | Configuration |
 | `model_actual`, `model_actual_source` | Backend metadata, or null with a reason; never inferred from executable or model prose |
 | `review_quality` / `semantic_quality: NOT_MEASURED` | No substantive evaluation of this execution profile has been performed |
@@ -77,7 +77,7 @@ Transport/stdout and stderr remain private attempt artifacts. A saved `study.jso
 fields and `program_checks`. Study narrative is authored as sections/blocks;
 the program computes the Markdown, block map and every document locator.
 Contract/artifact identifiers (`contract_id:
-"evidence-ledger"`, `artifact_format: "evidence-ledger-inventory-scope-v2-artifacts"`) belong only
+"evidence-ledger"`, `artifact_format: "evidence-ledger-required-diagrams-v3-artifacts"`) belong only
 to invocation metadata, the manifest and the immutable coverage plan, not agent
 responses or the root of saved results. The coverage plan records both identifiers
 and `origin: "SOURCE_INVENTORY"`; it is also embedded in saved review plans.
@@ -89,7 +89,7 @@ as an agent response. Stored `program_checks` are execution records, not signatu
 against later manual tampering with report files.
 
 `program_checks` separates `execution`, `contract`, `source`, `evidence`,
-`completion_self_assessment`, `document_links`, `registry_coverage`,
+`completion_self_assessment`, `document_links`, `diagrams`, `registry_coverage`,
 `omission_coverage`, `finding_ids_by_claim` and `policy_satisfied` as applicable.
 Failed attempts retain invocation/validation diagnostics; they do not get a
 successful result. Source guards compare state at prescribed boundaries; they
@@ -204,6 +204,45 @@ material through existing recovery, but cannot publish it as a valid
 `ARCHITECTURE.md`. Formatting errors never trigger another architectural Study.
 Presentation changes do not require a new Review; canonical document changes
 always require a new review identity and cannot reuse an earlier Review.
+
+### Required PlantUML diagrams
+
+COMPLETE Study and Revision require at least one valid PlantUML diagram in each
+of `components` and `data_and_state`. Other sections cannot satisfy these
+requirements. Extra diagrams are allowed. Each required diagram occupies one
+`report_sections[].blocks[]` record containing only a standalone, closed
+CommonMark fence. Backticks and tildes are accepted. The info string is exactly
+`plantuml`, case-insensitive, with no parameters. Lists, blockquotes, inline code,
+ordinary text and other fence languages do not supply a required diagram.
+
+Python uses the existing Markdown parser, not a fence substring search. It checks
+exactly one `@startuml` before exactly one `@enduml`, nonempty content other than
+comments, and nonempty links to registered claims. External directives from the
+`!include` family and `!import` are forbidden. Comments and quoted literal
+examples are not executable directives. This is basic structure checking, not a
+PlantUML parser, compiler or architecture assessment.
+
+Missing diagrams reject COMPLETE. PARTIAL/BLOCKED may omit them with nonempty
+`limitations`; the author must explain the gap and information to verify in its
+section and limitations. Python records the missing sections without keyword
+tests of the explanation. A malformed present required diagram fails the
+contract for every completion status. Python never fixes or generates diagrams.
+
+The orchestrator alone writes saved `program_checks.diagrams`:
+`required_sections`, `present_sections`, `missing_sections`, `complete` and
+`scope: "STRUCTURAL_ONLY"`. Required sections are always `components` and
+`data_and_state`; `complete` is true only when both contain valid diagrams.
+COMPLETE cannot satisfy processing policy without this check. The model Study
+wire schema is unchanged.
+
+Materialized validation reads each block through its validated `block_map`
+locator and applies the same checks. Publication validates the ten sections and
+checks diagram content and placement against the canonical document before
+writing `ARCHITECTURE.md`. These checks make no model calls or external requests,
+and do not change canonical Markdown, locators, provenance or Review identity.
+Review still assesses component truth, dependencies, data-flow directions,
+evidence links, text consistency and the reasons for incomplete diagrams. A
+format rejection is not a substantive architectural conclusion.
 
 Each file is replaced atomically with private permissions. Multiple files are
 **not** one atomic transaction. A stage is published only after all stage writes
@@ -674,7 +713,17 @@ closed `details.code` values and schema-owned JSON paths distinguish:
 | `INVALID_MARKDOWN_STRUCTURE` | Authored block has invalid Markdown structure, including an unclosed fence |
 | `REPORT_SECTION_COUNT_MISMATCH` | Published architecture does not have exactly ten H2 headings |
 | `REPORT_HEADING_ORDER_MISMATCH` | Published architecture heading titles or order differ from the fixed dictionary |
+| `REQUIRED_DIAGRAM_MISSING` | Required section has no valid diagram in a COMPLETE Study |
+| `INVALID_PLANTUML_FENCE` | PlantUML fence is invalid or not a standalone block |
+| `INVALID_PLANTUML_BOUNDARY` | PlantUML boundary markers are missing, repeated or reversed |
+| `EMPTY_PLANTUML_DIAGRAM` | No diagram content remains after blank lines and comments |
+| `FORBIDDEN_PLANTUML_DIRECTIVE` | Diagram uses an external include/import directive |
+| `UNLINKED_REQUIRED_DIAGRAM` | Required diagram has no valid registered claim links |
+| `DIAGRAM_CHECKS_MISMATCH` | Saved diagram checks differ from the canonical document |
+| `DIAGRAM_PUBLICATION_MISMATCH` | Published diagrams differ from the checked canonical content or location |
 
+Diagram diagnostics include section_key, diagram_type and the trusted path;
+block errors also include block_index. They never copy PlantUML content.
 Diagnostics never echo arbitrary response values, source content or invalid IDs.
 Paths contain trusted schema keys and numeric indices. Journal IDs are validated
 local IDs and JSON encoded. Public retention messages state the contract reason,
@@ -946,5 +995,5 @@ run within each revision; a new study can never inherit an older review.
 
 The removed Catalog stage is not accepted in stage_agents or prompts. Configuration
 errors identify the key to remove. The artifact format changed to
-`evidence-ledger-inventory-scope-v2-artifacts`; earlier run formats and coverage plans
+`evidence-ledger-required-diagrams-v3-artifacts`; earlier run formats and coverage plans
 are rejected without migration or modification of existing reports.

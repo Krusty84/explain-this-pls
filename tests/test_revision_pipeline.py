@@ -33,9 +33,10 @@ def initial_finding(stage, context, data, severity='HIGH'):
 
 
 class RevisionPipelineTests(FolderFixture):
-    def run_case(self, change=None, *, rounds=1, policy='strict', continue_on_error=True, verify_immutable=True):
+    def run_case(self, change=None, *, rounds=1, policy='strict', continue_on_error=True, verify_immutable=True,
+                 language='English'):
         self.value.update(result_policy=policy, continue_on_error=continue_on_error,
-                          execution={'max_revision_rounds': rounds}, output_language='English')
+                          execution={'max_revision_rounds': rounds}, output_language=language)
         config = self.config()
         run_dir = self.base / ('revision-run-' + str(len(list(self.base.glob('revision-run-*')))))
         runner = Runner(config, run_dir)
@@ -100,9 +101,9 @@ class RevisionPipelineTests(FolderFixture):
                 self.assert_selected_aliases('001')
 
     def test_material_findings_trigger_one_full_revision_and_frozen_coverage(self):
-        for severity in ('HIGH', 'MEDIUM'):
-            with self.subTest(severity=severity):
-                manifest, code = self.run_case(lambda s, c, d: initial_finding(s, c, d, severity))
+        for severity, language in (('HIGH', 'English'), ('MEDIUM', 'Russian')):
+            with self.subTest(severity=severity, language=language):
+                manifest, code = self.run_case(lambda s, c, d: initial_finding(s, c, d, severity), language=language)
                 self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
                 self.assertEqual(self.stages(), ['study', 'review', 'revise', 'review'])
                 self.assertEqual(len(manifest['revisions']), 2)
@@ -112,7 +113,7 @@ class RevisionPipelineTests(FolderFixture):
                     self.assertEqual(revision['study']['review_plan']['coverage_plan'], coverage)
                     self.assertEqual(revision['review']['review_plan']['coverage_plan'], coverage)
                     assert_architecture(self, self.run_dir / revision['directory'], revision['study'],
-                                        revision['study_invocation'], 'English')
+                                        revision['study_invocation'], language)
                     self.assertEqual(revision['review']['target']['document_sha256'],
                                      revision['study']['review_plan']['document_sha256'])
                 repeated = manifest['revisions'][1]['review']
@@ -247,6 +248,30 @@ class RevisionPipelineTests(FolderFixture):
         self.assertIsNotNone(manifest['revisions'][1]['study_material'])
         self.assertFalse(manifest['revision_history'][1]['review_complete'])
 
+    def test_missing_revised_diagram_keeps_the_frozen_prior_pair(self):
+        for policy in ('strict', 'compromise'):
+            with self.subTest(policy=policy):
+                def change(stage, context, data):
+                    initial_finding(stage, context, data)
+                    if stage == 'study' and context['revision_id'] == '002':
+                        section = next(section for section in data['report_sections'] if section['key'] == 'components')
+                        section['blocks'] = [dict(markdown='The component diagram is unavailable.', claim_ids=[])]
+                    return data
+
+                manifest, code = self.run_case(change, policy=policy)
+                self.assertNotEqual(code, 0)
+                self.assertFalse(manifest['accepted'])
+                self.assertEqual(self.stages(), ['study', 'review', 'revise'])
+                self.assert_selected_aliases('001')
+                revised = manifest['revisions'][1]
+                self.assertIsNone(revised['study'])
+                self.assertIsNone(revised['review'])
+                self.assertFalse((self.run_dir / revised['directory'] / 'ARCHITECTURE.md').exists())
+                self.assertEqual(revised['study_invocation']['error']['details']['code'], 'REQUIRED_DIAGRAM_MISSING')
+                if policy == 'compromise':
+                    self.assertTrue(revised['study_invocation']['material_retained'])
+                    self.assertFalse(revised['study_material']['strict_valid'])
+
     def test_latest_complete_pair_selected_even_when_material_findings_remain(self):
         for failure in ('unresolved', 'not_checked', 'missing', 'new_finding'):
             def change(stage, context, data):
@@ -292,6 +317,10 @@ class RevisionPipelineTests(FolderFixture):
                     else:
                         data['claims'] = [retained]
                         data['report_sections'][0]['blocks'] = [block]
+                        for section in data['report_sections'][1:]:
+                            for authored_block in section['blocks']:
+                                if authored_block['claim_ids']:
+                                    authored_block['claim_ids'] = ['C-002']
                 initial_finding(stage, context, data)
                 if not resolved and stage == 'review' and context['revision_id'] == '002':
                     data['prior_findings'][0].update(status='UNRESOLVED',

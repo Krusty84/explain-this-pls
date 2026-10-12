@@ -101,6 +101,10 @@ class RevisionTests(unittest.TestCase):
         def replace(study):
             study['claims'][0].update(id='C-002', statement='Replacement description.')
             study['report_sections'][0]['blocks'][0].update(markdown='Replacement description.\n', claim_ids=['C-002'])
+            for section in study['report_sections']:
+                for block in section['blocks']:
+                    block['claim_ids'] = ['C-002' if identifier == 'C-001' else identifier
+                                          for identifier in block['claim_ids']]
         current = self.pair(context, change_study=replace)
         diff = current['study']['registry_diff']
         self.assertEqual((diff['removed_ids'], diff['added_ids']), (['C-001'], ['C-002']))

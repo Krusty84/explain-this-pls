@@ -74,6 +74,13 @@
           "claim_ids": [
             "C-001"
           ]
+        },
+        {
+          "markdown": "```plantuml\n@startuml\ncomponent \"Entry point\" as Entry\ncomponent Worker\nEntry --> Worker : starts\n@enduml\n```",
+          "claim_ids": [
+            "C-001",
+            "C-002"
+          ]
         }
       ]
     },
@@ -96,6 +103,12 @@
         {
           "markdown": "Not applicable in this synthetic fixture.",
           "claim_ids": []
+        },
+        {
+          "markdown": "```plantuml\n@startuml\nqueue Jobs\ncomponent Worker\ndatabase State\nJobs --> Worker : jobs\nWorker --> State : updates\n@enduml\n```",
+          "claim_ids": [
+            "C-002"
+          ]
         }
       ]
     },

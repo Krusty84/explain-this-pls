@@ -110,6 +110,8 @@ def citation_warnings(stage, data, resolutions, corrections):
 
 def continuation_allowed(checks):
     """Only recorded citation exceptions can relax the strict processing gate."""
+    if 'diagrams' in checks and not checks['diagrams'].get('complete'):
+        return False
     if checks.get('policy_satisfied'):
         return True
     unresolved = {w['evidence_id'] for w in checks.get('citation_warnings', []) if w['action'] == 'UNRESOLVED'}
@@ -211,6 +213,8 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
     citations_only = (context.get('result_policy') == 'compromise'
                       and all(e['status'] in ('RESOLVED', 'QUOTE_MISMATCH') for e in checks['evidence']))
     if stage == 'study':
+        from src.reports.document_rendering import inspect_materialized_diagrams
+        checks['diagrams'] = inspect_materialized_diagrams(data)
         result['revision_id'] = context.get('revision_id', '001')
         result['registry_diff'] = None
         if context.get('previous_revision'):
@@ -222,6 +226,7 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
         checks['document_links'] = {'registered': len(data['claims']), 'matched': len(data['claims']),
                                    'scope': 'REGISTERED_CLAIMS_ONLY'}
         study_conditions = bool(data['claims'] and data['completion_status'] == 'COMPLETE'
+            and checks['diagrams']['complete']
             and all(c['evidence_ids'] or c['epistemic_kind'] != 'FACT' for c in data['claims']))
         checks['policy_satisfied'] = bool(study_conditions and evidence_ok)
         checks['continuation_allowed'] = checks['policy_satisfied'] or bool(citations_only and study_conditions)
