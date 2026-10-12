@@ -175,7 +175,7 @@ def strict_json(text: str) -> Any:
             raise
         raise response_error('INVALID_JSON', 'result', 'Invalid JSON encoding or numeric/nesting limit.') from exc
 
-def jsonc(text: str) -> Any:
+def jsonc_text(text: str) -> str:
     """Replace comments/trailing commas with spaces, preserving error positions."""
     chars = list(text)
     tokens: list[tuple[str, int]] = []
@@ -220,7 +220,11 @@ def jsonc(text: str) -> Any:
             # Do not accidentally accept an empty array/object containing a comma.
             if tokens[index - 1][0] not in ('[', '{', ',', ':'):
                 chars[pos] = ' '
-    return strict_json(''.join(chars))
+    return ''.join(chars)
+
+
+def jsonc(text: str) -> Any:
+    return strict_json(jsonc_text(text))
 
 def schema_diagnostics(value: Any, schema: dict, where: str = '$', *, private=False, limit=100) -> dict:
     """Collect every defect count, but bound the detail list. Paths use trusted schema keys.

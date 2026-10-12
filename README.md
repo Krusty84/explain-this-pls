@@ -306,6 +306,21 @@ destination. **Check setup** checks the local prerequisites; **Run** starts the
 analysis. Selecting a file alone does not call a model. Invalid configs display
 their validation error and cannot start.
 
+For a Codex configuration, **Models** opens the model catalog. Choose `agent.model`
+or an active Codex stage's `stage_agents.<stage>.model`, then select a model.
+Hidden models are included. **Check model** checks that Codex is signed in with
+ChatGPT and sends a short, ephemeral, read-only request using the selected model.
+This request uses your Codex allowance. **Apply** becomes available only after a
+successful response. Other errors leave access unverified; the specific
+ChatGPT-account unsupported-model error marks the model unavailable.
+
+**Apply** updates only the selected model field and preserves JSONC comments,
+formatting and other settings. **Refresh** reloads the config and catalog and
+clears access checks; changing the target field also clears them. If an external
+editor changes the file, refresh before applying. **Cancel**, Escape or Ctrl+C
+closes the dialog and stops a pending catalog request or model check.
+Catalog requests time out after 30 seconds; model checks after 60 seconds.
+
 The **Steps** table retains completed stages and revisions while showing the
 active step, elapsed time, attempts, tokens and agent-estimated cost. Select a row
 for agent/model details, diagnostics and complete report paths. Scroll horizontally
@@ -333,6 +348,25 @@ python3 explain.py --config config.jsonc --check
 
 This checks your local setup without calling a model or switching branches.
 It does not test your agent login or model availability.
+
+To list Codex models without an audit or access probes:
+
+```sh
+python3 explain.py --config config.jsonc --models --output text
+python3 explain.py --config config.jsonc --models --output json
+```
+
+The output groups catalogs by the executable and active stages. It includes each
+model's `slug`, `display_name`, `visibility` and `supported_in_api`. These fields
+do not confirm access through ChatGPT; `supported_in_api` describes API support.
+`--output auto` uses text in a terminal and JSON otherwise. `--models` cannot be
+combined with `--check` or `--tui` and creates no audit reports. To check a model
+yourself, use your configured Codex executable:
+
+```sh
+codex exec --ephemeral --sandbox read-only --skip-git-repo-check \
+  --model MODEL 'Ответь только OK. Не используй инструменты.'
+```
 
 Then start the analysis:
 

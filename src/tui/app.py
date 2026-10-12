@@ -23,6 +23,7 @@ from explain import ROOT, load_config
 from src.contracts.contracts import ContractError
 from src.runtime.reporting import Reporter, diagnostic, duration, metric_value, safe_text
 from src.tui.settings import config_directory, config_files, read_settings, save_settings
+from src.tui.models import ModelChooser
 from src.tui.state import RunState
 from src.tui.worker import AuditProcess
 
@@ -205,6 +206,7 @@ class ExplainApp(App[int]):
             with Horizontal(classes='actions'):
                 yield Button('Run', id='run', variant='primary', disabled=True)
                 yield Button('Check setup', id='check', disabled=True)
+                yield Button('Models', id='models', disabled=True)
                 yield Button('Refresh', id='refresh')
                 yield Button('Change folder', id='change-folder')
                 yield Button('Quit', id='quit-picker')
@@ -293,7 +295,7 @@ class ExplainApp(App[int]):
         table.focus()
 
     def enable_start(self, enabled):
-        for name in ('run', 'check'):
+        for name in ('run', 'check', 'models'):
             self.query_one('#' + name, Button).disabled = not enabled
 
     def select_config(self, key):
@@ -301,6 +303,9 @@ class ExplainApp(App[int]):
             return
         self.selected, config, error = self.configs[key]
         self.enable_start(config is not None)
+        self.query_one('#models', Button).disabled = config is None or not (
+            config['agent'].get('backend') == 'codex' or
+            any(agent['backend'] == 'codex' for agent in config['_agents'].values()))
         s = self.presenter.display
         lines = ['File: ' + s(self.selected)]
         if config is None:
@@ -328,6 +333,8 @@ class ExplainApp(App[int]):
             self.start_audit(check_only=name == 'check' or self.args.check)
         elif name == 'refresh':
             self.refresh_configs()
+        elif name == 'models':
+            self.choose_model()
         elif name == 'change-folder':
             self.choose_folder()
         elif name == 'back' and not self.running:
@@ -338,6 +345,21 @@ class ExplainApp(App[int]):
             self.action_cancel()
         elif name in ('quit-picker', 'quit-run'):
             self.action_quit()
+
+    def choose_model(self):
+        if self.running or self.selected is None:
+            return
+        try:
+            original = self.selected.read_bytes()
+            screen = ModelChooser(self.selected, load_config(self.selected), original)
+        except (OSError, ValueError, RuntimeError, ContractError) as exc:
+            self.query_one('#config-preview', Static).update(self.literal(exc))
+            return
+        self.push_screen(screen, self.model_chosen)
+
+    def model_chosen(self, changed):
+        if changed:
+            self.refresh_configs()
 
     def start_audit(self, *, check_only=False):
         if self.running or self.selected is None:
@@ -496,6 +518,9 @@ class ExplainApp(App[int]):
         self.call_after_refresh(self.query_one('#summary', DataTable).focus)
 
     def action_cancel(self):
+        if isinstance(self.screen, ModelChooser):
+            self.screen.action_close()
+            return
         if not self.running:
             self.exit(self.last_exit_code)
             return

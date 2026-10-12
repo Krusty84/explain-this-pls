@@ -11,6 +11,7 @@ The parent publishes reports. The agent receives stdin and returns structured JS
 """
 from __future__ import annotations
 import argparse
+import asyncio
 import contextlib
 import datetime as dt
 from dataclasses import asdict
@@ -37,6 +38,7 @@ from src.runtime.execution import Budget, execution_settings
 from src.runtime.metrics import RunMetrics, measurement, usage, FIELDS
 from src.runtime.tool_observer import ToolObserver
 from src.backends import codex
+from src.backends import codex_models
 from src.backends import opencode_cli
 from src.backends import xxx
 from src.backends.json_response import json_object_response
@@ -1054,6 +1056,29 @@ def repository_lock(repo: Path):
     finally:
         os.close(fd)
 
+def resolve_agent(agent: dict, path: Path) -> dict:
+    agent = dict(agent)
+    if set(agent) - {'backend', 'executable', 'model', 'expected_version'}:
+        raise AuditError('Unknown agent configuration field.')
+    backend = agent.get('backend')
+    if backend not in BACKENDS:
+        raise AuditError(f'Unsupported backend: {backend}')
+    executable_name = agent.get('executable') or BACKENDS[backend]
+    if not isinstance(executable_name, str):
+        raise AuditError('agent.executable must be a string.')
+    if '/' in executable_name:
+        executable_path = Path(executable_name).expanduser()
+        executable_name = str((path.resolve().parent / executable_path).resolve())
+    executable = shutil.which(executable_name)
+    if not executable:
+        raise AuditError(f'{backend} executable was not found. Install it separately.')
+    agent['executable'] = str(Path(executable).resolve())
+    for key in ('model', 'expected_version'):
+        if agent.get(key) is not None and not isinstance(agent[key], str):
+            raise AuditError(f'agent.{key} must be a string or null.')
+    return agent
+
+
 def load_config(path: Path) -> dict:
     path = path.resolve()
     value = (jsonc if path.suffix.lower() == '.jsonc' else strict_json)(path.read_text())
@@ -1145,25 +1170,7 @@ def load_config(path: Path) -> dict:
     for stage in ('study', *(s for s in stages if s != 'study')):
         agent = dict(value['agent'])
         agent.update(value['stage_agents'].get(stage, {}))
-        if set(agent) - {'backend', 'executable', 'model', 'expected_version'}:
-            raise AuditError('Unknown agent configuration field.')
-        backend = agent.get('backend')
-        if backend not in BACKENDS:
-            raise AuditError(f'Unsupported backend: {backend}')
-        executable_name = agent.get('executable') or BACKENDS[backend]
-        if not isinstance(executable_name, str):
-            raise AuditError('agent.executable must be a string.')
-        if '/' in executable_name:
-            executable_path = Path(executable_name).expanduser()
-            executable_name = str((path.parent / executable_path).resolve())
-        executable = shutil.which(executable_name)
-        if not executable:
-            raise AuditError(f'{backend} executable was not found. Install it separately.')
-        agent['executable'] = str(Path(executable).resolve())
-        for key in ('model', 'expected_version'):
-            if agent.get(key) is not None and not isinstance(agent[key], str):
-                raise AuditError(f'agent.{key} must be a string or null.')
-        value['_agents'][stage] = agent
+        value['_agents'][stage] = resolve_agent(agent, path)
     value['_prompt_paths'] = {}
     if set(value['prompts']) - (set(STAGES) | {'revise'}):
         raise AuditError('Unknown prompt stage.')
@@ -2424,6 +2431,56 @@ class Runner:
         persist()
         return manifest, code
 
+def run_models(args, reporter) -> int:
+    """List catalogs without entering the audit lifecycle or testing inference."""
+    old_handler = signal.getsignal(signal.SIGTERM)
+
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt(f'Received signal {signum}')
+
+    try:
+        signal.signal(signal.SIGTERM, interrupted)
+        config = load_config(args.config)
+        groups = {}
+        for stage, agent in config['_agents'].items():
+            if agent['backend'] == 'codex':
+                group = groups.setdefault(agent['executable'], {'executable': agent['executable'], 'stages': []})
+                group['stages'].append(stage)
+        if not groups:
+            raise AuditError('The configuration has no active Codex agents.')
+
+        async def fetch():
+            return [dict(group, models=await codex_models.catalog(group['executable']))
+                    for group in groups.values()]
+
+        catalogs = asyncio.run(fetch())
+        if reporter.mode == 'json':
+            reporter.stdout.write(json.dumps({'catalogs': catalogs}, ensure_ascii=False, indent=2) + '\n')
+        else:
+            lines = ['Codex model catalogs. Account access has not been checked.']
+            for group in catalogs:
+                lines += ['', reporter.display(group['executable']) + ' | Stages: ' + ', '.join(group['stages'])]
+                rows = [['Model', 'Name', 'Visibility', 'Supported in API']]
+                rows += [[reporter.display(model[key]) for key in ('slug', 'display_name', 'visibility')]
+                         + ['unknown' if model['supported_in_api'] is None else str(model['supported_in_api']).lower()]
+                         for model in group['models']]
+                widths = [max(len(row[index]) for row in rows) for index in range(4)]
+                lines += ['  '.join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip() for row in rows]
+                if not group['models']:
+                    lines.append('No models returned.')
+            reporter.stdout.write('\n'.join(lines) + '\n')
+        return 0
+    except KeyboardInterrupt:
+        reporter.stderr.write('Model catalog request interrupted.\n')
+        return 130
+    except (OSError, ValueError, RuntimeError, ContractError) as exc:
+        reporter.stderr.write('Cannot list Codex models: ' + reporter.display(exc) + '\n')
+        return 1
+    finally:
+        signal.signal(signal.SIGTERM, old_handler)
+        reporter.close()
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, epilog=
         'In command-line mode, stdout contains one result. --help and argument syntax errors '
@@ -2434,6 +2491,7 @@ def main(argv=None) -> int:
     parser.add_argument('--config', type=Path, help='Path to a JSON or JSONC configuration; required outside the TUI.')
     parser.add_argument('--tui', action='store_true', help='Open the interactive config picker and run dashboard (also the default without arguments).')
     parser.add_argument('--check', action='store_true', help='Check configuration, source state, and CLI capabilities; no branch switch or model calls.')
+    parser.add_argument('--models', action='store_true', help='List Codex model catalogs for the configured active agents; no access probes or audit.')
     parser.add_argument('--trust-repository', action='store_true', help='Trust only the configured Git checkout and verified submodules despite an ownership mismatch (Git >= 2.34.1).')
     parser.add_argument('--output', choices=('auto', 'text', 'json'), default='auto',
                         help='Result format on stdout: text is human-readable; auto selects text for a TTY, JSON otherwise (default: auto). Diagnostics use stderr.')
@@ -2441,6 +2499,8 @@ def main(argv=None) -> int:
     parser.add_argument('--no-progress', action='store_true', help='Disable the spinner and periodic waiting messages; keep stage boundaries, warnings and errors.')
     argv = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(argv)
+    if args.models and (args.check or args.tui):
+        parser.error('--models cannot be combined with --check or --tui.')
     if not argv or args.tui:
         if args.output != 'auto':
             parser.error('--tui cannot be combined with --output text or --output json.')
@@ -2456,6 +2516,8 @@ def main(argv=None) -> int:
     if args.config is None:
         parser.error('--config is required unless using --tui.')
     reporter = Reporter(mode=output_mode(args.output, sys.stdout), verbose=args.verbose, progress=not args.no_progress)
+    if args.models:
+        return run_models(args, reporter)
     return run_audit(args, reporter)
 
 
