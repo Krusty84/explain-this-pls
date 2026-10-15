@@ -127,7 +127,7 @@ class ArchitectureFolderPipelineTests(FolderFixture):
                             if token.type == 'heading_open']
                 notice = ('Обязательная диаграмма отсутствует' if language == 'Russian' else
                           'Required diagram missing')
-                self.assertEqual(sum(tag == 'h2' for tag, _ in headings), 10)
+                self.assertEqual(sum(tag == 'h2' for tag, _ in headings), 5)
                 self.assertEqual(sum(tag == 'h2' for tag, _ in headings[:headings.index(('h3', notice))]), 5)
                 self.assertNotIn(notice, study['report_markdown'])
 

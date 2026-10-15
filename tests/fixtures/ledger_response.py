@@ -6,8 +6,7 @@ import copy
 import json
 import os
 # Keep the child-process fixture self-contained; production checks enforce keys.
-SECTION_KEYS = ('scope', 'context', 'components', 'startup_and_flows', 'data_and_state',
-                'cross_cutting', 'constraints', 'change_navigation', 'unknowns', 'evidence_basis')
+SECTION_KEYS = ('scope', 'context', 'components', 'startup_and_flows', 'data_and_state')
 
 
 def sections(markdown='C-001: Has an entry point\n'):

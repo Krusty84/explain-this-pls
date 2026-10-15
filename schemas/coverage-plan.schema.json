@@ -10,7 +10,7 @@
     "artifact_format": {
       "type": "string",
       "enum": [
-        "evidence-ledger-required-diagrams-v3-artifacts"
+        "evidence-ledger-five-sections-v4-artifacts"
       ]
     },
     "origin": {

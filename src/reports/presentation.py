@@ -163,11 +163,6 @@ def render_architecture(data, language='English'):
     validate_materialized(data)
     missing_diagrams = inspect_materialized_diagrams(data)['missing_sections']
     blocks = data['block_map']
-    present = list(dict.fromkeys(block['section_key'] for block in blocks))
-    if len(present) != len(SECTION_KEYS):
-        raise contract_violation('REPORT_SECTION_COUNT_MISMATCH', '$.block_map')
-    if present != list(SECTION_KEYS):
-        raise contract_violation('REPORT_HEADING_ORDER_MISMATCH', '$.block_map')
     claims = {entry['id']: entry for entry in data['claims']}
     evidence = {'study:' + entry['id']: entry for entry in data['evidence']}
     resolutions = {entry['id']: entry for entry in data['program_checks']['evidence']}
@@ -190,8 +185,8 @@ def render_architecture(data, language='English'):
                            if russian(language) else
                            '### Required diagram missing\n\n'
                            'The study is incomplete. See this section and the limitations for the missing checks.\n\n'))
-        if key == 'evidence_basis':
-            chunks.append(render_evidence_index(data, language))
+        if key == 'scope':
+            chunks.append(render_evidence_index(data, language) + '\n')
     return ''.join(chunks)
 
 

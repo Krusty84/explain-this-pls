@@ -77,7 +77,7 @@ Transport/stdout and stderr remain private attempt artifacts. A saved `study.jso
 fields and `program_checks`. Study narrative is authored as sections/blocks;
 the program computes the Markdown, block map and every document locator.
 Contract/artifact identifiers (`contract_id:
-"evidence-ledger"`, `artifact_format: "evidence-ledger-required-diagrams-v3-artifacts"`) belong only
+"evidence-ledger"`, `artifact_format: "evidence-ledger-five-sections-v4-artifacts"`) belong only
 to invocation metadata, the manifest and the immutable coverage plan, not agent
 responses or the root of saved results. The coverage plan records both identifiers
 and `origin: "SOURCE_INVENTORY"`; it is also embedded in saved review plans.
@@ -142,7 +142,7 @@ Study and Revision share the same pure renderer. Its inputs are canonical
 and makes no model call. Identical inputs produce identical UTF-8 bytes without
 mutating the Study. One initial Study still runs per pinned source snapshot.
 
-The published document has exactly ten H2 headings, in the section-key order
+The published document has exactly five H2 headings, in the section-key order
 below. Python constants define their numbered titles for Russian and English,
 including supported aliases. Other languages without a fixed dictionary are
 configuration errors before any model call. Model `report_sections[].title`
@@ -156,11 +156,6 @@ published heading.
 | `components` | Компоненты системы | System components |
 | `startup_and_flows` | Запуск и выполнение | Startup and execution |
 | `data_and_state` | Данные и состояние | Data and state |
-| `cross_cutting` | Сквозные механизмы | Cross-cutting mechanisms |
-| `constraints` | Ограничения и особенности legacy | Constraints and legacy details |
-| `change_navigation` | Навигация для изменений | Change navigation |
-| `unknowns` | Неизвестные и непроверенные области | Unknown and unverified areas |
-| `evidence_basis` | Основания выводов и источники | Evidence basis and sources |
 
 For each `block_map` record, references follow only
 `claim_ids` → `claims[].evidence_ids` → `evidence` → source catalog.
@@ -173,7 +168,7 @@ HYPOTHESIS/UNKNOWN without evidence receive no fabricated source; unresolved
 support remains an explicit limitation. Missing definitions or required relations
 remain strict contract errors, not quote warnings.
 
-Every reference links to a stable internal evidence anchor. The tenth section
+Every reference links to a stable internal evidence anchor. The end of `scope`
 contains an H3 source index (`Реестр источников` in Russian), recording evidence
 ID, source ID, displayed relative file path, inclusive start/end lines and
 locator status. Submodule display paths include `sources[].root`; source identity
@@ -188,7 +183,7 @@ file/range locator resolved; an empty quote does not establish quote verificatio
 other resolution failures display their status without claiming verified support.
 Detailed citation-warning tables remain in `study.annotated.md` and
 `FINAL_REPORT.md`. Architecture warnings stay beside their blocks or under H3
-inside the tenth section; they never add an H2.
+inside the relevant section; they never add an H2.
 
 A pinned CommonMark parser validates every authored block and the final document.
 Blocks may contain H3–H6, paragraphs, lists, tables, inline code, links, quotes
@@ -238,8 +233,10 @@ COMPLETE cannot satisfy processing policy without this check. The model Study
 wire schema is unchanged.
 
 Materialized validation reads each block through its validated `block_map`
-locator and applies the same checks. Publication validates the ten sections and
-checks diagram content and placement against the canonical document before
+locator and applies the same checks. It requires five canonical H2 headings and
+five ordered block groups with matching section and block indexes. Saved block
+keys use the same five-value enum as Study responses. Publication validates the
+five sections and checks diagram content and placement against the canonical document before
 writing `ARCHITECTURE.md`. These checks make no model calls or external requests,
 and do not change canonical Markdown, locators, provenance or Review identity.
 Review still assesses component truth, dependencies, data-flow directions,
@@ -738,8 +735,8 @@ closed `details.code` values and schema-owned JSON paths distinguish:
 | `UNKNOWN_OMISSION_AREA_ID`, `DUPLICATE_OMISSION_AREA_ID` | Unknown or repeated review-plan area |
 | `UNEXPECTED_TOP_LEVEL_HEADING` | Authored block contains a forbidden H1/H2 |
 | `INVALID_MARKDOWN_STRUCTURE` | Authored block has invalid Markdown structure, including an unclosed fence |
-| `REPORT_SECTION_COUNT_MISMATCH` | Published architecture does not have exactly ten H2 headings |
-| `REPORT_HEADING_ORDER_MISMATCH` | Published architecture heading titles or order differ from the fixed dictionary |
+| `REPORT_SECTION_COUNT_MISMATCH` | Canonical or published architecture does not have exactly five sections |
+| `REPORT_HEADING_ORDER_MISMATCH` | Block groups or published heading titles differ from the required order |
 | `REQUIRED_DIAGRAM_MISSING` | Required section has no valid diagram in a COMPLETE Study |
 | `INVALID_PLANTUML_FENCE` | PlantUML fence is invalid or not a standalone block |
 | `INVALID_PLANTUML_BOUNDARY` | PlantUML boundary markers are missing, repeated or reversed |
@@ -779,9 +776,8 @@ never overwrite the original `extracted.json`, manifest, material or review.
 ## Frozen registry and review plan
 
 Direct-study and revision claims have `id`, `statement`, `scope`, `epistemic_kind`,
-`evidence_ids`, `uncertainty` on the wire. `report_sections` has exactly ten sections, with keys
-`scope`, `context`, `components`, `startup_and_flows`, `data_and_state`,
-`cross_cutting`, `constraints`, `change_navigation`, `unknowns`, `evidence_basis`
+`evidence_ids`, `uncertainty` on the wire. `report_sections` has exactly five sections, with keys
+`scope`, `context`, `components`, `startup_and_flows`, `data_and_state`
 in that order. Each has `title` and `blocks`, each block `markdown` and `claim_ids`.
 Titles and narrative use output_language. There are no model block IDs, reverse
 claim.block_ids, hashes, provenance, report_markdown or document locators.
@@ -959,7 +955,8 @@ and evidence references to them receive the usual strict checks.
 Study, Review and Revision share the same frozen inventory-derived plan. The same
 snapshot and filter produce the same scope regardless of model classification.
 Component boundaries and relevance judgments belong in `components`; investigated
-areas, missing checks and uncertainty belong in `unknowns` and `limitations`.
+areas, missing checks and uncertainty belong in `scope`, the relevant retained
+section, and `limitations`.
 A structurally valid PARTIAL document is published with its complete registry and
 limitations. Its self-assessment still prevents a COMPLETE workflow result; it
 does not make the document contract invalid.
@@ -1022,5 +1019,5 @@ run within each revision; a new study can never inherit an older review.
 
 The removed Catalog stage is not accepted in stage_agents or prompts. Configuration
 errors identify the key to remove. The artifact format changed to
-`evidence-ledger-required-diagrams-v3-artifacts`; earlier run formats and coverage plans
+`evidence-ledger-five-sections-v4-artifacts`; earlier run formats and coverage plans
 are rejected without migration or modification of existing reports.

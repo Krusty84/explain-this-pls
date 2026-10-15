@@ -21,12 +21,7 @@
               "context",
               "components",
               "startup_and_flows",
-              "data_and_state",
-              "cross_cutting",
-              "constraints",
-              "change_navigation",
-              "unknowns",
-              "evidence_basis"
+              "data_and_state"
             ]
           },
           "title": {

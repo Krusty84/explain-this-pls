@@ -29,7 +29,7 @@ class PublicationTests(FolderFixture):
         directory = self.base / 'existing-run'
         directory.mkdir()
         supported = {'contract_id': 'evidence-ledger',
-                     'artifact_format': 'evidence-ledger-required-diagrams-v3-artifacts', 'accepted': True}
+                     'artifact_format': 'evidence-ledger-five-sections-v4-artifacts', 'accepted': True}
         for name in ('claim.registry.json', 'review.plan.json', 'study.json', 'ARCHITECTURE.md'):
             (directory / name).write_bytes(b'existing artifact bytes')
         for field in ('contract_id', 'artifact_format'):
@@ -39,7 +39,7 @@ class PublicationTests(FolderFixture):
                     if missing:
                         unsupported.pop(field)
                     else:
-                        unsupported[field] = 'evidence-ledger-artifacts' if field == 'artifact_format' else 'unsupported-format'
+                        unsupported[field] = 'evidence-ledger-required-diagrams-v3-artifacts' if field == 'artifact_format' else 'unsupported-format'
                     (directory / 'manifest.json').write_text(json.dumps(unsupported))
                     before = {p.name: p.read_bytes() for p in directory.iterdir()}
                     with self.assertRaises(AuditError) as caught: Runner(self.config(), directory)
@@ -272,7 +272,7 @@ class PublicationTests(FolderFixture):
             self.assertNotIn(field, saved)
             self.assertNotIn(field, saved['review_plan'])
         self.assertEqual(meta['contract_id'], 'evidence-ledger')
-        self.assertEqual(meta['artifact_format'], 'evidence-ledger-required-diagrams-v3-artifacts')
+        self.assertEqual(meta['artifact_format'], 'evidence-ledger-five-sections-v4-artifacts')
         self.assertEqual(meta['context_format'], 'compact-context')
         self.assertTrue(meta['publication_complete'])
 

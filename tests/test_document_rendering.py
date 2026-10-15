@@ -104,6 +104,49 @@ class RenderingTests(unittest.TestCase):
                 validate_result('study', data, self.context)
             self.assertEqual(caught.exception.details['code'], code)
 
+    def test_five_sections_required_in_wire_and_materialized_documents(self):
+        from src.contracts.contracts import MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS
+        from src.reports.presentation import render_architecture
+        from test_required_diagrams import unchecked_materialization
+
+        expected = ['scope', 'context', 'components', 'startup_and_flows', 'data_and_state']
+        for mode, context in (('git', self.context),
+                ('folder', dict(source_directory='/source', source_fingerprint='abc'))):
+            wire = response(context)
+            self.assertEqual([section['key'] for section in wire['report_sections']], expected)
+            validate_result('study', wire, context, mode)
+            validate_materialized(materialize_study(wire))
+            for defect in ('missing', 'duplicate', 'reordered', 'removed'):
+                invalid = copy.deepcopy(wire)
+                sections = invalid['report_sections']
+                if defect == 'missing': sections.pop(1)
+                elif defect == 'duplicate': sections.insert(2, copy.deepcopy(sections[1]))
+                elif defect == 'reordered': sections[1], sections[2] = sections[2], sections[1]
+                else: sections[1]['key'] = 'cross_cutting'
+                with self.subTest(mode=mode, defect=defect):
+                    with self.assertRaises(ContractError):
+                        validate_result('study', invalid, context, mode)
+                    saved = unchecked_materialization(invalid)
+                    with self.assertRaises(ContractError): validate_materialized(saved)
+                    with self.assertRaises(ContractError): render_architecture(saved)
+                    if defect == 'removed':
+                        schemas = MODEL_SCHEMAS if mode == 'git' else MODEL_FOLDER_SCHEMAS
+                        with self.assertRaises(ContractError):
+                            validate_schema(sections, schemas['study']['properties']['report_sections'])
+
+    def test_materialized_heading_count_cannot_be_forged_with_a_valid_hash(self):
+        for context in (self.context, dict(source_directory='/source', source_fingerprint='abc')):
+            for defect in ('missing', 'extra'):
+                saved = materialize_study(response(context))
+                markdown = saved['report_markdown']
+                saved['report_markdown'] = (markdown.replace('## 2.', '### 2.', 1) if defect == 'missing'
+                                            else markdown + '## Extra section\n\nUnregistered content.\n')
+                saved['materialization_provenance']['document_sha256'] = sha(saved['report_markdown'].encode())
+                with self.subTest(context=context, defect=defect), self.assertRaises(ContractError) as caught:
+                    validate_materialized(saved)
+                self.assertEqual(caught.exception.details['code'], 'REPORT_SECTION_COUNT_MISMATCH')
+                self.assertEqual(caught.exception.details['path'], '$.report_markdown')
+
     def test_frozen_context_catches_document_claim_and_locator_changes(self):
         doc = materialize_study(self.wire)
         ctx = review_context(doc, self.context)
@@ -135,6 +178,22 @@ class RenderingTests(unittest.TestCase):
             unmarked = {k: v for k, v in recovered.items() if k != key}
             with self.assertRaises(ContractError): review_context(unmarked, self.context)
             with self.assertRaises(ContractError): render_stage('study', unmarked)
+
+    def test_recovery_discards_removed_and_unknown_sections(self):
+        for mode, context in (('git', self.context),
+                ('folder', dict(source_directory='/source', source_fingerprint='abc'))):
+            data = response(context)
+            data['claims'] = 'invalid'
+            for key in ('cross_cutting', 'constraints', 'change_navigation', 'unknowns', 'evidence_basis',
+                        'unrecognized', None):
+                data['report_sections'].append(dict(key=key, title='Removed content',
+                    blocks=[dict(markdown='Discarded section text.', claim_ids=[])]))
+            with self.subTest(mode=mode):
+                recovered = recoverable_material('study', data, context, mode, {})
+                self.assertEqual(recovered['report_markdown'], recover_sections(data['report_sections'][:5]))
+                self.assertNotIn('Discarded section text.', recovered['report_markdown'])
+                self.assertFalse(recovered['strict_valid'])
+                self.assertNotIn('claims', recovered)
 
     def test_markdown_study_is_rejected_without_recovery_or_review(self):
         from src.reports.presentation import render_stage
@@ -218,13 +277,10 @@ class MarkdownStructureTests(unittest.TestCase):
     def test_fixed_heading_dictionaries_and_language_aliases(self):
         self.assertEqual(SECTION_TITLES['Russian'], (
             'Область исследования', 'Контекст системы', 'Компоненты системы',
-            'Запуск и выполнение', 'Данные и состояние', 'Сквозные механизмы',
-            'Ограничения и особенности legacy', 'Навигация для изменений',
-            'Неизвестные и непроверенные области', 'Основания выводов и источники'))
+            'Запуск и выполнение', 'Данные и состояние'))
         self.assertEqual(SECTION_TITLES['English'], (
             'Study scope', 'System context', 'System components', 'Startup and execution',
-            'Data and state', 'Cross-cutting mechanisms', 'Constraints and legacy details',
-            'Change navigation', 'Unknown and unverified areas', 'Evidence basis and sources'))
+            'Data and state'))
         for aliases, expected in ((('Russian', 'ru', 'RUSSIAN', 'Русский'), 'Russian'),
                 (('English', 'en', 'ENGLISH', 'Английский'), 'English')):
             for alias in aliases:

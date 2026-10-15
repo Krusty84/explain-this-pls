@@ -152,6 +152,20 @@ class CoveragePlanTests(unittest.TestCase):
             with self.assertRaisesRegex(ContractError, 'inventories differ'):
                 verify_review_context(changed_review)
 
+    def test_review_retains_four_topics_priority_scenarios_and_source_areas(self):
+        context = self.context | {'_inventory': self.inventory, 'coverage_plan': self.plan(),
+                                 'priority_scenarios': ['Start the application.']}
+        from src.reports.document_rendering import materialize_study
+        review = review_context(materialize_study(response(context)), context)
+        areas = review['review_plan']['omission_areas']
+        self.assertEqual([area['scope'] for area in areas[:4]],
+                         ['context', 'components', 'startup_and_flows', 'data_and_state'])
+        self.assertEqual([area['id'] for area in areas],
+                         ['A-001', 'A-002', 'A-003', 'A-004', 'P-001', 'S-001', 'S-002'])
+        self.assertEqual(areas[4]['scope'], 'Start the application.')
+        self.assertEqual(review['review_plan']['required_claim_ids'], ['C-001'])
+        verify_review_context(review)
+
     def test_empty_directory_group_has_no_source_members(self):
         self.inventory['entries'].append({'path': 'empty', 'type': 'directory'})
         plan = self.plan()

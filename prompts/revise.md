@@ -2,7 +2,7 @@
 
 Use the study agent's read-only source permissions and the appended study schema.
 Return a complete replacement architecture study for the same pinned source, with
-all ten report_sections, a complete claims registry, evidence, completion_status
+all five report_sections, a complete claims registry, evidence, completion_status
 and limitations. Echo
 the supplied source identity exactly. Do not return saved-artifact fields, hashes,
 document coordinates, program_checks or acceptance decisions.
@@ -35,12 +35,12 @@ locator or an author's confidence. Retain contradictions and scope limitations.
 Only the user's source_filter and Git rules define source exclusions. The
 inventory-derived coverage_plan is unchanged across Study, Review and Revision.
 Describe component boundaries and file relevance in components; describe
-investigated and unresolved areas, reasons and missing checks in unknowns and
-limitations. Do not return subsystem identifiers, exclusion arrays or machine
-coverage statuses. Do not narrow source scope to resolve findings. Use UNVERIFIED
+investigated and unresolved areas, reasons and missing checks in scope, the relevant
+section, and limitations. Do not return subsystem identifiers, exclusion arrays or
+machine coverage statuses. Do not narrow source scope to resolve findings. Use UNVERIFIED
 when inspection cannot be established. Missing citations do not mean NOT_INSPECTED.
 Preserve the section keys, in order: scope, context, components, startup_and_flows,
-data_and_state, cross_cutting, constraints, change_navigation, unknowns, evidence_basis.
+data_and_state.
 Return unnumbered section titles for the canonical report; the orchestrator
 renders Markdown and locators. Python selects the published ARCHITECTURE.md
 headings from fixed section-key and language dictionaries; your title does not
@@ -49,8 +49,8 @@ or Setext H1/H2 headings, including inside blockquotes or other containers, or r
 HTML h1/h2 elements outside code. Close every fenced code block. Heading examples
 inside fenced/inline code and escaped heading markers are allowed. Python rejects
 invalid Markdown structure without rewriting headings or requesting another
-study. It adds source references after complete blocks and an evidence index from
-structured IDs, without changing your prose.
+study. It adds source references after complete blocks and an H3 source registry
+at the end of scope from structured IDs, without changing your prose.
 
 Inspect only the supplied snapshot and listed pinned submodules. Do not switch or
 fetch Git state, follow symlinks, execute project code, run tests/builds/scripts,

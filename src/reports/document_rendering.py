@@ -23,7 +23,7 @@ from src.analysis.evidence import canonical, sha, lines
 from src.reports.architecture_format import section_headings
 
 RENDERING_RULE = 'study-blocks-lf'
-BLOCK = obj(id=string(), section_key=string(), section_index={'type': 'integer'},
+BLOCK = obj(id=string(), section_key=string(*SECTION_KEYS), section_index={'type': 'integer'},
             block_index={'type': 'integer'}, claim_ids=STRINGS, locator=LOCATOR)
 PROVENANCE = obj(rule=string(RENDERING_RULE), normalized_sha256=string(),
                  document_sha256=string(), registry_sha256=string(), block_map_sha256=string())
@@ -352,6 +352,25 @@ def validate_materialized(value):
     # Saved-only fields are checked by saved_contracts at publication.
     validate_schema({k: v for k, v in value.items()
                      if k not in ('program_checks', 'review_plan', 'normalization_provenance', 'revision_id', 'registry_diff', 'advisory')}, schema)
+    section_keys = [block['section_key'] for i, block in enumerate(value['block_map'])
+                    if i == 0 or block['section_key'] != value['block_map'][i - 1]['section_key']]
+    if len(section_keys) != len(SECTION_KEYS):
+        raise contract_violation('REPORT_SECTION_COUNT_MISMATCH', '$.block_map')
+    if section_keys != list(SECTION_KEYS):
+        raise contract_violation('REPORT_HEADING_ORDER_MISMATCH', '$.block_map')
+    block_index = 0
+    for i, block in enumerate(value['block_map']):
+        if i == 0 or block['section_key'] != value['block_map'][i - 1]['section_key']:
+            block_index = 0
+        if (block['section_index'] != SECTION_KEYS.index(block['section_key'])
+                or block['block_index'] != block_index):
+            raise contract_violation('SECTION_ORDER_MISMATCH', f'$.block_map[{i}]')
+        block_index += 1
+    tokens = _markdown_tokens(value['report_markdown'])
+    headings = [token for token in tokens if token.type == 'heading_open' and token.tag == 'h2']
+    if len(headings) != len(SECTION_KEYS):
+        raise contract_violation('REPORT_SECTION_COUNT_MISMATCH', '$.report_markdown',
+                                 expected_count=len(SECTION_KEYS), actual_count=len(headings))
     document = lines(value['report_markdown'])
     ids = unique_ids(value['claims'], r'C-[0-9]{3,}', '$.claims')
     for i, claim in enumerate(value['claims']):
@@ -394,7 +413,8 @@ def recover_sections(value):
         return None
     sections = []
     for section in value:
-        if (type(section) is not dict or type(section.get('title')) is not str
+        if (type(section) is not dict or section.get('key') not in SECTION_KEYS
+                or type(section.get('title')) is not str
                 or not section['title'].strip() or any(c in section['title'] for c in '\r\n')
                 or type(section.get('blocks')) is not list):
             continue

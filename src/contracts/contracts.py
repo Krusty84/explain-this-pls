@@ -64,7 +64,7 @@ def obj(**properties: dict) -> dict:
 # additionalProperties. Local semantic checks enforce nonblank strings, bounds
 # and graph constraints regardless of a backend's JSON Schema dialect.
 CONTRACT_ID = 'evidence-ledger'
-ARTIFACT_FORMAT = 'evidence-ledger-required-diagrams-v3-artifacts'
+ARTIFACT_FORMAT = 'evidence-ledger-five-sections-v4-artifacts'
 STRINGS = array(string())
 STATUS = string('COMPLETE', 'PARTIAL', 'BLOCKED')
 BASE = dict(completion_status=STATUS, report_markdown=string(), limitations=STRINGS)
@@ -75,8 +75,7 @@ CLAIM = obj(id=string(), statement=string(), scope=string(),
     epistemic_kind=string('FACT', 'HYPOTHESIS', 'UNKNOWN'), evidence_ids=STRINGS,
     uncertainty=string())
 MATERIALIZED_CLAIM = obj(**CLAIM['properties'], document_locators=array(LOCATOR))
-SECTION_KEYS = ('scope', 'context', 'components', 'startup_and_flows', 'data_and_state',
-                'cross_cutting', 'constraints', 'change_navigation', 'unknowns', 'evidence_basis')
+SECTION_KEYS = ('scope', 'context', 'components', 'startup_and_flows', 'data_and_state')
 SECTIONS = array(obj(key=string(*SECTION_KEYS), title=string(),
                      blocks=array(obj(markdown=string(), claim_ids=STRINGS))))
 STUDY_BASE = dict(completion_status=STATUS, report_sections=SECTIONS, limitations=STRINGS)

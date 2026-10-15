@@ -27,3 +27,4 @@ explain.config
 .venv/
 input/*
 architecture-reports/*
+bench_codex.py

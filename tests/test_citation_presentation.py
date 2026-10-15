@@ -52,7 +52,7 @@ class CitationPresentationTests(unittest.TestCase):
             rendered = render_architecture(data)
             block = text if text.endswith('\n') else text + '\n'
             self.assertIn(block + '\n*Sources:', rendered)
-            self.assertEqual(len([line for line in rendered.split('\n') if line.startswith('## ')]), 10)
+            self.assertEqual(len([line for line in rendered.split('\n') if line.startswith('## ')]), 5)
             self.assertNotIn('## Citation warnings', rendered)
             self.assertEqual(data, original)
 
@@ -173,7 +173,7 @@ class CitationPresentationTests(unittest.TestCase):
         tokens = MarkdownIt().enable('table').parse(rendered)
         headings = [token.map[0] for token in tokens if token.type == 'heading_open' and token.tag == 'h2']
         first_blocks = [next(block for block in data['block_map'] if block['section_index'] == index)
-                        for index in range(10)]
+                        for index in range(5)]
         replacements = {line: canonical_lines[block['locator']['start_line'] - 3]
                         for line, block in zip(headings, first_blocks)}
         indexes = ({claim['id']: claim for claim in data['claims']},
@@ -190,7 +190,8 @@ class CitationPresentationTests(unittest.TestCase):
                     self.assertEqual(published_lines[end], '\n')
                     removed.update(range(start, end + 1))
             if token.type == 'heading_open' and token.tag == 'h3' and published_lines[token.map[0]] == '### Source registry\n':
-                removed.update(range(token.map[0], len(published_lines)))
+                next_section = next(line for line in headings if line > token.map[0])
+                removed.update(range(token.map[0], next_section))
         restored = ''.join(replacements.get(index, line) for index, line in enumerate(published_lines)
                            if index not in removed)
         self.assertEqual(restored.encode('utf-8'), data['report_markdown'].encode('utf-8'))
@@ -199,19 +200,33 @@ class CitationPresentationTests(unittest.TestCase):
         wire = json.loads((Path(__file__).parent / 'fixtures' / 'architecture_presentation.json').read_text())
         data = presentation_data(wire)
         data['program_checks']['evidence'][2]['status'] = 'QUOTE_MISMATCH'
-        rendered = render_architecture(data)
-        tokens = MarkdownIt().enable('table').parse(rendered)
-        children = [child for token in tokens for child in (token.children or [])]
-        destinations = [child.attrGet('href').removeprefix('#') for child in children
-                        if child.type == 'link_open' and child.attrGet('href').startswith('#source-e-')]
-        definitions = [match.group(1) for child in children if child.type == 'html_inline'
-                       and (match := re.fullmatch(r'<a id="(source-e-[0-9]+)">', child.content))]
-        self.assertTrue(destinations)
-        self.assertEqual(len(definitions), len(set(definitions)))
-        self.assertEqual(set(destinations), set(definitions))
-        for entry, resolution in zip(data['evidence'], data['program_checks']['evidence']):
-            row = next(line for line in rendered.splitlines() if f'<a id="source-{entry["id"].lower()}"></a>' in line)
-            self.assertIn(resolution['status'], row)
+        for language, title in (('English', 'Source registry'), ('Russian', 'Реестр источников')):
+            with self.subTest(language=language):
+                rendered = render_architecture(data, language)
+                tokens = MarkdownIt().enable('table').parse(rendered)
+                headings = [token.map[0] for token in tokens
+                            if token.type == 'heading_open' and token.tag == 'h2']
+                registries = [token.map[0] for i, token in enumerate(tokens)
+                              if token.type == 'heading_open' and token.tag == 'h3'
+                              and tokens[i + 1].content == title]
+                self.assertEqual(len(registries), 1)
+                self.assertLess(headings[0], registries[0])
+                self.assertLess(registries[0], headings[1])
+                scope = rendered.split('### ' + title, 1)[0]
+                for block in data['block_map']:
+                    if block['section_key'] == 'scope': self.assertIn(block['locator']['quote'], scope)
+                children = [child for token in tokens for child in (token.children or [])]
+                destinations = [child.attrGet('href').removeprefix('#') for child in children
+                                if child.type == 'link_open' and child.attrGet('href').startswith('#source-e-')]
+                definitions = [match.group(1) for child in children if child.type == 'html_inline'
+                               and (match := re.fullmatch(r'<a id="(source-e-[0-9]+)">', child.content))]
+                self.assertTrue(destinations)
+                self.assertEqual(len(definitions), len(set(definitions)))
+                self.assertEqual(set(destinations), set(definitions))
+                for entry, resolution in zip(data['evidence'], data['program_checks']['evidence']):
+                    row = next(line for line in rendered.splitlines()
+                               if f'<a id="source-{entry["id"].lower()}"></a>' in line)
+                    self.assertIn(resolution['status'], row)
 
     def test_warning_tables_are_deterministic_escaped_and_do_not_show_quotes(self):
         first = warning()

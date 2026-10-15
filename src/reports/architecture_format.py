@@ -6,14 +6,11 @@
 SECTION_TITLES = {
     'Russian': (
         'Область исследования', 'Контекст системы', 'Компоненты системы',
-        'Запуск и выполнение', 'Данные и состояние', 'Сквозные механизмы',
-        'Ограничения и особенности legacy', 'Навигация для изменений',
-        'Неизвестные и непроверенные области', 'Основания выводов и источники',
+        'Запуск и выполнение', 'Данные и состояние',
     ),
     'English': (
         'Study scope', 'System context', 'System components', 'Startup and execution',
-        'Data and state', 'Cross-cutting mechanisms', 'Constraints and legacy details',
-        'Change navigation', 'Unknown and unverified areas', 'Evidence basis and sources',
+        'Data and state',
     ),
 }
 

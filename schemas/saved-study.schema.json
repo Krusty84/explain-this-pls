@@ -141,7 +141,14 @@
             "type": "string"
           },
           "section_key": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "scope",
+              "context",
+              "components",
+              "startup_and_flows",
+              "data_and_state"
+            ]
           },
           "section_index": {
             "type": "integer"
@@ -759,7 +766,7 @@
             "artifact_format": {
               "type": "string",
               "enum": [
-                "evidence-ledger-required-diagrams-v3-artifacts"
+                "evidence-ledger-five-sections-v4-artifacts"
               ]
             },
             "origin": {

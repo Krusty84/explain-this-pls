@@ -102,30 +102,25 @@ only with a specific historical source. Preserve contradictions.
 Use the following sections, translated into output_language; retain IDs,
 paths, symbols, and enum values. Keep explanations architectural, not file-by-file.
 Use these stable keys in exactly this order: scope, context, components,
-startup_and_flows, data_and_state, cross_cutting, constraints, change_navigation,
-unknowns, evidence_basis. Return unnumbered titles for the canonical report.
+startup_and_flows, data_and_state. Return unnumbered titles for the canonical report.
 Python selects the published ARCHITECTURE.md headings from fixed section-key and
 language dictionaries; your title does not override them.
 
-1. Scope and evidence basis: source mode and identity (branch/commit for git,
+1. Scope: source mode and identity (branch/commit for git,
    directory for folder), static inspection, user-configured exclusions, completion
-   status, and applicable limits. Disclose material gaps caused by unfollowed links.
+   status, and applicable limits. Describe investigation gaps, reasons, and missing
+   checks. Disclose material gaps caused by unfollowed links.
 2. System context and overview: purpose, external boundaries, processes, integrations.
 3. Component map: name, responsibility, code locations, interfaces/entry points,
    important dependencies, evidence IDs.
 4. Startup and runtime flows: trigger, registered path, state, effects, errors,
    activation, evidence, and missing steps for startup and selected scenarios.
 5. Data and state: stores, readers/writers, transactions, consistency, shared state.
-6. Cross-cutting mechanisms: relevant configuration, security checks, error handling,
-   logging, concurrency, scheduling, and mechanisms actually discovered.
-7. Constraints and legacy exceptions: classify each as TECHNICALLY_ENFORCED,
-   DOCUMENTED_RULE, or OBSERVED_PATTERN; include scope, evidence, and exceptions.
-8. Change navigation: change type, starting locations, related constraints/components,
-   and relevant test locations where found. Do not imply tests were run.
-9. Unknowns and coverage: investigated and unresolved areas, reasons, missing
-   evidence, and concrete next verification steps. Use UNVERIFIED when inspection
-   cannot be established; missing citations do not establish that a file was unread.
-10. Evidence basis and limitations: explain why cited sources are relevant. The orchestrator renders the evidence index from structured locators.
+
+Describe local uncertainty and missing checks in the relevant section and
+limitations. Use UNVERIFIED when inspection cannot be established; missing
+citations do not establish that a file was unread. The orchestrator adds the
+source registry under H3 at the end of scope from structured locators.
 
 Each material relationship in prose, tables, diagrams, and scenarios needs supporting evidence
 or a visible uncertainty label. Explain non-applicable sections rather than filling
@@ -177,7 +172,7 @@ Return the object specified by the appended wire schema.
 Put the architecture narrative only in report_sections. Each section contains
 key, title and blocks. Each block contains markdown and claim_ids, for example:
 {"key":"components","title":"Components","blocks":[{"markdown":"Requests reach Dispatcher.","claim_ids":["C-001"]}]}
-This is a section fragment, not a complete response. Preserve all ten thematic
+This is a section fragment, not a complete response. Preserve all five thematic
 sections. A block is a coherent paragraph, list, table, fenced code fragment or
 other independent Markdown fragment; multiline content is allowed. Split content
 reasonably by subject and evidence; never pack the report into a single block to
@@ -241,8 +236,8 @@ The pinned inventory defines the full source scope. Only the user's source_filte
 and Git rules determine exclusions. Use inventory_summary, the inventory-derived
 coverage_plan and read-only source tools for navigation. Describe component
 boundaries and file relevance in components; describe investigation gaps and
-their reasons in unknowns and limitations. Do not return subsystem identifiers,
-exclusion arrays or machine coverage statuses. Do not narrow source scope or
+their reasons in scope, the relevant section, and limitations. Do not return
+subsystem identifiers, exclusion arrays or machine coverage statuses. Do not narrow source scope or
 exclude generated, vendor, binary, hidden or linked entries yourself. Symlinks
 are metadata only; never follow them. Directory grouping is navigation, not
 proof of architectural boundaries or inspection. Disclose unfinished work.

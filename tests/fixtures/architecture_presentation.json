@@ -46,6 +46,12 @@
           "claim_ids": [
             "C-001"
           ]
+        },
+        {
+          "markdown": "Runtime deployment is unknown.",
+          "claim_ids": [
+            "C-003"
+          ]
         }
       ]
     },
@@ -109,58 +115,6 @@
           "claim_ids": [
             "C-002"
           ]
-        }
-      ]
-    },
-    {
-      "key": "cross_cutting",
-      "title": "cross_cutting",
-      "blocks": [
-        {
-          "markdown": "Not applicable in this synthetic fixture.",
-          "claim_ids": []
-        }
-      ]
-    },
-    {
-      "key": "constraints",
-      "title": "constraints",
-      "blocks": [
-        {
-          "markdown": "Not applicable in this synthetic fixture.",
-          "claim_ids": []
-        }
-      ]
-    },
-    {
-      "key": "change_navigation",
-      "title": "change_navigation",
-      "blocks": [
-        {
-          "markdown": "Not applicable in this synthetic fixture.",
-          "claim_ids": []
-        }
-      ]
-    },
-    {
-      "key": "unknowns",
-      "title": "unknowns",
-      "blocks": [
-        {
-          "markdown": "Runtime deployment is unknown.",
-          "claim_ids": [
-            "C-003"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "evidence_basis",
-      "title": "evidence_basis",
-      "blocks": [
-        {
-          "markdown": "Not applicable in this synthetic fixture.",
-          "claim_ids": []
         }
       ]
     }

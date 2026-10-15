@@ -237,7 +237,7 @@ a gap if it cannot read the original text exactly.
 Files in `schemas/` match these definitions;
 [test_result_regressions.py](tests/test_result_regressions.py) checks consistency.
 
-Study returns ten ordered `report_sections`, blocks linked through `claim_ids`,
+Study returns five ordered `report_sections`, blocks linked through `claim_ids`,
 `claims`, `evidence`, status, and limitations. Claims use `FACT`, `HYPOTHESIS`,
 or `UNKNOWN`. Evidence specifies a source, relative path, line range, and quote.
 [document_rendering.py](src/reports/document_rendering.py) computes Markdown,
@@ -275,8 +275,8 @@ Citation warnings show the evidence ID, source, path, lines, reason and affected
 claims in CLI/TUI output and report tables. `UNRESOLVED` means the citation was not
 verified; `CORRECTED` records a repaired range or common leading indentation.
 Authored blocks and FACT labels stay unchanged. Problem statuses appear beside
-linked architecture blocks; the source index stays in section 10. Detailed warning
-tables stay in `study.annotated.md` and `FINAL_REPORT.md`, without an eleventh H2.
+linked architecture blocks; the H3 source index ends the scope section. Detailed
+warning tables stay in `study.annotated.md` and `FINAL_REPORT.md`, without a sixth H2.
 Warnings do not make unresolved citations proof. Structurally valid documents
 can be saved with unresolved evidence under either policy. `strict` blocks
 successful processing and continuation. `compromise` can complete when
@@ -295,7 +295,7 @@ backends; the orchestrator sends no format-repair request.
 Former Catalog stage keys and old artifact formats are unsupported. Remove
 `stage_agents.catalog` and `prompts.catalog`. Custom Study prompts must use the
 current document contract; subsystem, exclusion and coverage arrays are no longer
-required. The artifact format is `evidence-ledger-required-diagrams-v3-artifacts`.
+required. The artifact format is `evidence-ledger-five-sections-v4-artifacts`.
 Start a new run directory; existing reports remain unchanged. See
 [CONTRACTS.md](CONTRACTS.md) for response, validation and storage contracts.
 
@@ -351,7 +351,7 @@ comparison is unavailable or unnecessary when applicable.
 
 ### Architecture Document Rendering
 
-The published architecture report has exactly ten numbered H2 sections. Python
+The published architecture report has exactly five numbered H2 sections. Python
 fixes their names and order for Russian and English; model section titles do not
 select published headings. Aliases `ru`, `russian`, `русский`, `en`, `english` and
 `английский` are case-insensitive. Unsupported languages fail before a model call.
@@ -363,14 +363,9 @@ select published headings. Aliases `ru`, `russian`, `русский`, `en`, `eng
 | System components | Components, responsibilities, dependencies and a PlantUML overview. |
 | Startup and execution | Startup and significant execution scenarios. |
 | Data and state | Storage, readers/writers, transactions and a PlantUML data-flow diagram. |
-| Cross-cutting mechanisms | Configuration, security, errors, logging and concurrency. |
-| Constraints and legacy details | Enforced restrictions, documented rules and observed conventions. |
-| Change navigation | Starting points for changes and related tests. |
-| Unknown and unverified areas | Studied areas, gaps and next verification steps. |
-| Evidence basis and sources | Source support and remaining uncertainty. |
 
 Each block with linked evidence is followed by file paths, inclusive line ranges
-and evidence IDs. IDs link to the H3 source index in section 10. Evidence is
+and evidence IDs. IDs link to the H3 source index at the end of scope. Evidence is
 deduplicated per block in structured reference order. Submodule paths include
 their source root and retain pinned source identity. Unresolved locators carry
 status warnings; an empty quote checks only the locator. Missing evidence gets
