@@ -184,6 +184,11 @@ The [commented configuration](config.codex.example.jsonc) describes other option
 - **Stage timeouts:** `execution.stage_timeout_seconds` defaults to one hour.
 - **Different agents per stage:** use `stage_agents` for study, review or comparison.
 - **Legacy encodings:** use `source_decoding.rules` for encodings such as CP1251.
+- **Source navigation:** `source_context.mode` defaults to `"on-demand"`. The
+  prompt lists every file; agents read symbol maps as needed from the supplied
+  attempt directory. All files are still parsed before the stage starts. Set
+  `"full"` to send all symbols in the prompt, or `source_context.enabled: false`
+  to disable map preparation and export. Map reads do not count as source evidence.
 - **Continuing after errors:** `continue_on_error` defaults to `true`. Set it to
   `false` to stop further agent calls after an error. Source changes always stop the run.
 

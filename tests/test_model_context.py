@@ -4,22 +4,46 @@
 
 import copy
 import json
+from pathlib import Path
+import tempfile
 import unittest
 
 from src.reports.document_rendering import materialize_study
 from fixtures.ledger_response import response
 from src.analysis.ledger import review_context, verify_review_context
 from src.model.model_context import (build_model_prompt, input_measurements,
-                                     project_model_context, serialize_model_input)
+                                     on_demand_source_index, project_model_context, serialize_model_input)
 
 
-def decode_source_context(value):
+def decode_source_context(value, maps=None):
     result = copy.deepcopy(value)
     file_columns = result.pop('file_columns')
-    symbol_columns = result.pop('symbol_columns')
+    symbol_columns = result.pop('symbol_columns', [])
+    file_tables = result.pop('file_value_tables', {})
+    symbol_tables = result.pop('symbol_value_tables', {})
+    result.pop('index_format', None)
+    delivery = result.pop('delivery', 'full')
+    maps_root = result.pop('maps_root', None)
     result['files'] = [dict(zip(file_columns, row, strict=True)) for row in result['files']]
     for record in result['files']:
-        record['symbols'] = [dict(zip(symbol_columns, row, strict=True)) for row in record['symbols']]
+        for column, table in file_tables.items():
+            record[column] = table[record[column]]
+        columns, tables = symbol_columns, symbol_tables
+        if delivery == 'on-demand':
+            name, count = record.pop('symbols_ref'), record.pop('symbol_count')
+            shard = {'symbols': [], 'symbol_columns': [], 'symbol_value_tables': {}}
+            if name:
+                shard = maps[name] if maps is not None else json.loads((Path(maps_root) / name).read_text(encoding='utf-8'))
+            record['symbols'] = shard['symbols']
+            columns, tables = shard['symbol_columns'], shard['symbol_value_tables']
+            if len(record['symbols']) != count:
+                raise ValueError('Symbol count does not match the map.')
+            if name and (shard['source_id'], shard['path']) != (record['source_id'], record['path']):
+                raise ValueError('Symbol map identity mismatch.')
+        record['symbols'] = [dict(zip(columns, row, strict=True)) for row in record['symbols']]
+        for symbol in record['symbols']:
+            for column, table in tables.items():
+                symbol[column] = table[symbol[column]]
     return result
 
 
@@ -120,10 +144,14 @@ class ModelContextTests(unittest.TestCase):
                 self.assertEqual(rows['file_columns'], ['source_id', 'path', 'parser', 'language', 'encoding',
                     'total_lines', 'map_status', 'map_reason', 'symbols'])
                 self.assertEqual(rows['symbol_columns'], ['name', 'kind', 'parent', 'start_line', 'end_line'])
-                self.assertEqual(rows['files'][0], ['source-002', 'модуль/ёж🐍.py', 'python:3.12',
-                    'python', 'utf-8', 12, 'complete', None, [
-                        ['внутри', 'function', 'Класс.метод', 9, 10],
-                        ['Класс', 'class', None, 1, 12], ['метод', 'method', 'Класс', 7, 11]]])
+                self.assertEqual(rows['index_format'], 'dictionary-v1')
+                self.assertEqual(rows['delivery'], 'full')
+                self.assertEqual(rows['file_value_tables']['source_id'], ['source-002', 'source-001'])
+                self.assertEqual(rows['file_value_tables']['map_reason'], [None, 'parse_error'])
+                self.assertEqual(rows['symbol_value_tables'],
+                                 {'kind': ['function', 'class', 'method'], 'parent': ['Класс.метод', None, 'Класс']})
+                self.assertEqual(rows['files'][0], [0, 'модуль/ёж🐍.py', 0, 0, 0, 12, 0, 0, [
+                        ['внутри', 0, 0, 9, 10], ['Класс', 1, 1, 1, 12], ['метод', 2, 2, 7, 11]]])
                 self.assertEqual(decode_source_context(rows), source)
                 self.assertEqual(wire['priority_scenarios'], context['priority_scenarios'])
                 self.assertEqual(wire['source_decoding'], context['source_decoding'])
@@ -153,7 +181,8 @@ class ModelContextTests(unittest.TestCase):
                         'incomplete': bool(selected)}}
                 projected = project_model_context('study', {'source_context': source})['source_context']
                 self.assertEqual(decode_source_context(projected), source)
-                self.assertEqual(set(projected), set(source) | {'file_columns', 'symbol_columns'})
+                self.assertEqual(set(projected), set(source) | {
+                    'file_columns', 'symbol_columns', 'file_value_tables', 'symbol_value_tables', 'index_format', 'delivery'})
 
     def test_large_source_context_rows_retain_every_file_and_symbol(self):
         for count in (1000, 5000):
@@ -182,6 +211,86 @@ class ModelContextTests(unittest.TestCase):
                 source_bytes = len(json.dumps(source, ensure_ascii=False).encode('utf-8'))
                 self.assertEqual(measured['source_index']['original_utf8_bytes'], source_bytes)
                 self.assertEqual(measured['source_index']['transmitted_utf8_bytes'], len(encoded))
+                self.assertEqual(measured['source_index']['packed_full_index_utf8_bytes'], len(encoded))
+                self.assertEqual(measured['source_index']['initial_index_utf8_bytes'], len(encoded))
+                self.assertEqual(measured['source_index']['stored_map_utf8_bytes'], 0)
+                self.assertEqual(measured['source_index']['delivery'], 'full')
                 self.assertEqual(measured['source_index']['saved_utf8_bytes'], source_bytes - len(encoded))
                 self.assertAlmostEqual(measured['source_index']['reduction_percent'],
                     (source_bytes - len(encoded)) * 100 / source_bytes, places=2)
+
+    def test_on_demand_preserves_file_order_errors_and_self_contained_maps(self):
+        def file(source_id, path, symbols, **extra):
+            return dict(source_id=source_id, path=path, parser='python:3.12', language='python',
+                        encoding='utf-8', total_lines=9, map_status='complete', map_reason=None,
+                        symbols=symbols) | extra
+        symbols = [dict(name='метод🐍', kind='method', parent='Класс', start_line=8, end_line=9),
+                   dict(name='Класс', kind='class', parent=None, start_line=1, end_line=9)]
+        source = {'mode': 'index-only', 'fragments': [], 'files': [
+            file('source-002', 'same.py', symbols),
+            file('source-001', 'empty.py', [], total_lines=0),
+            file('source-001', 'same.py', symbols),
+            file('source-001', 'bad.py', [], parser=None, encoding=None, total_lines=None,
+                 map_status='unavailable', map_reason='decoding_error')],
+            'omissions': {'maps': 1, 'reasons': {'decoding_error': 1}, 'incomplete': True}}
+        before = copy.deepcopy(source)
+        full = project_model_context('study', {'source_context': source})['source_context']
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            wire, maps = on_demand_source_index(full, root)
+            self.assertEqual(on_demand_source_index(source, root), (wire, maps))
+            self.assertEqual(decode_source_context(wire, maps), source)
+            self.assertEqual(set(maps), {'M-000003.json', 'M-000004.json'})
+            self.assertNotIn('symbol_columns', wire)
+            self.assertNotIn('symbol_value_tables', wire)
+            self.assertNotIn('symbols', wire['file_columns'])
+            self.assertEqual(wire['files'][0][-2:], [2, 'M-000004.json'])
+            self.assertEqual(wire['files'][1][-2:], [0, None])
+            self.assertEqual(wire['files'][2][-2:], [2, 'M-000003.json'])
+            self.assertEqual(wire['files'][3][-2:], [0, None])
+            self.assertEqual(wire['maps_root'], str(root))
+            self.assertEqual(project_model_context('study', {'source_context': wire})['source_context'], wire)
+            stored_bytes = 0
+            for name, value in maps.items():
+                content = (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+                stored_bytes += len(content)
+                (root / name).write_bytes(content)
+                self.assertEqual(value['symbol_value_tables'], {'kind': ['method', 'class'], 'parent': ['Класс', None]})
+            self.assertEqual(decode_source_context(wire), source)
+            context_json = serialize_model_input({'source_context': wire})
+            measured = input_measurements('', context_json, '{}', context_json,
+                source_context=source, transmitted_source_context=wire, stored_map_utf8_bytes=stored_bytes)['source_index']
+            self.assertEqual(measured['delivery'], 'on-demand')
+            self.assertEqual(measured['stored_map_utf8_bytes'], stored_bytes)
+            self.assertEqual(measured['packed_full_index_utf8_bytes'], len(serialize_model_input(full).encode('utf-8')))
+            self.assertEqual(measured['initial_index_utf8_bytes'], len(serialize_model_input(wire).encode('utf-8')))
+            maps['M-000004.json']['symbols'][0][0] = 'changed'
+            wire['files'][0][1] = 'changed'
+        self.assertEqual(source, before)
+        self.assertEqual(decode_source_context(full), before)
+
+    def test_on_demand_defers_all_symbols_and_preserves_long_names(self):
+        symbols = [dict(name='a' * 1500 if number == 0 else f'operation{number}', kind='function',
+                        parent=None, start_line=number + 1, end_line=number + 1) for number in range(10000)]
+        source = {'mode': 'index-only', 'files': [dict(source_id='source-001', path='large.py',
+            parser='python:3.12', language='python', encoding='utf-8', total_lines=10000,
+            map_status='partial', map_reason='parse_error', symbols=symbols)], 'fragments': [],
+            'omissions': {'maps': 1, 'reasons': {'parse_error': 1}, 'incomplete': True}}
+        with tempfile.TemporaryDirectory() as raw:
+            wire, maps = on_demand_source_index(source, Path(raw).resolve())
+        self.assertEqual(len(maps), 1)
+        self.assertEqual(wire['files'][0][-2:], [10000, 'M-000001.json'])
+        self.assertEqual(wire['omissions'], source['omissions'])
+        self.assertNotIn('a' * 1500, serialize_model_input(wire))
+        self.assertEqual(decode_source_context(wire, maps), source)
+        self.assertLess(len(serialize_model_input(wire)), len(serialize_model_input(source)) / 50)
+
+    def test_on_demand_empty_inventory_and_relative_root(self):
+        source = {'mode': 'index-only', 'files': [], 'fragments': [],
+                  'omissions': {'maps': 0, 'reasons': {}, 'incomplete': False}}
+        with tempfile.TemporaryDirectory() as raw:
+            wire, maps = on_demand_source_index(source, Path(raw).resolve())
+            self.assertEqual(maps, {})
+            self.assertEqual(decode_source_context(wire, maps), source)
+        with self.assertRaisesRegex(ValueError, 'absolute'):
+            on_demand_source_index(source, 'relative/maps')

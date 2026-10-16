@@ -120,7 +120,7 @@ mismatches. Explicit `--output text` or `--output json` cannot combine with `--t
    snapshot and review target. The CLI receives the prompt through stdin.
    Study, review, and revise run in the source directory; compare runs in a
    temporary directory. All three adapters receive the same
-   [index-only map](#full-source-index) when source context is enabled.
+   [source navigation index](#full-source-index) when source context is enabled.
 5. The adapter extracts a completed JSON response. [ResultValidator](src/model/validation.py)
    checks identity, schema, and data consistency. Study/review evidence IDs are
    normalized; `compromise` also permits local citation repair. Study blocks become
@@ -201,30 +201,57 @@ citation, not `NOT_INSPECTED`; Python leaves file inspection `UNVERIFIED`.
 
 ### Full Source Index
 
-`source_context.enabled` is a strict boolean and defaults to `true`. When enabled,
-Study, Review and Revision receive the same full file/symbol map from the pinned
-inventory and decoding rules. The payload has
-`mode: "index-only"` and `fragments: []`. Each regular file includes its source ID,
-relative path, parser/version, language, encoding, line count, declarations and
-map status. Unknown values are null; parse or read failures stay explicit entries.
-File order is deterministic; the map is not truncated. Compare receives no
-prepared source context.
+`source_context.enabled` is a strict boolean and defaults to `true`.
+`source_context.mode` accepts `"on-demand"` (default) or `"full"`. Existing configs
+without `mode` use `on-demand`; `full` restores inline delivery of all symbols.
+When disabled, neither map preparation nor export runs. When enabled, the builder
+parses the complete pinned inventory using the decoding rules before each stage;
+on-demand delivery reduces prompt size, not source parsing work. Compare receives
+no prepared source context.
 
-Internal maps and cache entries retain named fields. The model view sends
-`file_columns` and `symbol_columns` once, with files and their nested symbols as
-rows in that column order. All values and list ordering remain intact. Context
-and schema JSON omit optional separator spaces.
+Study, Review and Revision receive every file's source ID, relative path,
+parser/version, language, encoding, line count and map status. Unknown values are
+null; parse or read failures stay explicit entries. File order is deterministic;
+the inventory is not truncated. The wire payload retains `mode: "index-only"` and
+`fragments: []`, with `index_format: "dictionary-v1"` and a `delivery` field.
+
+Internal maps and cache entries retain named fields. The model view defines
+`file_columns` and, where symbols are present, `symbol_columns`; records are rows
+in the supplied column order. Repeated file metadata and symbol `kind` and `parent`
+values use zero-based table references. Tables follow first occurrence; all values,
+nulls, empty values, list order and inclusive source line coordinates remain intact.
+Context and schema JSON omit optional separator spaces.
+
+With `delivery: "full"`, symbols stay inline. With `delivery: "on-demand"`, file
+rows contain `symbol_count` and `symbols_ref`. Each file with symbols has one
+multiline `M-000001.json`-style map under the attempt's `source-maps/` directory;
+other files have a null reference. Each map contains complete declarations and
+its own value tables, without source bodies. The payload supplies one absolute
+`maps_root`. Agents read maps as needed through native tools with `offset`/`limit`
+pages, then verify claims against original source. Every stage can read every map,
+regardless of earlier agents' selections. A failed map read remains an analysis
+gap; it does not trigger a hidden full-index fallback.
+
+The attempt and maps exist before the final prompt is built. AttemptStore saves
+maps atomically and records their byte sizes and SHA-256 values. Verification
+before launch and publication rejects changed, missing or substituted maps. Codex
+retains its read-only sandbox; OpenCode and XXX allow the current attempt's map
+directory without opening neighboring reports or logs.
 
 The run-local cache keeps maps and metadata, not source text, and validates pinned
 state before reuse. Each attempt saves `source-context.manifest.json` with processing
-status, map gaps, preparation time and sizes. `transmitted_text_bytes` is zero.
+status, map gaps, preparation time and sizes. Sizes distinguish the full named
+index, packed full index, initial transmitted index and stored map files. Stored
+map bytes are not bytes transmitted to the model; subsequent tool reads determine
+the total. Source text fragments are absent, so `transmitted_text_bytes` is zero.
 A full map can be larger than the source text. Source reads and evidence records
 have no program size or count limits. Stage timeouts, source integrity checks and
 native CLI/model limits remain. Capacity errors do not cause silent truncation.
 
 `scripts/measure_prompt_sizes.py` measures complete synthetic Python indexes with
-1, 1,000 and 5,000 files, before and after projection, and the full stage prompts.
-It calls no model and makes no token or answer-quality claims.
+1, 1,000 and 5,000 files, both delivery modes, and the full stage prompts. It also
+checks a large file and a long symbol name. It calls no model and makes no token
+or answer-quality claims.
 
 Python uses standard `ast`. The pinned `ast-grep-py` package supplies JavaScript,
 TypeScript, JSX/TSX, Go, C/C++, Java, Rust and Swift grammars, including SwiftUI
@@ -445,7 +472,8 @@ observation times for replay. Missing measurements include an availability reaso
 overall metrics can remain partial while complete individual results confirm
 repeats. Ambiguous or incomplete results do not count. Private logs can contain
 source text.
-An index-only map adds no delivered or tool-read source lines.
+Neither the initial index nor reads of saved symbol maps add delivered or tool-read
+source lines. Source coverage comes from reads of the original source files.
 
 OpenCode V2 and XXX/OpenCode V1 observe completed native tools and supported numbered
 Read output. XXX keeps its separate session ownership and deletion checks. Codex

@@ -113,7 +113,8 @@ else:
     if '--format' in args:
         config = json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])
         name = args[args.index('--agent') + 1]
-        call['permissions'] = {p['action']: p['effect'] for p in config['agents'][name]['permissions']}
+        call['permission_rules'] = config['agents'][name]['permissions']
+        call['permissions'] = {p['action']: p['effect'] for p in call['permission_rules']}
         from cli_response import cli_result
         sys.stdout.buffer.write(cli_result(args, data)['stdout'])
     else:

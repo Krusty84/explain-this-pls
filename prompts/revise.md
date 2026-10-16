@@ -127,9 +127,19 @@ Never modify files or switch, initialize, update, or fetch Git checkouts.
 
 ## Prepared source context
 
-source_context uses mode "index-only" and fragments: []. Its full file/symbol map
-covers the pinned inventory; map errors and unavailable metadata remain explicit.
-Locate files through the map -> read implementations with native read-only tools
+source_context uses index_format "dictionary-v1" and fragments: []. It lists all
+pinned files, including map errors and unavailable metadata. Decode rows using
+the supplied columns and value tables; table indexes start at zero, and values
+follow first occurrence. Preserve null, empty values and original source lines.
+With delivery "full", symbols are inline. With delivery "on-demand", each file
+has symbol_count and symbols_ref; null means no saved symbol map. Resolve each
+non-null reference under the single absolute maps_root. Read needed JSON maps
+with native read-only tools and offset/limit pages; each map has its own tables.
+The complete inventory was parsed before this stage. Map selection by earlier
+agents does not restrict your access. If a map cannot be read, report the gap;
+there is no automatic full-index fallback. If source_context is absent, use
+the inventory and native source tools.
+Locate files through the map -> read needed symbol maps -> read original source
 -> verify relationships and activation conditions -> cite exact source locations.
 A repeat read is allowed for a specific check. The map is navigation, not evidence
 of behavior or inspection. Read relevant files even when their map is incomplete.

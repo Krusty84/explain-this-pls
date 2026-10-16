@@ -184,6 +184,44 @@ class ToolObserverTests(unittest.TestCase):
                 self.assertEqual(metrics['consecutive_confirmed_repeats'], 0)
                 self.assertEqual(metrics['incomplete_results'], 1)
 
+    def test_external_symbol_map_reads_keep_repeat_guard_without_source_coverage(self):
+        path = '/reports/study/attempt-001/source-maps/M-000001.json'
+        for backend in ('codex', 'opencode', 'xxx'):
+            with self.subTest(backend=backend):
+                clock = Clock()
+                observer = ToolObserver(backend, context=CONTEXT, clock=clock)
+                if backend == 'codex':
+                    observer.event({'type': 'item.completed', 'item': {
+                        'id': 'source', 'type': 'command_execution', 'command': 'cat /source/unit.py',
+                        'aggregated_output': 'abc\nxyz', 'exit_code': 0, 'status': 'completed'}})
+                else:
+                    observer.event(native(0, backend=backend))
+                before = observer.snapshot()
+                source_lines = dict(observer.tool_lines)
+                delivered = dict(observer.delivered)
+                for number in range(1, 52):
+                    clock.now = number * 3
+                    if backend == 'codex':
+                        observer.event({'type': 'item.completed', 'item': {
+                            'id': 'map-' + str(number), 'type': 'command_execution',
+                            'command': 'cat ' + path, 'aggregated_output': '{"symbols": []}',
+                            'exit_code': 0, 'status': 'completed'}})
+                    else:
+                        event = native(number, backend=backend, path=path)
+                        event['part']['state']['output'] = event['part']['state']['output'].replace(
+                            'abc', '{"symbols": [').replace('xyz', ']}')
+                        observer.event(event)
+                metrics = observer.snapshot()
+                self.assertEqual(metrics['calls'], 52)
+                self.assertEqual(metrics['successful_results'], 52)
+                self.assertEqual(metrics['incomplete_results'], 0)
+                self.assertEqual(metrics['exact_repeats'], 50)
+                self.assertTrue(observer.triggered)
+                self.assertEqual(metrics['unique_lines'], before['unique_lines'])
+                self.assertEqual(metrics['delivery']['unique_lines'], before['delivery']['unique_lines'])
+                self.assertEqual(observer.tool_lines, source_lines)
+                self.assertEqual(observer.delivered, delivered)
+
     def test_changed_native_semantic_metadata_is_not_exact_repeat(self):
         observer, _ = self.observer()
         event = native(0)

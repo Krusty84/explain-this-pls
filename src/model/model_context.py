@@ -4,16 +4,25 @@
 """Lossless content projection for model input; never used for validation/hashing."""
 import copy
 import json
+from pathlib import Path
 
 CONTEXT_FORMAT = 'compact-context'
 
 _FILE_COLUMNS = ('source_id', 'path', 'parser', 'language', 'encoding', 'total_lines',
                  'map_status', 'map_reason', 'symbols')
 _SYMBOL_COLUMNS = ('name', 'kind', 'parent', 'start_line', 'end_line')
+_FILE_TABLE_COLUMNS = ('source_id', 'parser', 'language', 'encoding', 'map_status', 'map_reason')
+_SYMBOL_TABLE_COLUMNS = ('kind', 'parent')
 SOURCE_INDEX_INSTRUCTION = (
-    'source_context.files contains rows in file_columns order. Each row\'s symbols cell '
-    'contains rows in symbol_columns order. Preserve null values and original inclusive '
-    'source line coordinates.')
+    'source_context uses index_format "dictionary-v1". Files are rows in file_columns order. '
+    'For columns in file_value_tables, each cell is a zero-based index into that column\'s '
+    'table, including null table entries. In delivery "full", symbols are rows in '
+    'symbol_columns order; kind and parent cells index symbol_value_tables. In delivery '
+    '"on-demand", symbol_count reports the full count and symbols_ref identifies a JSON '
+    'map under the absolute maps_root. Read only the maps needed with native read-only '
+    'tools. Each map supplies its own source_id, path, symbol_columns and '
+    'symbol_value_tables. A null symbols_ref means zero symbols. Preserve original '
+    'inclusive source line coordinates. Maps are navigation, never source evidence.')
 
 
 def serialize_model_input(value):
@@ -32,7 +41,7 @@ def build_model_prompt(template, context_json, schema_json, backend, *, source_i
 
 
 def input_measurements(template, context_json, schema_json, prompt, *, correction=False,
-                       source_context=None, transmitted_source_context=None):
+                       source_context=None, transmitted_source_context=None, stored_map_utf8_bytes=0):
     """Exact wire text sizes, NOT tokenizer estimates or quality measurements."""
     def size(text):
         return {'characters': len(text), 'utf8_bytes': len(text.encode('utf-8'))}
@@ -43,22 +52,84 @@ def input_measurements(template, context_json, schema_json, prompt, *, correctio
     if source_context is not None and transmitted_source_context is not None:
         original = len(json.dumps(source_context, ensure_ascii=False).encode('utf-8'))
         transmitted = len(serialize_model_input(transmitted_source_context).encode('utf-8'))
+        packed = copy.deepcopy(source_context)
+        _source_index(packed)
         result['source_index'] = {'original_utf8_bytes': original, 'transmitted_utf8_bytes': transmitted,
             'saved_utf8_bytes': original - transmitted,
-            'reduction_percent': round(100 * (original - transmitted) / original, 2)}
+            'reduction_percent': round(100 * (original - transmitted) / original, 2),
+            'delivery': transmitted_source_context.get('delivery', 'full'),
+            'initial_index_utf8_bytes': transmitted, 'stored_map_utf8_bytes': stored_map_utf8_bytes,
+            'packed_full_index_utf8_bytes': len(serialize_model_input(packed).encode('utf-8'))}
     return result
+
+
+def _pack_rows(records, columns, table_columns):
+    tables = {column: [] for column in table_columns}
+    positions = {column: {} for column in table_columns}
+    rows = []
+    for record in records:
+        row = []
+        for column in columns:
+            value = record[column]
+            if column in tables:
+                if value not in positions[column]:
+                    positions[column][value] = len(tables[column])
+                    tables[column].append(value)
+                value = positions[column][value]
+            row.append(value)
+        rows.append(row)
+    return rows, tables
 
 
 def _source_index(index):
     if 'file_columns' in index:
         return
-    rows = []
-    for file in index['files']:
-        values = file | {'symbols': [[symbol[key] for key in _SYMBOL_COLUMNS] for symbol in file['symbols']]}
-        rows.append([values[column] for column in _FILE_COLUMNS])
+    symbols, symbol_tables = _pack_rows(
+        (symbol for file in index['files'] for symbol in file['symbols']),
+        _SYMBOL_COLUMNS, _SYMBOL_TABLE_COLUMNS)
+    remaining = iter(symbols)
+    files = [file | {'symbols': [next(remaining) for _ in file['symbols']]} for file in index['files']]
+    rows, file_tables = _pack_rows(files, _FILE_COLUMNS, _FILE_TABLE_COLUMNS)
+    index.update(index_format='dictionary-v1', delivery='full',
+                 file_value_tables=file_tables, symbol_value_tables=symbol_tables)
     index['file_columns'] = list(_FILE_COLUMNS)
     index['symbol_columns'] = list(_SYMBOL_COLUMNS)
     index['files'] = rows
+
+
+def on_demand_source_index(index, maps_root):
+    """Return a complete file index and independent symbol maps without source I/O."""
+    if not Path(maps_root).is_absolute():
+        raise ValueError('maps_root must be an absolute path.')
+    packed = copy.deepcopy(index)
+    _source_index(packed)
+    files = []
+    for row in packed['files']:
+        file = dict(zip(packed['file_columns'], row, strict=True))
+        for column, table in packed['file_value_tables'].items():
+            file[column] = table[file[column]]
+        symbols = [dict(zip(packed['symbol_columns'], symbol, strict=True)) for symbol in file['symbols']]
+        for symbol in symbols:
+            for column, table in packed['symbol_value_tables'].items():
+                symbol[column] = table[symbol[column]]
+        file['symbols'] = symbols
+        files.append(file)
+    names = {(file['source_id'], file['path']): f'M-{number:06d}.json'
+             for number, file in enumerate(sorted(files, key=lambda file: (file['source_id'], file['path'])), 1)}
+    maps = {}
+    for file, row in zip(files, packed['files'], strict=True):
+        symbols, tables = _pack_rows(file['symbols'], _SYMBOL_COLUMNS, _SYMBOL_TABLE_COLUMNS)
+        name = names[(file['source_id'], file['path'])] if symbols else None
+        if name:
+            maps[name] = {'source_id': file['source_id'], 'path': file['path'],
+                          'symbol_columns': list(_SYMBOL_COLUMNS), 'symbol_value_tables': tables,
+                          'symbols': symbols}
+        row[-1:] = [len(symbols), name]
+    packed['file_columns'][-1:] = ['symbol_count', 'symbols_ref']
+    packed.pop('symbol_columns')
+    packed.pop('symbol_value_tables')
+    packed.update(delivery='on-demand', maps_root=str(maps_root))
+    return packed, maps
 
 
 def _registry(claims):

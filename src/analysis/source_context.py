@@ -36,12 +36,15 @@ LANGUAGES = {'.py': 'python', '.pyi': 'python', '.js': 'javascript', '.mjs': 'ja
 def source_context_settings(value=None):
     if value is None:
         value = {}
-    if type(value) is not dict or set(value) - {'enabled'}:
-        raise ValueError('source_context accepts enabled only.')
+    if type(value) is not dict or set(value) - {'enabled', 'mode'}:
+        raise ValueError('source_context accepts enabled and mode only.')
     enabled = value.get('enabled', True)
     if type(enabled) is not bool:
         raise ValueError('source_context.enabled must be a JSON boolean.')
-    return {'enabled': enabled}
+    mode = value.get('mode', 'on-demand')
+    if mode not in ('full', 'on-demand'):
+        raise ValueError('source_context.mode must be full or on-demand.')
+    return {'enabled': enabled, 'mode': mode}
 
 
 def serialize_source_context(value):

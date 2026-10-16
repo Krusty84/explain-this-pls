@@ -70,15 +70,18 @@ def check_cli(session) -> dict:
     session.versions = {k: v['version'] for k, v in result.items()}
     return result
 
-def command(session, stage: str, state: Path, agent: dict, schema_path: Path, env: dict, *, reports_only=False, schema=None) -> list[str]:
+def command(session, stage: str, state: Path, agent: dict, schema_path: Path, env: dict, *, reports_only=False, schema=None,
+            source_maps_directory: Path | None = None) -> list[str]:
     adapter = CLI_ADAPTERS.get(agent['backend'])
     if adapter:
         access_stage = 'compare' if reports_only else stage
         kwargs = {}
         if adapter is opencode_cli:
-            kwargs['agent_name'] = opencode_cli.prepare_environment(env, access_stage)
+            kwargs['agent_name'] = opencode_cli.prepare_environment(env, access_stage,
+                source_maps_directory=source_maps_directory)
         elif adapter is xxx:
-            kwargs['agent_name'] = xxx.prepare_environment(env, access_stage)
+            kwargs['agent_name'] = xxx.prepare_environment(env, access_stage,
+                source_maps_directory=source_maps_directory)
         return adapter.build_command(agent, access_stage, session.mode, schema or session.schemas[stage], schema_path, **kwargs)
     raise AuditError('No CLI adapter for this backend.',
                      code='BACKEND_INCOMPATIBLE')

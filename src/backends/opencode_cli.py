@@ -26,7 +26,7 @@ def required_flags(mode: str) -> list[str]:
     return ['--standalone', '--format', '--model', '--agent']
 
 
-def prepare_environment(env, stage):
+def prepare_environment(env, stage, *, source_maps_directory=None):
     try:
         config = strict_json(env.get('OPENCODE_CONFIG_CONTENT') or '{}')
     except ContractError as exc:
@@ -39,6 +39,13 @@ def prepare_environment(env, stage):
     if stage not in ('compare', 'repair'):
         permissions += [{'action': action, 'resource': '*', 'effect': 'allow'}
                         for action in ('read', 'glob', 'grep')]
+        if source_maps_directory is not None:
+            directory = Path(source_maps_directory).resolve().as_posix()
+            if '*' in directory or '?' in directory:
+                raise response_error('BACKEND_INCOMPATIBLE', 'compatibility',
+                                     'Source map directory cannot contain * or ?: ' + directory)
+            permissions.append({'action': 'external_directory',
+                'resource': directory + '/*', 'effect': 'allow'})
     name = 'architecture-audit-' + secrets.token_hex(16)
     config.setdefault('agents', {})[name] = {'mode': 'primary', 'permissions': permissions}
     env['OPENCODE_CONFIG_CONTENT'] = json.dumps(config)

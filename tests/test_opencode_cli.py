@@ -168,6 +168,31 @@ class OpenCodeCLITests(unittest.TestCase):
             if stage not in ('compare', 'repair'): expected.update(read='allow', glob='allow', grep='allow')
             self.assertEqual(permissions, expected)
 
+    def test_symbol_maps_allow_only_the_current_external_directory(self):
+        directory = Path('private output/source-maps')
+        pattern = directory.resolve().as_posix() + '/*'
+        for stage in ('study', 'review', 'revise', 'compare', 'repair'):
+            with self.subTest(stage=stage):
+                env = {}
+                name = adapter.prepare_environment(env, stage, source_maps_directory=directory)
+                permissions = json.loads(env['OPENCODE_CONFIG_CONTENT'])['agents'][name]['permissions']
+                expected = [{'action': '*', 'resource': '*', 'effect': 'deny'}]
+                if stage not in ('compare', 'repair'):
+                    expected += [{'action': action, 'resource': '*', 'effect': 'allow'}
+                                 for action in ('read', 'glob', 'grep')]
+                    expected.append({'action': 'external_directory', 'resource': pattern, 'effect': 'allow'})
+                self.assertEqual(permissions, expected)
+
+    def test_source_map_directory_wildcards_cannot_expand_external_access(self):
+        for wildcard in ('*', '?'):
+            with self.subTest(wildcard=wildcard):
+                directory = Path('private output') / ('run' + wildcard) / 'source-maps'
+                with self.assertRaises(ContractError) as caught:
+                    adapter.prepare_environment({}, 'study', source_maps_directory=directory)
+                self.assertEqual(caught.exception.failure_kind, 'BACKEND_INCOMPATIBLE')
+                self.assertEqual(caught.exception.failure_layer, 'compatibility')
+                self.assertIn(directory.resolve().as_posix(), str(caught.exception))
+
     def test_final_answer_only_with_split_and_backfilled_text(self):
         earlier = transcript({'ignore': True})
         for event in earlier:

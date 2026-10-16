@@ -58,18 +58,20 @@ class ConfigTests(FolderFixture):
 
     def test_source_context_and_read_guard_defaults_and_disable(self):
         config = self.config()
-        self.assertEqual(config['source_context'], {'enabled': True})
+        self.assertEqual(config['source_context'], {'enabled': True, 'mode': 'on-demand'})
         self.assertTrue(config['execution']['read_loop_guard'])
         self.value['source_context'] = {'enabled': False}
         self.value['execution']['read_loop_guard'] = False
         config = self.config()
-        self.assertEqual(config['source_context'], {'enabled': False})
+        self.assertEqual(config['source_context'], {'enabled': False, 'mode': 'on-demand'})
         self.assertFalse(config['execution']['read_loop_guard'])
+        self.value['source_context'] = {'mode': 'full'}
+        self.assertEqual(self.config()['source_context'], {'enabled': True, 'mode': 'full'})
 
     def test_invalid_source_context_and_read_guard_before_backend_lookup(self):
         original = copy.deepcopy(self.value)
         invalid = [None, False, [], {'other': 1}, {'enabled': 1}, {'enabled': 'true'},
-                   {'enabled': None}, {'max_bytes': 65536}]
+                   {'enabled': None}, {'max_bytes': 65536}, {'mode': None}, {'mode': 'lazy'}, {'mode': []}]
         for value in invalid:
             self.value = copy.deepcopy(original) | {'source_context': value}
             with self.subTest(value=value), patch('src.runtime.config.shutil.which') as which:

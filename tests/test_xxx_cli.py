@@ -44,6 +44,33 @@ class XXXCLITests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ContractError):
                 xxx.prepare_environment({'OPENCODE_CONFIG_CONTENT': value}, 'study')
 
+    def test_symbol_maps_allow_only_the_current_external_directory(self):
+        directory = Path('private output/source-maps')
+        pattern = directory.resolve().as_posix() + '/*'
+        for stage in ('study', 'review', 'revise', 'compare', 'repair'):
+            with self.subTest(stage=stage):
+                env = {}
+                name = xxx.prepare_environment(env, stage, source_maps_directory=directory)
+                permission = json.loads(env['OPENCODE_CONFIG_CONTENT'])['agent'][name]['permission']
+                if stage == 'compare':
+                    self.assertEqual(permission, {'*': 'deny'})
+                elif stage == 'repair':
+                    self.assertEqual(permission['external_directory'], 'deny')
+                else:
+                    self.assertEqual(permission, {'*': 'deny', 'read': 'allow', 'glob': 'allow',
+                        'grep': 'allow', 'list': 'allow', 'external_directory': {'*': 'deny', pattern: 'allow'}})
+                    self.assertEqual(list(permission['external_directory']), ['*', pattern])
+
+    def test_source_map_directory_wildcards_cannot_expand_external_access(self):
+        for wildcard in ('*', '?'):
+            with self.subTest(wildcard=wildcard):
+                directory = Path('private output') / ('run' + wildcard) / 'source-maps'
+                with self.assertRaises(ContractError) as caught:
+                    xxx.prepare_environment({}, 'study', source_maps_directory=directory)
+                self.assertEqual(caught.exception.failure_kind, 'BACKEND_INCOMPATIBLE')
+                self.assertEqual(caught.exception.failure_layer, 'compatibility')
+                self.assertIn(directory.resolve().as_posix(), str(caught.exception))
+
     def test_success_duplicates_and_missing_terminal_event(self):
         for scenario in ('', 'duplicate', 'missing-finish'):
             output, exported = transcript({'ok': True}, scenario=scenario)

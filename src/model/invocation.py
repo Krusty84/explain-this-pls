@@ -20,7 +20,7 @@ from src.reports.final_report import recoverable_material
 from src.analysis.ledger import prepare_result
 from src.analysis.evidence import source_catalog, SourceChanged
 from src.model.model_context import (CONTEXT_FORMAT, build_model_prompt, input_measurements,
-                                     serialize_model_input)
+                                     on_demand_source_index, serialize_model_input)
 from src.analysis.coverage_plan import inventory_summary, build_coverage_plan
 from src.runtime.errors import AuditError, UnsafeRepository
 from src.runtime.artifacts import now, digest, private_directory, neutral_temporary_base, append_observation
@@ -137,22 +137,6 @@ class ModelInvoker:
         variant = context.get('prompt_variant', stage)
         template = Path(self.session.cfg['_prompt_paths'][variant]).read_text()
         reports_only = stage == 'compare'
-        # Assemble only this stage's inputs; the configured CLI profile remains available.
-        projected = binding.project(context)
-        context_json = serialize_model_input(projected)
-        schema = binding.schema
-        schema_json = serialize_model_input(schema)
-        prompt = build_model_prompt(template, context_json, schema_json, agent['backend'],
-                                    source_index='source_context' in projected)
-        measurements = input_measurements(template, context_json, schema_json, prompt,
-            source_context=context.get('source_context'),
-            transmitted_source_context=projected.get('source_context'))
-        if preparation is not None and 'source_index' in measurements:
-            index_sizes = measurements['source_index']
-            preparation = dict(preparation, original_bytes=index_sizes['original_utf8_bytes'],
-                transmitted_bytes=index_sizes['transmitted_utf8_bytes'],
-                saved_bytes=index_sizes['saved_utf8_bytes'], reduction_percent=index_sizes['reduction_percent'])
-        payload = prompt.encode('utf-8')
         private_directory(destination)
         # Exclusive creation preserves every orchestrator-managed attempt.
         number = 1
@@ -163,12 +147,45 @@ class ModelInvoker:
                 break
             except FileExistsError:
                 number += 1
-        meta = {'stage': stage, 'invocation_id': str(uuid.uuid4()), 'started_at': now(),
+        # Assemble only this stage's inputs; the configured CLI profile remains available.
+        projected = binding.project(context)
+        source_maps_directory, source_maps = None, {}
+        if ('source_context' in projected and
+                self.session.source_context.settings['mode'] == 'on-demand'):
+            source_maps_directory = attempt / 'source-maps'
+            private_directory(source_maps_directory)
+            projected['source_context'], source_maps = on_demand_source_index(
+                projected['source_context'], source_maps_directory)
+        meta = {'attempt_hashes': attempt_hashes}
+        for name, value in source_maps.items():
+            self.attempts.save_attempt_value(attempt, 'source-maps/' + name, value, meta)
+        stored_bytes = sum(attempt_hashes[str((attempt / 'source-maps' / name)
+                           .relative_to(destination.parent))]['bytes'] for name in source_maps)
+        context_json = serialize_model_input(projected)
+        schema = binding.schema
+        schema_json = serialize_model_input(schema)
+        prompt = build_model_prompt(template, context_json, schema_json, agent['backend'],
+                                    source_index='source_context' in projected)
+        measurements = input_measurements(template, context_json, schema_json, prompt,
+            source_context=context.get('source_context'),
+            transmitted_source_context=projected.get('source_context'), stored_map_utf8_bytes=stored_bytes)
+        if preparation is not None and 'source_index' in measurements:
+            index_sizes = measurements['source_index']
+            preparation = dict(preparation, original_bytes=index_sizes['original_utf8_bytes'],
+                transmitted_bytes=index_sizes['transmitted_utf8_bytes'],
+                saved_bytes=index_sizes['saved_utf8_bytes'], reduction_percent=index_sizes['reduction_percent'])
+            preparation['delivery'] = self.session.source_context.settings['mode']
+            preparation['packed_full_index_utf8_bytes'] = index_sizes['packed_full_index_utf8_bytes']
+            preparation['stored_map_utf8_bytes'] = stored_bytes
+            if source_maps_directory is not None:
+                preparation['files'] = [dict(file, symbols_transmitted=0) for file in preparation['files']]
+        payload = prompt.encode('utf-8')
+        meta.update({'stage': stage, 'invocation_id': str(uuid.uuid4()), 'started_at': now(),
             'backend': agent['backend'], 'executable': agent['executable'],
             'model_requested': agent.get('model'), 'cli_version': self.session.versions.get(agent['backend'] + ':' + agent['executable']),
             'prompt_sha256': digest(payload), 'template_sha256': digest(template.encode()),
             'schema_sha256': digest(json.dumps(schema, sort_keys=True).encode()),
-            'input_bytes': len(payload), 'status': 'RUNNING'}
+            'input_bytes': len(payload), 'status': 'RUNNING'})
         meta['input_measurements'] = measurements
         meta.update(attempt=attempt.name, artifact_directory=str(attempt), api_version=None,
                     model_actual=None, request_id=None, session_id=None, message_id=None,
@@ -200,6 +217,7 @@ class ModelInvoker:
         observer.seed_prompt(context.get('source_context', {}).get('fragments', []))
         try:
             self.attempts.save_binding(binding, None, None, attempt, meta)
+            self.attempts.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
             budget.check()
             self.publisher.assert_coverage_file(context)
             if self.session.folder:
@@ -218,7 +236,8 @@ class ModelInvoker:
                 artifacts.save_json(schema_path, schema)
                 try:
                     if agent['backend'] == 'xxx':
-                        cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only, schema=schema)
+                        cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only,
+                                           schema=schema, source_maps_directory=source_maps_directory)
                         data, provider_meta = xxx.invoke(cmd, cwd, env, payload, process=process_runtime.process,
                             artifacts=attempt, budget=budget, meta=meta, observer=observer, process_options={
                                 'reporter': self.session.reporter, 'context': self.session.stage_context(stage, context),
@@ -232,7 +251,8 @@ class ModelInvoker:
                     else:
                         if agent['backend'] == 'opencode':
                             opencode_cli.verify_version(meta['cli_version'])
-                        cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only, schema=schema)
+                        cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only,
+                                           schema=schema, source_maps_directory=source_maps_directory)
                         r = None
                         meta['prompt_sent'] = True
                         try:
@@ -363,6 +383,7 @@ class ModelInvoker:
                 artifacts.save_json(destination / 'invocation.json', meta)
             raise
 
-    def command(self, stage, state, agent, schema_path, env, *, reports_only=False, schema=None):
+    def command(self, stage, state, agent, schema_path, env, *, reports_only=False, schema=None,
+                source_maps_directory=None):
         return command(self.session, stage, state, agent, schema_path, env,
-                       reports_only=reports_only, schema=schema)
+                       reports_only=reports_only, schema=schema, source_maps_directory=source_maps_directory)

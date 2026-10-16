@@ -132,11 +132,13 @@ class PublicationTests(FolderFixture):
         destination = runner.session.run_dir / 'study.logs'
         with patch('src.runtime.process.process', side_effect=self.process_for(data, context)):
             runner.invoke('study', context, destination)
-        first = {p.name: p.read_bytes() for p in (destination / 'attempt-001').iterdir()}
+        attempt = destination / 'attempt-001'
+        first = {str(p.relative_to(attempt)): p.read_bytes() for p in attempt.rglob('*') if p.is_file()}
         with patch('src.runtime.process.process', side_effect=self.process_for(data | {'unexpected_field': True}, context)):
             with self.assertRaises(ContractError):
                 runner.invoke('study', context, destination)
-        self.assertEqual(first, {p.name: p.read_bytes() for p in (destination / 'attempt-001').iterdir()})
+        self.assertEqual(first, {str(p.relative_to(attempt)): p.read_bytes()
+                                 for p in attempt.rglob('*') if p.is_file()})
         summary = json.loads((destination / 'invocation.json').read_text())
         self.assertEqual(summary['attempt'], 'attempt-002')
         self.assertEqual(summary['status'], 'FAILED')

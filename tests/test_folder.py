@@ -440,7 +440,12 @@ class FolderCLIIntegrationTests(FolderFixture):
                             self.assertNotIn('features.shell_tool=false', args)
                         else:
                             self.assertEqual(call['permissions'], {'*': 'deny', 'read': 'allow',
-                                'glob': 'allow', 'grep': 'allow'})
+                                'glob': 'allow', 'grep': 'allow', 'external_directory': 'allow'})
+                            external = [rule for rule in call['permission_rules']
+                                if rule['action'] == 'external_directory' and rule['effect'] == 'allow']
+                            maps = Path(context['source_context']['maps_root'])
+                            self.assertEqual(external, [{'action': 'external_directory',
+                                'resource': maps.resolve().as_posix() + '/*', 'effect': 'allow'}])
                     if not check:
                         self.assertNotIn('architecture_document', invocations[0]['context'])
                         self.assertEqual(invocations[1]['context']['architecture_document']['report_markdown'], manifest['study']['report_markdown'])

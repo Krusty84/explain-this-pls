@@ -4,6 +4,7 @@
 """XXX / OpenCode 1.2.27 CLI: one run, a verified export, owned-session cleanup."""
 import copy
 import json
+from pathlib import Path
 import re
 import secrets
 import sys
@@ -68,7 +69,7 @@ def required_flags(mode):
     return ['--format', '--agent', '--model', '--title']
 
 
-def prepare_environment(env, stage):
+def prepare_environment(env, stage, *, source_maps_directory=None):
     try:
         config = strict_json(env.get('OPENCODE_CONFIG_CONTENT') or '{}')
         if type(config) is not dict or type(config.get('agent', {})) is not dict:
@@ -80,6 +81,12 @@ def prepare_environment(env, stage):
     if stage != 'compare':
         permission.update(read='allow', glob='allow', grep='allow', list='allow')
         permission['external_directory'] = 'deny'
+        if stage != 'repair' and source_maps_directory is not None:
+            directory = Path(source_maps_directory).resolve().as_posix()
+            if '*' in directory or '?' in directory:
+                raise response_error('BACKEND_INCOMPATIBLE', 'compatibility',
+                                     'Source map directory cannot contain * or ?: ' + directory)
+            permission['external_directory'] = {'*': 'deny', directory + '/*': 'allow'}
     name = 'architecture-audit-' + secrets.token_hex(16)
     config.setdefault('agent', {})[name] = {'mode': 'primary', 'permission': permission}
     config['share'] = 'disabled'

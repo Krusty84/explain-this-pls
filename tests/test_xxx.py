@@ -247,7 +247,13 @@ class XXXTests(unittest.TestCase):
         self.assertEqual(len([c for c in self.recorded() if c['args'][0] == 'export' and '--help' not in c['args']]), 2)
         self.assertEqual(len([c for c in self.recorded() if c['args'][:2] == ['session', 'delete'] and '--help' not in c['args']]), 2)
         for call in calls:
-            self.assertEqual(call['permissions'], {'*': 'deny', 'read': 'allow', 'glob': 'allow', 'grep': 'allow', 'list': 'allow', 'external_directory': 'deny'})
+            maps = Path(call['context']['source_context']['maps_root'])
+            self.assertEqual(maps.name, 'source-maps')
+            self.assertTrue(maps.is_relative_to(self.run_dir))
+            self.assertFalse(maps.is_relative_to(self.source))
+            self.assertEqual(call['permissions'], {'*': 'deny', 'read': 'allow', 'glob': 'allow',
+                'grep': 'allow', 'list': 'allow', 'external_directory': {
+                    '*': 'deny', maps.resolve().as_posix() + '/*': 'allow'}})
             self.assertNotIn('--model', call['args'])
             self.assertEqual(call['config']['share'], 'disabled')
         self.assertEqual(manifest['study_invocation']['retry_policy']['orchestrator_retries'], 0)
@@ -264,6 +270,15 @@ class XXXTests(unittest.TestCase):
         self.assertEqual(manifest['study_invocation']['compaction']['completed'], 2)
         self.assertEqual(manifest['metrics']['usage']['total_tokens'], 60)
         self.assertEqual(len(self.prompts()), 2)
+
+    def test_full_source_index_keeps_external_artifacts_denied(self):
+        self.value['source_context'] = {'mode': 'full'}
+        manifest, code = self.run_case()
+        self.assertEqual(code, 0, manifest)
+        for call in self.prompts():
+            self.assertEqual(call['permissions']['external_directory'], 'deny')
+            self.assertEqual(call['context']['source_context']['delivery'], 'full')
+        self.assertFalse(list(self.run_dir.rglob('source-maps')))
 
     def test_fenced_json_completes_publication_with_original_logs(self):
         from src.runtime import process as process_runtime

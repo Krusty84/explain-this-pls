@@ -77,9 +77,12 @@
 
   // One monotonic budget per stage. null disables the optional idle deadline.
   // opencode_format_retries is retained for compatibility and has no effect.
-  // Full index-only file/symbol map. Implementations use native read-only tools.
+  // Full inventory is parsed. Read symbol maps on demand with native read-only tools.
   "source_context": {
     "enabled": true,
+    // Default: "on-demand". "full" sends all symbols in the initial prompt.
+    // enabled=false disables map preparation and export in either mode.
+    "mode": "on-demand",
   },
   "execution": {
     // Stop only after 50 confirmed repeated tool results spanning 120 seconds.

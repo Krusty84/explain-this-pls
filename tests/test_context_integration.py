@@ -72,6 +72,7 @@ class PreparedContextTests(FolderFixture):
         self.assertEqual(preparation['reduction_percent'], source_index['reduction_percent'])
 
     def test_same_preparation_all_backends_and_source_scope(self):
+        self.value['source_context'] = {'mode': 'full'}
         declarations = 1000
         (self.source / 'api.js').write_text('export class Service {\n  run() { return "private body"; }\n}\n' +
             ''.join(f'function operation{i:04d}() {{ return "private function body"; }}\n'
@@ -124,6 +125,77 @@ class PreparedContextTests(FolderFixture):
         self.assertEqual(len(seeded), sum(len(context) for context in contexts))
         self.assertTrue(all(fragments == [] and lines == 0 and delivered == {}
                             for fragments, lines, delivered in seeded))
+
+    def test_default_on_demand_maps_all_backends_and_independent_reviews(self):
+        (self.source / 'empty.py').write_text('')
+        (self.source / 'notes.txt').write_text('No declarations here.\n')
+        (self.source / 'кириллица.py').write_text('class Корень:\n    def метод(self): pass\n')
+        indexes = []
+        for backend in ('codex', 'opencode', 'xxx'):
+            manifest, code = self.run_case(backend=backend, large=False, review=True)
+            self.assertEqual(code, 0, manifest.get('diagnostics'))
+            roots = []
+            for call in self.calls:
+                wire = call['context']['source_context']
+                self.assertEqual(wire['delivery'], 'on-demand')
+                self.assertNotIn('symbols', wire['file_columns'])
+                self.assertNotIn('symbol_columns', wire)
+                self.assertNotIn('symbol_value_tables', wire)
+                root = Path(wire['maps_root'])
+                self.assertTrue(root.is_absolute())
+                self.assertFalse(root.is_relative_to(self.source))
+                roots.append(root)
+                restored = decode_source_context(wire)
+                indexes.append(restored)
+                records = {file['path']: file for file in restored['files']}
+                self.assertEqual(set(records), {'app.py', 'empty.py', 'notes.txt', 'кириллица.py'})
+                self.assertEqual(records['empty.py']['symbols'], [])
+                self.assertEqual(records['notes.txt']['map_reason'], 'unknown_language')
+                self.assertEqual([s['name'] for s in records['кириллица.py']['symbols']], ['Корень', 'метод'])
+                self.assertEqual(len(list(root.glob('*.json'))), 2)
+                for path in root.glob('*.json'):
+                    self.assertGreater(len(path.read_text().splitlines()), 1)
+                if backend in ('opencode', 'xxx'):
+                    cfg = json.loads(call['env']['OPENCODE_CONFIG_CONTENT'])
+                    name = call['command'][call['command'].index('--agent') + 1]
+                    permission = (cfg['agents'][name]['permissions'] if backend == 'opencode' else
+                                  cfg['agent'][name]['permission']['external_directory'])
+                    self.assertIn(root.as_posix() + '/*', json.dumps(permission))
+            self.assertEqual(len(set(roots)), len(self.calls))
+            for path in self.runner.session.run_dir.rglob('attempt-*/invocation.json'):
+                self.assert_prompt_measurements(path)
+                meta = json.loads(path.read_text())
+                stored = sum(p.stat().st_size for p in (path.parent / 'source-maps').glob('*.json'))
+                self.assertEqual(meta['input_measurements']['source_index']['stored_map_utf8_bytes'], stored)
+                preparation = json.loads((path.parent / 'source-context.manifest.json').read_text())
+                self.assertEqual(preparation['stored_map_utf8_bytes'], stored)
+                self.assertTrue(all(f['symbols_transmitted'] == 0 for f in preparation['files']))
+        self.assertTrue(all(index == indexes[0] for index in indexes))
+
+    def test_changed_missing_or_symlinked_map_blocks_publication(self):
+        for backend in ('codex', 'opencode', 'xxx'):
+            for action in ('change', 'remove', 'symlink'):
+                def change(runner, context, data):
+                    wire = context['source_context']
+                    column = wire['file_columns'].index('symbols_ref')
+                    name = next(row[column] for row in wire['files'] if row[column])
+                    path = Path(wire['maps_root']) / name
+                    if action == 'change':
+                        path.write_text('{}\n')
+                    elif action == 'remove':
+                        path.unlink()
+                    else:
+                        replacement = self.base / 'replacement.json'
+                        replacement.write_bytes(path.read_bytes())
+                        path.unlink()
+                        path.symlink_to(replacement)
+                with self.subTest(backend=backend, action=action):
+                    manifest, code = self.run_case(backend=backend, large=False, change=change)
+                    self.assertNotEqual(code, 0)
+                    self.assertTrue(manifest['critical_failure'])
+                    meta = json.loads(next(self.runner.session.run_dir.rglob('study.logs/invocation.json')).read_text())
+                    self.assertFalse(meta['publication_complete'])
+                    self.assertEqual(meta['error']['code'], 'MODEL_BINDING_CHANGED')
 
     def test_disabled_context_and_projection_exclusions(self):
         self.value['source_context'] = {'enabled': False}

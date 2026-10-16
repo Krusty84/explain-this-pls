@@ -365,8 +365,9 @@ class ContextTests(unittest.TestCase):
         self.assert_complete_index(payload, manifest)
 
     def test_configuration_is_strict(self):
-        self.assertEqual(source_context_settings(), {'enabled': True})
-        self.assertEqual(source_context_settings({'enabled': False}), {'enabled': False})
+        self.assertEqual(source_context_settings(), {'enabled': True, 'mode': 'on-demand'})
+        self.assertEqual(source_context_settings({'enabled': False}), {'enabled': False, 'mode': 'on-demand'})
+        self.assertEqual(source_context_settings({'mode': 'full'}), {'enabled': True, 'mode': 'full'})
         for value in [{'enabled': 1}, {'enabled': 'false'}, {'max_bytes': 65536}, {'unknown': True}, []]:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 source_context_settings(value)

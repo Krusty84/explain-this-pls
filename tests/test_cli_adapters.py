@@ -4,17 +4,19 @@
 """Offline compatibility checks for the standalone CLI adapters."""
 import itertools
 import json
+from fnmatch import fnmatchcase
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.backends import codex
+from src.backends import codex, opencode_cli, preflight, xxx
 from src.contracts.contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS
 from src.runtime.errors import AuditError
 from src.runtime.runner import Runner
@@ -27,6 +29,47 @@ REQUIRED_FLAGS = {
 
 
 class CLIAdapterTests(unittest.TestCase):
+    def test_source_map_permissions_resolve_symlinks_without_allowing_sibling_logs(self):
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / 'attempt/source-maps'
+            directory.mkdir(parents=True)
+            alias = Path(raw) / 'maps-link'
+            alias.symlink_to(directory, target_is_directory=True)
+            expected = directory.resolve().as_posix() + '/*'
+            for adapter in (opencode_cli, xxx):
+                with self.subTest(adapter=adapter.__name__):
+                    env = {}
+                    name = adapter.prepare_environment(env, 'study', source_maps_directory=alias)
+                    config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+                    if adapter is xxx:
+                        patterns = [pattern for pattern, effect in
+                            config['agent'][name]['permission']['external_directory'].items() if effect == 'allow']
+                    else:
+                        patterns = [rule['resource'] for rule in config['agents'][name]['permissions']
+                            if rule['action'] == 'external_directory' and rule['effect'] == 'allow']
+                    self.assertEqual(patterns, [expected])
+                    self.assertTrue(fnmatchcase((directory / 'M-000001.json').as_posix(), expected))
+                    self.assertFalse(fnmatchcase((directory.parent / 'stdout.log').as_posix(), expected))
+                    self.assertFalse(fnmatchcase((directory.parent / 'source-maps-other/M-000001.json').as_posix(), expected))
+
+    def test_source_map_directory_reaches_only_external_read_permissions(self):
+        session = SimpleNamespace(mode='git', schemas={'study': {}})
+        state, schema_path = Path('/state'), Path('/state/schema.json')
+        directory = Path('/private output/source-maps')
+        for backend, adapter in (('opencode', opencode_cli), ('xxx', xxx)):
+            for reports_only in (False, True):
+                with self.subTest(backend=backend, reports_only=reports_only):
+                    env = {}
+                    with patch.object(adapter, 'prepare_environment', return_value='audit') as prepare:
+                        preflight.command(session, 'study', state, {'backend': backend, 'executable': 'cli'},
+                            schema_path, env, reports_only=reports_only, source_maps_directory=directory)
+                    prepare.assert_called_once_with(env, 'compare' if reports_only else 'study',
+                        source_maps_directory=directory)
+        command = preflight.command(session, 'study', state, {'backend': 'codex', 'executable': 'cli'},
+            schema_path, {}, source_maps_directory=directory)
+        self.assertEqual(command[command.index('--sandbox') + 1], 'read-only')
+        self.assertNotIn('--add-dir', command)
+
     def test_commands_preserve_permissions_schema_and_model_selection(self):
         schema_path = Path('/private output/schema.json')
         for backend, adapter in ADAPTERS.items():
