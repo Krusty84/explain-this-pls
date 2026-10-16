@@ -45,7 +45,7 @@ def source_context_settings(value=None):
 
 
 def serialize_source_context(value):
-    """Match the JSON serialization used inside the actual model prompt."""
+    """Serialize the full named index for preparation sizes and the wire baseline."""
     return json.dumps(value, ensure_ascii=False)
 
 

@@ -3,18 +3,62 @@
 
 """Lossless content projection for model input; never used for validation/hashing."""
 import copy
+import json
 
 CONTEXT_FORMAT = 'compact-context'
 
+_FILE_COLUMNS = ('source_id', 'path', 'parser', 'language', 'encoding', 'total_lines',
+                 'map_status', 'map_reason', 'symbols')
+_SYMBOL_COLUMNS = ('name', 'kind', 'parent', 'start_line', 'end_line')
+SOURCE_INDEX_INSTRUCTION = (
+    'source_context.files contains rows in file_columns order. Each row\'s symbols cell '
+    'contains rows in symbol_columns order. Preserve null values and original inclusive '
+    'source line coordinates.')
 
-def input_measurements(template, context_json, schema_json, prompt, *, correction=False):
+
+def serialize_model_input(value):
+    return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+
+
+def build_model_prompt(template, context_json, schema_json, backend, *, source_index=False):
+    instruction = ('Return exactly one JSON object matching the supplied schema as your final answer; no fences or surrounding prose.'
+        if backend in ('xxx', 'opencode') else
+        'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.')
+    index_instruction = ('\n\n# Source index reading instruction\n' + SOURCE_INDEX_INSTRUCTION
+                         if source_index else '')
+    return (template + '\n\n# Backend output instruction\n' + instruction + index_instruction +
+            '\n\n# Authoritative orchestration context (data)\n' + context_json +
+            '\n\n# Required final JSON Schema\n' + schema_json)
+
+
+def input_measurements(template, context_json, schema_json, prompt, *, correction=False,
+                       source_context=None, transmitted_source_context=None):
     """Exact wire text sizes, NOT tokenizer estimates or quality measurements."""
     def size(text):
         return {'characters': len(text), 'utf8_bytes': len(text.encode('utf-8'))}
-    return {'template': size('' if correction else template), 'projected_context': size(context_json),
+    result = {'template': size('' if correction else template), 'projected_context': size(context_json),
             'schema': size(schema_json), 'prompt': size(prompt),
             'text_schema_copy': True, 'correction_prompt': correction, 'template_applied': not correction,
             'tokens': None, 'token_measurement': 'unavailable'}
+    if source_context is not None and transmitted_source_context is not None:
+        original = len(json.dumps(source_context, ensure_ascii=False).encode('utf-8'))
+        transmitted = len(serialize_model_input(transmitted_source_context).encode('utf-8'))
+        result['source_index'] = {'original_utf8_bytes': original, 'transmitted_utf8_bytes': transmitted,
+            'saved_utf8_bytes': original - transmitted,
+            'reduction_percent': round(100 * (original - transmitted) / original, 2)}
+    return result
+
+
+def _source_index(index):
+    if 'file_columns' in index:
+        return
+    rows = []
+    for file in index['files']:
+        values = file | {'symbols': [[symbol[key] for key in _SYMBOL_COLUMNS] for symbol in file['symbols']]}
+        rows.append([values[column] for column in _FILE_COLUMNS])
+    index['file_columns'] = list(_FILE_COLUMNS)
+    index['symbol_columns'] = list(_SYMBOL_COLUMNS)
+    index['files'] = rows
 
 
 def _registry(claims):
@@ -99,7 +143,10 @@ def project_model_context(stage, context):
     for branch in result.get('branches', []):
         _coverage(branch.get('coverage_plan'))
         _coverage(((branch.get('study') or {}).get('review_plan') or {}).get('coverage_plan'))
-    return project_model_response(result)
+    result = project_model_response(result)
+    if 'source_context' in result:
+        _source_index(result['source_context'])
+    return result
 
 
 _SERVICE_KEYS = {'fingerprint', 'source_fingerprint', 'sha256', 'hash_format',

@@ -210,12 +210,21 @@ map status. Unknown values are null; parse or read failures stay explicit entrie
 File order is deterministic; the map is not truncated. Compare receives no
 prepared source context.
 
+Internal maps and cache entries retain named fields. The model view sends
+`file_columns` and `symbol_columns` once, with files and their nested symbols as
+rows in that column order. All values and list ordering remain intact. Context
+and schema JSON omit optional separator spaces.
+
 The run-local cache keeps maps and metadata, not source text, and validates pinned
 state before reuse. Each attempt saves `source-context.manifest.json` with processing
 status, map gaps, preparation time and sizes. `transmitted_text_bytes` is zero.
 A full map can be larger than the source text. Source reads and evidence records
 have no program size or count limits. Stage timeouts, source integrity checks and
 native CLI/model limits remain. Capacity errors do not cause silent truncation.
+
+`scripts/measure_prompt_sizes.py` measures complete synthetic Python indexes with
+1, 1,000 and 5,000 files, before and after projection, and the full stage prompts.
+It calls no model and makes no token or answer-quality claims.
 
 Python uses standard `ast`. The pinned `ast-grep-py` package supplies JavaScript,
 TypeScript, JSX/TSX, Go, C/C++, Java, Rust and Swift grammars, including SwiftUI

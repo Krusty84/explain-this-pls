@@ -586,6 +586,13 @@ source, relative path, parser version, language, encoding, line count and map
 status; unavailable values are null. Unknown languages, partial parses and read
 failures remain visible. Comparison receives no source map.
 
+The model view uses `file_columns` in this order: `source_id`, `path`, `parser`,
+`language`, `encoding`, `total_lines`, `map_status`, `map_reason`, `symbols`.
+`files` contains rows of values in that order. Each `symbols` value contains rows
+in `symbol_columns` order: `name`, `kind`, `parent`, `start_line`, `end_line`.
+All values and list ordering remain intact. Internal maps, cache entries and
+manifests retain named fields. The manifest transfer size measures the model view.
+
 Maps are ordered deterministically and are not cut to a size quota. The run-local
 cache holds only maps and metadata and validates pinned state before reuse.
 The manifest records completeness, reasons, preparation time and transfer size;
@@ -922,6 +929,11 @@ Compromise recovery uses only the original response after its identity has
 been verified; it never promotes contract-invalid text to acceptance.
 
 Invocation metadata records `context_format: "compact-context"`.
+Context and schema JSON omit optional separator spaces. Input measurements record
+exact character and UTF-8 byte counts; they do not estimate tokens or answer quality.
+With a source map, `input_measurements.source_index` records `original_utf8_bytes`,
+`transmitted_utf8_bytes`, `saved_utf8_bytes` and `reduction_percent`. The original
+uses named fields and legacy separator spaces; the transmitted view uses compact rows.
 `input.prompt.txt` contains the exact request actually sent, with its hash recorded
 in invocation metadata. The backend receives the model schema, while local
 validation and publication use expanded internal and saved schemas.

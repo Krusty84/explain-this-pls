@@ -19,8 +19,8 @@ from src.model.structured_output import retry_policy
 from src.reports.final_report import recoverable_material
 from src.analysis.ledger import prepare_result
 from src.analysis.evidence import source_catalog, SourceChanged
-from src.model.model_context import CONTEXT_FORMAT
-from src.analysis.source_context import serialize_source_context
+from src.model.model_context import (CONTEXT_FORMAT, build_model_prompt, input_measurements,
+                                     serialize_model_input)
 from src.analysis.coverage_plan import inventory_summary, build_coverage_plan
 from src.runtime.errors import AuditError, UnsafeRepository
 from src.runtime.artifacts import now, digest, private_directory, neutral_temporary_base, append_observation
@@ -137,21 +137,21 @@ class ModelInvoker:
         variant = context.get('prompt_variant', stage)
         template = Path(self.session.cfg['_prompt_paths'][variant]).read_text()
         reports_only = stage == 'compare'
-        output_instruction = ('Return exactly one JSON object matching the supplied schema as your final answer; no fences or surrounding prose.'
-            if agent['backend'] in ('xxx', 'opencode') else
-            'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.')
         # Assemble only this stage's inputs; the configured CLI profile remains available.
         projected = binding.project(context)
-        context_json = json.dumps(projected, ensure_ascii=False)
-        if 'source_context' in projected:
-            transmitted = len(serialize_source_context(projected['source_context']).encode('utf-8'))
-            if preparation is not None:
-                preparation = dict(preparation, transmitted_bytes=transmitted)
+        context_json = serialize_model_input(projected)
         schema = binding.schema
-        schema_json = json.dumps(schema, ensure_ascii=False)
-        prompt = (template + '\n\n# Backend output instruction\n' + output_instruction +
-                  '\n\n# Authoritative orchestration context (data)\n' +
-                  context_json + '\n\n# Required final JSON Schema\n' + schema_json)
+        schema_json = serialize_model_input(schema)
+        prompt = build_model_prompt(template, context_json, schema_json, agent['backend'],
+                                    source_index='source_context' in projected)
+        measurements = input_measurements(template, context_json, schema_json, prompt,
+            source_context=context.get('source_context'),
+            transmitted_source_context=projected.get('source_context'))
+        if preparation is not None and 'source_index' in measurements:
+            index_sizes = measurements['source_index']
+            preparation = dict(preparation, original_bytes=index_sizes['original_utf8_bytes'],
+                transmitted_bytes=index_sizes['transmitted_utf8_bytes'],
+                saved_bytes=index_sizes['saved_utf8_bytes'], reduction_percent=index_sizes['reduction_percent'])
         payload = prompt.encode('utf-8')
         private_directory(destination)
         # Exclusive creation preserves every orchestrator-managed attempt.
@@ -169,9 +169,7 @@ class ModelInvoker:
             'prompt_sha256': digest(payload), 'template_sha256': digest(template.encode()),
             'schema_sha256': digest(json.dumps(schema, sort_keys=True).encode()),
             'input_bytes': len(payload), 'status': 'RUNNING'}
-        from src.model.model_context import input_measurements
-        meta['input_measurements'] = input_measurements(template, context_json, schema_json, prompt,
-                                                       correction=False)
+        meta['input_measurements'] = measurements
         meta.update(attempt=attempt.name, artifact_directory=str(attempt), api_version=None,
                     model_actual=None, request_id=None, session_id=None, message_id=None,
                     finish_reason=None, output_bytes=None, execution=self.session.execution)

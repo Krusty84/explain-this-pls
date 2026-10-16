@@ -16,10 +16,12 @@ from src.runtime.process import check_read_loop, cli_env, process
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
 from fixtures.xxx_protocol import transcript
-from src.model.model_context import project_model_context
+from src.model.model_context import (SOURCE_INDEX_INSTRUCTION, build_model_prompt,
+                                     project_model_context, serialize_model_input)
 from src.runtime.execution import Budget
 from src.runtime.tool_observer import ToolObserver
 from test_folder import FolderFixture
+from test_model_context import decode_source_context
 from fixtures.study_runner import run_case
 
 
@@ -31,6 +33,43 @@ def command_event(index):
 
 class PreparedContextTests(FolderFixture):
     run_case = run_case
+
+    def assert_prompt_measurements(self, path):
+        invocation = json.loads(path.read_text())
+        raw = (path.parent / 'input.prompt.txt').read_bytes()
+        prompt = raw.decode('utf-8')
+        context_json, schema_json = prompt.split('\n\n# Authoritative orchestration context (data)\n', 1)[1].split(
+            '\n\n# Required final JSON Schema\n', 1)
+        measurements = invocation['input_measurements']
+        self.assertEqual(invocation['input_bytes'], len(raw))
+        for name, value in (('prompt', prompt), ('projected_context', context_json), ('schema', schema_json)):
+            self.assertEqual(measurements[name], {'characters': len(value), 'utf8_bytes': len(value.encode('utf-8'))})
+        self.assertEqual(context_json, serialize_model_input(json.loads(context_json)))
+        self.assertEqual(schema_json, serialize_model_input(json.loads(schema_json)))
+        self.assertIsNone(measurements['tokens'])
+        context = json.loads(context_json)
+        if 'source_context' not in context:
+            self.assertNotIn('source_index', measurements)
+            self.assertNotIn(SOURCE_INDEX_INSTRUCTION, prompt)
+            self.assertNotIn('# Source index reading instruction', prompt)
+            return
+        self.assertEqual(prompt.count(SOURCE_INDEX_INSTRUCTION), 1)
+        self.assertEqual(prompt.count('# Source index reading instruction'), 1)
+        transmitted = context['source_context']
+        original = decode_source_context(transmitted)
+        original_bytes = len(json.dumps(original, ensure_ascii=False).encode('utf-8'))
+        transmitted_bytes = len(serialize_model_input(transmitted).encode('utf-8'))
+        saved_bytes = original_bytes - transmitted_bytes
+        source_index = measurements['source_index']
+        self.assertEqual(source_index['original_utf8_bytes'], original_bytes)
+        self.assertEqual(source_index['transmitted_utf8_bytes'], transmitted_bytes)
+        self.assertEqual(source_index['saved_utf8_bytes'], saved_bytes)
+        self.assertAlmostEqual(source_index['reduction_percent'], saved_bytes * 100 / original_bytes, places=2)
+        preparation = json.loads((path.parent / 'source-context.manifest.json').read_text())
+        self.assertEqual(preparation['original_bytes'], original_bytes)
+        self.assertEqual(preparation['transmitted_bytes'], transmitted_bytes)
+        self.assertEqual(preparation['saved_bytes'], saved_bytes)
+        self.assertEqual(preparation['reduction_percent'], source_index['reduction_percent'])
 
     def test_same_preparation_all_backends_and_source_scope(self):
         declarations = 1000
@@ -48,12 +87,12 @@ class PreparedContextTests(FolderFixture):
         contexts = []
         for backend in ('codex', 'opencode', 'xxx'):
             with patch.object(ToolObserver, 'seed_prompt', autospec=True, side_effect=seed):
-                manifest, code = self.run_case(backend=backend)
+                manifest, code = self.run_case(backend=backend, review=True)
             self.assertEqual(code, 0, manifest.get('diagnostics'))
             contexts.append([call['context'].get('source_context') for call in self.calls])
             for call in self.calls:
                 context = call['context']
-                index = context['source_context']
+                index = decode_source_context(context['source_context'])
                 self.assertEqual(index['mode'], 'index-only')
                 self.assertEqual(index['fragments'], [])
                 self.assertGreater(len(json.dumps(index, ensure_ascii=False).encode()), 65536)
@@ -70,6 +109,10 @@ class PreparedContextTests(FolderFixture):
                 self.assertEqual(sum(len(f['symbols']) for f in index['files']), declarations + 3 + len(assigned) - 1)
                 self.assertNotIn('private body', json.dumps(index))
                 self.assertNotIn('private function body', json.dumps(index))
+            attempts = list(self.runner.session.run_dir.rglob('attempt-*/invocation.json'))
+            self.assertEqual(len(attempts), len(self.calls))
+            for path in attempts:
+                self.assert_prompt_measurements(path)
             manifests = list(self.runner.session.run_dir.rglob('source-context.manifest.json'))
             self.assertEqual(len(manifests), len(self.calls))
             for path in manifests:
@@ -84,13 +127,24 @@ class PreparedContextTests(FolderFixture):
 
     def test_disabled_context_and_projection_exclusions(self):
         self.value['source_context'] = {'enabled': False}
-        manifest, code = self.run_case(large=False)
-        self.assertEqual(code, 0, manifest.get('diagnostics'))
-        self.assertTrue(all('source_context' not in c['context'] for c in self.calls))
+        for backend in ('codex', 'opencode', 'xxx'):
+            with self.subTest(backend=backend):
+                manifest, code = self.run_case(large=False, backend=backend)
+                self.assertEqual(code, 0, manifest.get('diagnostics'))
+                self.assertTrue(all('source_context' not in c['context'] for c in self.calls))
+                self.assertTrue(all('file_columns' not in call['prompt'] and 'symbol_columns' not in call['prompt']
+                                    for call in self.calls))
+                for path in self.runner.session.run_dir.rglob('attempt-*/invocation.json'):
+                    self.assert_prompt_measurements(path)
         for stage, variant in (('compare', 'compare'), ('repair', 'repair')):
             projected = project_model_context(stage, {'source_context': {'fragments': []},
                                                      'prompt_variant': variant})
             self.assertNotIn('source_context', projected)
+            prompt = build_model_prompt('', serialize_model_input(projected), '{}', 'codex')
+            self.assertNotIn('file_columns', prompt)
+            self.assertNotIn('symbol_columns', prompt)
+            self.assertNotIn(SOURCE_INDEX_INSTRUCTION, prompt)
+            self.assertNotIn('# Source index reading instruction', prompt)
 
     def test_no_progress_keeps_inventory_plan_logs_and_metrics_without_retry(self):
         cfg = self.config()
