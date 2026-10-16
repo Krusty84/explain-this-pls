@@ -58,9 +58,51 @@ class CitationPresentationTests(unittest.TestCase):
 
     def test_one_claim_one_evidence_and_registry_definition(self):
         rendered = render_architecture(presentation_data())
-        self.assertIn('*Sources: <code>app.py:1–1</code> [E-001](#source-e-001)*', rendered)
+        self.assertIn('*Sources: [E-001](#source-e-001)*', rendered)
         self.assertIn('<a id="source-e-001"></a><code>E-001</code>', rendered)
+        self.assertIn('<code>app.py:1–1</code>', rendered)
         self.assertIn('RESOLVED; locator resolved; no quote supplied', rendered)
+
+    def test_registry_has_four_columns_and_keeps_quote_verification_distinct(self):
+        wire = response(dict(branch='main', source_commit='a' * 40))
+        wire['evidence'].append(wire['evidence'][0] | dict(id='E-002', quote='verified quote'))
+        wire['claims'][0]['evidence_ids'].append('study:E-002')
+        for language, header, matched, unquoted in (
+                ('English', 'ID | File:lines | Source | Check', 'quote matched', 'no quote supplied'),
+                ('Russian', 'ID | Файл:строки | Источник | Проверка', 'цитата совпала', 'цитата не задана')):
+            with self.subTest(language=language):
+                rendered = render_architecture(presentation_data(wire), language)
+                self.assertIn('| ' + header + ' |', rendered)
+                rows = [line for line in rendered.splitlines() if '<a id="source-e-' in line]
+                self.assertEqual(len(rows), 2)
+                self.assertTrue(all(len(row.split('|')) == 6 for row in rows))
+                self.assertIn(unquoted, rows[0])
+                self.assertIn(matched, rows[1])
+                self.assertNotIn('verified quote', rendered)
+
+    def test_source_identities_are_deduplicated_outside_locator_rows(self):
+        wire = response(dict(branch='main', source_commit='a' * 40))
+        wire['evidence'].append(wire['evidence'][0] | dict(id='E-002', path='second.py'))
+        wire['claims'][0]['evidence_ids'].append('study:E-002')
+        data = presentation_data(wire)
+        rendered = render_architecture(data)
+        registry, identities = rendered.split('### Source identities\n', 1)
+        self.assertIn('| Source | Source identity |', identities)
+        self.assertNotIn('a' * 40, registry)
+        self.assertEqual(identities.count('a' * 40), 1)
+        self.assertEqual(identities.count('<code>source-001</code>'), 1)
+        self.assertNotIn('<code>source-002</code>', identities)
+
+    def test_folder_fingerprint_appears_once_for_repeated_source(self):
+        context = dict(source_directory='/source folder', source_fingerprint='f' * 64)
+        wire = response(context)
+        wire['evidence'].append(wire['evidence'][0] | dict(id='E-002', path='second.py'))
+        wire['claims'][0]['evidence_ids'].append('study:E-002')
+        data = presentation_data(wire)
+        data['review_plan']['sources'] = source_catalog(context)
+        rendered = render_architecture(data)
+        self.assertEqual(rendered.count('f' * 64), 1)
+        self.assertEqual(rendered.count('/source folder'), 1)
 
     def test_claim_order_drives_all_unique_references(self):
         wire = response(dict(branch='main', source_commit='a' * 40))
@@ -125,6 +167,15 @@ class CitationPresentationTests(unittest.TestCase):
                 render_architecture(data)
             self.assertEqual(caught.exception.details['code'], 'UNKNOWN_REFERENCE')
 
+    def test_compact_source_references_still_validate_source_ids(self):
+        data = presentation_data()
+        with self.assertRaises(ContractError) as caught:
+            render_source_references(data['block_map'][0],
+                {entry['id']: entry for entry in data['claims']},
+                {'study:' + entry['id']: entry for entry in data['evidence']},
+                {entry['id']: entry for entry in data['program_checks']['evidence']}, {})
+        self.assertEqual(caught.exception.details['code'], 'UNKNOWN_REFERENCE')
+
     def test_submodule_path_and_pinned_identity_remain_distinct(self):
         data = presentation_data()
         data['evidence'][0]['source_id'] = 'source-002'
@@ -144,7 +195,7 @@ class CitationPresentationTests(unittest.TestCase):
         self.assertNotIn('<h2>', rendered)
         self.assertIn('&#91;click&#93;&#40;https://evil&#41;', rendered)
         self.assertIn('a&#95;b&#42;&#91;&#93;&#40;&#41;&#33;&#35;&#126;&#124;&#96;&lt;&amp;&gt;', rendered)
-        self.assertIn('<code>' + html.escape(path, quote=False) + '</code>', MarkdownIt().render(rendered))
+        self.assertIn('<code>' + html.escape(path, quote=False) + ':1–1</code>', MarkdownIt().render(rendered))
 
     def test_golden_is_deterministic_pure_and_keeps_canonical_hash_and_blocks(self):
         fixture = Path(__file__).parent / 'fixtures' / 'architecture_presentation.json'
@@ -190,8 +241,7 @@ class CitationPresentationTests(unittest.TestCase):
                     self.assertEqual(published_lines[end], '\n')
                     removed.update(range(start, end + 1))
             if token.type == 'heading_open' and token.tag == 'h3' and published_lines[token.map[0]] == '### Source registry\n':
-                next_section = next(line for line in headings if line > token.map[0])
-                removed.update(range(token.map[0], next_section))
+                removed.update(range(token.map[0], len(published_lines)))
         restored = ''.join(replacements.get(index, line) for index, line in enumerate(published_lines)
                            if index not in removed)
         self.assertEqual(restored.encode('utf-8'), data['report_markdown'].encode('utf-8'))
@@ -210,11 +260,11 @@ class CitationPresentationTests(unittest.TestCase):
                               if token.type == 'heading_open' and token.tag == 'h3'
                               and tokens[i + 1].content == title]
                 self.assertEqual(len(registries), 1)
-                self.assertLess(headings[0], registries[0])
-                self.assertLess(registries[0], headings[1])
-                scope = rendered.split('### ' + title, 1)[0]
+                self.assertEqual(len(headings), 5)
+                self.assertLess(headings[-1], registries[0])
+                narrative = rendered.split('### ' + title, 1)[0]
                 for block in data['block_map']:
-                    if block['section_key'] == 'scope': self.assertIn(block['locator']['quote'], scope)
+                    self.assertIn(block['locator']['quote'], narrative)
                 children = [child for token in tokens for child in (token.children or [])]
                 destinations = [child.attrGet('href').removeprefix('#') for child in children
                                 if child.type == 'link_open' and child.attrGet('href').startswith('#source-e-')]

@@ -311,7 +311,7 @@ Citation warnings show the evidence ID, source, path, lines, reason and affected
 claims in CLI/TUI output and report tables. `UNRESOLVED` means the citation was not
 verified; `CORRECTED` records a repaired range or common leading indentation.
 Authored blocks and FACT labels stay unchanged. Problem statuses appear beside
-linked architecture blocks; the H3 source index ends the scope section. Detailed
+linked architecture blocks; the H3 source index follows all five sections. Detailed
 warning tables stay in `study.annotated.md` and `FINAL_REPORT.md`, without a sixth H2.
 Warnings do not make unresolved citations proof. Structurally valid documents
 can be saved with unresolved evidence under either policy. `strict` blocks
@@ -400,10 +400,12 @@ select published headings. Aliases `ru`, `russian`, `русский`, `en`, `eng
 | Startup and execution | Startup and significant execution scenarios. |
 | Data and state | Storage, readers/writers, transactions and a PlantUML data-flow diagram. |
 
-Each block with linked evidence is followed by file paths, inclusive line ranges
-and evidence IDs. IDs link to the H3 source index at the end of scope. Evidence is
-deduplicated per block in structured reference order. Submodule paths include
-their source root and retain pinned source identity. Unresolved locators carry
+Each block with linked evidence is followed by compact evidence-ID links to the
+H3 source index at the end of the document. Its four columns show ID, file with
+inclusive line range, source ID and locator/quote status. Source identities appear
+once per referenced source in a separate H3 table. Evidence is deduplicated per
+block in structured reference order. Submodule paths include their source root
+and retain pinned source identity. Unresolved locators carry
 status warnings; an empty quote checks only the locator. Missing evidence gets
 no invented reference.
 

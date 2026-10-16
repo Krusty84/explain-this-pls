@@ -120,9 +120,9 @@ def render_source_references(block, claims, evidence, resolutions, sources, lang
             seen.add(identifier)
             entry = _lookup(evidence, identifier, '$.claims.evidence_ids')
             resolution = _lookup(resolutions, identifier, '$.program_checks.evidence')
-            path = _source_path(entry, resolution, sources)
-            reference = (_code(f"{path}:{entry['start_line']}–{entry['end_line']}") +
-                         f" [{entry['id']}](#source-{entry['id'].lower()})")
+            # Paths appear only in the index; source relations still require validation.
+            _source_path(entry, resolution, sources)
+            reference = f"[{entry['id']}](#source-{entry['id'].lower()})"
             if resolution['status'] != 'RESOLVED':
                 reference += ' (' + _status(entry, resolution, language) + ')'
             refs.append(reference)
@@ -141,19 +141,24 @@ def render_evidence_index(data, language='English'):
     resolutions = {entry['id']: entry for entry in data['program_checks']['evidence']}
     sources = {entry['id']: entry for entry in data['review_plan']['sources']}
     out = ['### ' + ('Реестр источников' if ru else 'Source registry'), '',
-           '| ' + ('Доказательство | Источник | Файл | Начальная строка | Конечная строка | Статус локатора | Идентичность источника' if ru else
-                    'Evidence | Source | File | Start line | End line | Locator status | Source identity') + ' |',
-           '| --- | --- | --- | --- | --- | --- | --- |']
+           '| ' + ('ID | Файл:строки | Источник | Проверка' if ru else
+                    'ID | File:lines | Source | Check') + ' |',
+           '| --- | --- | --- | --- |']
     for entry in data['evidence']:
         resolution = _lookup(resolutions, 'study:' + entry['id'], '$.program_checks.evidence')
         path = _source_path(entry, resolution, sources)
-        source = sources.get(entry['source_id'])
+        values = [f'<a id="source-{entry["id"].lower()}"></a>' + _code(entry['id']),
+                  _code(f"{path}:{entry['start_line']}–{entry['end_line']}"), _code(entry['source_id']),
+                  cell(_status(entry, resolution, language))]
+        out.append('| ' + ' | '.join(values) + ' |')
+    out += ['', '### ' + ('Идентичность источников' if ru else 'Source identities'), '',
+            '| ' + ('Источник | Идентичность источника' if ru else 'Source | Source identity') + ' |',
+            '| --- | --- |']
+    for source_id in dict.fromkeys(entry['source_id'] for entry in data['evidence']):
+        source = sources.get(source_id)
         identity = json.dumps(source['identity'], ensure_ascii=False, sort_keys=True, separators=(',', ':')) if source else (
             'Источник отсутствует' if ru else 'Source missing')
-        values = [f'<a id="source-{entry["id"].lower()}"></a>' + _code(entry['id']), _code(entry['source_id']),
-                  _code(path), str(entry['start_line']), str(entry['end_line']), cell(_status(entry, resolution, language)),
-                  _code(identity)]
-        out.append('| ' + ' | '.join(values) + ' |')
+        out.append('| ' + _code(source_id) + ' | ' + _code(identity) + ' |')
     return '\n'.join(out) + '\n'
 
 
@@ -185,8 +190,7 @@ def render_architecture(data, language='English'):
                            if russian(language) else
                            '### Required diagram missing\n\n'
                            'The study is incomplete. See this section and the limitations for the missing checks.\n\n'))
-        if key == 'scope':
-            chunks.append(render_evidence_index(data, language) + '\n')
+    chunks.append(render_evidence_index(data, language) + '\n')
     return ''.join(chunks)
 
 

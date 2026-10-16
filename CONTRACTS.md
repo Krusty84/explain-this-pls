@@ -168,11 +168,13 @@ HYPOTHESIS/UNKNOWN without evidence receive no fabricated source; unresolved
 support remains an explicit limitation. Missing definitions or required relations
 remain strict contract errors, not quote warnings.
 
-Every reference links to a stable internal evidence anchor. The end of `scope`
-contains an H3 source index (`Реестр источников` in Russian), recording evidence
-ID, source ID, displayed relative file path, inclusive start/end lines and
-locator status. Submodule display paths include `sources[].root`; source identity
-retains its pinned commit. Paths are untrusted data and are escaped for Markdown
+Every reference displays only its evidence ID and links to a stable internal
+evidence anchor. An H3 source index (`Реестр источников` in Russian) follows all
+five sections, recording evidence ID, displayed relative file path with inclusive
+line range, source ID and locator/quote status. Source identities appear once per
+referenced source in a separate H3 table. Submodule display paths include
+`sources[].root`; source identity retains its pinned commit.
+Paths are untrusted data and are escaped for Markdown
 and HTML. External source URLs are not inferred from Git remotes; a verified
 explicit base and a pinned Git commit would be required, with percent-encoded
 path segments.
