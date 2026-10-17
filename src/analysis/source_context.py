@@ -23,6 +23,7 @@ import time
 from src.analysis.evidence import (PointerError, SourceChanged, _read_confined,
                                    canonical, sha, source_catalog, valid_path)
 from src.analysis.source_decoding import decode_source, normalize_source_decoding, SourceDecodeError, BOMS
+from src.runtime.errors import AuditError
 
 AST_GREP_VERSION = '0.50.0'
 PARSER_REVISION = 2
@@ -329,8 +330,9 @@ class SourceContextBuilder:
         decoding = normalize_source_decoding(context.get('source_decoding'))
         records = []
         for relative, entry in entries.items():
-            if not valid_path(relative) or '.git' in relative.split('/'):
-                raise SourceChanged('Unsafe file in pinned source context inventory.')
+            if not valid_path(relative):
+                raise AuditError('Unsafe file in pinned source context inventory.', code='UNSAFE_SOURCE_PATH',
+                                 failure_layer='integrity', node_path=relative)
             source = max((s for s in catalog if s['root'] == '.' or relative.startswith(s['root'] + '/')),
                          key=lambda s: len(s['root']))
             path = relative if source['root'] == '.' else relative[len(source['root']) + 1:]

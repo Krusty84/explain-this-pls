@@ -293,7 +293,7 @@ class GitFilterTests(unittest.TestCase):
         self.repo.preflight(['main'])
         folder = Folder(self.path, paths=tracked_paths(self.repo), source_filter={'exclude_paths': ['.gitignore']})
         with hashed_payloads() as hashes:
-            inventory = folder.snapshot(exclude_git=True)
+            inventory = folder.snapshot()
         self.assertEqual(hashes[b'*.env\n'], 0)
         self.assertNotIn('.gitignore', folder.files)
         self.assertNotIn('.env', folder.files)
@@ -317,7 +317,7 @@ class GitFilterTests(unittest.TestCase):
                 for branch in ('main', 'alias'):
                     self.repo.checkout(pins[branch])
                     folder = Folder(self.path, paths=tracked_paths(self.repo), source_filter=settings)
-                    inventories[branch] = folder.snapshot(exclude_git=True)
+                    inventories[branch] = folder.snapshot()
                     folder.assert_snapshot(inventories[branch]['source_fingerprint'])
                     self.assertTrue({'tracked.env', 'pkg/build/keep.py'} <= folder.files.keys())
                     self.assertFalse({'app.py', 'build/generated.py', '.env'} & folder.files.keys())
@@ -339,7 +339,7 @@ class SubmoduleFilterTests(RecursiveFixture, unittest.TestCase):
                 self.repo.checkout(pins[branch])
                 folder = Folder(self.path, paths=tracked_paths(self.repo),
                                 source_filter={'exclude_paths': [CHILD + '/app.py', LEAF]})
-                folder.snapshot(exclude_git=True)
+                folder.snapshot()
                 self.assertIn('app.py', folder.files)
                 self.assertNotIn(CHILD + '/app.py', folder.files)
                 self.assertFalse(any(p.startswith(LEAF + '/') for p in folder.files))

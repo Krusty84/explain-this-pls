@@ -198,8 +198,115 @@ class FolderInventoryTests(FolderFixture):
         for action in actions:
             fingerprint = folder.snapshot()['source_fingerprint']
             action()
-            with self.assertRaisesRegex(AuditError, 'Source folder changed'):
+            with self.assertRaisesRegex(AuditError, 'Source folder changed') as caught:
                 folder.assert_snapshot(fingerprint)
+            self.assertEqual(caught.exception.code, 'SOURCE_CHANGED')
+
+    def test_git_entries_are_pruned_before_stat_or_open_at_every_depth(self):
+        package = self.source / 'pkg'
+        package.mkdir()
+        (self.source / '.github').mkdir()
+        for relative in ('.gitignore', '.gitmodules', '.settings', '.github/workflow.yml'):
+            (self.source / relative).write_text('hidden source\n')
+        original_stat, original_open = os.stat, os.open
+
+        def guarded(operation):
+            def call(path, *args, **kwargs):
+                if Path(path).name == '.git':
+                    self.fail('Accessed excluded .git entry: ' + str(path))
+                return operation(path, *args, **kwargs)
+            return call
+
+        for parent in (self.source, package):
+            for kind in ('directory', 'file', 'symlink'):
+                with self.subTest(parent=parent.name, kind=kind):
+                    path = parent / '.git'
+                    if kind == 'directory':
+                        path.mkdir()
+                        (path / 'unsafe:metadata').write_text('private\n')
+                    elif kind == 'file':
+                        path.write_text('gitdir: outside\n')
+                    else:
+                        path.symlink_to(self.base / 'missing-git')
+                    try:
+                        with patch('os.stat', side_effect=guarded(original_stat)), \
+                                patch('os.open', side_effect=guarded(original_open)):
+                            folder = Folder(self.source)
+                            inventory = folder.snapshot()
+                            folder.assert_snapshot(inventory['source_fingerprint'])
+                        entries = {entry['path'] for entry in inventory['entries']}
+                        self.assertFalse(any('.git' in relative.split('/') for relative in entries))
+                        self.assertTrue({'.gitignore', '.gitmodules', '.settings', '.github/workflow.yml'} <= entries)
+                    finally:
+                        if kind == 'directory':
+                            (path / 'unsafe:metadata').unlink()
+                            path.rmdir()
+                        else:
+                            path.unlink()
+
+    def test_git_changes_do_not_invalidate_snapshot_or_fingerprint(self):
+        package = self.source / 'pkg'
+        package.mkdir()
+        folder = Folder(self.source)
+        fingerprint = folder.snapshot()['source_fingerprint']
+
+        def unchanged():
+            folder.assert_snapshot(fingerprint)
+            self.assertEqual(Folder(self.source).snapshot()['source_fingerprint'], fingerprint)
+
+        for parent in (self.source, package):
+            path = parent / '.git'
+            path.mkdir()
+            metadata = path / 'config'
+            metadata.write_text('first\n')
+            unchanged()
+            metadata.write_text('changed metadata\n')
+            unchanged()
+            metadata.unlink()
+            path.rmdir()
+            unchanged()
+            path.write_text('gitdir: first\n')
+            unchanged()
+            path.write_text('gitdir: changed\n')
+            unchanged()
+            path.unlink()
+            unchanged()
+            path.symlink_to(self.base / 'missing-git')
+            unchanged()
+            path.unlink()
+            unchanged()
+
+    def test_filters_apply_before_unsafe_path_validation(self):
+        (self.source / '.gitignore').write_text('ignored:file\nignored:dir/\nignored:link\n')
+        (self.source / 'ignored:file').write_text('ignored\n')
+        (self.source / 'ignored:dir').mkdir()
+        (self.source / 'ignored:dir/unsafe:name').write_text('ignored\n')
+        (self.source / 'ignored:link').symlink_to(self.base / 'outside')
+        (self.source / 'configured').mkdir()
+        (self.source / 'configured/unsafe:name').write_text('excluded\n')
+        folder = Folder(self.source, source_filter={'follow_gitignore': True, 'exclude_paths': ['configured']})
+        inventory = folder.snapshot()
+        self.assertEqual({entry['path'] for entry in inventory['entries']}, {'.', '.gitignore', 'app.py'})
+        folder.assert_snapshot(inventory['source_fingerprint'])
+
+    def test_new_unsafe_paths_are_reported_as_source_changes(self):
+        path = self.source / 'unsafe:name'
+        for kind in ('file', 'directory', 'symlink'):
+            folder = Folder(self.source)
+            fingerprint = folder.snapshot()['source_fingerprint']
+            if kind == 'file':
+                path.write_text('added\n')
+            elif kind == 'directory':
+                path.mkdir()
+            else:
+                path.symlink_to(self.base / 'outside')
+            with self.subTest(kind=kind), self.assertRaises(AuditError) as caught:
+                folder.assert_snapshot(fingerprint)
+            self.assertEqual(caught.exception.code, 'SOURCE_CHANGED')
+            if kind == 'directory':
+                path.rmdir()
+            else:
+                path.unlink()
 
     def test_links_are_recorded_without_following_targets_or_cycles(self):
         outside = self.base / 'outside'
@@ -397,6 +504,62 @@ class FolderCLIIntegrationTests(FolderFixture):
                         self.assertFalse(manifest['accepted'])
                         self.assertTrue(manifest['workflow_satisfied'])
                         self.assertIn('Review disabled by configuration', result.stderr)
+
+    def test_check_and_analysis_succeed_with_git_metadata(self):
+        self.value.pop('execution')
+        (self.source / '.git').mkdir()
+        (self.source / '.git/HEAD').write_text('ref: refs/heads/main\n')
+        (self.source / 'pkg').mkdir()
+        (self.source / 'pkg/.git').write_text('gitdir: elsewhere\n')
+        fingerprints = set()
+        for backend in ('codex', 'opencode'):
+            self.value['agent']['backend'] = backend
+            self.env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
+            for check in (True, False):
+                with self.subTest(backend=backend, check=check):
+                    self.calls.write_text('')
+                    result = self.execute(check)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    output = json.loads(result.stdout)
+                    self.assertEqual(output['status'], 'PREFLIGHT_OK' if check else 'COMPLETE')
+                    run = Path(output['manifest']).parent
+                    inventory = json.loads((run / 'source.inventory.json').read_text())
+                    fingerprints.add(inventory['source_fingerprint'])
+                    self.assertFalse(any('.git' in entry['path'].split('/') for entry in inventory['entries']))
+                    calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+                    self.assertEqual(sum('context' in call for call in calls), 0 if check else 1)
+        self.assertEqual(len(fingerprints), 1)
+
+    def test_unsafe_selected_paths_fail_preflight_with_and_without_source_context(self):
+        relative = 'unsafe:name'
+        path = self.source / relative
+        for kind in ('file', 'directory', 'symlink'):
+            if kind == 'file':
+                path.write_text('source\n')
+            elif kind == 'directory':
+                path.mkdir()
+            else:
+                path.symlink_to(self.base / 'outside')
+            for enabled in (True, False):
+                self.value['source_context'] = {'enabled': enabled}
+                for check in (True, False):
+                    with self.subTest(kind=kind, enabled=enabled, check=check):
+                        self.calls.write_text('')
+                        result = self.execute(check)
+                        self.assertEqual(result.returncode, 1, result.stderr)
+                        output = json.loads(result.stdout)
+                        self.assertEqual(output['status'], 'FAILED')
+                        manifest = json.loads(Path(output['manifest']).read_text())
+                        diagnostic = manifest['diagnostics'][0]
+                        self.assertEqual(diagnostic['code'], 'UNSAFE_SOURCE_PATH')
+                        self.assertEqual(diagnostic['node_path'], relative)
+                        self.assertEqual(diagnostic['phase'], 'preflight')
+                        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+                        self.assertFalse(any('context' in call for call in calls))
+            if kind == 'directory':
+                path.rmdir()
+            else:
+                path.unlink()
 
     def test_all_backends_check_and_run_without_git(self):
         before = Folder(self.source).snapshot()

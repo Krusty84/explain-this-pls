@@ -8,7 +8,7 @@ import json
 import os
 import stat
 from pathlib import Path
-from src.analysis.evidence import open_source_directory, stamp
+from src.analysis.evidence import open_source_directory, stamp, valid_path
 from src.analysis.source_filter import normalize_source_filter, excluded_root, gitignore_spec, gitignore_match
 from src.analysis.source_metrics import PhysicalLines
 from src.runtime.errors import AuditError
@@ -20,16 +20,14 @@ class Folder:
         self.inventory = None
         self.metadata = {}
         self.files = {}
-        self.exclude_git = False
         self.source_filter = normalize_source_filter(source_filter if source_filter is not None else {})
         self.ignore_rules = {}
         self.paths = None if paths is None else frozenset(paths) | {
             str(parent) for path in paths for parent in Path(path).parents}
 
-    def _scan(self, *, exclude_git=False, files=None, expected=None):
+    def _scan(self, *, files=None, expected=None):
         entries, metadata = [], {}
         rules, exclusions = {}, []
-        filtered = self.paths is not None or self.source_filter['follow_gitignore'] or self.source_filter['exclude_paths']
 
         def changed(name):
             raise AuditError('Source folder changed during the run; files will not be restored.',
@@ -37,7 +35,7 @@ class Folder:
 
         def record(info, name):
             # Excluded additions/removals can change a parent's timestamps.
-            metadata[name] = stamp(info)[:3] if filtered and stat.S_ISDIR(info.st_mode) else stamp(info)
+            metadata[name] = stamp(info)[:3] if stat.S_ISDIR(info.st_mode) else stamp(info)
             if expected is not None and metadata[name] != expected.get(name):
                 changed(name)
 
@@ -85,7 +83,7 @@ class Folder:
                             'mode': format(stat.S_IMODE(before.st_mode), '04o')})
             scopes = load_rules(fd, relative, scopes)
             for name in sorted(os.listdir(fd)):
-                if exclude_git and name == '.git':
+                if name == '.git':
                     continue
                 child = name if relative == '.' else relative + '/' + name
                 if self.paths is not None and child not in self.paths:
@@ -107,6 +105,11 @@ class Folder:
                 if ignored:
                     exclusions.append(ignored)
                     continue
+                if not valid_path(child):
+                    if expected is not None:
+                        changed(child)
+                    raise AuditError('Unsafe path in source folder.', code='UNSAFE_SOURCE_PATH',
+                                     failure_layer='integrity', node_path=child)
                 record(info, child)
                 entry = {'path': child, 'mode': format(stat.S_IMODE(info.st_mode), '04o')}
                 if stat.S_ISLNK(info.st_mode):
@@ -171,9 +174,9 @@ class Folder:
                 changed(next(iter(actual_files ^ files.keys())))
         return entries, metadata, rules, exclusions
 
-    def snapshot(self, *, exclude_git=False) -> dict:
+    def snapshot(self) -> dict:
         """Pin one content inventory; later checks reuse its hashes."""
-        entries, metadata, rules, exclusions = self._scan(exclude_git=exclude_git)
+        entries, metadata, rules, exclusions = self._scan()
         rule_provenance = [{'path': path, 'sha256': rule['sha256']} for path, rule in sorted(rules.items())]
         filtered = self.source_filter['follow_gitignore'] or self.source_filter['exclude_paths']
         basis = {'entries': entries, 'settings': self.source_filter, 'rule_files': rule_provenance} if filtered else entries
@@ -182,7 +185,7 @@ class Folder:
                           'algorithm': 'sha256', 'entries': entries,
                           'source_filter': dict(self.source_filter, exclude_paths=list(self.source_filter['exclude_paths']),
                                                 rule_files=rule_provenance, exclusions=exclusions)}
-        self.metadata, self.exclude_git = metadata, exclude_git
+        self.metadata = metadata
         self.ignore_rules = rules
         self.files = {e['path']: e for e in entries if e['type'] == 'file'}
         return self.inventory
@@ -194,7 +197,7 @@ class Folder:
             raise AuditError('Source folder changed from the pinned snapshot.', failure_layer='integrity')
         if self.source_filter != {key: self.inventory['source_filter'][key] for key in self.source_filter}:
             raise AuditError('Source filter changed during the run.', code='SOURCE_CHANGED', failure_layer='integrity')
-        entries, _, rules, _ = self._scan(exclude_git=self.exclude_git, files=self.files, expected=self.metadata)
+        entries, _, rules, _ = self._scan(files=self.files, expected=self.metadata)
         if entries != self.inventory['entries'] or rules.keys() != self.ignore_rules.keys():
             raise AuditError('Source folder changed during the run; files will not be restored.',
                              code='SOURCE_CHANGED', failure_layer='integrity')

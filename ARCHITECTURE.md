@@ -45,17 +45,17 @@ config.*.example.jsonc     Configuration examples for three backends
 
 ## Main Runtime Components
 
-| Component | Responsibility |
-|---|---|
-| [cli.main](src/cli.py) | Selects TUI, audit, `--check`, or the `--models` catalog. |
-| [run_audit](src/runtime/audit.py) | Loads configuration, creates the run directory, locks the source, and handles signals and shutdown. Shared by CLI and TUI. |
-| [Runner](src/runtime/runner.py) | Coordinates source modes, branches, comparison, Git restoration, and final publication. |
-| [RunSession](src/runtime/session.py) | Holds configuration, source state, bindings, prepared context, metrics, and the critical-failure flag. |
-| [SourcePipeline](src/runtime/pipeline.py) | Runs study, optional review, and at most one revision round. Selects the published revision. |
-| [ModelInvoker](src/model/invocation.py) | Prepares the prompt and schema, calls the backend, records the attempt, validates the response, and requests publication. |
-| [Repository](src/analysis/repository.py), [Folder](src/analysis/folder.py) | Guard source state. Repository manages the Git hierarchy; Folder builds the inventory and pins file state. |
-| [ReportPublisher](src/reports/publication.py) | Validates and saves reports, claim registries, review plans, and the selected revision. |
-| [Reporter](src/runtime/reporting.py), [RunMetrics](src/runtime/metrics.py) | Emit events, console output, and `run.log`; aggregate time, attempts, and available model usage. |
+| Component                                                                  | Responsibility                                                                                                             |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| [cli.main](src/cli.py)                                                     | Selects TUI, audit, `--check`, or the `--models` catalog.                                                                  |
+| [run_audit](src/runtime/audit.py)                                          | Loads configuration, creates the run directory, locks the source, and handles signals and shutdown. Shared by CLI and TUI. |
+| [Runner](src/runtime/runner.py)                                            | Coordinates source modes, branches, comparison, Git restoration, and final publication.                                    |
+| [RunSession](src/runtime/session.py)                                       | Holds configuration, source state, bindings, prepared context, metrics, and the critical-failure flag.                     |
+| [SourcePipeline](src/runtime/pipeline.py)                                  | Runs study, optional review, and at most one revision round. Selects the published revision.                               |
+| [ModelInvoker](src/model/invocation.py)                                    | Prepares the prompt and schema, calls the backend, records the attempt, validates the response, and requests publication.  |
+| [Repository](src/analysis/repository.py), [Folder](src/analysis/folder.py) | Guard source state. Repository manages the Git hierarchy; Folder builds the inventory and pins file state.                 |
+| [ReportPublisher](src/reports/publication.py)                              | Validates and saves reports, claim registries, review plans, and the selected revision.                                    |
+| [Reporter](src/runtime/reporting.py), [RunMetrics](src/runtime/metrics.py) | Emit events, console output, and `run.log`; aggregate time, attempts, and available model usage.                           |
 
 Packages group responsibilities. Dependencies cross package boundaries:
 `analysis`, `contracts`, and `reports` call each other.
@@ -145,6 +145,9 @@ mismatches. Explicit `--output text` or `--output json` cannot combine with `--t
 and study assignments. `follow_gitignore` defaults to `false`; `exclude_paths`
 defaults to `[]`. See the [configuration example](README.md#configuration).
 
+Folder mode always skips entries named `.git` at any depth before reading metadata
+or contents, including directories, worktree files and symbolic links.
+
 `exclude_paths` applies in both modes and each Git branch checkout. Paths are
 exact, case-sensitive and relative to the common source root, with `/` separators.
 An entry excludes a file or directory and its descendants. `build` does not match
@@ -176,10 +179,14 @@ Artifacts record filter settings and excluded paths or pruned roots with `CONFIG
 or `GITIGNORE` origins. Folder `source.inventory.json` also records active rule-file
 hashes and each matching rule's file and line. Git inventories record filter
 exclusions. The manifest records pinned commits, recursive checkout plans, switch
-attempts and verified restoration. Only source filters and Git rules exclude files;
-agent relevance notes cannot change the inventory or evidence checks. Active Folder
-rule files stay pinned even if an edit would not change selection. Changes confined
-to excluded content do not invalidate a filtered Folder snapshot.
+attempts and verified restoration. Source filters, Git rules and the mandatory
+Folder `.git` exclusion determine selection; agent relevance notes cannot change
+the inventory or evidence checks. Active Folder rule files stay pinned even if an
+edit would not change selection. Changes confined to excluded content do not
+invalidate a filtered Folder snapshot. Directory guards pin device, inode and
+permissions. Included entry membership and full file metadata remain checked.
+Adding or removing excluded `.git` entries between checks does not invalidate
+the snapshot.
 
 Filtering is not a security boundary. Native CLI tools can access the original
 directory, including excluded paths, under the CLI's permissions.
@@ -285,14 +292,14 @@ computes the verdict from assessments, findings, and checks.
 one revision. Acceptance requires study and review from the same revision.
 Without review, branch differences use `REPORTED_UNVERIFIED`.
 
-| Field | Meaning |
-|---|---|
-| `completion_status` | Agent self-assessment: `COMPLETE`, `PARTIAL`, or `BLOCKED`. |
-| `program_checks` | Schema, evidence, and processing-policy checks. |
-| `accepted` | Study and its matching review satisfy acceptance checks. Remains `false` when review is disabled. |
-| `workflow_satisfied` | Enabled stages satisfy strict policy checks. |
-| `processing_completed` | Processing finished; `compromise` permits recorded citation warnings. |
-| `publication_complete` | Publication recorded; independent of content quality. |
+| Field                  | Meaning                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| `completion_status`    | Agent self-assessment: `COMPLETE`, `PARTIAL`, or `BLOCKED`.                                       |
+| `program_checks`       | Schema, evidence, and processing-policy checks.                                                   |
+| `accepted`             | Study and its matching review satisfy acceptance checks. Remains `false` when review is disabled. |
+| `workflow_satisfied`   | Enabled stages satisfy strict policy checks.                                                      |
+| `processing_completed` | Processing finished; `compromise` permits recorded citation warnings.                             |
+| `publication_complete` | Publication recorded; independent of content quality.                                             |
 
 ### Failure Policy and Citation Diagnostics
 
@@ -340,14 +347,14 @@ Start a new run directory; existing reports remain unchanged. See
 State lives in RunSession memory and per-run files. Each run directory has a
 UTC timestamp and random suffix.
 
-| Files | Purpose |
-|---|---|
-| `config.snapshot.json`, `manifest.json`, `run.log` | Configuration, stage state, diagnostics, metrics, and events. |
-| `source.inventory.json`, `coverage.plan.json` | Pinned source inventory and analysis scope. |
-| `revisions/001/`, optional `revisions/002/` | Separate study/review revisions in Markdown and JSON. |
-| `claim.registry.json`, `review.plan.json`, `registry.diff.json` | Claim registry, review target, and revision changes. |
-| `study.logs/attempt-001/` and equivalent stage paths | Prompt, schema, stdout/stderr, extracted and transformed responses, validation, bindings, and tool observations. |
-| `FINAL_REPORT.md` | Consolidated result, selected reports, limitations, and errors. |
+| Files                                                           | Purpose                                                                                                          |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `config.snapshot.json`, `manifest.json`, `run.log`              | Configuration, stage state, diagnostics, metrics, and events.                                                    |
+| `source.inventory.json`, `coverage.plan.json`                   | Pinned source inventory and analysis scope.                                                                      |
+| `revisions/001/`, optional `revisions/002/`                     | Separate study/review revisions in Markdown and JSON.                                                            |
+| `claim.registry.json`, `review.plan.json`, `registry.diff.json` | Claim registry, review target, and revision changes.                                                             |
+| `study.logs/attempt-001/` and equivalent stage paths            | Prompt, schema, stdout/stderr, extracted and transformed responses, validation, bindings, and tool observations. |
+| `FINAL_REPORT.md`                                               | Consolidated result, selected reports, limitations, and errors.                                                  |
 
 Folder mode publishes selected reports at the run root. Git mode uses
 `branches/<branch-id>/` per source and `comparison/` for comparison.
@@ -392,13 +399,13 @@ fixes their names and order for Russian and English; model section titles do not
 select published headings. Aliases `ru`, `russian`, `русский`, `en`, `english` and
 `английский` are case-insensitive. Unsupported languages fail before a model call.
 
-| Section | Contents |
-|---|---|
-| Study scope | Source studied, exclusions and investigation limits. |
-| System context | Purpose, external boundaries, processes and integrations. |
-| System components | Components, responsibilities, dependencies and a PlantUML overview. |
-| Startup and execution | Startup and significant execution scenarios. |
-| Data and state | Storage, readers/writers, transactions and a PlantUML data-flow diagram. |
+| Section               | Contents                                                                 |
+| --------------------- | ------------------------------------------------------------------------ |
+| Study scope           | Source studied, exclusions and investigation limits.                     |
+| System context        | Purpose, external boundaries, processes and integrations.                |
+| System components     | Components, responsibilities, dependencies and a PlantUML overview.      |
+| Startup and execution | Startup and significant execution scenarios.                             |
+| Data and state        | Storage, readers/writers, transactions and a PlantUML data-flow diagram. |
 
 Each block with linked evidence is followed by compact evidence-ID links to the
 H3 source index at the end of the document. Its four columns show ID, file with
@@ -485,11 +492,11 @@ conservative partial metrics.
 
 ## External Dependencies and Integrations
 
-| Backend | Protocol and boundary |
-|---|---|
-| [Codex](src/backends/codex.py) | `exec --ephemeral --sandbox read-only --output-schema --json`; final response comes from a separate file. Compare disables the shell tool. |
-| [OpenCode V2](src/backends/opencode_cli.py) | `run --standalone --format json`; a temporary profile permits source reads and searches. Events confirm completion; session export verifies a missing final event. |
-| [XXX / OpenCode 1.2.27](src/backends/xxx.py) | One `run --format json`, mandatory export, and history verification including compaction. Confirmed owned sessions are deleted. |
+| Backend                                      | Protocol and boundary                                                                                                                                              |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [Codex](src/backends/codex.py)               | `exec --ephemeral --sandbox read-only --output-schema --json`; final response comes from a separate file. Compare disables the shell tool.                         |
+| [OpenCode V2](src/backends/opencode_cli.py)  | `run --standalone --format json`; a temporary profile permits source reads and searches. Events confirm completion; session export verifies a missing final event. |
+| [XXX / OpenCode 1.2.27](src/backends/xxx.py) | One `run --format json`, mandatory export, and history verification including compaction. Confirmed owned sessions are deleted.                                    |
 
 CLIs use the user's existing configuration and authentication.
 [preflight.py](src/backends/preflight.py) checks versions and required commands.
@@ -596,11 +603,11 @@ choose a new output directory to run it. Each attempt runs one study. Review and
 revision are outside the experiment scope. Each repetition runs three variants
 in sequence:
 
-| Variant | Tool observation | Automatic stop | Full source index |
-|---|---|---|---|
-| `observe` | On | Off | Off |
-| `guard` | On | On | Off |
-| `context` | On | On | On |
+| Variant   | Tool observation | Automatic stop | Full source index |
+| --------- | ---------------- | -------------- | ----------------- |
+| `observe` | On               | Off            | Off               |
+| `guard`   | On               | On             | Off               |
+| `context` | On               | On             | On                |
 
 The source snapshot, inventory, coverage plan, configured model, prompt templates,
 validation settings and timeouts stay fixed. A source, template, CLI version or reported model

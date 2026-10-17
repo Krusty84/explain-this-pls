@@ -64,7 +64,7 @@ class RunSession:
                                              paths=tracked_paths(self.repo))
             folder = self._source_folder
         if folder.inventory is None:
-            folder.snapshot(exclude_git=self.repo is not None)
+            folder.snapshot()
             if self.repo:
                 folder.inventory['source_filter']['exclusions'].extend(ignored_paths(self.repo, folder.source_filter))
         folder.assert_snapshot(folder.inventory['source_fingerprint'])

@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from src.contracts.contracts import ContractError, validate_result, SCHEMAS, validate_schema, accepted
-from src.analysis.evidence import resolve_evidence, SourceChanged, open_source_directory
+from src.analysis.evidence import resolve_evidence, SourceChanged, open_source_directory, valid_path
 from src.analysis.ledger import freeze_plan, prepare_result, review_context, CONTRACT_ID, ARTIFACT_FORMAT
 from src.reports.presentation import render_stage, label
 from src.reports.final_report import render_final_report, recoverable_material
@@ -113,6 +113,28 @@ class LedgerTests(unittest.TestCase):
             with self.subTest(field=field, value=value):
                 pointer = study(self.context)['evidence'][0] | {field: value}
                 self.assertNotEqual(self.resolved(pointer)['status'], 'RESOLVED')
+
+    def test_source_path_validation_excludes_only_exact_git_components(self):
+        for relative in ('.git', '.git/config', 'nested/.git/config'):
+            with self.subTest(path=relative):
+                self.assertFalse(valid_path(relative))
+        for relative in ('.gitignore', '.gitmodules', '.github/workflows/check.yml',
+                         'nested/.hidden.py', 'nested/.gitconfig'):
+            with self.subTest(path=relative):
+                self.assertTrue(valid_path(relative))
+
+    def test_git_evidence_paths_fail_without_source_reads(self):
+        cases = [(self.context, 'source-001', path)
+                 for path in ('.git', '.git/config', 'nested/.git/config')]
+        cases.append((self.context | {'submodules': [
+            {'path': 'nested/.git', 'expected_commit': 'def'}]}, 'source-002', 'config'))
+        with patch('src.analysis.evidence._read_confined') as read:
+            for context, source_id, path in cases:
+                with self.subTest(source_id=source_id, path=path):
+                    pointer = study(self.context)['evidence'][0] | dict(source_id=source_id, path=path)
+                    result = resolve_evidence('study', [pointer], context)[0]
+                    self.assertEqual(result['status'], 'INVALID_POINTER')
+            read.assert_not_called()
 
     def test_source_quotes_match_exact_text_within_selected_lines(self):
         fragment = '    first = "Привет"\n    second = 2\n    finish()\n'

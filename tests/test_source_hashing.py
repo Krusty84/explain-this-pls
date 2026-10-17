@@ -182,7 +182,7 @@ class GitHashingTests(unittest.TestCase):
                 for branch in ('main', 'alias'):
                     self.repo.checkout(pins[branch])
                     folder = Folder(self.path, paths=tracked_paths(self.repo))
-                    inventory = folder.snapshot(exclude_git=True)
+                    inventory = folder.snapshot()
                     for _ in range(3):
                         self.repo.assert_expected()
                         folder.assert_snapshot(inventory['source_fingerprint'])

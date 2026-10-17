@@ -58,7 +58,7 @@ def source_catalog(context):
 def valid_path(path):
     return (type(path) is str and bool(path.strip()) and len(path) <= 4096 and
             not re.search(r'[\x00-\x1f\x7f\\:]', path) and
-            all(part not in ('', '.', '..') for part in path.split('/')))
+            all(part not in ('', '.', '..', '.git') for part in path.split('/')))
 
 
 def stamp(info):
@@ -139,8 +139,8 @@ def _read_confined(root, relative, limit=None, *, expected=None, pinned=None, re
                 if len(data) > before.st_size:
                     raise SourceChanged('Source grew beyond its initial file size.')
         for parent, name, child, before, full_stamp in chain:
-            # Unpinned ancestors can change due to unrelated /tmp peers. Source
-            # directories use the full pinned stamp; Git preparation pins identity.
+            # Directory pins check identity; file pins also check size and timestamps.
+            # Unpinned ancestors can change due to unrelated /tmp peers.
             try:
                 current = os.stat(name, dir_fd=parent, follow_symlinks=False)
             except OSError:
@@ -196,7 +196,7 @@ def _resolve_with_sources(stage, pointers, context, expected_files=None, *, expe
             if max(owners, key=lambda s: len(s['root']))['id'] != source['id']:
                 raise PointerError('SOURCE_SCOPE_MISMATCH')
             # Repository control files are not architectural source evidence.
-            if '.git' in relative.split('/'):
+            if not valid_path(relative):
                 raise PointerError('INVALID_POINTER')
             if ((context.get('_inventory') is not None or expected_metadata is not None)
                     and expected_files is not None and relative not in expected_files):

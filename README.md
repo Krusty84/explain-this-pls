@@ -140,15 +140,15 @@ paths in the original directory.
 
 #### Main settings
 
-| Field                       | Purpose                                                                                                                   |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `mode`                      | Analyze Git branches (`"git"`) or a directory (`"folder"`).                                                               |
-| `git_mode`                  | Source repository, local branches and the baseline branch.                                                                |
-| `folder_mode.path`          | Source directory for folder mode.                                                                                         |
-| `reports_dir`               | Destination for results; each run gets a separate subfolder.                                                              |
-| `project_description`       | Optional introduction to the system's purpose and history.                                                                |
-| `output_language`           | Report language: `"Russian"` (default) or `"English"`.                                                                    |
-| `priority_scenarios`        | Optional workflows or areas to focus on.                                                                                  |
+| Field                 | Purpose                                                      |
+| --------------------- | ------------------------------------------------------------ |
+| `mode`                | Analyze Git branches (`"git"`) or a directory (`"folder"`).  |
+| `git_mode`            | Source repository, local branches and the baseline branch.   |
+| `folder_mode.path`    | Source directory for folder mode.                            |
+| `reports_dir`         | Destination for results; each run gets a separate subfolder. |
+| `project_description` | Optional introduction to the system's purpose and history.   |
+| `output_language`     | Report language: `"English"` (default) or `"Russian"`.       |
+| `priority_scenarios`  | Optional workflows or areas to focus on.                     |
 
 #### Agent settings
 
@@ -247,7 +247,8 @@ python3 explain.py --config config.jsonc --check
 ```
 
 This checks your local setup without calling a model or switching branches.
-It does not test your agent login or model availability.
+In Folder mode, it also validates all included inventory paths without preparing
+the source index.
 
 To list Codex models without an audit or access probes:
 

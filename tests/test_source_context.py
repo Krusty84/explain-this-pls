@@ -13,6 +13,7 @@ from unittest.mock import patch
 from src.analysis.evidence import SourceChanged, lines, sha, stamp
 from src.analysis.source_context import (SourceContextBuilder, parse_symbols,
                                          serialize_source_context, source_context_settings)
+from src.runtime.errors import AuditError
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'source_context'
 # Independent expected names, kinds, parents and inclusive physical line ranges.
@@ -273,6 +274,22 @@ class ContextTests(unittest.TestCase):
             builder.prepare('study', context)
         with self.assertRaises(SourceChanged):
             SourceContextBuilder().prepare('study', context)
+
+    def test_unsafe_inventory_paths_fail_before_source_reads(self):
+        for relative in ('.git', '.git/config', 'nested/.git/config', '../outside.py',
+                         '/outside.py', 'a//b.py', 'a/./b.py', 'a\\b.py', 'a:b.py',
+                         'a\x00b.py', 'a\nb.py', 'a\x7fb.py'):
+            with self.subTest(path=relative):
+                context = dict(source_mode='folder', source_directory=str(self.root),
+                               source_fingerprint='pinned', _inventory={'entries': [
+                                   dict(path=relative, type='file', size=0, sha256=sha(b''))]})
+                with patch('src.analysis.source_context._read_confined') as read, \
+                        self.assertRaises(AuditError) as caught:
+                    SourceContextBuilder().prepare('study', context)
+                self.assertEqual(caught.exception.code, 'UNSAFE_SOURCE_PATH')
+                self.assertEqual(caught.exception.failure_layer, 'integrity')
+                self.assertEqual(caught.exception.node_path, relative)
+                read.assert_not_called()
 
     def test_cache_keeps_only_index_metadata_and_payload_is_independent(self):
         context = self.context({'x.py': 'def main():\n    return "private source body"\n'})

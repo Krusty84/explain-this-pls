@@ -274,7 +274,8 @@ class Runner:
                     'source_fingerprint': fingerprint, 'output_language': self.session.cfg['output_language'],
                     'project_description': self.session.cfg['project_description'],
                     'priority_scenarios': self.session.cfg['priority_scenarios'], 'execution_mode': 'static-only',
-                    'source_access': 'Current directory tree, including hidden files; do not follow symlinks or use Git. '
+                    'source_access': 'Read the pinned source inventory, including eligible hidden files. '
+                                     'Do not read .git entries or configured exclusions. Do not follow symlinks or use Git. '
                                      'Native CLI permissions; pinned metadata is verified at stage boundaries only.'}
                 self.run_source(manifest, context, self.session.run_dir, persist)
                 manifest['accepted'] = accepted(manifest)

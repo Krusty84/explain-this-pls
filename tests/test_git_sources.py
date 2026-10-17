@@ -70,7 +70,7 @@ class GitSourceTests(unittest.TestCase):
 
     def capture(self):
         folder = Folder(self.path, paths=tracked_paths(self.repo))
-        folder.snapshot(exclude_git=True)
+        folder.snapshot()
         return folder
 
     def topic(self):
