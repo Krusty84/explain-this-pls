@@ -93,7 +93,7 @@ This example analyzes two branches and writes reports in English:
     "branches": ["main", "customer-version"],
     "baseline_branch": "main"
   },
-  "reports_dir": "../architecture-reports/legacy-erp",
+  "reports_dir": "../architecture-reports",
   "output_language": "English",
   "agent": {
     "backend": "codex",
@@ -102,6 +102,10 @@ This example analyzes two branches and writes reports in English:
   "priority_scenarios": ["Order creation", "Inventory updates"]
 }
 ```
+
+`reports_dir` is the base directory. The source directory name is always appended.
+For existing configurations, change `../architecture-reports/legacy-erp` to
+`../architecture-reports`.
 
 For a single branch, set `git_mode.branches` to `["main"]` and
 `git_mode.baseline_branch` to `"main"`. Comparison is skipped.
@@ -140,23 +144,23 @@ paths in the original directory.
 
 #### Main settings
 
-| Field                 | Purpose                                                      |
-| --------------------- | ------------------------------------------------------------ |
-| `mode`                | Analyze Git branches (`"git"`) or a directory (`"folder"`).  |
-| `git_mode`            | Source repository, local branches and the baseline branch.   |
-| `folder_mode.path`    | Source directory for folder mode.                            |
-| `reports_dir`         | Destination for results; each run gets a separate subfolder. |
-| `project_description` | Optional introduction to the system's purpose and history.   |
-| `output_language`     | Report language: `"English"` (default) or `"Russian"`.       |
-| `priority_scenarios`  | Optional workflows or areas to focus on.                     |
+| Field                 | Purpose                                                     |
+| --------------------- | ----------------------------------------------------------- |
+| `mode`                | Analyze Git branches (`"git"`) or a directory (`"folder"`). |
+| `git_mode`            | Source repository, local branches and the baseline branch.  |
+| `folder_mode.path`    | Source directory for folder mode.                           |
+| `reports_dir`         | Base directory; results use `<source-name>/<run-id>/`.      |
+| `project_description` | Optional introduction to the system's purpose and history.  |
+| `output_language`     | Report language: `"English"` (default) or `"Russian"`.      |
+| `priority_scenarios`  | Optional workflows or areas to focus on.                    |
 
 #### Agent settings
 
-| Field              | Purpose                                                                       |
-| ------------------ | ----------------------------------------------------------------------------- |
-| `agent.backend`    | Coding agent: `codex`, `opencode` (V2), or `xxx` (OpenCode 1.2.27).           |
-| `agent.executable` | CLI command or path; defaults to `codex`, `opencode`, or `xxx`, respectively. |
-| `agent.model`      | Optional model name; omit it or use `null` for the CLI's configured model.    |
+| Field                    | Purpose                                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------ |
+| `agent.backend`          | Coding agent: `codex`, `opencode` (V2), or `xxx` (OpenCode 1.2.27).                        |
+| `agent.executable`       | CLI command or path; defaults to `codex`, `opencode`, or `xxx`, respectively.              |
+| `agent.model`            | Optional model name; omit it or use `null` for the CLI's configured model.                 |
 | `agent.reasoning_effort` | Optional non-empty string with the model's native effort value; `null` keeps CLI settings. |
 
 The tool uses your CLI's existing login and settings. No separate API key is needed
@@ -166,11 +170,11 @@ Set `reasoning_effort` beside `model`. Values depend on the model and backend;
 the tool does not translate them to a common scale. Empty strings and other types
 are rejected as `INVALID_CONFIG`.
 
-| Backend | How the value is passed |
-| --- | --- |
-| Codex | `-c 'model_reasoning_effort="high"'` |
-| OpenCode V2 | `--model provider/model#high` |
-| XXX | `--variant high`; `model` can remain `null`. |
+| Backend     | How the value is passed                      |
+| ----------- | -------------------------------------------- |
+| Codex       | `-c 'model_reasoning_effort="high"'`         |
+| OpenCode V2 | `--model provider/model#high`                |
+| XXX         | `--variant high`; `model` can remain `null`. |
 
 For V2, an explicit effort requires a full `provider/model` name. An existing
 `#variant` suffix is kept if effort is absent or `null`. The same explicit value
@@ -183,10 +187,14 @@ clear the runner's override and retain CLI settings, including a V2 model suffix
 
 ```json
 {
-  "agent": {"backend": "codex", "model": "gpt-6-astra", "reasoning_effort": "high"},
+  "agent": {
+    "backend": "codex",
+    "model": "gpt-6-astra",
+    "reasoning_effort": "high"
+  },
   "stage_agents": {
-    "review": {"reasoning_effort": "medium"},
-    "compare": {"reasoning_effort": null}
+    "review": { "reasoning_effort": "medium" },
+    "compare": { "reasoning_effort": null }
   }
 }
 ```
@@ -309,7 +317,8 @@ script-friendly summary, or `python3 explain.py --help` to see all options.
 
 ### Read the results
 
-Each run saves results in a new subfolder of `reports_dir`. Start with these files:
+Each run saves results in `reports_dir/<source-name>/<run-id>/`, for example
+`../architecture-reports/legacy-erp/<run-id>/`. Start with these files:
 
 | Report                   | Contents                                                                  |
 | ------------------------ | ------------------------------------------------------------------------- |

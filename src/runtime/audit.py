@@ -54,7 +54,7 @@ def run_audit(args, reporter) -> int:
         except ContractError as exc:
             raise AuditError('The configuration is not valid JSON/JSONC.', code='CONFIGURATION_ERROR',
                              hint='Check the configuration syntax and run --check again.') from exc
-        reports = Path(config['reports_dir'])
+        reports = Path(config['_reports_dir'])
         run_id = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:10]
         run_dir = reports / run_id
         reporter.run_id = run_id

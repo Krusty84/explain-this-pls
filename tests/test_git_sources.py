@@ -320,7 +320,7 @@ class GitSourceTests(unittest.TestCase):
         args = SimpleNamespace(config=self.base / 'config.json', check=False, trust_repository=False)
         with patch.dict(os.environ, env, clear=True):
             self.assertEqual(run_audit(args, reporter), 130)
-        manifests = [json.loads(path.read_text()) for path in (self.base / 'reports').glob('*/manifest.json')]
+        manifests = [json.loads(path.read_text()) for path in (self.base / 'reports' / self.path.name).glob('*/manifest.json')]
         manifest = next(m for m in manifests if m['status'] != 'PREFLIGHT_OK')
         self.assertTrue(manifest['restoration']['restored'])
         self.assertEqual(manifest['exit_code'], 130)

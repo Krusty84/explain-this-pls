@@ -176,6 +176,8 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(pilot.app.selected, self.path)
             self.assertFalse(self.settings.exists())
+            preview = str(pilot.app.query_one('#config-preview', Static).content)
+            self.assertIn('Reports: ' + str(self.base / 'reports' / 'source'), preview)
 
     async def test_discovery_validation_refresh_and_removed_selection(self):
         save_settings(self.settings, self.directory)

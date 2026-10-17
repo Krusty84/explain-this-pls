@@ -180,6 +180,14 @@ class StartupCLIIntegrationTests(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text())
         snapshot = json.loads((manifest_path.parent / 'config.snapshot.json').read_text())
         self.assertEqual(snapshot['mode'], mode)
+        source = self.repo_path if mode == 'git' else self.folder
+        self.assertEqual(manifest_path.parent, self.reports / source.name / output['run_id'])
+        self.assertEqual(snapshot['reports_dir'], str(self.reports))
+        self.assertNotIn('_reports_dir', snapshot)
+        self.assertTrue((manifest_path.parent / 'run.log').is_file())
+        if not check:
+            self.assertEqual(output['final_report'], str(manifest_path.parent / 'FINAL_REPORT.md'))
+            self.assertTrue(Path(output['final_report']).is_file())
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         self.assertEqual(len(calls), 2 if check else 7 if mode == 'git' else 4)
         self.assertIn('--version', calls[0]['args'])
@@ -199,6 +207,19 @@ class StartupCLIIntegrationTests(unittest.TestCase):
             self.repo.clean()
             if not check:
                 self.assertTrue(manifest['restoration']['restored'])
+
+    def test_repeated_runs_share_project_directories_and_keep_separate_results(self):
+        for mode, source in (('git', self.repo_path), ('folder', self.folder)):
+            with self.subTest(mode=mode):
+                runs = []
+                for _ in range(2):
+                    result = self.execute(mode, check=True)
+                    self.assert_completed(result, mode, True, os.geteuid())
+                    runs.append(Path(json.loads(result.stdout)['manifest']).parent)
+                self.assertNotEqual(*runs)
+                self.assertEqual(set((self.reports / source.name).iterdir()), set(runs))
+        self.assertEqual({path.name for path in self.reports.iterdir()},
+                         {self.repo_path.name, self.folder.name})
 
     def test_main_with_mocked_euids_completes_real_pipeline_in_both_modes(self):
         for euid in (0, 1000):

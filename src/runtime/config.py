@@ -104,8 +104,10 @@ def load_config(path: Path) -> dict:
         p = Path(obj[key]).expanduser()
         obj[key] = str((path.parent / p if not p.is_absolute() else p).resolve())
     repo, reports = Path(source[source_key]), Path(value['reports_dir'])
-    if overlap(repo, reports):
+    project_reports = (reports / repo.name).resolve()
+    if overlap(repo, reports) or overlap(repo, project_reports):
         raise AuditError('Source directory and reports_dir must be disjoint, not ancestors of each other.')
+    value['_reports_dir'] = str(project_reports)
     if mode == 'git':
         branches = source['branches']
         if not isinstance(branches, list) or not branches or any(not isinstance(b, str) or not b for b in branches):

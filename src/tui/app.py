@@ -319,7 +319,7 @@ class ExplainApp(App[int]):
             agents = '; '.join(stage + ': ' + agent['backend'] + ' / ' + (agent.get('model') or 'CLI default')
                                for stage, agent in config['_agents'].items())
             lines += ['Agents: ' + s(agents), 'Review: ' + ('enabled' if config['execution']['review_enabled'] else 'disabled'),
-                      'Reports: ' + s(config['reports_dir'])]
+                      'Reports: ' + s(config['_reports_dir'])]
         self.query_one('#config-preview', Static).update(Text('\n'.join(lines)))
 
     def on_data_table_row_highlighted(self, event):

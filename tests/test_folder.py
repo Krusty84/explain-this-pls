@@ -84,6 +84,74 @@ class FolderFixture(unittest.TestCase):
 
 
 class ModeConfigTests(FolderFixture):
+    def test_report_directory_uses_only_the_active_source(self):
+        self.value['git_mode'] = {'repository': './git-source',
+            'branches': ['main'], 'baseline_branch': 'main'}
+        for mode, name in (('git', 'git-source'), ('folder', 'source')):
+            with self.subTest(mode=mode):
+                self.value['mode'] = mode
+                cfg = self.config()
+                self.assertEqual(cfg['reports_dir'], str(self.base / 'reports'))
+                self.assertEqual(cfg['_reports_dir'], str(self.base / 'reports' / name))
+
+    def test_report_paths_support_relative_absolute_home_and_directory_names(self):
+        source = self.base / 'проект с пробелами'
+        source.mkdir()
+        reports = self.base / 'отчёты с пробелами'
+        paths = (('./проект с пробелами/', './отчёты с пробелами/'),
+                 (str(source) + '/', str(reports) + '/'),
+                 ('~/проект с пробелами/', '~/отчёты с пробелами/'))
+        for mode in ('git', 'folder'):
+            for source_path, reports_path in paths:
+                with self.subTest(mode=mode, source=source_path), \
+                        patch.dict(os.environ, {'HOME': str(self.base)}):
+                    self.value.update(mode=mode, reports_dir=reports_path,
+                        folder_mode={'path': source_path}, git_mode={'repository': source_path,
+                            'branches': ['main'], 'baseline_branch': 'main'})
+                    cfg = self.config()
+                    self.assertEqual(cfg['reports_dir'], str(reports))
+                    self.assertEqual(cfg['_reports_dir'], str(reports / source.name))
+
+    def test_report_directory_uses_the_resolved_source_name(self):
+        alias = self.base / 'source-alias'
+        alias.symlink_to(self.source, target_is_directory=True)
+        self.value.update(folder_mode={'path': str(alias)}, git_mode={'repository': str(alias),
+            'branches': ['main'], 'baseline_branch': 'main'})
+        for mode in ('git', 'folder'):
+            with self.subTest(mode=mode):
+                self.value['mode'] = mode
+                self.assertEqual(self.config()['_reports_dir'], str(self.base / 'reports' / 'source'))
+
+    def test_report_directory_always_appends_the_source_name(self):
+        self.value['reports_dir'] = './reports/source'
+        cfg = self.config()
+        self.assertEqual(cfg['reports_dir'], str(self.base / 'reports' / 'source'))
+        self.assertEqual(cfg['_reports_dir'], str(self.base / 'reports' / 'source' / 'source'))
+
+    def test_report_base_and_resolved_project_directory_cannot_overlap_source(self):
+        reports = self.base / 'reports'
+        reports.mkdir()
+        nested = self.source / 'nested'
+        nested.mkdir()
+        self.value['git_mode'] = {'repository': str(self.source),
+            'branches': ['main'], 'baseline_branch': 'main'}
+        for mode in ('git', 'folder'):
+            self.value['mode'] = mode
+            for path in (self.source, nested, self.base):
+                self.value['reports_dir'] = str(path)
+                with self.subTest(mode=mode, base=path), patch('src.runtime.config.shutil.which') as which:
+                    with self.assertRaisesRegex(AuditError, 'disjoint'):
+                        self.config()
+                    which.assert_not_called()
+                self.value['reports_dir'] = str(reports)
+                alias = reports / self.source.name
+                alias.symlink_to(path, target_is_directory=True)
+                with self.subTest(mode=mode, project_target=path), patch('src.runtime.config.shutil.which') as which:
+                    with self.assertRaisesRegex(AuditError, 'disjoint'):
+                        self.config()
+                    which.assert_not_called()
+                alias.unlink()
+
     def test_study_agent_and_custom_prompt_in_both_modes(self):
         prompt = self.base / 'custom-study.md'
         prompt.write_text('# Study the source architecture')
@@ -158,6 +226,9 @@ class ModeConfigTests(FolderFixture):
         self.config_path.write_text(text)
         cfg = load_config(self.config_path)
         snapshot = {k: v for k, v in cfg.items() if not k.startswith('_')}
+        self.assertEqual(snapshot['reports_dir'], str(self.base / 'reports'))
+        self.assertNotIn('_reports_dir', snapshot)
+        self.assertEqual(cfg['_reports_dir'], str(self.base / 'reports' / 'source'))
         strict_path = self.base / 'config.json'
         strict_path.write_text(json.dumps(snapshot))
         self.assertEqual(load_config(strict_path), cfg)

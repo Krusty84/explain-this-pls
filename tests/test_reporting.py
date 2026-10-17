@@ -656,7 +656,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     self.assertEqual(len(invocations), 0 if check else 2)
                     self.assertNotIn('Comparing branch reports', result.stderr)
                     self.assertNotIn('Branch report comparison ready', result.stderr)
-                    manifests = list(self.reports.glob('*/manifest.json'))
+                    manifests = list((self.reports / self.repo_path.name).glob('*/manifest.json'))
                     path = max(manifests, key=lambda p: p.stat().st_mtime_ns)
                     manifest = json.loads(path.read_text())
                     self.assertEqual(manifest['pins'], {'master': self.master})
@@ -897,7 +897,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('BrokenPipe', result.stderr)
         self.assertEqual(self.repo.symbolic(), 'master')
-        manifests = list(self.reports.glob('*/manifest.json'))
+        manifests = list((self.reports / self.repo_path.name).glob('*/manifest.json'))
         self.assertEqual(len(manifests), 1)
         self.assertTrue(json.loads(manifests[0].read_text())['restoration']['restored'])
 

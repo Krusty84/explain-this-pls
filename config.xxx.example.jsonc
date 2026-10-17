@@ -9,7 +9,8 @@
     "branches": ["main", "customer-version"],
     "baseline_branch": "main",
   },
-  "reports_dir": "../architecture-reports/legacy-app",
+  // The source directory name and a run ID are appended automatically.
+  "reports_dir": "../architecture-reports",
   "output_language": "English",
 
   // Source filtering is opt-in. Paths below are examples, not application defaults.
