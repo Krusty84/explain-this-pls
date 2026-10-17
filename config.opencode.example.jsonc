@@ -110,26 +110,32 @@
     // Command on PATH or executable path. Defaults: codex / opencode / xxx.
     "executable": "opencode",
     // null uses the model selected by the configured CLI.
-    "model": "deepseek/deepseek-v4-pro",
+    "model": "deepseek-v4-pro",
+    // Native variant, e.g. "high"; requires model: "provider/model" and cannot contain "#".
+    // null keeps CLI settings and any #variant suffix in model.
+    "reasoning_effort": null,
     // Optional exact --version output pin, for example "opencode v2.0.23".
     "expected_version": null,
   },
 
   // Uncomment only the fields you want to override; omitted fields inherit agent.
-  // When changing backend, also override executable and any inherited model/version.
+  // When changing backend, also override executable and any inherited model/effort/version.
   // model: null selects the CLI's model; expected_version: null clears version pinning.
+  // reasoning_effort: null clears the runner's effort override; revision uses study.
   "stage_agents": {
     // Substantive revision always uses study.
     "study": {
       // "backend": "opencode",
       // "executable": "opencode",
       // "model": null,
+      // "reasoning_effort": null,
       // "expected_version": null,
     },
     "review": {
       // "backend": "opencode",
       // "executable": "opencode",
       // "model": null,
+      // "reasoning_effort": null,
       // "expected_version": null,
     },
     // Used only in git mode with two or more selected branches.
@@ -137,6 +143,7 @@
       // "backend": "opencode",
       // "executable": "opencode",
       // "model": null,
+      // "reasoning_effort": null,
       // "expected_version": null,
     },
   },

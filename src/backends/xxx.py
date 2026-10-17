@@ -100,6 +100,8 @@ def build_command(agent, stage, mode, schema, schema_path, *, agent_name):
                '--title', agent_name]
     if agent.get('model'):
         command += ['--model', agent['model']]
+    if agent.get('reasoning_effort') is not None:
+        command += ['--variant', agent['reasoning_effort']]
     return command
 
 

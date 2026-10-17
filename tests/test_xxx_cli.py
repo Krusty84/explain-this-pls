@@ -44,6 +44,19 @@ class XXXCLITests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ContractError):
                 xxx.prepare_environment({'OPENCODE_CONFIG_CONTENT': value}, 'study')
 
+    def test_reasoning_effort_selects_variant_with_or_without_explicit_model(self):
+        for model in (None, 'one/model'):
+            for effort in (None, 'high', 'custom/deep', 'custom#deep'):
+                with self.subTest(model=model, effort=effort):
+                    command = xxx.build_command({'executable': 'xxx', 'model': model,
+                        'reasoning_effort': effort}, 'study', 'folder', {}, Path('schema'), agent_name='audit')
+                    expected = ['xxx', 'run', '--format', 'json', '--agent', 'audit', '--title', 'audit']
+                    if model:
+                        expected += ['--model', model]
+                    if effort is not None:
+                        expected += ['--variant', effort]
+                    self.assertEqual(command, expected)
+
     def test_symbol_maps_allow_only_the_current_external_directory(self):
         directory = Path('private output/source-maps')
         pattern = directory.resolve().as_posix() + '/*'

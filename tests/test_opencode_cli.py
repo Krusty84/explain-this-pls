@@ -86,6 +86,22 @@ class OpenCodeCLITests(unittest.TestCase):
             self.assertEqual(command, ['oc', 'run', '--standalone', '--format', 'json', '--agent',
                                        'private-agent'] + (['--model', model] if model else []))
 
+    def test_reasoning_effort_selects_one_native_model_variant(self):
+        for model, effort, selected in (
+                ('provider/model', 'high', 'provider/model#high'),
+                ('provider/model#high', 'high', 'provider/model#high'),
+                ('provider/model', 'custom/deep', 'provider/model#custom/deep'),
+                ('provider/model#custom/deep', 'custom/deep', 'provider/model#custom/deep'),
+                ('short-model', None, 'short-model'),
+                ('provider/model#existing', None, 'provider/model#existing'),
+                (None, None, None)):
+            with self.subTest(model=model, effort=effort):
+                command = adapter.build_command({'executable': 'oc', 'model': model,
+                    'reasoning_effort': effort}, 'study', 'folder', {}, Path('/tmp/schema'),
+                    agent_name='private-agent')
+                self.assertEqual(command, ['oc', 'run', '--standalone', '--format', 'json', '--agent',
+                    'private-agent'] + (['--model', selected] if selected else []))
+
     def test_fenced_final_with_split_text_and_verified_export(self):
         text = ' \t\r\n```JSON\r\n {"ok": true} \r\n```\r\n'
         for missing_finish in (False, True):

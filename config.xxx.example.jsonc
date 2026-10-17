@@ -3,11 +3,11 @@
   "result_policy": "compromise",
   "project_description": "Legacy application architecture audit using OpenCode 1.2.27 / XXX",
   "mode": "folder",
-  "folder_mode": {"path": "../legacy-app"},
+  "folder_mode": { "path": "../legacy-app" },
   "git_mode": {
     "repository": "../legacy-app",
     "branches": ["main", "customer-version"],
-    "baseline_branch": "main"
+    "baseline_branch": "main",
   },
   "reports_dir": "../architecture-reports/legacy-app",
   "output_language": "English",
@@ -24,41 +24,33 @@
       // General: VCS, IDE and temporary artifacts
       // ".git", ".hg", ".svn", ".idea", ".vs", ".DS_Store", ".cache",
       // "build", "dist", "temp", "tmp", "coverage",
-
       // Java: Maven, Gradle, Spring Boot, Quarkus, Micronaut, Jakarta EE, Android
       // ".gradle", "target", "out", ".cxx", "android/.gradle", "android/.cxx",
       // "android/build", "android/app/build", "app/build",
-
       // JS/TS: React, Next.js, Vue, Nuxt, Angular, SvelteKit, Astro, Vite,
       // NestJS, Remix, Electron, Expo
       // "node_modules", "bower_components", ".next", ".nuxt", ".nitro", ".output",
       // ".angular/cache", ".svelte-kit", ".astro", ".vite", ".turbo", ".parcel-cache",
       // ".expo", ".vercel", ".netlify", ".yarn/cache", ".pnpm-store",
       // "storybook-static", "playwright-report", "test-results",
-
       // C/C++: CMake, Qt, Meson, Ninja, Autotools, Bazel, Unreal Engine
       // "CMakeFiles", "CMakeCache.txt", "cmake-build-debug", "cmake-build-release",
       // "cmake-build-relwithdebinfo", "cmake-build-minsizerel", "autom4te.cache",
       // ".deps", ".libs", "bazel-out", "bazel-bin", "bazel-testlogs",
       // "Binaries", "Intermediate", "DerivedDataCache",
-
       // Rust: Cargo, Actix Web, Axum, Rocket, Bevy, Tauri; also uses "target" above
       // ".rustc_info.json", "src-tauri/target",
-
       // Go: Gin, Echo, Fiber, Buffalo, standard tools; no mandatory build directory
       // "coverage.out", "__debug_bin",
-
       // Python: Django, Flask, FastAPI, Celery, pytest, mypy, Ruff, tox, Poetry, Jupyter
       // ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
       // ".tox", ".nox", ".hypothesis", ".ipynb_checkpoints", ".eggs", ".pytype",
       // "__pypackages__", "htmlcov", "staticfiles",
-
       // Swift: SwiftPM, Xcode, SwiftUI, UIKit, Vapor, Carthage
       // ".build", "DerivedData", "Carthage/Build", "ios/build",
-
       // Extra review required: these often contain source, scripts or resources.
       // "Pods", "ios/Pods", "Carthage/Checkouts", "vendor", "bin", "Saved"
-    ]
+    ],
   },
   // Evidence checks; also symbol-map decoding when source_context is enabled.
   // Paths are relative to the common source root.
@@ -67,7 +59,7 @@
   "source_decoding": {
     "rules": [
       // {"path": "src/legacy", "encoding": "cp1251"}
-    ]
+    ],
   },
   "agent": {
     // XXX is OpenCode 1.2.27 over CLI; opencode selects the separate V2 CLI.
@@ -76,15 +68,18 @@
     "executable": "xxx",
     // null preserves the agent's configured provider/model and authentication.
     "model": null,
+    // Native variant passed with --variant, also when model is null.
+    // null keeps CLI settings. XXX can silently ignore an unknown variant.
+    "reasoning_effort": null,
     // Optional exact output of this executable's --version, not its upstream version.
-    "expected_version": null
+    "expected_version": null,
   },
   // Full inventory is parsed. Read symbol maps on demand with native read-only tools.
   "source_context": {
     "enabled": true,
     // Default: "on-demand". "full" sends all symbols in the initial prompt.
     // enabled=false disables map preparation and export in either mode.
-    "mode": "on-demand"
+    "mode": "on-demand",
   },
   "execution": {
     // Stop only after 50 confirmed repeated tool results spanning 120 seconds.
@@ -98,10 +93,50 @@
     // Used only with review enabled: one revision and full review after material findings.
     "max_revision_rounds": 1,
     "stage_timeout_seconds": 3600,
-    "idle_timeout_seconds": null
+    "idle_timeout_seconds": null,
   },
-  "stage_agents": {},
+  // Uncomment only the fields you want to override; omitted fields inherit agent.
+  // When changing backend, also override executable and any inherited model/effort/version.
+  // model: null selects the CLI's model; expected_version: null clears version pinning.
+  // reasoning_effort: null clears the runner's effort override; revision uses study.
+  "stage_agents": {
+    // Substantive revision always uses study.
+    "study": {
+      // "backend": "opencode",
+      // "executable": "opencode",
+      // "model": null,
+      // "reasoning_effort": null,
+      // "expected_version": null,
+    },
+    "review": {
+      // "backend": "opencode",
+      // "executable": "opencode",
+      // "model": null,
+      // "reasoning_effort": null,
+      // "expected_version": null,
+    },
+    // Used only in git mode with two or more selected branches.
+    "compare": {
+      // "backend": "opencode",
+      // "executable": "opencode",
+      // "model": null,
+      // "reasoning_effort": null,
+      // "expected_version": null,
+    },
+  },
+
+  // Business flows or areas to prioritize, e.g. ["Order creation", "Inventory updates"].
   "priority_scenarios": [],
+  // Continue after recoverable stage failures, with retained material under compromise policy.
+  // false stops further agent calls in both modes; integrity, cleanup and publication failures always stop.
   "continue_on_error": true,
-  "prompts": {}
+
+  // Omitted entries use bundled prompts, even if this config is moved elsewhere.
+  // Custom prompts must be outside the source directory and match the output schema.
+  "prompts": {
+    // "study": "./custom-prompts/study.md",
+    // "revise": "./custom-prompts/revise.md",
+    // "review": "./custom-prompts/review.md",
+    // "compare": "./custom-prompts/compare.md", // Git mode with two or more branches only.
+  },
 }

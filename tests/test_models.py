@@ -285,6 +285,17 @@ class ModelBackendTests(ModelFixture, unittest.IsolatedAsyncioTestCase):
 
 
 class ModelConfigTests(unittest.TestCase):
+    def test_model_edit_preserves_effort_in_shared_and_stage_sections(self):
+        for field in ('agent.model', 'stage_agents.study.model',
+                      'stage_agents.review.model', 'stage_agents.compare.model'):
+            for effort in ('high', None):
+                section = '{"model": "old", /* keep effort */ "reasoning_effort": ' + json.dumps(effort) + '}'
+                text = section
+                for key in reversed(field.split('.')[:-1]):
+                    text = '{"' + key + '": ' + text + '}'
+                with self.subTest(field=field, effort=effort):
+                    self.assertEqual(replace_model(text, field, 'new'), text.replace('"old"', '"new"'))
+
     def test_replacement_preserves_comments_strings_spacing_and_crlf(self):
         text = '{\r\n\t// "model": "fake"\r\n\t"agent": {"backend":"codex", "model" : null /*keep*/},\r\n' \
                '\t"project_description":"escaped \\" model and // comment",\r\n\t"reports_dir":"../reports",\r\n}\r\n'
@@ -393,6 +404,7 @@ class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
 
     async def test_hidden_current_model_selects_visible_model_and_requires_manual_check(self):
         self.config['agent']['model'] = 'hidden-model'
+        self.config['agent']['reasoning_effort'] = 'high'
         self.write_config()
         original = self.path.read_text()
         app = self.app()
@@ -425,6 +437,7 @@ class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertNotIsInstance(app.screen, ModelChooser)
             self.assertEqual(jsonc(self.path.read_text())['agent']['model'], 'public-model')
+            self.assertEqual(jsonc(self.path.read_text())['agent']['reasoning_effort'], 'high')
             self.assertIn('public-model', str(app.query_one('#config-preview', Static).content))
         self.assertIn('"path": "./source"', self.path.read_text())
         self.assertIn('"reports_dir": "./reports"', self.path.read_text())

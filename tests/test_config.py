@@ -118,12 +118,113 @@ class ConfigTests(FolderFixture):
 
     def test_revision_uses_study_agent(self):
         self.value['agent']['model'] = 'shared'
-        self.value['stage_agents'] = {'study': {'model': 'study-model', 'expected_version': 'pinned'}}
+        self.value['agent']['reasoning_effort'] = 'high'
+        self.value['stage_agents'] = {'study': {'model': 'study-model', 'expected_version': 'pinned',
+                                               'reasoning_effort': 'low'}}
         config = self.config()
         self.assertEqual(config['_agents']['study']['model'], 'study-model')
+        self.assertEqual(config['_agents']['study']['reasoning_effort'], 'low')
         self.assertEqual(config['_agents']['review']['model'], 'shared')
+        self.assertEqual(config['_agents']['review']['reasoning_effort'], 'high')
         self.assertNotIn('revise', config['_agents'])
         self.assertTrue(config['_prompt_paths']['revise'].endswith('revise.md'))
+
+    def test_reasoning_effort_is_optional_and_preserves_native_values(self):
+        for backend in ('codex', 'opencode', 'xxx'):
+            self.value['agent'].update(backend=backend, model='provider/model')
+            self.value['agent'].pop('reasoning_effort', None)
+            with self.subTest(backend=backend, omitted=True):
+                self.assertNotIn('reasoning_effort', self.config()['_agents']['study'])
+            for effort in (None, 'high', 'native-level', ' native-level '):
+                self.value['agent']['reasoning_effort'] = effort
+                with self.subTest(backend=backend, effort=effort):
+                    self.assertEqual(self.config()['_agents']['study']['reasoning_effort'], effort)
+            if backend != 'opencode':
+                self.value['agent'].pop('model')
+                self.assertEqual(self.config()['_agents']['study']['reasoning_effort'], ' native-level ')
+
+    def test_reasoning_effort_inherits_and_overrides_for_each_active_stage(self):
+        base = copy.deepcopy(self.value)
+        for backend in ('codex', 'opencode', 'xxx'):
+            for target in ('study', 'review', 'compare'):
+                for effort in ('custom-level', None):
+                    self.value = copy.deepcopy(base)
+                    self.value.update(mode='git', git_mode={'repository': './source',
+                        'branches': ['main', 'feature'], 'baseline_branch': 'main'},
+                        stage_agents={target: {'reasoning_effort': effort}})
+                    self.value['agent'].update(backend=backend, model='provider/model', reasoning_effort='high')
+                    with self.subTest(backend=backend, target=target, effort=effort):
+                        agents = self.config()['_agents']
+                        self.assertEqual(set(agents), {'study', 'review', 'compare'})
+                        for stage, agent in agents.items():
+                            self.assertEqual(agent['reasoning_effort'], effort if stage == target else 'high')
+
+    def test_invalid_reasoning_effort_fails_before_any_cli(self):
+        base = copy.deepcopy(self.value)
+        for backend in ('codex', 'opencode', 'xxx'):
+            for target in ('agent', 'study', 'review', 'compare'):
+                for effort in ('', ' \t ', False, 1, 1.5, [], {}):
+                    self.value = copy.deepcopy(base)
+                    self.value.update(mode='git', git_mode={'repository': './source',
+                        'branches': ['main', 'feature'], 'baseline_branch': 'main'})
+                    self.value['agent'].update(backend=backend, model='provider/model')
+                    if target == 'agent':
+                        self.value['agent']['reasoning_effort'] = effort
+                    else:
+                        self.value['stage_agents'] = {target: {'reasoning_effort': effort}}
+                    with self.subTest(backend=backend, target=target, effort=effort), \
+                            patch('src.runtime.process.process') as process:
+                        with self.assertRaises(AuditError) as caught:
+                            self.config()
+                        self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
+                        self.assertIn('reasoning_effort', str(caught.exception))
+                        process.assert_not_called()
+
+    def test_inactive_stages_do_not_validate_reasoning_effort(self):
+        self.value.update(execution={'review_enabled': False},
+            stage_agents={'review': {'reasoning_effort': []}, 'compare': {'reasoning_effort': False}})
+        self.assertEqual(set(self.config()['_agents']), {'study'})
+        self.value['execution']['review_enabled'] = True
+        with self.assertRaises(AuditError) as caught:
+            self.config()
+        self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
+        self.value['stage_agents']['review']['reasoning_effort'] = None
+        self.assertEqual(set(self.config()['_agents']), {'study', 'review'})
+        self.value.update(mode='git', git_mode={'repository': './source',
+            'branches': ['main', 'feature'], 'baseline_branch': 'main'})
+        with self.assertRaises(AuditError) as caught:
+            self.config()
+        self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
+
+    def test_opencode_reasoning_effort_requires_provider_model_and_consistent_suffix(self):
+        self.value['agent'].update(backend='opencode', reasoning_effort='high')
+        invalid_models = (None, 1, [], '', 'model', '/model', 'provider/', ' /model', 'provider/ ',
+            'provider/model#', '#provider/model', 'provider/model#other', 'provider/model#high#high')
+        for model in invalid_models:
+            self.value['agent']['model'] = model
+            with self.subTest(model=model), patch('src.runtime.config.shutil.which') as which:
+                with self.assertRaises(AuditError) as caught:
+                    self.config()
+                self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
+                which.assert_not_called()
+        for model in ('provider/model', 'provider/model#high'):
+            self.value['agent']['model'] = model
+            with self.subTest(model=model):
+                self.assertEqual(self.config()['_agents']['study']['model'], model)
+        self.value['agent'].update(model='provider/model', reasoning_effort='high#other')
+        with self.assertRaises(AuditError) as caught:
+            self.config()
+        self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
+
+    def test_opencode_models_without_reasoning_effort_keep_existing_validation(self):
+        self.value['agent'].update(backend='opencode', reasoning_effort=None)
+        for model in (None, '', 'model', 'provider/model#native'):
+            self.value['agent']['model'] = model
+            with self.subTest(model=model):
+                self.assertEqual(self.config()['_agents']['study']['model'], model)
+        self.value['agent'].pop('reasoning_effort')
+        self.value['agent']['model'] = 'model'
+        self.assertEqual(self.config()['_agents']['study']['model'], 'model')
 
     def test_decoding_is_normalized_and_invalid_settings_fail_before_any_cli(self):
         self.value['source_decoding'] = {'rules': [{'path': 'src/old', 'encoding': 'windows-1251'},

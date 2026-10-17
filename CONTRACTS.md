@@ -59,6 +59,7 @@ Unsupported results are rejected without modifying their artifacts.
 | Expected source identities, review target, contract/artifact identifiers in invocation metadata and manifest | Orchestrator |
 | `program_checks` (including coverage and diagram checks), `verdict`, frozen plan, hashes, file distribution, reverse links, tables | Python, after local wire validation |
 | `model_requested` | Configuration |
+| `reasoning_effort_requested` | Resolved stage configuration, or null; does not confirm actual model effort |
 | `model_actual`, `model_actual_source` | Backend metadata, or null with a reason; never inferred from executable or model prose |
 | `review_quality` / `semantic_quality: NOT_MEASURED` | No substantive evaluation of this execution profile has been performed |
 
@@ -326,11 +327,14 @@ expected_version retains exact comparison with the executable's version output;
 branding does not switch backend or model. Preflight checks --version, run --help,
 export --help and session delete --help. It creates no session or model request
 and does not prove provider readiness.
+An explicit effort on any active stage using this executable also requires
+`--variant` in run help. The model's variant catalog is not checked.
 
 Each substantive stage runs:
     xxx run --format json --agent <private-agent> --title <invocation-title>
 An explicit model adds --model provider/model; otherwise the configured default
-is preserved. The prompt and schema arrive through stdin. No standalone, attach,
+is preserved. An explicit reasoning_effort adds --variant even without a model;
+XXX can silently ignore an unknown variant. The prompt and schema arrive through stdin. No standalone, attach,
 continue or session option is sent. The transient V1 config uses agent/permission,
 allows read/glob/grep/list for source stages, and denies tools for compare.
 Source stages retain external_directory denial. User authentication, configuration,

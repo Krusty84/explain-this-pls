@@ -40,13 +40,14 @@ class RevisionPipelineTests(FolderFixture):
         config = self.config()
         run_dir = self.base / ('revision-run-' + str(len(list(self.base.glob('revision-run-*')))))
         runner = Runner(config, run_dir)
-        calls, originals, frozen_first = [], {}, {}
+        calls, commands, originals, frozen_first = [], [], {}, {}
 
         def process(command, cwd, env, payload, **kwargs):
             context = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n', 1)[1]
                                  .split('\n\n# Required final JSON Schema', 1)[0])
             stage = context['stage']
             calls.append(copy.deepcopy(context))
+            commands.append(list(command))
             if context.get('revision_id') == '002' and not frozen_first:
                 first = run_dir / 'revisions' / '001'
                 frozen_first.update({str(p.relative_to(first)): p.read_bytes() for p in first.rglob('*') if p.is_file()})
@@ -63,6 +64,7 @@ class RevisionPipelineTests(FolderFixture):
             manifest, code = runner.run()
         self.runner, self.run_dir = runner, run_dir
         self.calls, self.originals = calls, originals
+        self.commands = commands
         self.manifest = manifest
         if frozen_first and verify_immutable:
             first = run_dir / 'revisions' / '001'
@@ -130,6 +132,22 @@ class RevisionPipelineTests(FolderFixture):
         self.assertEqual((code, manifest['status'], manifest['accepted']), (2, 'PARTIAL', False))
         self.assertEqual(self.stages(), ['study', 'review'])
         self.assert_selected_aliases('001')
+
+    def test_revision_preserves_study_effort_in_commands_and_saved_metadata(self):
+        self.value['agent']['reasoning_effort'] = 'xhigh'
+        self.value['stage_agents'] = {'study': {'reasoning_effort': 'high'},
+                                      'review': {'reasoning_effort': 'low'}}
+        manifest, code = self.run_case(initial_finding)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stages(), ['study', 'review', 'revise', 'review'])
+        for command, effort in zip(self.commands, ('high', 'low', 'high', 'low')):
+            self.assertIn('model_reasoning_effort=' + json.dumps(effort), command)
+        for revision in manifest['revisions']:
+            for stage, effort in (('study', 'high'), ('review', 'low')):
+                self.assertEqual(revision[stage + '_invocation']['reasoning_effort_requested'], effort)
+                logs = self.run_dir / revision['directory'] / (stage + '.logs')
+                for path in (logs / 'invocation.json', logs / 'attempt-001/invocation.json'):
+                    self.assertEqual(json.loads(path.read_text())['reasoning_effort_requested'], effort)
 
     def test_revision_report_paths_are_visible_before_the_next_stage(self):
         err = io.StringIO()

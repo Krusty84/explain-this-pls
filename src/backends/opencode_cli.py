@@ -56,7 +56,10 @@ def build_command(agent: dict, stage: str, mode: str, schema: dict,
                   schema_path: Path, *, agent_name: str) -> list[str]:
     cmd = [agent['executable'], 'run', '--standalone', '--format', 'json', '--agent', agent_name]
     if agent.get('model'):
-        cmd += ['--model', agent['model']]
+        model = agent['model']
+        if agent.get('reasoning_effort') is not None and '#' not in model:
+            model += '#' + agent['reasoning_effort']
+        cmd += ['--model', model]
     return cmd
 
 

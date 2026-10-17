@@ -108,6 +108,23 @@ class CLIAdapterTests(unittest.TestCase):
                     flags.clear()
                     self.assertEqual(adapter.required_flags(mode), expected)
 
+    def test_codex_reasoning_effort_is_a_quoted_config_override(self):
+        agent = {'executable': 'codex', 'model': 'chosen-model', 'reasoning_effort': 'high'}
+        command = codex.build_command(agent, 'compare', 'git', {}, Path('/state/schema.json'))
+        self.assertEqual(command, ['codex', 'exec', '--ephemeral', '--color', 'never',
+            '--sandbox', 'read-only', '--output-schema', '/state/schema.json', '--json',
+            '--output-last-message', '/state/final.response.json', '-c', 'approval_policy="never"',
+            '-c', 'web_search="disabled"', '--skip-git-repo-check', '-c', 'features.shell_tool=false',
+            '--model', 'chosen-model', '-c', 'model_reasoning_effort="high"', '-'])
+        for model in (None, 'chosen-model'):
+            agent = {'executable': 'codex', 'model': model}
+            original = codex.build_command(agent, 'study', 'folder', {}, Path('/state/schema.json'))
+            self.assertEqual(codex.build_command(agent | {'reasoning_effort': None}, 'study',
+                'folder', {}, Path('/state/schema.json')), original)
+            with_effort = codex.build_command(agent | {'reasoning_effort': 'xhigh'}, 'study',
+                'folder', {}, Path('/state/schema.json'))
+            self.assertEqual(with_effort, original[:-1] + ['-c', 'model_reasoning_effort="xhigh"', '-'])
+
     def test_parsers_preserve_results_and_metadata(self):
         data = {'report_markdown': '# Report', 'completion_status': 'COMPLETE'}
         outputs = {
@@ -197,6 +214,48 @@ class CLIPreflightTests(unittest.TestCase):
                     self.assertEqual(caught.exception.failure_kind, 'BACKEND_INCOMPATIBLE')
                     self.assertEqual(caught.exception.failure_layer, 'compatibility')
                     self.assertEqual(runner.session.versions, {})
+
+    def test_xxx_requires_variant_if_only_a_later_stage_sets_effort(self):
+        for effort, supported in ((None, False), ('high', False), ('high', True)):
+            with self.subTest(effort=effort, supported=supported):
+                runner = self.runner('xxx')
+                runner.session.cfg['_agents']['review']['reasoning_effort'] = effort
+                flags = xxx.required_flags('folder') + (['--variant'] if supported else [])
+                responses = [
+                    {'returncode': 0, 'stdout': b'fixture 1.0', 'stderr': b''},
+                    {'returncode': 0, 'stdout': ' '.join(flags).encode(), 'stderr': b''},
+                    {'returncode': 0, 'stdout': b'sessionID', 'stderr': b''},
+                    {'returncode': 0, 'stdout': b'sessionID', 'stderr': b''},
+                ]
+                with patch('src.runtime.process.process', side_effect=responses) as process:
+                    if effort is not None and not supported:
+                        with self.assertRaises(AuditError) as caught:
+                            runner.check_cli()
+                        self.assertEqual(caught.exception.code, 'BACKEND_INCOMPATIBLE')
+                        self.assertEqual(process.call_count, 2)
+                    else:
+                        result = runner.check_cli()
+                        self.assertEqual(process.call_count, 4)
+                        self.assertEqual(result['xxx:/configured/agent']['required_flags'],
+                            xxx.required_flags('folder') + (['--variant'] if effort is not None else []))
+                self.assertNotIn('--variant', xxx.required_flags('folder'))
+
+    def test_xxx_variant_requirement_is_specific_to_the_executable(self):
+        runner = self.runner('xxx')
+        runner.session.cfg['_agents']['review'].update(executable='/configured/other', reasoning_effort='high')
+        responses = []
+        for extra in ([], ['--variant']):
+            responses += [
+                {'returncode': 0, 'stdout': b'fixture 1.0', 'stderr': b''},
+                {'returncode': 0, 'stdout': ' '.join(xxx.required_flags('folder') + extra).encode(), 'stderr': b''},
+                {'returncode': 0, 'stdout': b'sessionID', 'stderr': b''},
+                {'returncode': 0, 'stdout': b'sessionID', 'stderr': b''},
+            ]
+        with patch('src.runtime.process.process', side_effect=responses) as process:
+            result = runner.check_cli()
+        self.assertEqual(process.call_count, 8)
+        self.assertNotIn('--variant', result['xxx:/configured/agent']['required_flags'])
+        self.assertIn('--variant', result['xxx:/configured/other']['required_flags'])
 
 
 if __name__ == '__main__':

@@ -157,9 +157,44 @@ paths in the original directory.
 | `agent.backend`    | Coding agent: `codex`, `opencode` (V2), or `xxx` (OpenCode 1.2.27).           |
 | `agent.executable` | CLI command or path; defaults to `codex`, `opencode`, or `xxx`, respectively. |
 | `agent.model`      | Optional model name; omit it or use `null` for the CLI's configured model.    |
+| `agent.reasoning_effort` | Optional non-empty string with the model's native effort value; `null` keeps CLI settings. |
 
 The tool uses your CLI's existing login and settings. No separate API key is needed
 in this configuration.
+
+Set `reasoning_effort` beside `model`. Values depend on the model and backend;
+the tool does not translate them to a common scale. Empty strings and other types
+are rejected as `INVALID_CONFIG`.
+
+| Backend | How the value is passed |
+| --- | --- |
+| Codex | `-c 'model_reasoning_effort="high"'` |
+| OpenCode V2 | `--model provider/model#high` |
+| XXX | `--variant high`; `model` can remain `null`. |
+
+For V2, an explicit effort requires a full `provider/model` name. An existing
+`#variant` suffix is kept if effort is absent or `null`. The same explicit value
+uses one suffix; a conflicting value or `#` in effort is `INVALID_CONFIG`.
+XXX checks CLI support for `--variant` but does not check the model's variant
+catalog. An unknown variant can be silently ignored by XXX.
+
+Stages inherit the shared value. Set a stage value to override it, or `null` to
+clear the runner's override and retain CLI settings, including a V2 model suffix:
+
+```json
+{
+  "agent": {"backend": "codex", "model": "gpt-6-astra", "reasoning_effort": "high"},
+  "stage_agents": {
+    "review": {"reasoning_effort": "medium"},
+    "compare": {"reasoning_effort": null}
+  }
+}
+```
+
+Report revision uses the study agent's effort. Only active stages are checked.
+Invocation metadata records `reasoning_effort_requested`; it does not confirm
+that the model applied the value. Edit effort in the configuration file; the TUI
+model selector preserves it.
 
 #### Optional settings
 

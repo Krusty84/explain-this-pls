@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 """Codex CLI commands and structured-output parsing (stdlib only)."""
+import json
 from pathlib import Path
 
 from src.contracts.contracts import ContractError, response_error, strict_json
@@ -30,6 +31,8 @@ def build_command(agent: dict, stage: str, mode: str, schema: dict,
         cmd += ['-c', 'features.shell_tool=false']
     if agent.get('model'):
         cmd += ['--model', agent['model']]
+    if agent.get('reasoning_effort') is not None:
+        cmd += ['-c', 'model_reasoning_effort=' + json.dumps(agent['reasoning_effort'])]
     return cmd + ['-']
 
 

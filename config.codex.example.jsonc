@@ -109,25 +109,30 @@
     "executable": "codex",
     // null uses the model selected by the configured CLI.
     "model": "gpt-6-astra",
+    // Native model effort, e.g. "high". null keeps the CLI's configured effort.
+    "reasoning_effort": null,
     // null disables version pinning; otherwise use the exact --version output.
     "expected_version": null,
   },
 
   // Uncomment only the fields you want to override; omitted fields inherit agent.
-  // When changing backend, also override executable and any inherited model/version.
+  // When changing backend, also override executable and any inherited model/effort/version.
   // model: null selects the CLI's model; expected_version: null clears version pinning.
+  // reasoning_effort: null clears the runner's effort override; revision uses study.
   "stage_agents": {
     // Substantive revision always uses study.
     "study": {
       // "backend": "codex",
       // "executable": "codex",
       // "model": null,
+      // "reasoning_effort": null,
       // "expected_version": null,
     },
     "review": {
       // "backend": "codex",
       // "executable": "codex",
       // "model": null,
+      // "reasoning_effort": null,
       // "expected_version": null,
     },
     // Used only in git mode with two or more selected branches.
@@ -135,6 +140,7 @@
       // "backend": "codex",
       // "executable": "codex",
       // "model": null,
+      // "reasoning_effort": null,
       // "expected_version": null,
     },
   },

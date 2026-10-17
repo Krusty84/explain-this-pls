@@ -21,11 +21,26 @@ BACKENDS = {'codex': 'codex', 'opencode': 'opencode', 'xxx': 'xxx'}
 
 def resolve_agent(agent: dict, path: Path) -> dict:
     agent = dict(agent)
-    if set(agent) - {'backend', 'executable', 'model', 'expected_version'}:
+    if set(agent) - {'backend', 'executable', 'model', 'reasoning_effort', 'expected_version'}:
         raise AuditError('Unknown agent configuration field.')
     backend = agent.get('backend')
     if backend not in BACKENDS:
         raise AuditError(f'Unsupported backend: {backend}')
+    effort = agent.get('reasoning_effort')
+    if effort is not None and (not isinstance(effort, str) or not effort.strip()):
+        raise AuditError('agent.reasoning_effort must be a nonempty string or null.', code='INVALID_CONFIG')
+    if backend == 'opencode' and effort is not None:
+        if '#' in effort:
+            raise AuditError('OpenCode reasoning_effort cannot contain "#".', code='INVALID_CONFIG')
+        model = agent.get('model')
+        if not isinstance(model, str):
+            raise AuditError('OpenCode reasoning_effort requires agent.model in provider/model form.', code='INVALID_CONFIG')
+        selector, suffix, variant = model.partition('#')
+        provider, slash, name = selector.partition('/')
+        if not slash or not provider.strip() or not name.strip():
+            raise AuditError('OpenCode reasoning_effort requires agent.model in provider/model form.', code='INVALID_CONFIG')
+        if suffix and variant != effort:
+            raise AuditError('OpenCode model variant conflicts with agent.reasoning_effort.', code='INVALID_CONFIG')
     executable_name = agent.get('executable') or BACKENDS[backend]
     if not isinstance(executable_name, str):
         raise AuditError('agent.executable must be a string.')

@@ -182,7 +182,8 @@ class ModelInvoker:
         payload = prompt.encode('utf-8')
         meta.update({'stage': stage, 'invocation_id': str(uuid.uuid4()), 'started_at': now(),
             'backend': agent['backend'], 'executable': agent['executable'],
-            'model_requested': agent.get('model'), 'cli_version': self.session.versions.get(agent['backend'] + ':' + agent['executable']),
+            'model_requested': agent.get('model'), 'reasoning_effort_requested': agent.get('reasoning_effort'),
+            'cli_version': self.session.versions.get(agent['backend'] + ':' + agent['executable']),
             'prompt_sha256': digest(payload), 'template_sha256': digest(template.encode()),
             'schema_sha256': digest(json.dumps(schema, sort_keys=True).encode()),
             'input_bytes': len(payload), 'status': 'RUNNING'})

@@ -17,6 +17,8 @@ CLI_ADAPTERS = {'codex': codex, 'opencode': opencode_cli, 'xxx': xxx}
 
 def check_cli(session) -> dict:
     result = {}
+    variant_executables = {agent['executable'] for agent in session.cfg['_agents'].values()
+        if agent['backend'] == 'xxx' and agent.get('reasoning_effort') is not None}
     for agent in session.cfg['_agents'].values():
         key = agent['backend'] + ':' + agent['executable']
         if key in result:
@@ -47,6 +49,8 @@ def check_cli(session) -> dict:
                     output = r['stderr']
                 texts.append(output.decode(errors='replace'))
             required = adapter.required_flags(session.mode)
+            if backend == 'xxx' and agent['executable'] in variant_executables:
+                required.append('--variant')
             if any(flag not in texts[1] for flag in required):
                 raise AuditError(f'{backend} lacks required CLI options: {required}',
                                  code='BACKEND_INCOMPATIBLE', failure_kind='BACKEND_INCOMPATIBLE',
