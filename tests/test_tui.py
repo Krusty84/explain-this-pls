@@ -176,6 +176,11 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(read_settings(self.settings), self.directory)
                 self.assertEqual(app.selected, self.path)
                 self.assertFalse(app.query_one('#run', Button).disabled)
+                self.assertEqual(str(app.query_one('#check', Button).label), 'Check config')
+                self.assertEqual(str(app.query_one('#change-folder', Button).label), 'Config folder')
+                for button in app.query('#picker Button'):
+                    self.assertTrue(button.parent.content_region.contains_region(button.region))
+                    self.assertGreaterEqual(button.content_region.width, len(str(button.label)))
                 self.assertEqual(app.query_one('#configs', DataTable).get_row_at(0)[0].plain, self.path.name)
                 worker.assert_not_called()
         async with self.app().run_test() as pilot:

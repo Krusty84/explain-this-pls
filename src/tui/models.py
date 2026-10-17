@@ -58,16 +58,17 @@ class ModelChooser(ModalScreen):
 
     def compose(self):
         with Vertical(id='model-dialog'):
-            yield Static(self.literal('File: ' + str(self.path)), id='model-file')
-            yield Static('Apply Scope', id='model-scope')
-            yield Select([(field, field) for field in self.targets], value=self.target,
+            yield Static(self.literal('Config: ' + str(self.path)), id='model-file')
+            yield Static('Use for', id='model-scope')
+            yield Select([('global' if field == 'agent.model' else field.split('.')[1], field)
+                          for field in self.targets], value=self.target,
                          allow_blank=False, id='model-target')
             yield Static('', id='model-current')
             yield DataTable(id='model-table', cursor_type='row', zebra_stripes=True)
             yield Static('', id='model-status')
             with Horizontal(id='model-actions'):
                 yield Button('Check ChatGPT Access', id='model-check', disabled=True)
-                yield Button('Apply', id='model-apply', variant='primary', disabled=True)
+                yield Button('Use', id='model-apply', variant='primary', disabled=True)
                 yield Button('Refresh', id='model-refresh')
                 yield Button('Cancel', id='model-close')
 
@@ -179,7 +180,8 @@ class ModelChooser(ModalScreen):
         self.original, self.targets = original, targets
         self.target = self.target if self.target in targets else next(iter(targets))
         select = self.query_one('#model-target', Select)
-        select.set_options([(field, field) for field in targets])
+        select.set_options([('global' if field == 'agent.model' else field.split('.')[1], field)
+                            for field in targets])
         select.value = self.target
         self.load_catalog()
 

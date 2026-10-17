@@ -268,12 +268,12 @@ python3 explain.py
 ```
 
 On first launch, select the folder containing your JSON/JSONC configurations.
-The app remembers this folder. Use **Change folder** to choose another location,
+The app remembers this folder. Use **Config folder** to choose another location,
 or **Refresh** after editing or adding configs.
 
 Select a config to preview its source, branches, agents, review setting and report
 destination. Invalid configs show validation errors and cannot run. Use **Check
-setup** to check prerequisites, then **Run** to start analysis. Selecting a config
+config** to check prerequisites, then **Run** to start analysis. Selecting a config
 alone does not call a model.
 
 The config table shows `Config | Mode | Source | Model | Effort | Results`.
@@ -281,10 +281,10 @@ Model and Effort use the merged `study` settings; `CLI default` means no explici
 value is set. OpenCode V2's `#variant` also supplies Effort. Results shows
 `COMPLETED`, `PARTIAL`, or `—` when no analysis is recorded.
 
-For Codex agents, **Models** lets you choose a model for the shared agent or an
-individual stage through **Apply Scope**. Use **Check ChatGPT Access**, then
-**Apply** after a successful check. The access check makes a short model request
-and uses your Codex allowance.
+For Codex agents, **Models** lets you choose a model through **Use for**:
+**global** sets the shared model; **study**, **review**, and **compare** set stage
+models. Use **Check ChatGPT Access**, then **Use** after a successful check.
+The access check makes a short model request and uses your Codex allowance.
 Refresh before applying if you changed the config in another editor.
 
 The **Steps** table shows progress, elapsed time and available usage estimates.

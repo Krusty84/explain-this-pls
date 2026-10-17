@@ -73,14 +73,14 @@ writable installation directory. The picker scans JSON/JSONC files directly insi
 the folder and excludes example configs and subfolders. For config selection and
 model-selection controls, see [README.md](README.md#run-explain-this-pls).
 
-The Codex **Models** dialog can target `agent.model` or
-`stage_agents.<stage>.model` for study, review or compare. Inactive stages remain
+The Codex **Models** dialog's **Use for** list maps **global** to `agent.model`
+and **study**, **review**, or **compare** to `stage_agents.<stage>.model`. Inactive stages remain
 selectable; setting a model does not enable them. Stage settings inherit the
 shared agent settings unless overridden. Models with `visibility: hide` are
 omitted. **Access via API** reports API support; **Access via ChatGPT** reports an
 explicit check. **Check ChatGPT Access** checks ChatGPT login, then sends a short,
 ephemeral, read-only request using the selected model and the user's Codex
-allowance. **Apply** requires a successful response. The specific ChatGPT-account
+allowance. **Use** requires a successful response. The specific ChatGPT-account
 unsupported-model error marks a model unavailable; other errors leave access
 unverified.
 

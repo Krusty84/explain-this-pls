@@ -206,10 +206,10 @@ class ExplainApp(App[int]):
                 yield Static('Select a configuration.', id='config-preview')
             with Horizontal(classes='actions'):
                 yield Button('Run', id='run', variant='primary', disabled=True)
-                yield Button('Check setup', id='check', disabled=True)
+                yield Button('Check config', id='check', disabled=True)
                 yield Button('Models', id='models', disabled=True)
                 yield Button('Refresh', id='refresh')
-                yield Button('Change folder', id='change-folder')
+                yield Button('Config folder', id='change-folder')
                 yield Button('Quit', id='quit-picker')
         with Vertical(id='dashboard'):
             yield Static('Preparing analysis…', id='run-status')

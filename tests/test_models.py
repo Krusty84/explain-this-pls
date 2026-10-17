@@ -17,7 +17,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from textual.widgets import Button, DataTable, Select, Static
+from textual.widgets import Button, DataTable, OptionList, Select, Static
 
 from src.runtime.config import load_config
 from src.cli import main
@@ -420,7 +420,13 @@ class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
             self.assertEqual(table.row_count, 1)
             self.assertEqual([column.label.plain for column in table.columns.values()],
                              ['Model', 'Name', 'Visibility', 'Access via API', 'Access via ChatGPT'])
-            self.assertEqual(str(screen.query_one('#model-scope', Static).content), 'Apply Scope')
+            self.assertEqual(str(screen.query_one('#model-file', Static).content), 'Config: ' + str(self.path))
+            self.assertEqual(str(screen.query_one('#model-scope', Static).content), 'Use for')
+            self.assertEqual(str(screen.query_one('#model-apply', Button).label), 'Use')
+            select = screen.query_one('#model-target', Select)
+            self.assertEqual(select.value, 'agent.model')
+            self.assertEqual([option.prompt for option in select.query_one(OptionList).options],
+                             ['global', 'study', 'review', 'compare'])
             self.assertEqual(str(screen.query_one('#model-check', Button).label), 'Check ChatGPT Access')
             self.assertIn('Check ChatGPT Access', str(screen.query_one('#model-status', Static).content))
             for button in screen.query(Button):
@@ -512,9 +518,12 @@ class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
             await self.ready(pilot, screen)
             await pilot.click('#model-check')
             await self.ready(pilot, screen)
-            screen.query_one('#model-target', Select).value = 'stage_agents.study.model'
+            select = screen.query_one('#model-target', Select)
+            select.focus()
+            await pilot.press('enter', 'down', 'enter')
             await pilot.pause()
             await self.ready(pilot, screen)
+            self.assertEqual(select.value, 'stage_agents.study.model')
             self.assertTrue(screen.query_one('#model-apply', Button).disabled)
             await pilot.click('#model-check')
             await self.ready(pilot, screen)
@@ -525,6 +534,9 @@ class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
             self.assertIn('Refresh', str(screen.query_one('#model-status', Static).content))
             await pilot.click('#model-refresh')
             await self.ready(pilot, screen)
+            self.assertEqual(select.value, 'stage_agents.study.model')
+            self.assertEqual([option.prompt for option in select.query_one(OptionList).options],
+                             ['global', 'study', 'review', 'compare'])
             self.assertTrue(screen.query_one('#model-apply', Button).disabled)
             await pilot.click('#model-check')
             await self.ready(pilot, screen)
