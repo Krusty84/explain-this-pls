@@ -509,7 +509,7 @@ class Reporter(NullReporter):
             self._emit(event, level, exception=exception, _started=_started, **context)
 
     def _emit(self, event, level, *, exception, _started, **context):
-        if event in ('root_warning', 'description_missing', 'stop_requested', 'citation_warning'):
+        if event in ('root_warning', 'description_missing', 'stop_requested', 'citation_warning', 'last_analysis_warning'):
             level = logging.WARNING
         if event == 'citation_warning':
             fields = ('branch', 'source_name', 'commit', 'stage', 'revision_id', 'generated_by', 'backend',
@@ -578,6 +578,8 @@ class Reporter(NullReporter):
             return ['[WARN] Project description is missing. Set project_description to describe the system purpose and history.']
         if name == 'citation_warning':
             return ['[WARN] ' + self.stage_message(c, citation_warning_message(c))]
+        if name == 'last_analysis_warning':
+            return ['[WARN] ' + s(c['message'])]
         if name == 'stage_started':
             if self._progress and self._progress_line(self._progress) is not None:
                 return []

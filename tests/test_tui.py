@@ -4,6 +4,7 @@
 """Headless UI and real spawned-worker checks; no provider or model calls."""
 from argparse import Namespace
 import contextlib
+import datetime as dt
 import io
 import json
 import os
@@ -21,6 +22,7 @@ from unittest.mock import Mock, patch
 from textual.widgets import Button, DataTable, Input, Static, TabbedContent
 
 from src.cli import main
+from src.contracts.contracts import jsonc
 from src.runtime.metrics import usage
 from src.runtime.reporting import Reporter
 from src.tui.app import ExplainApp, FolderChooser, WorkerMessage
@@ -102,6 +104,16 @@ class TuiRoutingTests(unittest.TestCase):
 
 
 class RunStateTests(unittest.TestCase):
+    def test_metadata_warning_is_retained_without_failing_completed_steps(self):
+        state = RunState()
+        context = dict(branch='folder', stage='study', revision_id='001')
+        state.apply('stage_completed', dict(context, status='COMPLETE', elapsed_seconds=1))
+        warning = {'code': 'LAST_ANALYSIS_NOT_SAVED', 'message': 'Could not save last_analysis.'}
+        state.apply('last_analysis_warning', warning)
+        state.finish({'result': {'status': 'COMPLETE', 'exit_code': 0}})
+        self.assertEqual(state.rows[('folder', 'study', '001')]['status'], 'COMPLETE')
+        self.assertIn(warning, state.diagnostics)
+
     def test_sources_revisions_partial_skip_error_and_final_metrics(self):
         state = RunState(clock=lambda: 10)
         contexts = [dict(branch=branch, stage=stage, revision_id=revision, backend='codex')
@@ -178,6 +190,71 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.settings.exists())
             preview = str(pilot.app.query_one('#config-preview', Static).content)
             self.assertIn('Reports: ' + str(self.base / 'reports' / 'source'), preview)
+
+    async def test_config_columns_show_study_model_and_effort_with_native_variant(self):
+        value = jsonc(self.path.read_text())
+        cases = [({}, {}, 'CLI default', 'CLI default'),
+                 ({'model': 'shared', 'reasoning_effort': 'high'},
+                  {'review': {'model': 'other', 'reasoning_effort': 'low'}}, 'shared', 'high'),
+                 ({'model': 'shared', 'reasoning_effort': 'high'},
+                  {'study': {'model': 'study-model', 'reasoning_effort': 'medium'}}, 'study-model', 'medium'),
+                 ({'model': 'shared', 'reasoning_effort': 'high'},
+                  {'study': {'model': None, 'reasoning_effort': None}}, 'CLI default', 'CLI default'),
+                 ({'backend': 'opencode', 'model': 'provider/model#native'}, {}, 'provider/model#native', 'native'),
+                 ({'backend': 'opencode', 'model': 'provider/model#native', 'reasoning_effort': None},
+                  {}, 'provider/model#native', 'native'),
+                 ({'backend': 'opencode', 'model': 'provider/model', 'reasoning_effort': 'high'},
+                  {}, 'provider/model', 'high'),
+                 ({'model': 'model#native'}, {}, 'model#native', 'CLI default'),
+                 ({'model': '[bold]model\x1b[31m', 'reasoning_effort': '[red]high'},
+                  {}, '[bold]model\\x1b[31m', '[red]high')]
+        app = self.app(self.path)
+        async with app.run_test(size=(80, 24)) as pilot:
+            table = app.query_one('#configs', DataTable)
+            self.assertEqual([column.label.plain for column in table.columns.values()],
+                             ['Config', 'Mode', 'Source', 'Model', 'Effort', 'Results'])
+            for agent, stages, model, effort in cases:
+                with self.subTest(agent=agent, stages=stages):
+                    updated = value | {'agent': value['agent'] | agent, 'stage_agents': stages}
+                    self.path.write_text(json.dumps(updated))
+                    app.refresh_configs()
+                    await pilot.pause()
+                    row = [cell.plain for cell in table.get_row_at(0)]
+                    self.assertEqual(row, [self.path.name, 'folder', str(self.base / 'source'), model, effort, '—'])
+
+    async def test_results_survive_reopen_and_show_time_path_and_missing_directory(self):
+        directory = self.base / 'reports' / 'saved [bold]'
+        directory.mkdir(parents=True)
+        record = {'status': 'COMPLETED', 'finished_at': '2026-10-17T15:00:00+03:00',
+                  'results_dir': str(directory)}
+        value = jsonc(self.path.read_text()) | {'last_analysis': record}
+        self.path.write_text(json.dumps(value))
+        async with self.app(self.path).run_test(size=(80, 24)) as pilot:
+            table = pilot.app.query_one('#configs', DataTable)
+            self.assertEqual(table.get_row_at(0)[5].plain, 'COMPLETED')
+            preview = str(pilot.app.query_one('#config-preview', Static).content)
+            finished = dt.datetime.fromisoformat(record['finished_at']).astimezone().isoformat(sep=' ', timespec='seconds')
+            self.assertIn('Finished: ' + finished, preview)
+            self.assertIn('Results directory: ' + str(directory), preview)
+        value['last_analysis']['status'] = 'PARTIAL'
+        self.path.write_text(json.dumps(value))
+        async with self.app(self.path).run_test(size=(60, 20)) as pilot:
+            app = pilot.app
+            table = app.query_one('#configs', DataTable)
+            self.assertEqual(table.get_row_at(0)[5].plain, 'PARTIAL')
+            await pilot.resize_terminal(100, 30)
+            directory.rmdir()
+            before = self.path.read_bytes()
+            app.refresh_configs()
+            await pilot.pause()
+            self.assertEqual(table.get_row_at(0)[5].plain, 'Missing')
+            self.assertIn('Results: PARTIAL (Missing)', str(app.query_one('#config-preview', Static).content))
+            self.assertFalse(app.query_one('#run', Button).disabled)
+            self.assertEqual(self.path.read_bytes(), before)
+            value['last_analysis'] = None
+            self.path.write_text(json.dumps(value))
+            app.refresh_configs()
+            self.assertEqual(table.get_row_at(0)[5].plain, '—')
 
     async def test_discovery_validation_refresh_and_removed_selection(self):
         save_settings(self.settings, self.directory)
@@ -336,6 +413,7 @@ class LiveTuiTests(unittest.IsolatedAsyncioTestCase):
                                     app.query_one('#run-tabs', TabbedContent).active == 'summary-tab')
                 self.assertEqual(app.pending_result['result']['status'], 'PREFLIGHT_OK')
                 self.assertEqual(app.pending_result['result']['metrics']['attempts'], 0)
+                self.assertNotIn('last_analysis', jsonc(self.config_path.read_text()))
                 await pilot.click('#back')
                 await pilot.click('#run')
                 await self.wait_for(pilot, lambda: not app.running and
@@ -343,6 +421,12 @@ class LiveTuiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(app.pending_result['result']['status'], 'COMPLETE')
                 self.assertGreater(app.query_one('#stages', DataTable).row_count, 2)
                 self.assertEqual(app.query_one('#run-tabs', TabbedContent).active, 'summary-tab')
+                record = jsonc(self.config_path.read_text())['last_analysis']
+                self.assertEqual(record['status'], 'COMPLETED')
+                self.assertEqual(Path(record['results_dir']), Path(app.pending_result['result']['manifest']).parent)
+                await pilot.click('#back')
+                await pilot.pause()
+                self.assertEqual(app.query_one('#configs', DataTable).get_row_at(0)[5].plain, 'COMPLETED')
 
     async def test_keyboard_cancel_stops_silent_agent_and_restores_checkout(self):
         self.prepare('git')

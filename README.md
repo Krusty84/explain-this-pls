@@ -144,15 +144,30 @@ paths in the original directory.
 
 #### Main settings
 
-| Field                 | Purpose                                                     |
-| --------------------- | ----------------------------------------------------------- |
-| `mode`                | Analyze Git branches (`"git"`) or a directory (`"folder"`). |
-| `git_mode`            | Source repository, local branches and the baseline branch.  |
-| `folder_mode.path`    | Source directory for folder mode.                           |
-| `reports_dir`         | Base directory; results use `<source-name>/<run-id>/`.      |
-| `project_description` | Optional introduction to the system's purpose and history.  |
-| `output_language`     | Report language: `"English"` (default) or `"Russian"`.      |
-| `priority_scenarios`  | Optional workflows or areas to focus on.                    |
+| Field                 | Purpose                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------- |
+| `mode`                | Analyze Git branches (`"git"`) or a directory (`"folder"`).                            |
+| `git_mode`            | Source repository, local branches and the baseline branch.                             |
+| `folder_mode.path`    | Source directory for folder mode.                                                      |
+| `reports_dir`         | Base directory; results use `<source-name>/<run-id>/`.                                 |
+| `last_analysis`       | Optional record of the latest saved useful analysis; omitted or `null` until recorded. |
+| `project_description` | Optional introduction to the system's purpose and history.                             |
+| `output_language`     | Report language: `"English"` (default) or `"Russian"`.                                 |
+| `priority_scenarios`  | Optional workflows or areas to focus on.                                               |
+
+CLI and TUI runs update `last_analysis` after saving useful material and the final
+report, once cleanup has finished:
+
+```json
+"last_analysis": {
+  "status": "COMPLETED",
+  "finished_at": "2026-10-17T12:00:00+00:00",
+  "results_dir": "/path/to/architecture-reports/legacy-app/run-id"
+}
+```
+
+`COMPLETE` and `COMPLETE_WITH_WARNINGS` become `COMPLETED`. Other outcomes with
+saved useful results, including failed or interrupted runs, become `PARTIAL`.
 
 #### Agent settings
 
@@ -260,6 +275,11 @@ Select a config to preview its source, branches, agents, review setting and repo
 destination. Invalid configs show validation errors and cannot run. Use **Check
 setup** to check prerequisites, then **Run** to start analysis. Selecting a config
 alone does not call a model.
+
+The config table shows `Config | Mode | Source | Model | Effort | Results`.
+Model and Effort use the merged `study` settings; `CLI default` means no explicit
+value is set. OpenCode V2's `#variant` also supplies Effort. Results shows
+`COMPLETED`, `PARTIAL`, or `—` when no analysis is recorded.
 
 For Codex agents, **Models** lets you choose a model for the shared agent or an
 individual stage through **Apply Scope**. Use **Check ChatGPT Access**, then

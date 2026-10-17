@@ -3,6 +3,7 @@
 
 """Configuration validation and paths relative to the installed project."""
 from __future__ import annotations
+import datetime as dt
 import shutil
 from pathlib import Path
 from src.contracts.contracts import jsonc, strict_json
@@ -56,15 +57,35 @@ def resolve_agent(agent: dict, path: Path) -> dict:
             raise AuditError(f'agent.{key} must be a string or null.')
     return agent
 
-def load_config(path: Path) -> dict:
+def last_analysis_settings(value, path):
+    if value is None:
+        return None
+    if type(value) is not dict or set(value) != {'status', 'finished_at', 'results_dir'}:
+        raise ValueError('last_analysis must contain status, finished_at and results_dir, or be null.')
+    if value['status'] not in ('COMPLETED', 'PARTIAL'):
+        raise ValueError('last_analysis.status must be COMPLETED or PARTIAL.')
+    try:
+        finished = dt.datetime.fromisoformat(value['finished_at'])
+    except (TypeError, ValueError) as exc:
+        raise ValueError('last_analysis.finished_at must be an ISO 8601 timestamp with a timezone.') from exc
+    if finished.utcoffset() is None:
+        raise ValueError('last_analysis.finished_at must include a timezone.')
+    directory = value['results_dir']
+    if not isinstance(directory, str) or not directory.strip():
+        raise ValueError('last_analysis.results_dir must be a nonempty path string.')
+    directory = Path(directory).expanduser()
+    return dict(value, results_dir=str((path.parent / directory).resolve()))
+
+
+def load_config(path: Path, *, text: str | None = None) -> dict:
     path = path.resolve()
-    value = (jsonc if path.suffix.lower() == '.jsonc' else strict_json)(path.read_text())
+    value = (jsonc if path.suffix.lower() == '.jsonc' else strict_json)(path.read_text() if text is None else text)
     if type(value) is not dict:
         raise AuditError('Configuration must be a JSON object.')
     allowed = {'reports_dir', 'agent', 'stage_agents',
         'output_language', 'priority_scenarios', 'continue_on_error', 'project_description', 'prompts',
         'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy', 'source_decoding',
-        'source_filter', 'source_context'}
+        'source_filter', 'source_context', 'last_analysis'}
     if set(value) - allowed:
         raise AuditError(f'Unknown configuration keys: {set(value) - allowed}')
     try:
@@ -76,6 +97,7 @@ def load_config(path: Path) -> dict:
         value['source_context'] = source_context_settings(value.get('source_context'))
         value['source_decoding'] = normalize_source_decoding(value.get('source_decoding'))
         value['source_filter'] = normalize_source_filter(value.get('source_filter', {}))
+        value['last_analysis'] = last_analysis_settings(value.get('last_analysis'), path)
     except ValueError as exc:
         raise AuditError(str(exc), code='INVALID_CONFIG') from exc
     for key in ('mode', 'reports_dir', 'agent'):

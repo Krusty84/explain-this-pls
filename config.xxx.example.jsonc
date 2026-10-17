@@ -13,6 +13,11 @@
   "reports_dir": "../architecture-reports",
   "output_language": "English",
 
+  // CLI/TUI runs with useful reports update this field; setup checks keep it unchanged.
+  // Stores status (COMPLETED/PARTIAL), finished_at (ISO 8601 with timezone), and results_dir (run directory).
+  // null or omission means no recorded analysis. Existing report folders are not scanned.
+  "last_analysis": null,
+
   // Source filtering is opt-in. Paths below are examples, not application defaults.
   // Review each entry: legacy code and resources can use these directory names.
   // Use exact source-root-relative paths with "/"; directories exclude their contents.

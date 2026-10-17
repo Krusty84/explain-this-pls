@@ -73,6 +73,8 @@ class RunState:
                 if context.get('metrics'):
                     row['metrics'] = context['metrics']
                     row['duration_seconds'] = context['metrics']['duration_seconds']
+        elif name == 'last_analysis_warning':
+            self.diagnostics.append(context)
         elif name in ('root_warning', 'description_missing'):
             self.diagnostics.append({'message': 'Running with administrator privileges.' if name == 'root_warning'
                                      else 'Project description is missing.'})

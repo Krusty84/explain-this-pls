@@ -4,6 +4,7 @@
 """Config selection and a persistent table of audit results."""
 from argparse import Namespace
 import asyncio
+import datetime as dt
 import json
 from pathlib import Path
 import signal
@@ -228,7 +229,7 @@ class ExplainApp(App[int]):
     def on_mount(self):
         self._set_pointer_shape("default")
         self.query_one('#run', Button).display = not self.args.check
-        self.query_one('#configs', DataTable).add_columns('Config', 'Mode', 'Source / validation')
+        self.query_one('#configs', DataTable).add_columns('Config', 'Mode', 'Source', 'Model', 'Effort', 'Results')
         table = self.query_one('#stages', DataTable)
         for name, width in (('Source', 20), ('Step/revision', 18), ('Status', 12), ('Elapsed', 8),
                             ('Attempts', 8), ('Tokens', 22), ('Cost', 22), ('Result', 55)):
@@ -277,12 +278,23 @@ class ExplainApp(App[int]):
                 config = load_config(path)
                 mode = config['mode']
                 source = config[mode + '_mode']['path' if mode == 'folder' else 'repository']
+                agent = config['_agents']['study']
+                model = agent.get('model') or 'CLI default'
+                effort = agent.get('reasoning_effort')
+                if effort is None and agent['backend'] == 'opencode':
+                    effort = (agent.get('model') or '').partition('#')[2]
+                effort = effort or 'CLI default'
+                analysis = config['last_analysis']
+                results = '—'
+                if analysis:
+                    results = analysis['status'] if Path(analysis['results_dir']).is_dir() else 'Missing'
                 error = ''
             except (OSError, ValueError, RuntimeError, ContractError) as exc:
                 config, mode, source = None, 'Invalid', self.presenter.display(diagnostic(exc).message)
+                model, effort, results = '—', '—', '—'
                 error = source
             self.configs[str(path)] = (path, config, error)
-            table.add_row(self.literal(path.name), self.literal(mode), self.literal(source), key=str(path))
+            table.add_row(*(self.literal(value) for value in (path.name, mode, source, model, effort, results)), key=str(path))
         selected = str(self.selected) if str(self.selected) in self.configs else next(iter(self.configs), None)
         if selected:
             table.move_cursor(row=list(self.configs).index(selected))
@@ -320,6 +332,12 @@ class ExplainApp(App[int]):
                                for stage, agent in config['_agents'].items())
             lines += ['Agents: ' + s(agents), 'Review: ' + ('enabled' if config['execution']['review_enabled'] else 'disabled'),
                       'Reports: ' + s(config['_reports_dir'])]
+            analysis = config['last_analysis']
+            if analysis:
+                finished = dt.datetime.fromisoformat(analysis['finished_at']).astimezone().isoformat(sep=' ', timespec='seconds')
+                lines += ['Results: ' + s(analysis['status']) +
+                          (' (Missing)' if not Path(analysis['results_dir']).is_dir() else ''),
+                          'Finished: ' + finished, 'Results directory: ' + s(analysis['results_dir'])]
         self.query_one('#config-preview', Static).update(Text('\n'.join(lines)))
 
     def on_data_table_row_highlighted(self, event):

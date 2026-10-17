@@ -24,6 +24,7 @@ import test_explain as fixtures
 from src.runtime.errors import AuditError
 from src.analysis.repository import Repository
 from src.cli import main
+from src.contracts.contracts import jsonc
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_WARNING = '[WARN] Running with administrator privileges.'
@@ -188,6 +189,11 @@ class StartupCLIIntegrationTests(unittest.TestCase):
         if not check:
             self.assertEqual(output['final_report'], str(manifest_path.parent / 'FINAL_REPORT.md'))
             self.assertTrue(Path(output['final_report']).is_file())
+            record = jsonc(self.config_path.read_text())['last_analysis']
+            self.assertEqual(record, {'status': 'COMPLETED', 'finished_at': manifest['finished_at'],
+                                      'results_dir': str(manifest_path.parent)})
+        else:
+            self.assertNotIn('last_analysis', jsonc(self.config_path.read_text()))
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         self.assertEqual(len(calls), 2 if check else 7 if mode == 'git' else 4)
         self.assertIn('--version', calls[0]['args'])

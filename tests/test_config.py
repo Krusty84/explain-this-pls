@@ -10,6 +10,35 @@ from test_folder import FolderFixture
 
 
 class ConfigTests(FolderFixture):
+    def test_last_analysis_is_optional_and_resolves_paths_without_requiring_results(self):
+        self.assertIsNone(self.config()['last_analysis'])
+        self.value['last_analysis'] = None
+        self.assertIsNone(self.config()['last_analysis'])
+        for status in ('COMPLETED', 'PARTIAL'):
+            self.value['last_analysis'] = {'status': status, 'finished_at': '2026-10-17T15:00:00+03:00',
+                                           'results_dir': './reports/source/old-run'}
+            with self.subTest(status=status):
+                saved = self.config()['last_analysis']
+                self.assertEqual(saved, self.value['last_analysis'] | {
+                    'results_dir': str(self.base / 'reports/source/old-run')})
+                self.assertFalse((self.base / 'reports').exists())
+
+    def test_invalid_last_analysis_fails_before_backend_lookup(self):
+        valid = {'status': 'COMPLETED', 'finished_at': '2026-10-17T12:00:00Z', 'results_dir': './reports/run'}
+        invalid = [False, [], '', {}, *({k: v for k, v in valid.items() if k != key} for key in valid),
+                   valid | {'extra': True}]
+        for key, values in {'status': ('COMPLETE', 'FAILED', None, [], True),
+                            'finished_at': ('invalid', '2026-10-17', '2026-10-17T12:00:00', None, 42),
+                            'results_dir': ('', ' \t ', None, [], 42)}.items():
+            invalid += [valid | {key: value} for value in values]
+        for value in invalid:
+            self.value['last_analysis'] = value
+            with self.subTest(value=value), patch('src.runtime.config.shutil.which') as which:
+                with self.assertRaisesRegex(AuditError, 'last_analysis') as caught:
+                    self.config()
+                self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
+                which.assert_not_called()
+
     def test_report_language_is_checked_before_backend_lookup(self):
         for language in ('French', '', None, [], 1):
             self.value['output_language'] = language

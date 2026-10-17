@@ -17,6 +17,7 @@ from src.runtime.artifacts import now
 from src.runtime import artifacts
 from src.runtime.execution import repository_lock
 from src.runtime.config import load_config
+from src.runtime.config_edit import save_last_analysis
 from src.runtime.runner import Runner
 
 def run_audit(args, reporter) -> int:
@@ -26,6 +27,7 @@ def run_audit(args, reporter) -> int:
     manifest, code = {}, 1
     header_shown = False
     config = None
+    original = None
     phase = 'configuration'
     old_umask = os.umask(0o077)
     old_handler = signal.getsignal(signal.SIGTERM)
@@ -50,7 +52,9 @@ def run_audit(args, reporter) -> int:
         if sys.platform not in ('darwin', 'linux') or sys.version_info < (3, 11):
             raise AuditError('This implementation requires macOS or Linux and Python 3.11+.')
         try:
-            config = load_config(args.config.resolve())
+            config_path = args.config.resolve()
+            original = config_path.read_bytes()
+            config = load_config(config_path, text=original.decode('utf-8'))
         except ContractError as exc:
             raise AuditError('The configuration is not valid JSON/JSONC.', code='CONFIGURATION_ERROR',
                              hint='Check the configuration syntax and run --check again.') from exc
@@ -122,6 +126,19 @@ def run_audit(args, reporter) -> int:
                         artifacts.save_json(run_dir / 'manifest.json', manifest)
                     except OSError as save_error:
                         reporter.error(save_error)
+        if (not args.check and config is not None and manifest.get('has_usable_material')
+                and manifest.get('final_report') and existing_file(Path(manifest['final_report']))):
+            analysis = {
+                'status': 'COMPLETED' if code == 0 and manifest.get('status') in
+                    ('COMPLETE', 'COMPLETE_WITH_WARNINGS') else 'PARTIAL',
+                'finished_at': manifest['finished_at'],
+                'results_dir': str(run_dir.resolve()),
+            }
+            try:
+                save_last_analysis(config_path, analysis, original)
+            except (OSError, ValueError, ContractError) as exc:
+                reporter.emit('last_analysis_warning', code='LAST_ANALYSIS_NOT_SAVED',
+                              message='Could not save last_analysis in the configuration: ' + str(exc))
         signal.signal(signal.SIGTERM, old_handler)
         os.umask(old_umask)
         manifest_path = run_dir / 'manifest.json' if run_dir else None
