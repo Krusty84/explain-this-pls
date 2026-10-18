@@ -11,6 +11,8 @@ import signal
 import os
 import sys
 
+from rich.console import Group
+from rich.rule import Rule
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -327,22 +329,25 @@ class ExplainApp(App[int]):
             any(isinstance(agent, dict) and agent.get('backend') == 'codex'
                 for agent in config['stage_agents'].values()))
         s = self.presenter.display
-        lines = ['Config: ' + s(self.selected)]
         if config is None:
-            lines += ['Cannot start: ' + error]
+            lines = ['Config: ' + s(self.selected), 'Cannot start: ' + error]
         else:
             source = config[config['mode'] + '_mode']
-            description = ('Proj.Desc: ' + s(config['project_description']) if config['project_description'] else
-                           ('Proj.Desc: Not set. Add project_description to the config.', 'red'))
-            lines += ['Source: ' + s(source.get('path', source.get('repository'))), description,
-                      'Reports: ' + s(config['_reports_dir'])]
+            description = ('Project Description: ' + s(config['project_description']) if config['project_description'] else
+                           ('Project Description: Not set. Add project_description to the config.', 'red'))
+            lines = [description, 'Source: ' + s(source.get('path', source.get('repository'))),
+                     'Config: ' + s(self.selected), 'Reports: ' + s(config['_reports_dir'])]
             analysis = config['last_analysis']
             if analysis:
                 finished = dt.datetime.fromisoformat(analysis['finished_at']).astimezone().isoformat(sep=' ', timespec='seconds')
                 lines += ['Results: ' + s(analysis['status']) +
                           (' (Missing)' if not Path(analysis['results_dir']).is_dir() else ''),
                           'Finished: ' + finished, 'Results directory: ' + s(analysis['results_dir'])]
-        self.query_one('#config-preview', Static).update(Text('\n').join(Text.assemble(line) for line in lines))
+        lines = [Text.assemble(line) for line in lines]
+        content = (Group(Text('\n').join(lines[:2]), Text('─' * 40, style='dim'),
+                         Text('\n').join(lines[2:]), fit=False)
+                   if config is not None else Text('\n').join(lines))
+        self.query_one('#config-preview', Static).update(content)
 
     def on_data_table_row_highlighted(self, event):
         if event.data_table.id == 'configs':

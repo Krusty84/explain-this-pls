@@ -19,6 +19,9 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
+from rich.console import Group
+from rich.rule import Rule
+from textual.geometry import Region
 from textual.widgets import Button, DataTable, Input, Static, TabbedContent
 
 from src.cli import main
@@ -194,8 +197,16 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(pilot.app.selected, self.path)
             self.assertFalse(self.settings.exists())
-            preview = str(pilot.app.query_one('#config-preview', Static).content)
-            self.assertIn('Reports: ' + str(self.base / 'reports' / 'source'), preview)
+            preview = pilot.app.query_one('#config-preview', Static)
+            self.assertIsInstance(preview.content, Group)
+            self.assertIn('Reports: ' + str(self.base / 'reports' / 'source'), preview.content.renderables[-1].plain)
+            for width in (60, 100):
+                await pilot.resize_terminal(width, 24)
+                await pilot.pause()
+                lines = [strip.text for strip in preview.render_lines(Region(0, 0, *preview.size))]
+                self.assertEqual([line for line in lines if line.startswith('─')],
+                                 ['─' * preview.content_size.width])
+                self.assertTrue(all(line.strip() for line in lines))
 
     async def test_reselection_reloads_external_changes_in_preview_row_and_buttons(self):
         value = jsonc(self.path.read_text())
@@ -228,10 +239,15 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                     [self.path.name, 'git', str(repository), model, 'native', 'COMPLETED'])
                 self.assertGreater(list(table.columns.values())[3].content_width, old_width)
                 self.assertGreaterEqual(list(table.columns.values())[3].content_width, len(model))
-                preview = app.query_one('#config-preview', Static).content
-                self.assertIn('Proj.Desc: Обновлённый проект [bold]', preview.plain)
-                self.assertIn('Source: ' + str(repository), preview.plain)
-                self.assertIn('Results: COMPLETED', preview.plain)
+                project, separator, files = app.query_one('#config-preview', Static).content.renderables
+                self.assertEqual(project.plain.splitlines(),
+                    ['Project Description: Обновлённый проект [bold]', 'Source: ' + str(repository)])
+                self.assertIsInstance(separator, Rule)
+                self.assertEqual(separator.characters, '─')
+                self.assertEqual(separator.style, 'dim')
+                self.assertEqual(files.plain.splitlines()[:3],
+                    ['Config: ' + str(self.path), 'Reports: ' + str(self.base / 'reports' / repository.name),
+                     'Results: COMPLETED'])
                 self.assertFalse(app.query_one('#run', Button).disabled)
                 self.assertFalse(app.query_one('#check', Button).disabled)
                 self.assertTrue(app.query_one('#models', Button).disabled)
@@ -256,13 +272,13 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                                 self.assertTrue(await pilot.click('#configs', offset=(2, 1)))
                             await pilot.pause()
                             reader.assert_called_once_with(self.path)
-                        preview = app.query_one('#config-preview', Static).content
+                        preview = app.query_one('#config-preview', Static).content.renderables[0]
                         red = [span for span in preview.spans if span.style == 'red']
                         if description.strip():
-                            self.assertIn(r'Proj.Desc: Updated [bold]\x1b[31m', preview.plain)
+                            self.assertIn(r'Project Description: Updated [bold]\x1b[31m', preview.plain)
                             self.assertEqual(red, [])
                         else:
-                            warning = 'Proj.Desc: Not set. Add project_description to the config.'
+                            warning = 'Project Description: Not set. Add project_description to the config.'
                             self.assertIn(warning, preview.plain)
                             start = preview.plain.index(warning)
                             self.assertEqual([(span.start, span.end) for span in red],
@@ -299,7 +315,8 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                         await pilot.press('enter')
                         await pilot.pause()
                         self.assertEqual(table.get_row(str(self.path))[1].plain, 'folder')
-                        self.assertNotIn('Cannot start:', app.query_one('#config-preview', Static).content.plain)
+                        self.assertNotIn('Cannot start:',
+                                         app.query_one('#config-preview', Static).content.renderables[-1].plain)
                         for name in ('run', 'check', 'models'):
                             self.assertFalse(app.query_one('#' + name, Button).disabled)
                 worker.assert_not_called()
@@ -366,7 +383,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
         async with self.app(self.path).run_test(size=(80, 24)) as pilot:
             table = pilot.app.query_one('#configs', DataTable)
             self.assertEqual(table.get_row_at(0)[5].plain, 'COMPLETED')
-            preview = str(pilot.app.query_one('#config-preview', Static).content)
+            preview = pilot.app.query_one('#config-preview', Static).content.renderables[-1].plain
             finished = dt.datetime.fromisoformat(record['finished_at']).astimezone().isoformat(sep=' ', timespec='seconds')
             self.assertIn('Finished: ' + finished, preview)
             self.assertIn('Results directory: ' + str(directory), preview)
@@ -382,7 +399,8 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             app.refresh_configs()
             await pilot.pause()
             self.assertEqual(table.get_row_at(0)[5].plain, 'Missing')
-            self.assertIn('Results: PARTIAL (Missing)', str(app.query_one('#config-preview', Static).content))
+            self.assertIn('Results: PARTIAL (Missing)',
+                          app.query_one('#config-preview', Static).content.renderables[-1].plain)
             self.assertFalse(app.query_one('#run', Button).disabled)
             self.assertEqual(self.path.read_bytes(), before)
             value['last_analysis'] = None
@@ -435,6 +453,9 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(read_settings(self.settings), empty)
             self.assertTrue(app.query_one('#run', Button).disabled)
             self.assertEqual(app.query_one('#configs', DataTable).row_count, 0)
+            preview = app.query_one('#config-preview', Static).content
+            self.assertNotIsInstance(preview, Group)
+            self.assertIn('No configs found.', str(preview))
 
     async def test_invalid_settings_and_stale_directory_reopen_chooser(self):
         for contents in ('broken', json.dumps({'config_dir': str(self.base / 'missing')})):
