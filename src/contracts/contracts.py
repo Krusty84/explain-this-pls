@@ -64,7 +64,7 @@ def obj(**properties: dict) -> dict:
 # additionalProperties. Local semantic checks enforce nonblank strings, bounds
 # and graph constraints regardless of a backend's JSON Schema dialect.
 CONTRACT_ID = 'evidence-ledger'
-ARTIFACT_FORMAT = 'evidence-ledger-five-sections-v4-artifacts'
+ARTIFACT_FORMAT = 'architecture-artifacts'
 STRINGS = array(string())
 STATUS = string('COMPLETE', 'PARTIAL', 'BLOCKED')
 BASE = dict(completion_status=STATUS, report_markdown=string(), limitations=STRINGS)

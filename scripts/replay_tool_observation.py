@@ -29,7 +29,10 @@ def replay(path, backend, *, context=None):
             observer.feed(line + '\n')
             continue
         records += 1
-        if isinstance(event, dict) and event.get('format') == 'tool-observer-v1':
+        if isinstance(event, dict) and 'format' in event and event['format'] != 'tool-observer':
+            observer._invalid('Unsupported normalized tool observation format.')
+            continue
+        if isinstance(event, dict) and event.get('format') == 'tool-observer':
             raw = event.get('call')
             timestamp = event.get('observed_at_seconds')
             if type(timestamp) not in (int, float) or not math.isfinite(timestamp) or timestamp < 0:
@@ -131,7 +134,7 @@ def main(argv=None):
         if not path.is_file():
             parser.error('Selected attempt log does not exist: ' + selected)
         attempts.append(replay(path, args.backend, context=context))
-    report = {'format': 'tool-observer-replay-v1', 'live_executed': False, 'attempts': attempts}
+    report = {'format': 'tool-observer-replay', 'live_executed': False, 'attempts': attempts}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.with_suffix('.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     args.output.with_suffix('.md').write_text(markdown(report), encoding='utf-8')

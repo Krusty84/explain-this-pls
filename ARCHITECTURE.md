@@ -220,7 +220,7 @@ Study, Review and Revision receive every file's source ID, relative path,
 parser/version, language, encoding, line count and map status. Unknown values are
 null; parse or read failures stay explicit entries. File order is deterministic;
 the inventory is not truncated. The wire payload retains `mode: "index-only"` and
-`fragments: []`, with `index_format: "dictionary-v1"` and a `delivery` field.
+`fragments: []`, with `index_format: "dictionary"` and a `delivery` field.
 
 Internal maps and cache entries retain named fields. The model view defines
 `file_columns` and, where symbols are present, `symbol_columns`; records are rows
@@ -338,7 +338,7 @@ backends; the orchestrator sends no format-repair request.
 Former Catalog stage keys and old artifact formats are unsupported. Remove
 `stage_agents.catalog` and `prompts.catalog`. Custom Study prompts must use the
 current document contract; subsystem, exclusion and coverage arrays are no longer
-required. The artifact format is `evidence-ledger-five-sections-v4-artifacts`.
+required. The artifact format is `architecture-artifacts`.
 Start a new run directory; existing reports remain unchanged. See
 [CONTRACTS.md](CONTRACTS.md) for response, validation and storage contracts.
 
@@ -477,7 +477,8 @@ stay active.
 
 Attempt metrics separate delivered lines, tool-read lines, exact repeats, model
 requests and token usage. `tool-events.jsonl` records completed calls with monotonic
-observation times for replay. Missing measurements include an availability reason;
+observation times and the permanent format `tool-observer` for replay.
+Missing measurements include an availability reason;
 overall metrics can remain partial while complete individual results confirm
 repeats. Ambiguous or incomplete results do not count. Private logs can contain
 source text.
@@ -557,6 +558,8 @@ and falls back to `stdout.log`. `--output` is a file prefix: the example writes
 `/path/to/replay.json` and `/path/to/replay.md`. These files contain the possible stop
 time, call number, streak, metrics and observation limits. Optional `--context`
 accepts saved orchestration context for source ownership and prompt delivery.
+The JSON report uses the permanent format `tool-observer-replay`. Records with
+an unknown `format` are invalid; native CLI events have no format marker.
 Recorded monotonic times reproduce the live rule. Native wall-clock timestamps
 provide weaker evidence; logs without timestamps cannot establish the time
 threshold. Tests use small fixtures and need no external report directory.

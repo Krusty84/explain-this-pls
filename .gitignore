@@ -28,3 +28,4 @@ explain.config
 input/*
 architecture-reports/*
 bench_codex.py
+!/AGENTS.md

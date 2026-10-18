@@ -127,7 +127,7 @@ Never modify files or switch, initialize, update, or fetch Git checkouts.
 
 ## Prepared source context
 
-source_context uses index_format "dictionary-v1" and fragments: []. It lists all
+source_context uses index_format "dictionary" and fragments: []. It lists all
 pinned files, including map errors and unavailable metadata. Decode rows using
 the supplied columns and value tables; table indexes start at zero, and values
 follow first occurrence. Preserve null, empty values and original source lines.

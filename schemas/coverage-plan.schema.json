@@ -10,7 +10,7 @@
     "artifact_format": {
       "type": "string",
       "enum": [
-        "evidence-ledger-five-sections-v4-artifacts"
+        "architecture-artifacts"
       ]
     },
     "origin": {

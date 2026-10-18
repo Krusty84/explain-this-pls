@@ -50,6 +50,12 @@ The `evidence-ledger` contract requires the saved schema or explicitly marked
 recovery material for rendering.
 Unsupported results are rejected without modifying their artifacts.
 
+Internal contract, schema, format and processing-rule identifiers are permanent
+and carry no version numbers. Keep these identifiers when schemas change; update
+the single implementation and its validation. Do not add version fields,
+migrations or legacy aliases. External tool, protocol, model and parser versions
+and document revision numbers remain valid.
+
 ## Data provenance and storage
 
 | Data | Authority |
@@ -78,7 +84,7 @@ Transport/stdout and stderr remain private attempt artifacts. A saved `study.jso
 fields and `program_checks`. Study narrative is authored as sections/blocks;
 the program computes the Markdown, block map and every document locator.
 Contract/artifact identifiers (`contract_id:
-"evidence-ledger"`, `artifact_format: "evidence-ledger-five-sections-v4-artifacts"`) belong only
+"evidence-ledger"`, `artifact_format: "architecture-artifacts"`) belong only
 to invocation metadata, the manifest and the immutable coverage plan, not agent
 responses or the root of saved results. The coverage plan records both identifiers
 and `origin: "SOURCE_INVENTORY"`; it is also embedded in saved review plans.
@@ -1036,6 +1042,6 @@ copies of the selected artifacts, published after selection. Frozen-document che
 run within each revision; a new study can never inherit an older review.
 
 The removed Catalog stage is not accepted in stage_agents or prompts. Configuration
-errors identify the key to remove. The artifact format changed to
-`evidence-ledger-five-sections-v4-artifacts`; earlier run formats and coverage plans
+errors identify the key to remove. The permanent artifact format is
+`architecture-artifacts`; unsupported run formats and coverage plans
 are rejected without migration or modification of existing reports.

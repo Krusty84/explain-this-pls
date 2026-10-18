@@ -14,7 +14,7 @@ _SYMBOL_COLUMNS = ('name', 'kind', 'parent', 'start_line', 'end_line')
 _FILE_TABLE_COLUMNS = ('source_id', 'parser', 'language', 'encoding', 'map_status', 'map_reason')
 _SYMBOL_TABLE_COLUMNS = ('kind', 'parent')
 SOURCE_INDEX_INSTRUCTION = (
-    'source_context uses index_format "dictionary-v1". Files are rows in file_columns order. '
+    'source_context uses index_format "dictionary". Files are rows in file_columns order. '
     'For columns in file_value_tables, each cell is a zero-based index into that column\'s '
     'table, including null table entries. In delivery "full", symbols are rows in '
     'symbol_columns order; kind and parent cells index symbol_value_tables. In delivery '
@@ -90,7 +90,7 @@ def _source_index(index):
     remaining = iter(symbols)
     files = [file | {'symbols': [next(remaining) for _ in file['symbols']]} for file in index['files']]
     rows, file_tables = _pack_rows(files, _FILE_COLUMNS, _FILE_TABLE_COLUMNS)
-    index.update(index_format='dictionary-v1', delivery='full',
+    index.update(index_format='dictionary', delivery='full',
                  file_value_tables=file_tables, symbol_value_tables=symbol_tables)
     index['file_columns'] = list(_FILE_COLUMNS)
     index['symbol_columns'] = list(_SYMBOL_COLUMNS)

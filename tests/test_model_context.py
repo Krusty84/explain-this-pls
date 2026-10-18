@@ -144,7 +144,7 @@ class ModelContextTests(unittest.TestCase):
                 self.assertEqual(rows['file_columns'], ['source_id', 'path', 'parser', 'language', 'encoding',
                     'total_lines', 'map_status', 'map_reason', 'symbols'])
                 self.assertEqual(rows['symbol_columns'], ['name', 'kind', 'parent', 'start_line', 'end_line'])
-                self.assertEqual(rows['index_format'], 'dictionary-v1')
+                self.assertEqual(rows['index_format'], 'dictionary')
                 self.assertEqual(rows['delivery'], 'full')
                 self.assertEqual(rows['file_value_tables']['source_id'], ['source-002', 'source-001'])
                 self.assertEqual(rows['file_value_tables']['map_reason'], [None, 'parse_error'])

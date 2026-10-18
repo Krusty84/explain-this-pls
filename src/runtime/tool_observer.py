@@ -91,7 +91,7 @@ class ToolObserver:
 
     def _record(self, **values):
         if self.event_sink:
-            self.event_sink({'format': 'tool-observer-v1', 'attempt_id': self.attempt_id,
+            self.event_sink({'format': 'tool-observer', 'attempt_id': self.attempt_id,
                              'observed_at_seconds': self.clock() - self.started, **values})
 
     def _request(self, identity):

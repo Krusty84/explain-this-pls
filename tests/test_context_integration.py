@@ -56,6 +56,7 @@ class PreparedContextTests(FolderFixture):
         self.assertEqual(prompt.count(SOURCE_INDEX_INSTRUCTION), 1)
         self.assertEqual(prompt.count('# Source index reading instruction'), 1)
         transmitted = context['source_context']
+        self.assertEqual(transmitted['index_format'], 'dictionary')
         original = decode_source_context(transmitted)
         original_bytes = len(json.dumps(original, ensure_ascii=False).encode('utf-8'))
         transmitted_bytes = len(serialize_model_input(transmitted).encode('utf-8'))

@@ -394,6 +394,7 @@ class ToolObserverTests(unittest.TestCase):
         for n in range(60):
             clock.now = n * 3
             observer.observe(call(n))
+        self.assertEqual({record['format'] for record in saved}, {'tool-observer'})
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'tool-events.jsonl'
             path.write_text('\n'.join(json.dumps(r) for r in saved), encoding='utf-8')
@@ -403,6 +404,7 @@ class ToolObserverTests(unittest.TestCase):
             output = Path(folder) / 'report'
             self.assertEqual(main([folder, '--attempt', '.', '--backend', 'opencode', '--output', str(output)]), 0)
             self.assertTrue(output.with_suffix('.json').is_file())
+            self.assertEqual(json.loads(output.with_suffix('.json').read_text())['format'], 'tool-observer-replay')
             self.assertIn('No live model calls', output.with_suffix('.md').read_text())
 
     def test_replay_missing_time_is_unavailable(self):
@@ -415,6 +417,20 @@ class ToolObserverTests(unittest.TestCase):
             self.assertEqual(result['timing'], 'unavailable')
             self.assertIsNone(result['possible_stop'])
             self.assertIn('No per-call timestamps', ' '.join(result['metrics']['observation']['limitations']))
+
+    def test_replay_unknown_normalized_format_is_not_a_native_event(self):
+        for marker in ('unsupported-format', None):
+            with self.subTest(format=marker), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / 'events.jsonl'
+                path.write_text(json.dumps(native(0) | {'format': marker}), encoding='utf-8')
+                with patch.object(ToolObserver, 'event') as native_event:
+                    result = replay(path, 'opencode')
+                native_event.assert_not_called()
+                self.assertEqual(result['metrics']['invalid_events'], 1)
+                self.assertEqual(result['metrics']['calls'], 0)
+                self.assertIsNone(result['possible_stop'])
+                self.assertIn('Unsupported normalized tool observation format.',
+                              result['metrics']['observation']['limitations'])
 
     def test_replay_cli_rejects_unsupported_backend(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -464,7 +480,7 @@ class ToolObserverTests(unittest.TestCase):
     def test_replay_nonfinite_and_incomplete_normalized_records(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'events.jsonl'
-            path.write_text('\n'.join(json.dumps({'format': 'tool-observer-v1', 'observed_at_seconds': t,
+            path.write_text('\n'.join(json.dumps({'format': 'tool-observer', 'observed_at_seconds': t,
                                                    'call': {'unexpected': True}})
                                       for t in (float('inf'), float('nan'), 4)))
             result = replay(path, 'opencode')
