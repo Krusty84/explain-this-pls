@@ -444,7 +444,7 @@ class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
             self.assertNotIsInstance(app.screen, ModelChooser)
             self.assertEqual(jsonc(self.path.read_text())['agent']['model'], 'public-model')
             self.assertEqual(jsonc(self.path.read_text())['agent']['reasoning_effort'], 'high')
-            self.assertIn('public-model', str(app.query_one('#config-preview', Static).content))
+            self.assertEqual(app.query_one('#configs', DataTable).get_row_at(0)[3].plain, 'public-model')
         self.assertIn('"path": "./source"', self.path.read_text())
         self.assertIn('"reports_dir": "./reports"', self.path.read_text())
         self.assertNotEqual(original, self.path.read_text())

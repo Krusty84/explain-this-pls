@@ -23,6 +23,7 @@ from textual.widgets import Button, DataTable, Input, Static, TabbedContent
 
 from src.cli import main
 from src.contracts.contracts import jsonc
+from src.runtime.config import load_config
 from src.runtime.metrics import usage
 from src.runtime.reporting import Reporter
 from src.tui.app import ExplainApp, FolderChooser, WorkerMessage
@@ -195,6 +196,134 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.settings.exists())
             preview = str(pilot.app.query_one('#config-preview', Static).content)
             self.assertIn('Reports: ' + str(self.base / 'reports' / 'source'), preview)
+
+    async def test_reselection_reloads_external_changes_in_preview_row_and_buttons(self):
+        value = jsonc(self.path.read_text())
+        (self.directory / 'other.json').write_text(json.dumps(value))
+        save_settings(self.settings, self.directory)
+        app = self.app()
+        with patch('src.tui.app.AuditProcess') as worker:
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                table = app.query_one('#configs', DataTable)
+                old_width = list(table.columns.values())[3].content_width
+                await pilot.press('down')
+                repository = self.base / 'repository_with_a_longer_name'
+                results = self.base / 'saved-results'
+                results.mkdir()
+                model = 'provider/a-much-longer-study-model#native'
+                value.update(mode='git', git_mode={'repository': str(repository), 'branches': ['main'],
+                    'baseline_branch': 'main'}, project_description='Обновлённый проект [bold]',
+                    agent={'backend': 'opencode', 'executable': sys.executable, 'model': model},
+                    last_analysis={'status': 'COMPLETED', 'finished_at': '2026-10-17T15:00:00+03:00',
+                                   'results_dir': str(results)})
+                self.path.write_text(json.dumps(value))
+                before = self.path.read_bytes()
+                with patch('src.tui.app.load_config', wraps=load_config) as reader:
+                    await pilot.press('up')
+                    await pilot.pause()
+                    reader.assert_called_once_with(self.path)
+                self.assertEqual(app.selected, self.path)
+                self.assertEqual([cell.plain for cell in table.get_row(str(self.path))],
+                    [self.path.name, 'git', str(repository), model, 'native', 'COMPLETED'])
+                self.assertGreater(list(table.columns.values())[3].content_width, old_width)
+                self.assertGreaterEqual(list(table.columns.values())[3].content_width, len(model))
+                preview = app.query_one('#config-preview', Static).content
+                self.assertIn('Proj.Desc: Обновлённый проект [bold]', preview.plain)
+                self.assertIn('Source: ' + str(repository), preview.plain)
+                self.assertIn('Results: COMPLETED', preview.plain)
+                self.assertFalse(app.query_one('#run', Button).disabled)
+                self.assertFalse(app.query_one('#check', Button).disabled)
+                self.assertTrue(app.query_one('#models', Button).disabled)
+                self.assertEqual(app.configs[str(self.path)][1]['project_description'], value['project_description'])
+                self.assertEqual(self.path.read_bytes(), before)
+                worker.assert_not_called()
+
+    async def test_enter_and_click_reload_the_explicit_config_and_description_color(self):
+        value = jsonc(self.path.read_text())
+        app = self.app(self.path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            for action in ('enter', 'click'):
+                for description in ('Updated [bold]\x1b[31m', ' \t\n '):
+                    with self.subTest(action=action, description=description):
+                        value['project_description'] = description
+                        self.path.write_text(json.dumps(value))
+                        with patch('src.tui.app.load_config', wraps=load_config) as reader:
+                            if action == 'enter':
+                                await pilot.press('enter')
+                            else:
+                                self.assertTrue(await pilot.click('#configs', offset=(2, 1)))
+                            await pilot.pause()
+                            reader.assert_called_once_with(self.path)
+                        preview = app.query_one('#config-preview', Static).content
+                        red = [span for span in preview.spans if span.style == 'red']
+                        if description.strip():
+                            self.assertIn(r'Proj.Desc: Updated [bold]\x1b[31m', preview.plain)
+                            self.assertEqual(red, [])
+                        else:
+                            warning = 'Proj.Desc: Not set. Add project_description to the config.'
+                            self.assertIn(warning, preview.plain)
+                            start = preview.plain.index(warning)
+                            self.assertEqual([(span.start, span.end) for span in red],
+                                             [(start, start + len(warning))])
+                        self.assertFalse(app.query_one('#run', Button).disabled)
+                        self.assertFalse(app.query_one('#check', Button).disabled)
+                        self.assertFalse(app.query_one('#models', Button).disabled)
+
+    async def test_reselection_handles_invalid_missing_unreadable_and_restored_config(self):
+        original = self.path.read_text()
+        app = self.app(self.path)
+        with patch('src.tui.app.AuditProcess') as worker:
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                table = app.query_one('#configs', DataTable)
+                for failure in ('invalid', 'missing', 'unreadable'):
+                    with self.subTest(failure=failure):
+                        if failure == 'invalid':
+                            self.path.write_text('{')
+                        elif failure == 'missing':
+                            self.path.unlink()
+                        error = (patch('src.tui.app.load_config', side_effect=PermissionError('Cannot read config'))
+                                 if failure == 'unreadable' else contextlib.nullcontext())
+                        with error:
+                            await pilot.press('enter')
+                            await pilot.pause()
+                        row = [cell.plain for cell in table.get_row(str(self.path))]
+                        self.assertEqual(row[1], 'Invalid')
+                        self.assertEqual(row[3:], ['—', '—', '—'])
+                        self.assertIn('Cannot start: ' + row[2], app.query_one('#config-preview', Static).content.plain)
+                        for name in ('run', 'check', 'models'):
+                            self.assertTrue(app.query_one('#' + name, Button).disabled)
+                        self.path.write_text(original)
+                        await pilot.press('enter')
+                        await pilot.pause()
+                        self.assertEqual(table.get_row(str(self.path))[1].plain, 'folder')
+                        self.assertNotIn('Cannot start:', app.query_one('#config-preview', Static).content.plain)
+                        for name in ('run', 'check', 'models'):
+                            self.assertFalse(app.query_one('#' + name, Button).disabled)
+                worker.assert_not_called()
+
+    async def test_run_and_check_revalidate_external_changes_in_the_row(self):
+        original = self.path.read_text()
+        for name in ('run', 'check'):
+            with self.subTest(action=name):
+                self.path.write_text(original)
+                app = self.app(self.path)
+                with patch('src.tui.app.AuditProcess') as worker:
+                    async with app.run_test() as pilot:
+                        await pilot.pause()
+                        self.path.write_text('{')
+                        with patch('src.tui.app.load_config', wraps=load_config) as reader:
+                            await pilot.click('#' + name)
+                            await pilot.pause()
+                            reader.assert_called_once_with(self.path)
+                        self.assertEqual(app.query_one('#configs', DataTable).get_row_at(0)[1].plain, 'Invalid')
+                        self.assertIn('Cannot start:', app.query_one('#config-preview', Static).content.plain)
+                        self.assertTrue(app.query_one('#picker').display)
+                        for button in ('run', 'check', 'models'):
+                            self.assertTrue(app.query_one('#' + button, Button).disabled)
+                        worker.assert_not_called()
 
     async def test_config_columns_show_study_model_and_effort_with_native_variant(self):
         value = jsonc(self.path.read_text())

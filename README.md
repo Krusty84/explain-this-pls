@@ -268,8 +268,7 @@ python3 explain.py
 ```
 
 On first launch, select the folder containing your JSON/JSONC configurations.
-The app remembers this folder. Use **Config folder** to choose another location,
-or **Refresh** after editing or adding configs.
+The app remembers this folder. Use **Config folder** to choose another location.
 
 Select a config to preview its source, branches, agents, review setting and report
 destination. Invalid configs show validation errors and cannot run. Use **Check

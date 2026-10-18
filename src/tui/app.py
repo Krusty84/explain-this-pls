@@ -262,6 +262,29 @@ class ExplainApp(App[int]):
         self.directory, self.explicit_config = directory, None
         self.refresh_configs()
 
+    def load_config_row(self, path):
+        try:
+            config = load_config(path)
+            mode = config['mode']
+            source = config[mode + '_mode']['path' if mode == 'folder' else 'repository']
+            agent = config['_agents']['study']
+            model = agent.get('model') or 'CLI default'
+            effort = agent.get('reasoning_effort')
+            if effort is None and agent['backend'] == 'opencode':
+                effort = (agent.get('model') or '').partition('#')[2]
+            effort = effort or 'CLI default'
+            analysis = config['last_analysis']
+            results = '—'
+            if analysis:
+                results = analysis['status'] if Path(analysis['results_dir']).is_dir() else 'Missing'
+            error = ''
+        except (OSError, ValueError, RuntimeError, ContractError) as exc:
+            config, mode, source = None, 'Invalid', self.presenter.display(diagnostic(exc).message)
+            model, effort, results = '—', '—', '—'
+            error = source
+        self.configs[str(path)] = (path, config, error)
+        return [self.literal(value) for value in (path.name, mode, source, model, effort, results)]
+
     def refresh_configs(self):
         self.configs.clear()
         table = self.query_one('#configs', DataTable)
@@ -274,27 +297,7 @@ class ExplainApp(App[int]):
         self.query_one('#config-location', Static).update(self.literal(
             'Config: ' + str(self.explicit_config) if self.explicit_config else 'Config folder: ' + str(self.directory)))
         for path in paths:
-            try:
-                config = load_config(path)
-                mode = config['mode']
-                source = config[mode + '_mode']['path' if mode == 'folder' else 'repository']
-                agent = config['_agents']['study']
-                model = agent.get('model') or 'CLI default'
-                effort = agent.get('reasoning_effort')
-                if effort is None and agent['backend'] == 'opencode':
-                    effort = (agent.get('model') or '').partition('#')[2]
-                effort = effort or 'CLI default'
-                analysis = config['last_analysis']
-                results = '—'
-                if analysis:
-                    results = analysis['status'] if Path(analysis['results_dir']).is_dir() else 'Missing'
-                error = ''
-            except (OSError, ValueError, RuntimeError, ContractError) as exc:
-                config, mode, source = None, 'Invalid', self.presenter.display(diagnostic(exc).message)
-                model, effort, results = '—', '—', '—'
-                error = source
-            self.configs[str(path)] = (path, config, error)
-            table.add_row(*(self.literal(value) for value in (path.name, mode, source, model, effort, results)), key=str(path))
+            table.add_row(*self.load_config_row(path), key=str(path))
         selected = str(self.selected) if str(self.selected) in self.configs else next(iter(self.configs), None)
         if selected:
             table.move_cursor(row=list(self.configs).index(selected))
@@ -313,6 +316,10 @@ class ExplainApp(App[int]):
     def select_config(self, key):
         if key not in self.configs:
             return
+        values = self.load_config_row(self.configs[key][0])
+        table = self.query_one('#configs', DataTable)
+        for column, value in zip(table.columns, values):
+            table.update_cell(key, column, value, update_width=True)
         self.selected, config, error = self.configs[key]
         self.enable_start(config is not None)
         self.query_one('#models', Button).disabled = config is None or not (
@@ -320,17 +327,14 @@ class ExplainApp(App[int]):
             any(isinstance(agent, dict) and agent.get('backend') == 'codex'
                 for agent in config['stage_agents'].values()))
         s = self.presenter.display
-        lines = ['File: ' + s(self.selected)]
+        lines = ['Config: ' + s(self.selected)]
         if config is None:
             lines += ['Cannot start: ' + error]
         else:
             source = config[config['mode'] + '_mode']
-            lines += ['Mode: ' + s(config['mode']), 'Source: ' + s(source.get('path', source.get('repository')))]
-            if config['mode'] == 'git':
-                lines += ['Branches: ' + s(', '.join(source['branches'])) + ' | Baseline: ' + s(source['baseline_branch'])]
-            agents = '; '.join(stage + ': ' + agent['backend'] + ' / ' + (agent.get('model') or 'CLI default')
-                               for stage, agent in config['_agents'].items())
-            lines += ['Agents: ' + s(agents), 'Review: ' + ('enabled' if config['execution']['review_enabled'] else 'disabled'),
+            description = ('Proj.Desc: ' + s(config['project_description']) if config['project_description'] else
+                           ('Proj.Desc: Not set. Add project_description to the config.', 'red'))
+            lines += ['Source: ' + s(source.get('path', source.get('repository'))), description,
                       'Reports: ' + s(config['_reports_dir'])]
             analysis = config['last_analysis']
             if analysis:
@@ -338,13 +342,17 @@ class ExplainApp(App[int]):
                 lines += ['Results: ' + s(analysis['status']) +
                           (' (Missing)' if not Path(analysis['results_dir']).is_dir() else ''),
                           'Finished: ' + finished, 'Results directory: ' + s(analysis['results_dir'])]
-        self.query_one('#config-preview', Static).update(Text('\n'.join(lines)))
+        self.query_one('#config-preview', Static).update(Text('\n').join(Text.assemble(line) for line in lines))
 
     def on_data_table_row_highlighted(self, event):
         if event.data_table.id == 'configs':
             self.select_config(event.row_key.value)
         elif event.data_table.id == 'stages':
             self.show_step_details()
+
+    def on_data_table_row_selected(self, event):
+        if event.data_table.id == 'configs':
+            self.select_config(event.row_key.value)
 
     def on_button_pressed(self, event):
         name = event.button.id
@@ -384,13 +392,8 @@ class ExplainApp(App[int]):
         if self.running or self.selected is None:
             return
         # Revalidate changes made in an external editor since the last selection.
-        try:
-            config, error = load_config(self.selected), ''
-        except (OSError, ValueError, RuntimeError, ContractError) as exc:
-            config, error = None, self.presenter.display(diagnostic(exc).message)
-        self.configs[str(self.selected)] = (self.selected, config, error)
         self.select_config(str(self.selected))
-        if config is None:
+        if self.configs[str(self.selected)][1] is None:
             return
         args = Namespace(**(vars(self.args) | {'config': self.selected, 'check': check_only}))
         self.state, self.pending_result = RunState(), None
