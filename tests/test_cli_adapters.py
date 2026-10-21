@@ -4,7 +4,6 @@
 """Offline compatibility checks for the standalone CLI adapters."""
 import itertools
 import json
-from fnmatch import fnmatchcase
 from pathlib import Path
 import subprocess
 import sys
@@ -16,7 +15,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.backends import codex, opencode_cli, preflight, xxx
+from src.backends import codex, preflight
 from src.contracts.contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS
 from src.runtime.errors import AuditError
 from src.runtime.runner import Runner
@@ -29,44 +28,11 @@ REQUIRED_FLAGS = {
 
 
 class CLIAdapterTests(unittest.TestCase):
-    def test_source_map_permissions_resolve_symlinks_without_allowing_sibling_logs(self):
-        with tempfile.TemporaryDirectory() as raw:
-            directory = Path(raw) / 'attempt/source-maps'
-            directory.mkdir(parents=True)
-            alias = Path(raw) / 'maps-link'
-            alias.symlink_to(directory, target_is_directory=True)
-            expected = directory.resolve().as_posix() + '/*'
-            for adapter in (opencode_cli, xxx):
-                with self.subTest(adapter=adapter.__name__):
-                    env = {}
-                    name = adapter.prepare_environment(env, 'study', source_maps_directory=alias)
-                    config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
-                    if adapter is xxx:
-                        patterns = [pattern for pattern, effect in
-                            config['agent'][name]['permission']['external_directory'].items() if effect == 'allow']
-                    else:
-                        patterns = [rule['resource'] for rule in config['agents'][name]['permissions']
-                            if rule['action'] == 'external_directory' and rule['effect'] == 'allow']
-                    self.assertEqual(patterns, [expected])
-                    self.assertTrue(fnmatchcase((directory / 'M-000001.json').as_posix(), expected))
-                    self.assertFalse(fnmatchcase((directory.parent / 'stdout.log').as_posix(), expected))
-                    self.assertFalse(fnmatchcase((directory.parent / 'source-maps-other/M-000001.json').as_posix(), expected))
-
-    def test_source_map_directory_reaches_only_external_read_permissions(self):
+    def test_source_maps_do_not_expand_codex_sandbox(self):
         session = SimpleNamespace(mode='git', schemas={'study': {}})
         state, schema_path = Path('/state'), Path('/state/schema.json')
-        directory = Path('/private output/source-maps')
-        for backend, adapter in (('opencode', opencode_cli), ('xxx', xxx)):
-            for reports_only in (False, True):
-                with self.subTest(backend=backend, reports_only=reports_only):
-                    env = {}
-                    with patch.object(adapter, 'prepare_environment', return_value='audit') as prepare:
-                        preflight.command(session, 'study', state, {'backend': backend, 'executable': 'cli'},
-                            schema_path, env, reports_only=reports_only, source_maps_directory=directory)
-                    prepare.assert_called_once_with(env, 'compare' if reports_only else 'study',
-                        source_maps_directory=directory)
         command = preflight.command(session, 'study', state, {'backend': 'codex', 'executable': 'cli'},
-            schema_path, {}, source_maps_directory=directory)
+            schema_path, {})
         self.assertEqual(command[command.index('--sandbox') + 1], 'read-only')
         self.assertNotIn('--add-dir', command)
 
@@ -214,48 +180,6 @@ class CLIPreflightTests(unittest.TestCase):
                     self.assertEqual(caught.exception.failure_kind, 'BACKEND_INCOMPATIBLE')
                     self.assertEqual(caught.exception.failure_layer, 'compatibility')
                     self.assertEqual(runner.session.versions, {})
-
-    def test_xxx_requires_variant_if_only_a_later_stage_sets_effort(self):
-        for effort, supported in ((None, False), ('high', False), ('high', True)):
-            with self.subTest(effort=effort, supported=supported):
-                runner = self.runner('xxx')
-                runner.session.cfg['_agents']['review']['reasoning_effort'] = effort
-                flags = xxx.required_flags('folder') + (['--variant'] if supported else [])
-                responses = [
-                    {'returncode': 0, 'stdout': b'fixture 1.0', 'stderr': b''},
-                    {'returncode': 0, 'stdout': ' '.join(flags).encode(), 'stderr': b''},
-                    {'returncode': 0, 'stdout': b'sessionID', 'stderr': b''},
-                    {'returncode': 0, 'stdout': b'sessionID', 'stderr': b''},
-                ]
-                with patch('src.runtime.process.process', side_effect=responses) as process:
-                    if effort is not None and not supported:
-                        with self.assertRaises(AuditError) as caught:
-                            runner.check_cli()
-                        self.assertEqual(caught.exception.code, 'BACKEND_INCOMPATIBLE')
-                        self.assertEqual(process.call_count, 2)
-                    else:
-                        result = runner.check_cli()
-                        self.assertEqual(process.call_count, 4)
-                        self.assertEqual(result['xxx:/configured/agent']['required_flags'],
-                            xxx.required_flags('folder') + (['--variant'] if effort is not None else []))
-                self.assertNotIn('--variant', xxx.required_flags('folder'))
-
-    def test_xxx_variant_requirement_is_specific_to_the_executable(self):
-        runner = self.runner('xxx')
-        runner.session.cfg['_agents']['review'].update(executable='/configured/other', reasoning_effort='high')
-        responses = []
-        for extra in ([], ['--variant']):
-            responses += [
-                {'returncode': 0, 'stdout': b'fixture 1.0', 'stderr': b''},
-                {'returncode': 0, 'stdout': ' '.join(xxx.required_flags('folder') + extra).encode(), 'stderr': b''},
-                {'returncode': 0, 'stdout': b'sessionID', 'stderr': b''},
-                {'returncode': 0, 'stdout': b'sessionID', 'stderr': b''},
-            ]
-        with patch('src.runtime.process.process', side_effect=responses) as process:
-            result = runner.check_cli()
-        self.assertEqual(process.call_count, 8)
-        self.assertNotIn('--variant', result['xxx:/configured/agent']['required_flags'])
-        self.assertIn('--variant', result['xxx:/configured/other']['required_flags'])
 
 
 if __name__ == '__main__':

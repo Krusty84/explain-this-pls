@@ -112,17 +112,17 @@ class HashlessPipelineTests(FolderFixture):
         self.assertFalse((runner.session.run_dir / 'revisions/001/study.material.json').exists())
 
 
-class HashlessXXXTests(unittest.TestCase):
-    setUp = native_fixtures.XXXOutputTests.setUp
-    config = native_fixtures.XXXOutputTests.config
-    stage = native_fixtures.XXXOutputTests.stage
-    recorded = native_fixtures.XXXOutputTests.recorded
-    prompts = native_fixtures.XXXOutputTests.prompts
+class HashlessResponseTests(unittest.TestCase):
+    setUp = native_fixtures.CodexOutputTests.setUp
+    config = native_fixtures.CodexOutputTests.config
+    stage = native_fixtures.CodexOutputTests.stage
+    recorded = native_fixtures.CodexOutputTests.recorded
+    prompts = native_fixtures.CodexOutputTests.prompts
 
     def test_invalid_service_hashes_are_saved_but_never_sent_for_repair(self):
         from src.contracts.contracts import ContractError
         with self.assertRaises(ContractError):
-            self.stage('xxx', 'schema-extra', repairs=2)
+            self.stage('schema-extra', repairs=2)
         attempt = self.destination / 'attempt-001'
         raw = json.loads((attempt / 'extracted.json').read_text())
         binding = json.loads((attempt / 'binding.json').read_text())

@@ -33,38 +33,38 @@ class CitationPipelineTests(test_folder.FolderFixture):
         if context['stage'] == 'study':
             data['evidence'][0]['quote'] = 'private unmatched source text'
 
-    def test_all_backends_continue_study_and_review_with_warnings(self):
-        for backend in ('codex', 'opencode', 'xxx'):
-            with self.subTest(backend=backend):
-                reporter = Reporter(stdout=io.StringIO(), stderr=io.StringIO(), progress=False)
-                self.addCleanup(reporter.close)
-                manifest, code = self.run_case(backend=backend, policy='compromise', review=True,
-                                             change=self.mismatch, reporter=reporter)
-                self.assertEqual(code, 0, manifest.get('diagnostics'))
-                self.assertEqual(manifest['status'], 'COMPLETE_WITH_WARNINGS')
-                self.assertEqual([c['context']['stage'] for c in self.calls],
-                                 ['study', 'review'])
-                self.assertTrue(processing_satisfied(manifest))
-                self.assertFalse(workflow_satisfied(manifest))
-                self.assertFalse(accepted(manifest))
-                checks = manifest['study']['program_checks']
-                self.assertFalse(checks['policy_satisfied'])
-                self.assertTrue(checks['continuation_allowed'])
-                self.assertEqual(checks['evidence_counts']['QUOTE_MISMATCH'], 1)
-                warnings = checks['citation_warnings']
-                self.assertEqual(len(warnings), 1)
-                self.assertTrue(warnings[0]['claim_ids'])
-                self.assertEqual(self.calls[-1]['context']['architecture_document']['program_checks']['citation_warnings'], warnings)
-                document = manifest['study']
-                validate_materialized(document)
-                architecture = (self.runner.session.run_dir / 'ARCHITECTURE.md').read_text()
-                assert_architecture(self, self.runner.session.run_dir, document,
-                                    manifest['study_invocation'], self.runner.session.cfg['output_language'])
-                self.assertGreater(len(architecture), len(document['report_markdown']))
-                evidence_id = warnings[0]['evidence_id'].split(':', 1)[1]
-                self.assertIn(f'[{evidence_id}](#source-{evidence_id.lower()})', architecture)
-                self.assertIn('QUOTE_MISMATCH', architecture)
-                self.assertNotIn('private unmatched source text', reporter.stderr.getvalue())
+    def test_codex_continue_study_and_review_with_warnings(self):
+        backend = 'codex'
+        with self.subTest(backend=backend):
+            reporter = Reporter(stdout=io.StringIO(), stderr=io.StringIO(), progress=False)
+            self.addCleanup(reporter.close)
+            manifest, code = self.run_case(backend=backend, policy='compromise', review=True,
+                                         change=self.mismatch, reporter=reporter)
+            self.assertEqual(code, 0, manifest.get('diagnostics'))
+            self.assertEqual(manifest['status'], 'COMPLETE_WITH_WARNINGS')
+            self.assertEqual([c['context']['stage'] for c in self.calls],
+                             ['study', 'review'])
+            self.assertTrue(processing_satisfied(manifest))
+            self.assertFalse(workflow_satisfied(manifest))
+            self.assertFalse(accepted(manifest))
+            checks = manifest['study']['program_checks']
+            self.assertFalse(checks['policy_satisfied'])
+            self.assertTrue(checks['continuation_allowed'])
+            self.assertEqual(checks['evidence_counts']['QUOTE_MISMATCH'], 1)
+            warnings = checks['citation_warnings']
+            self.assertEqual(len(warnings), 1)
+            self.assertTrue(warnings[0]['claim_ids'])
+            self.assertEqual(self.calls[-1]['context']['architecture_document']['program_checks']['citation_warnings'], warnings)
+            document = manifest['study']
+            validate_materialized(document)
+            architecture = (self.runner.session.run_dir / 'ARCHITECTURE.md').read_text()
+            assert_architecture(self, self.runner.session.run_dir, document,
+                                manifest['study_invocation'], self.runner.session.cfg['output_language'])
+            self.assertGreater(len(architecture), len(document['report_markdown']))
+            evidence_id = warnings[0]['evidence_id'].split(':', 1)[1]
+            self.assertIn(f'[{evidence_id}](#source-{evidence_id.lower()})', architecture)
+            self.assertIn('QUOTE_MISMATCH', architecture)
+            self.assertNotIn('private unmatched source text', reporter.stderr.getvalue())
 
     def test_strict_keeps_unmatched_quotes_without_allowing_continuation(self):
         manifest, code = self.run_case(policy='strict', change=self.mismatch)

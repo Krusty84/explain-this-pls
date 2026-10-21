@@ -269,8 +269,7 @@ advertised as a report.
 
 Metrics are backend metadata and runner measurements, never model-authored report
 fields. They do not change report acceptance, prompts, saved report schemas, or
-the contents of `FINAL_REPORT.md`. OpenCode V2 uses CLI events; XXX uses verified
-CLI session exports, with partial pipe-event accounting after a failure.
+the contents of `FINAL_REPORT.md`.
 
 Each attempt's `invocation.json` adds `metrics` with `usage`, `by_model`,
 `attempts: 1` and `duration_seconds`. Its enclosing invocation still identifies
@@ -297,7 +296,7 @@ and failed calls count, regardless of which report revision is
 selected. Manifest aliases of the selected revision are never additional usage.
 Attempt, stage and run durations are independently measured, not summed.
 Preflight probes are excluded from model attempts. A `--check` run has zero attempts
-and zero usage. XXX readiness checks invoke only version/help commands.
+and zero usage. Readiness checks invoke only version/help commands.
 
 `usage` contains `input_tokens`, `output_tokens`, `cache_read_tokens`,
 `cache_write_tokens`, `reasoning_tokens`, `total_tokens` and `cost_usd`.
@@ -306,7 +305,7 @@ breakdowns, not additional tokens to add to total. Each counter has an independe
 entry in `coverage`: `complete`, `partial` (known subtotal), or `unavailable`.
 Missing or invalid numbers remain null, not zero. Optional unavailable breakdowns
 do not make an otherwise reported total incomplete. `sources` records the consumed
-metadata fields; `total_tokens_estimated` marks the XXX fallback calculation.
+metadata fields; `total_tokens_estimated` records whether the total is estimated.
 `cost_is_estimate` describes backend-reported costs; no tariffs are fetched or
 applied by the runner. A reported zero cost does not establish a free invocation.
 
@@ -315,134 +314,12 @@ separate schema response. `turn.completed.usage` supplies tokens; total is input
 plus output, with cached input and optional reasoning already included. No monetary
 cost or actual model identity is inferred from the configured model.
 
-XXX (OpenCode 1.2.27) accounts for the assistant messages in its verified final
-session export. It sums unique step-finish counters for each message, using
-assistant totals only when no steps exist. Export and stdout counters are never
-added together. Actual models come from assistant metadata; summary-model usage
-has origin=compaction, separate from origin=stage. The stage's actual model is the
-final non-summary assistant model. Missing counters remain unavailable. Pipe-only
-usage after a failure, timeout or interruption remains partial.
-
 Complete accounting means the available backend accounting is complete, not that
 it has been reconciled against an invoice or includes unreported activity.
 
-### XXX CLI profile
-
-backend: "xxx" selects opencode-v1.2.27-cli, including branded executables.
-expected_version retains exact comparison with the executable's version output;
-branding does not switch backend or model. Preflight checks --version, run --help,
-export --help and session delete --help. It creates no session or model request
-and does not prove provider readiness.
-An explicit effort on any active stage using this executable also requires
-`--variant` in run help. The model's variant catalog is not checked.
-
-Each substantive stage runs:
-    xxx run --format json --agent <private-agent> --title <invocation-title>
-An explicit model adds --model provider/model; otherwise the configured default
-is preserved. An explicit reasoning_effort adds --variant even without a model;
-XXX can silently ignore an unknown variant. The prompt and schema arrive through stdin. No standalone, attach,
-continue or session option is sent. The transient V1 config uses agent/permission,
-allows read/glob/grep/list for source stages, and denies tools for compare.
-Source stages retain external_directory denial. User authentication, configuration,
-compaction and hooks stay intact; automatic sharing is disabled for this child.
-No installed binary, global configuration or other backend adapter is modified.
-
-The CLI emits NDJSON events, not a native schema response. Its final answer must
-be one JSON object, optionally inside the single JSON fence described below. After one successful run,
-one local export <sessionID> confirms session/title/directory, original prompt,
-agent, model, message/part identities and exact final text. The V1 export shape is
-messages[].info/parts. The final assistant must be completed, finish with stop,
-have no error or unfinished tools, and not be a compaction summary. A missing
-CLI step_finish can be confirmed by this export; a contradictory terminal event
-cannot. Conflicting duplicate events, foreign identities and invalid JSON fail.
-
-Automatic compaction runs inside the same CLI process and stage budget.
-The exporter verifies the service/summary/continuation chain. Fence normalization
-applies only to the verified final response, before the existing compaction-summary
-fallback selection. Summary parsing is unchanged. No HTTP recovery or extra format-correction prompt exists.
-Local schema, binding, normalization, semantic and source checks stay authoritative.
-strict rejects invalid results; compromise may retain eligible material with
-warnings, without treating it as accepted or requesting another model answer.
-Substantive review/revise remains a separate, unchanged pipeline operation.
-
-Legacy http_timeout_seconds, api_doc_timeout_seconds, opencode_format_retries
-and structured_output_repair_attempts remain accepted config keys but have no
-effect on XXX execution. retry_policy reports zero orchestrator retries and null
-format_retries_requested; no native retry-enforcement guarantee is claimed.
-
-Private attempt directories retain input.prompt.txt, schema.json, stdout.log,
-stderr.log, session-export logs, extracted/expanded/validation records and metadata.
-Stage/idle budgets cover run and export; stdout/stderr count as CLI activity.
-Owned process groups are stopped on timeout or interruption. A separate five-second
-cleanup budget exports an interrupted session once if needed, then calls
-session delete only after ownership is proven. Unknown sessions are never guessed,
-listed or deleted. Cleanup errors are recorded, block acceptance, and never mask
-the original failure. Reports are published after cleanup and integrity checks.
-
-The pinned CLI source is OpenCode v1.2.27 commit
-4ee426ba549131c4903a71dfb6259200467aca81, cli/cmd/run.ts, export.ts and session.ts.
-Protocol fixtures are synthetic and use no model. Installed-XXX compaction smoke
-remains explicit opt-in and may incur provider cost; it is never part of --check.
-
-OpenCode V2 runs `run --standalone --format json`, with prompts on stdin and a
-private agent allowing only read/glob/grep (no tools for comparison). Its final
-JSON comes from the last completed assistant step with finish reason `stop`;
-errors, incomplete output and invalid JSON are rejected. JSON wrapper extraction
-applies only after transport verification.
-OpenCode 2.0.23 can omit the terminal event even after emitting the full answer.
-After a successful CLI exit with final text but no finish event, the runner makes
-one local `session export --standalone` call within the same stage budget. It
-requires the same session, agent, latest assistant message and exact answer text,
-plus successful session/idle outcomes, a completion timestamp and `finish: stop`.
-The private export logs are retained. Failed, mismatched or incomplete exports
-remain failures; no model prompt is repeated or session resumed.
-Schema, binding, evidence and source checks still run locally. OpenCode V2 makes one model call per
-attempt and ignores the retained `opencode_format_retries` and
-`structured_output_repair_attempts` settings. Substantive revision rounds still
-apply. Session history uses OpenCode's standard local storage.
-
-XXX and OpenCode V2 first parse the complete final response with `strict_json()`.
-The shared parser's default fallback accepts exactly one triple-backtick code block labelled
-`json` (case-insensitive), with opening and closing fences on separate lines.
-Surrounding spaces, tabs and blank lines, and LF, CRLF or CR line endings are allowed.
-The payload is sliced without content changes and parsed with `strict_json()`;
-the result must be an object. Prose outside the block, multiple or nested blocks,
-missing fences, other labels, arrays, scalars, malformed JSON, duplicate keys and
-non-finite numbers remain invalid. Payload contents are never repaired.
-
-This is transport compatibility, not relaxed contract validation. Schema, source
-identity, semantics, evidence and security checks remain authoritative. It does
-not change claims, acceptance policy or self-assessments, and adds no model call.
-Codex parsing is unchanged.
-
-OpenCode V2 also accepts introductory prose followed by one final JSON object or
-one JSON-labelled fence. The prefix must contain no earlier object, array or
-code-block opener. The payload must parse as one complete strict JSON object;
-trailing prose, competing candidates, malformed JSON and duplicate keys fail.
-No content inside the payload is repaired. This opt-in rule does not change XXX.
-Verified session/message/finish metadata and completed usage are retained before
-JSON parsing, including when parsing fails after a successful local export.
-
-Private `stdout.log` and session-export logs retain the original transport bytes,
-including the exact response text. `extracted.json` separately retains the parsed
-wire object. Invocation `provider_metadata.response_normalization` records
-`kind: "markdown_json_fence"` and zero-based, end-exclusive character offsets
-`payload_start` / `payload_end` into the joined final response. These offsets
-recover the exact payload, including its whitespace, from the logged response.
-OpenCode's unfenced introductory-prose form uses `kind: "leading_prose_json_object"`
-with the same offsets. Fenced introductory prose uses `markdown_json_fence`.
-XXX also records the final `message_id` in this provenance, including when invalid
-final JSON uses the unchanged summary fallback. If payload parsing fails without
-a fallback, the same record is in the error details. Successful
-normalization is not a validation failure or compromise recovery.
-
-OpenCode CLI usage comes from distinct `step_finish` parts, deduplicated by session,
-message and part ID, with the existing native token normalization.
-A verified export supplies the missing final message's usage once, separately
-labelled `opencode.session_export`; it is not added when that step was reported.
-Incomplete/error streams retain partial counters. The CLI does not report the
-actual model in these events, so that field remains unknown. Counters describe
-reported steps; internal title generation or other unreported activity may be absent.
+Legacy `http_timeout_seconds`, `api_doc_timeout_seconds` and
+`structured_output_repair_attempts` remain accepted configuration keys but have
+no effect on Codex execution. The orchestrator sends no format-repair request.
 
 ## Git source access and lifecycle
 
@@ -624,8 +501,8 @@ when no changes are needed. It first requires the complete internal stage schema
 task, matching pinned Git/folder identity and, for review, unchanged frozen
 context and exact target. The caller verifies transport before calling it.
 It never repairs the schema.
-The rule is `EVIDENCE_IDS` in both strict and compromise, shared by Codex,
-OpenCode and XXX after their transport checks.
+The rule is `EVIDENCE_IDS` in both strict and compromise, applied after Codex
+transport checks.
 
 Evidence definitions may pad one/two numeric digits (`E-1`, `E-01` -> `E-001`)
 and remove the stage's own namespace (`study:E-001` in study or `review:E-001`
@@ -654,8 +531,7 @@ and does not normalize or ignore unknown references.
 Live processing preserves the existing source/cleanup guards:
 
 1. Check backend completion and transport identity using that adapter's contract.
-   XXX additionally verifies the original request and final answer against the
-   local export. Failed transports remain private evidence and cannot enter
+   Failed transports remain private evidence and cannot enter
    normalization or local result validation.
 2. Retain the original object in private `extracted.json`. Verify model identity
    bindings and write `expanded.json` and `binding.json`. An unknown, foreign or
@@ -912,8 +788,8 @@ causes `UNSUPPORTED_ARTIFACT_FORMAT` before any artifact writes. Use a new run d
 Default execution uses study → selection → compare. With review enabled,
 execution uses study → review, optionally one revised study → full review,
 then selection → compare (comparison only for
-multiple Git branches). XXX and OpenCode V2 use final JSON with local validation;
-no orchestrator format-repair prompt is sent.
+multiple Git branches). Codex uses final JSON with local validation; no
+orchestrator format-repair prompt is sent.
 
 ## Compact model context
 

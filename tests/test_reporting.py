@@ -489,7 +489,7 @@ class ProcessReportingTests(unittest.TestCase):
                 patch('src.runtime.process.os.set_blocking'), patch('src.runtime.process.os.read', side_effect=read), \
                 patch('src.runtime.process.os.killpg') as kill:
             result = process(['fake'], Path('/tmp'), {}, reporter=r, clock=clock,
-                             context={'branch': 'master', 'stage': 'study', 'backend': 'opencode'})
+                             context={'branch': 'master', 'stage': 'study', 'backend': 'codex'})
         self.assertTrue(spawn.call_args.kwargs['close_fds'])
         self.assertTrue(spawn.call_args.kwargs['start_new_session'])
         kill.assert_called_once_with(p.pid, signal.SIGKILL)
@@ -633,56 +633,54 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
     def test_single_branch_git_check_and_analysis(self):
         self.git('branch', '-D', 'test01', 'dev_01_customerA')
         self.assertEqual(self.git('branch', '--format=%(refname:short)').strip(), 'master')
-        self.env['OPENCODE_CONFIG_CONTENT'] = json.dumps({
-            'provider': {'custom': {'options': {'baseURL': 'https://example.invalid'}}}})
-        for backend in ('codex', 'opencode'):
-            for check in (True, False):
-                with self.subTest(backend=backend, check=check):
-                    args = self.prepare('git', check=check)
-                    value = jsonc(self.config_path.read_text())
-                    value['git_mode']['branches'] = ['master']
-                    value['agent']['backend'] = backend
-                    self.env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
-                    value['agent']['expected_version'] = self.env['AUDIT_TEST_CLI_VERSION']
-                    value['stage_agents'] = {'compare': {'executable': '/missing/compare-cli'}}
-                    value['prompts'] = {'compare': '/missing/compare-prompt'}
-                    self.config_path.write_text(json.dumps(value))
-                    result = self.run_cli(args + ['--output', 'text'])
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertTrue(result.stdout.startswith('[OK] Local setup checked.' if check else '[OK] Analysis complete.'))
-                    calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-                    invocations = [call for call in calls if 'context' in call]
-                    self.assertEqual(len(calls), 2 if check else 4)
-                    self.assertEqual(len(invocations), 0 if check else 2)
-                    self.assertNotIn('Comparing branch reports', result.stderr)
-                    self.assertNotIn('Branch report comparison ready', result.stderr)
-                    manifests = list((self.reports / self.repo_path.name).glob('*/manifest.json'))
-                    path = max(manifests, key=lambda p: p.stat().st_mtime_ns)
-                    manifest = json.loads(path.read_text())
-                    self.assertEqual(manifest['pins'], {'master': self.master})
-                    self.assertNotIn('comparison', manifest)
-                    self.assertNotIn('comparison_invocation', manifest)
-                    self.assertFalse((path.parent / 'comparison').exists())
-                    if check:
-                        self.assertEqual(manifest['switch_journal'], [])
-                    else:
-                        self.assertNotIn('Comparison:', result.stdout)
-                        self.assertNotIn('Restoration:', result.stdout)
-                        self.assertTrue(manifest['branches'][0]['accepted'])
-                        branch_dir = path.parent / manifest['branches'][0]['directory']
-                        for stage, report in (('study', 'ARCHITECTURE.md'),
-                                              ('review', 'ARCHITECTURE_REVIEW.md')):
-                            data = json.loads((branch_dir / (stage + '.json')).read_text())
-                            self.assertEqual(data['branch'], 'master')
-                            self.assertEqual(data['source_commit'], self.master)
-                            self.assertTrue((branch_dir / report).is_file())
-                        for call in invocations:
-                            self.assertEqual(call['context']['source_mode'], 'git')
-                            self.assertEqual(Path(call['cwd']), self.repo_path)
-                            self.assertEqual(call['cwd'], call['context']['repository'])
-                    self.assertEqual(self.repo.symbolic(), 'master')
-                    self.assertEqual(self.repo.head(), self.master)
-                    self.repo.clean()
+        backend = 'codex'
+        for check in (True, False):
+            with self.subTest(backend=backend, check=check):
+                args = self.prepare('git', check=check)
+                value = jsonc(self.config_path.read_text())
+                value['git_mode']['branches'] = ['master']
+                value['agent']['backend'] = backend
+                self.env['AUDIT_TEST_CLI_VERSION'] = 'fixture-cli 1.0'
+                value['agent']['expected_version'] = self.env['AUDIT_TEST_CLI_VERSION']
+                value['stage_agents'] = {'compare': {'executable': '/missing/compare-cli'}}
+                value['prompts'] = {'compare': '/missing/compare-prompt'}
+                self.config_path.write_text(json.dumps(value))
+                result = self.run_cli(args + ['--output', 'text'])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(result.stdout.startswith('[OK] Local setup checked.' if check else '[OK] Analysis complete.'))
+                calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+                invocations = [call for call in calls if 'context' in call]
+                self.assertEqual(len(calls), 2 if check else 4)
+                self.assertEqual(len(invocations), 0 if check else 2)
+                self.assertNotIn('Comparing branch reports', result.stderr)
+                self.assertNotIn('Branch report comparison ready', result.stderr)
+                manifests = list((self.reports / self.repo_path.name).glob('*/manifest.json'))
+                path = max(manifests, key=lambda p: p.stat().st_mtime_ns)
+                manifest = json.loads(path.read_text())
+                self.assertEqual(manifest['pins'], {'master': self.master})
+                self.assertNotIn('comparison', manifest)
+                self.assertNotIn('comparison_invocation', manifest)
+                self.assertFalse((path.parent / 'comparison').exists())
+                if check:
+                    self.assertEqual(manifest['switch_journal'], [])
+                else:
+                    self.assertNotIn('Comparison:', result.stdout)
+                    self.assertNotIn('Restoration:', result.stdout)
+                    self.assertTrue(manifest['branches'][0]['accepted'])
+                    branch_dir = path.parent / manifest['branches'][0]['directory']
+                    for stage, report in (('study', 'ARCHITECTURE.md'),
+                                          ('review', 'ARCHITECTURE_REVIEW.md')):
+                        data = json.loads((branch_dir / (stage + '.json')).read_text())
+                        self.assertEqual(data['branch'], 'master')
+                        self.assertEqual(data['source_commit'], self.master)
+                        self.assertTrue((branch_dir / report).is_file())
+                    for call in invocations:
+                        self.assertEqual(call['context']['source_mode'], 'git')
+                        self.assertEqual(Path(call['cwd']), self.repo_path)
+                        self.assertEqual(call['cwd'], call['context']['repository'])
+                self.assertEqual(self.repo.symbolic(), 'master')
+                self.assertEqual(self.repo.head(), self.master)
+                self.repo.clean()
 
     def test_repository_names_from_origin_and_local_fallback(self):
         cases = [(None, self.repo_path.name), ('', self.repo_path.name),

@@ -161,44 +161,18 @@ class PureNormalizationTests(unittest.TestCase):
 
 class NormalizationPipelineTests(FolderFixture):
     def test_cli_review_bare_references_share_one_normalization_rule(self):
-        for backend in ('codex', 'opencode'):
-            for policy in ('strict', 'compromise'):
-                with self.subTest(backend=backend, policy=policy):
-                    runner, context, raw = self.prepare(backend, policy)
-                    doc, _ = self.invoke(runner, context, raw)
-                    original = copy.deepcopy(doc)
-                    ctx = review_context(doc, context)
-                    wire = response(ctx)
-                    wire['evidence'][0]['id'] = 'E-002'
-                    wire['claims'][0]['evidence_ids'] = ['E-002', 'E-001']
-                    wire['findings'] = [dict(id='F-001', severity='LOW', type='SCOPE_MISMATCH', claim_ids=['C-001'],
-                        location='C-001', evidence_ids=['E-002'], impact='Synthetic', proposed_correction='Synthetic')]
-                    runner.session.cfg['_agents']['review']['backend'] = backend
-                    def answer(command, cwd, env, payload, **kwargs):
-                        model_data = model_wire(wire, prompt_context(payload), ctx)
-                        return cli_result(command, model_data)
-                    with patch('src.runtime.process.process', side_effect=answer) as process:
-                        saved, meta = runner.invoke('review', ctx, runner.session.run_dir / 'review.logs')
-                    self.assertEqual(process.call_count, 1)
-                    self.assertTrue(meta['publication_complete'])
-                    self.assertTrue(saved['program_checks']['policy_satisfied'])
-                    self.assertEqual(doc, original)
-                    self.assertEqual(saved['claims'][0]['evidence_ids'], ['review:E-002', 'study:E-001'])
-                    self.assertEqual(saved['findings'][0]['evidence_ids'], ['review:E-002'])
-                    attempt = runner.session.run_dir / 'review.logs/attempt-001'
-                    self.assertEqual(json.loads((attempt / 'expanded.json').read_text()), wire)
-                    self.assertEqual(meta['normalization_provenance']['replacement_count'], 3)
-
-    def test_cli_review_normalization_preserves_frozen_study_in_both_policies(self):
-        for backend in ('codex', 'opencode'):
-            for policy in ('strict', 'compromise'):
+        backend = 'codex'
+        for policy in ('strict', 'compromise'):
+            with self.subTest(backend=backend, policy=policy):
                 runner, context, raw = self.prepare(backend, policy)
                 doc, _ = self.invoke(runner, context, raw)
                 original = copy.deepcopy(doc)
                 ctx = review_context(doc, context)
                 wire = response(ctx)
-                wire['evidence'][0]['id'] = 'review:E-01'
-                wire['claims'][0]['evidence_ids'] = ['review:E-01', 'study:E-001']
+                wire['evidence'][0]['id'] = 'E-002'
+                wire['claims'][0]['evidence_ids'] = ['E-002', 'E-001']
+                wire['findings'] = [dict(id='F-001', severity='LOW', type='SCOPE_MISMATCH', claim_ids=['C-001'],
+                    location='C-001', evidence_ids=['E-002'], impact='Synthetic', proposed_correction='Synthetic')]
                 runner.session.cfg['_agents']['review']['backend'] = backend
                 def answer(command, cwd, env, payload, **kwargs):
                     model_data = model_wire(wire, prompt_context(payload), ctx)
@@ -206,12 +180,38 @@ class NormalizationPipelineTests(FolderFixture):
                 with patch('src.runtime.process.process', side_effect=answer) as process:
                     saved, meta = runner.invoke('review', ctx, runner.session.run_dir / 'review.logs')
                 self.assertEqual(process.call_count, 1)
+                self.assertTrue(meta['publication_complete'])
                 self.assertTrue(saved['program_checks']['policy_satisfied'])
                 self.assertEqual(doc, original)
-                self.assertEqual(saved['claim_registry'], original['claims'])
-                self.assertEqual(saved['target'], ctx['review_target'])
-                self.assertEqual(saved['normalization_provenance']['replacement_count'], 2)
-                self.assertTrue(meta['publication_complete'])
+                self.assertEqual(saved['claims'][0]['evidence_ids'], ['review:E-002', 'study:E-001'])
+                self.assertEqual(saved['findings'][0]['evidence_ids'], ['review:E-002'])
+                attempt = runner.session.run_dir / 'review.logs/attempt-001'
+                self.assertEqual(json.loads((attempt / 'expanded.json').read_text()), wire)
+                self.assertEqual(meta['normalization_provenance']['replacement_count'], 3)
+
+    def test_cli_review_normalization_preserves_frozen_study_in_both_policies(self):
+        backend = 'codex'
+        for policy in ('strict', 'compromise'):
+            runner, context, raw = self.prepare(backend, policy)
+            doc, _ = self.invoke(runner, context, raw)
+            original = copy.deepcopy(doc)
+            ctx = review_context(doc, context)
+            wire = response(ctx)
+            wire['evidence'][0]['id'] = 'review:E-01'
+            wire['claims'][0]['evidence_ids'] = ['review:E-01', 'study:E-001']
+            runner.session.cfg['_agents']['review']['backend'] = backend
+            def answer(command, cwd, env, payload, **kwargs):
+                model_data = model_wire(wire, prompt_context(payload), ctx)
+                return cli_result(command, model_data)
+            with patch('src.runtime.process.process', side_effect=answer) as process:
+                saved, meta = runner.invoke('review', ctx, runner.session.run_dir / 'review.logs')
+            self.assertEqual(process.call_count, 1)
+            self.assertTrue(saved['program_checks']['policy_satisfied'])
+            self.assertEqual(doc, original)
+            self.assertEqual(saved['claim_registry'], original['claims'])
+            self.assertEqual(saved['target'], ctx['review_target'])
+            self.assertEqual(saved['normalization_provenance']['replacement_count'], 2)
+            self.assertTrue(meta['publication_complete'])
 
     def prepare(self, backend='codex', policy='strict', local=True):
         cfg = self.config() | {'result_policy': policy}
@@ -219,8 +219,6 @@ class NormalizationPipelineTests(FolderFixture):
         reporter = Reporter(stdout=io.StringIO(), stderr=io.StringIO(), verbose=True)
         self.addCleanup(reporter.close)
         runner = Runner(cfg, self.base / ('run-' + str(len(list(self.base.glob('run-*'))))), reporter=reporter)
-        if backend == 'opencode':
-            runner.session.versions[backend + ':' + cfg['_agents']['study']['executable']] = 'opencode v2.0.23'
         context = {'source_directory': str(self.source),
                    'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
         data = response(context)
@@ -235,37 +233,37 @@ class NormalizationPipelineTests(FolderFixture):
             return runner.invoke('study', context, runner.session.run_dir / 'study.logs')
 
     def test_both_cli_backends_preserve_extracted_and_publish_provenance(self):
-        for backend in ('codex', 'opencode'):
-            for local in (True, False):
-                runner, context, raw = self.prepare(backend, local=local)
-                original = copy.deepcopy(raw)
-                saved, meta = self.invoke(runner, context, raw)
-                attempt = runner.session.run_dir / 'study.logs/attempt-001'
-                extracted_bytes = (attempt / 'extracted.json').read_bytes()
-                extracted = strict_json(extracted_bytes.decode())
-                expanded = strict_json((attempt / 'expanded.json').read_text())
-                normalized = strict_json((attempt / 'normalized.json').read_text())
-                journal = strict_json((attempt / 'normalization.json').read_text())
-                self.assertEqual(extracted, model_wire(original, prompt_context((attempt / 'input.prompt.txt').read_bytes()), context))
-                self.assertEqual(expanded, original)
-                self.assertEqual(raw, original)
-                candidate, changes = normalize_evidence('study', expanded, context, 'folder')
-                self.assertEqual(normalized, candidate)
-                self.assertEqual((attempt / 'extracted.json').read_bytes(), extracted_bytes)
-                provenance = normalization_provenance(expanded, candidate, changes)
-                self.assertEqual(journal, provenance | {'changes': changes})
-                self.assertEqual(provenance['replacement_count'], int(local))
-                self.assertEqual(provenance['input_sha256'], sha(canonical(original)))
-                self.assertEqual(provenance['normalized_sha256'], sha(canonical(normalized)))
-                self.assertEqual(saved['normalization_provenance'], provenance)
-                self.assertEqual(meta['normalization_provenance'], provenance)
-                self.assertEqual(saved['claims'], materialize_study(candidate)['claims'])
-                self.assertEqual(saved['review_plan']['registry_sha256'], sha(canonical(saved['claims'])))
-                self.assertEqual(saved['report_markdown'], materialize_study(raw)['report_markdown'])
-                assert_architecture(self, runner.session.run_dir, saved, meta, runner.session.cfg['output_language'])
-                self.assertTrue(meta['publication_complete'])
-                self.assertEqual(saved['program_checks']['semantic_quality'], 'NOT_MEASURED')
-                self.assertEqual('study_normalized' in runner.session.reporter.stderr.getvalue(), local)
+        backend = 'codex'
+        for local in (True, False):
+            runner, context, raw = self.prepare(backend, local=local)
+            original = copy.deepcopy(raw)
+            saved, meta = self.invoke(runner, context, raw)
+            attempt = runner.session.run_dir / 'study.logs/attempt-001'
+            extracted_bytes = (attempt / 'extracted.json').read_bytes()
+            extracted = strict_json(extracted_bytes.decode())
+            expanded = strict_json((attempt / 'expanded.json').read_text())
+            normalized = strict_json((attempt / 'normalized.json').read_text())
+            journal = strict_json((attempt / 'normalization.json').read_text())
+            self.assertEqual(extracted, model_wire(original, prompt_context((attempt / 'input.prompt.txt').read_bytes()), context))
+            self.assertEqual(expanded, original)
+            self.assertEqual(raw, original)
+            candidate, changes = normalize_evidence('study', expanded, context, 'folder')
+            self.assertEqual(normalized, candidate)
+            self.assertEqual((attempt / 'extracted.json').read_bytes(), extracted_bytes)
+            provenance = normalization_provenance(expanded, candidate, changes)
+            self.assertEqual(journal, provenance | {'changes': changes})
+            self.assertEqual(provenance['replacement_count'], int(local))
+            self.assertEqual(provenance['input_sha256'], sha(canonical(original)))
+            self.assertEqual(provenance['normalized_sha256'], sha(canonical(normalized)))
+            self.assertEqual(saved['normalization_provenance'], provenance)
+            self.assertEqual(meta['normalization_provenance'], provenance)
+            self.assertEqual(saved['claims'], materialize_study(candidate)['claims'])
+            self.assertEqual(saved['review_plan']['registry_sha256'], sha(canonical(saved['claims'])))
+            self.assertEqual(saved['report_markdown'], materialize_study(raw)['report_markdown'])
+            assert_architecture(self, runner.session.run_dir, saved, meta, runner.session.cfg['output_language'])
+            self.assertTrue(meta['publication_complete'])
+            self.assertEqual(saved['program_checks']['semantic_quality'], 'NOT_MEASURED')
+            self.assertEqual('study_normalized' in runner.session.reporter.stderr.getvalue(), local)
 
     def test_contract_failure_after_normalization_has_candidate_diagnostic(self):
         for policy in ('strict', 'compromise'):

@@ -183,7 +183,7 @@ class ModeConfigTests(FolderFixture):
 
     def test_folder_ignores_inactive_source_and_compare_settings(self):
         self.value.update(git_mode={'repository': None, 'branches': 'not checked'},
-            stage_agents={'compare': {'backend': 'unavailable', 'executable': '/missing/cli'}},
+            stage_agents={'compare': {'executable': '/missing/cli'}},
             prompts={'compare': '/missing/prompt'})
         cfg = self.config()
         self.assertEqual(cfg['folder_mode']['path'], str(self.source))
@@ -537,12 +537,10 @@ class FolderCLIIntegrationTests(FolderFixture):
         self.calls = self.base / 'calls.jsonl'
         # An empty PATH makes any accidental Git invocation fail.
         self.env = {'HOME': str(home), 'PATH': '', 'PYTHONDONTWRITEBYTECODE': '1',
-            'AUDIT_TEST_CALL_LOG': str(self.calls), 'PYTHONIOENCODING': 'utf-8',
-            'OPENCODE_CONFIG_CONTENT': json.dumps({'provider': {'custom': {'options': {
-                'baseURL': 'https://example.invalid'}}}, 'plugin': ['auth-plugin']})}
+            'AUDIT_TEST_CALL_LOG': str(self.calls), 'PYTHONIOENCODING': 'utf-8'}
         self.value['agent']['executable'] = str(self.cli)
         self.value.update(git_mode={'repository': '/missing/repository'},
-            stage_agents={'compare': {'backend': 'missing', 'executable': '/missing/cli'}},
+            stage_agents={'compare': {'executable': '/missing/cli'}},
             prompts={'compare': '/missing/prompt'})
 
     def execute(self, check=False):
@@ -552,29 +550,29 @@ class FolderCLIIntegrationTests(FolderFixture):
             cmd.append('--check')
         return subprocess.run(cmd, cwd=self.base, env=self.env, capture_output=True, text=True, timeout=30)
 
-    def test_default_without_review_in_cli_json_for_all_backends(self):
+    def test_default_without_review_in_cli_json_for_codex(self):
         self.value.pop('execution')
-        self.value['stage_agents']['review'] = {'backend': 'missing', 'executable': '/missing/review-cli'}
+        self.value['stage_agents']['review'] = {'executable': '/missing/review-cli'}
         self.value['prompts'].update(review='/missing/review-prompt', revise='/missing/revise-prompt')
-        for backend in ('codex', 'opencode'):
-            self.value['agent']['backend'] = backend
-            self.env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
-            for check in (True, False):
-                with self.subTest(backend=backend, check=check):
-                    self.calls.write_text('')
-                    result = self.execute(check)
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    output = json.loads(result.stdout)
-                    self.assertFalse(output['review_enabled'])
-                    self.assertEqual(output['workflow_satisfied'], not check)
-                    calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-                    stages = [c['context']['stage'] for c in calls if 'context' in c]
-                    self.assertEqual(stages, [] if check else ['study'])
-                    if not check:
-                        manifest = json.loads(Path(output['manifest']).read_text())
-                        self.assertFalse(manifest['accepted'])
-                        self.assertTrue(manifest['workflow_satisfied'])
-                        self.assertIn('Review disabled by configuration', result.stderr)
+        backend = 'codex'
+        self.value['agent']['backend'] = backend
+        self.env['AUDIT_TEST_CLI_VERSION'] = 'fixture-cli 1.0'
+        for check in (True, False):
+            with self.subTest(backend=backend, check=check):
+                self.calls.write_text('')
+                result = self.execute(check)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output = json.loads(result.stdout)
+                self.assertFalse(output['review_enabled'])
+                self.assertEqual(output['workflow_satisfied'], not check)
+                calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+                stages = [c['context']['stage'] for c in calls if 'context' in c]
+                self.assertEqual(stages, [] if check else ['study'])
+                if not check:
+                    manifest = json.loads(Path(output['manifest']).read_text())
+                    self.assertFalse(manifest['accepted'])
+                    self.assertTrue(manifest['workflow_satisfied'])
+                    self.assertIn('Review disabled by configuration', result.stderr)
 
     def test_check_and_analysis_succeed_with_git_metadata(self):
         self.value.pop('execution')
@@ -583,22 +581,22 @@ class FolderCLIIntegrationTests(FolderFixture):
         (self.source / 'pkg').mkdir()
         (self.source / 'pkg/.git').write_text('gitdir: elsewhere\n')
         fingerprints = set()
-        for backend in ('codex', 'opencode'):
-            self.value['agent']['backend'] = backend
-            self.env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
-            for check in (True, False):
-                with self.subTest(backend=backend, check=check):
-                    self.calls.write_text('')
-                    result = self.execute(check)
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    output = json.loads(result.stdout)
-                    self.assertEqual(output['status'], 'PREFLIGHT_OK' if check else 'COMPLETE')
-                    run = Path(output['manifest']).parent
-                    inventory = json.loads((run / 'source.inventory.json').read_text())
-                    fingerprints.add(inventory['source_fingerprint'])
-                    self.assertFalse(any('.git' in entry['path'].split('/') for entry in inventory['entries']))
-                    calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-                    self.assertEqual(sum('context' in call for call in calls), 0 if check else 1)
+        backend = 'codex'
+        self.value['agent']['backend'] = backend
+        self.env['AUDIT_TEST_CLI_VERSION'] = 'fixture-cli 1.0'
+        for check in (True, False):
+            with self.subTest(backend=backend, check=check):
+                self.calls.write_text('')
+                result = self.execute(check)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output = json.loads(result.stdout)
+                self.assertEqual(output['status'], 'PREFLIGHT_OK' if check else 'COMPLETE')
+                run = Path(output['manifest']).parent
+                inventory = json.loads((run / 'source.inventory.json').read_text())
+                fingerprints.add(inventory['source_fingerprint'])
+                self.assertFalse(any('.git' in entry['path'].split('/') for entry in inventory['entries']))
+                calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+                self.assertEqual(sum('context' in call for call in calls), 0 if check else 1)
         self.assertEqual(len(fingerprints), 1)
 
     def test_unsafe_selected_paths_fail_preflight_with_and_without_source_context(self):
@@ -632,83 +630,74 @@ class FolderCLIIntegrationTests(FolderFixture):
             else:
                 path.unlink()
 
-    def test_all_backends_check_and_run_without_git(self):
+    def test_codex_check_and_run_without_git(self):
         before = Folder(self.source).snapshot()
-        for backend in ('codex', 'opencode'):
-            for check in (True, False):
-                with self.subTest(backend=backend, check=check):
-                    self.calls.write_text('')
-                    self.value['agent']['backend'] = backend
-                    self.env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
-                    self.value['project_description'] = '' if check else 'ERP-система 1995 года.'
-                    result = self.execute(check)
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    output = json.loads(result.stdout)
-                    self.assertEqual(output['status'], 'PREFLIGHT_OK' if check else 'COMPLETE')
-                    self.assertEqual(result.stderr.count('Project description is missing.'), int(check))
-                    run = Path(output['manifest']).parent
-                    manifest = json.loads((run / 'manifest.json').read_text())
-                    self.assertEqual(manifest['contract_id'], 'evidence-ledger')
-                    self.assertEqual(manifest['artifact_format'], 'architecture-artifacts')
-                    self.assertEqual(manifest['source_fingerprint'], before['source_fingerprint'])
-                    self.assertEqual(json.loads((run / 'source.inventory.json').read_text()), before)
-                    snapshot = json.loads((run / 'config.snapshot.json').read_text())
-                    self.assertEqual(snapshot['folder_mode']['path'], str(self.source))
-                    calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-                    invocations = [c for c in calls if 'context' in c]
-                    self.assertEqual(len(calls), 2 if check else 4)
-                    self.assertEqual(len(invocations), 0 if check else 2)
-                    self.assertFalse((run / 'comparison').exists())
-                    self.assertFalse((self.source / '.git').exists())
-                    for call in invocations:
-                        context, args = call['context'], call['args']
+        backend = 'codex'
+        for check in (True, False):
+            with self.subTest(backend=backend, check=check):
+                self.calls.write_text('')
+                self.value['agent']['backend'] = backend
+                self.env['AUDIT_TEST_CLI_VERSION'] = 'fixture-cli 1.0'
+                self.value['project_description'] = '' if check else 'ERP-система 1995 года.'
+                result = self.execute(check)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output = json.loads(result.stdout)
+                self.assertEqual(output['status'], 'PREFLIGHT_OK' if check else 'COMPLETE')
+                self.assertEqual(result.stderr.count('Project description is missing.'), int(check))
+                run = Path(output['manifest']).parent
+                manifest = json.loads((run / 'manifest.json').read_text())
+                self.assertEqual(manifest['contract_id'], 'evidence-ledger')
+                self.assertEqual(manifest['artifact_format'], 'architecture-artifacts')
+                self.assertEqual(manifest['source_fingerprint'], before['source_fingerprint'])
+                self.assertEqual(json.loads((run / 'source.inventory.json').read_text()), before)
+                snapshot = json.loads((run / 'config.snapshot.json').read_text())
+                self.assertEqual(snapshot['folder_mode']['path'], str(self.source))
+                calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+                invocations = [c for c in calls if 'context' in c]
+                self.assertEqual(len(calls), 2 if check else 4)
+                self.assertEqual(len(invocations), 0 if check else 2)
+                self.assertFalse((run / 'comparison').exists())
+                self.assertFalse((self.source / '.git').exists())
+                for call in invocations:
+                    context, args = call['context'], call['args']
+                    for field in ('contract_id', 'artifact_format', 'context_format'):
+                        self.assertNotIn(field, call['schema']['properties'])
+                        self.assertNotIn(field, call['schema']['required'])
+                    self.assertEqual(call['cwd'], str(self.source))
+                    self.assertEqual(context['project_description'], self.value['project_description'])
+                    self.assertNotIn('entries', context)
+                    self.assertNotIn('branch', context)
+                    self.assertIn('--skip-git-repo-check', args)
+                    self.assertNotIn('features.shell_tool=false', args)
+                if not check:
+                    self.assertNotIn('architecture_document', invocations[0]['context'])
+                    self.assertEqual(invocations[1]['context']['architecture_document']['report_markdown'], manifest['study']['report_markdown'])
+                    review_context = invocations[1]['context']
+                    self.assertNotIn('document_sha256', review_context)
+                    self.assertNotIn('source_fingerprint', review_context)
+                    bindings = json.loads((run / 'revisions/001/review.logs/attempt-001/binding.json').read_text())
+                    target = next(mapping['identity'] for mapping in bindings['mappings']
+                                  if mapping['id'] == review_context['review_target_id'])
+                    self.assertEqual(target['document_sha256'], manifest['study']['review_plan']['document_sha256'])
+                    assert_architecture(self, run, manifest['study'], manifest['study_invocation'],
+                                        self.value.get('output_language', 'Russian'))
+                    self.assertEqual(len({call['context']['source_snapshot_id'] for call in invocations}), 1)
+                    self.assertEqual(manifest['study_invocation']['stage'], 'study')
+                    self.assertNotIn('document', manifest)
+                    self.assertNotIn('document_invocation', manifest)
+                    self.assertFalse((run / 'document.json').exists())
+                    self.assertFalse((run / 'document.logs').exists())
+                    self.assertTrue((run / 'ARCHITECTURE.md').is_file())
+                    self.assertTrue((run / 'ARCHITECTURE_REVIEW.md').is_file())
+                    for stage in ('study', 'review'):
+                        data = json.loads((run / f'{stage}.json').read_text())
+                        self.assertEqual(data, manifest[stage])
+                        meta = json.loads((run / 'revisions/001' / f'{stage}.logs/invocation.json').read_text())
+                        self.assertEqual(meta['stage'], stage)
                         for field in ('contract_id', 'artifact_format', 'context_format'):
-                            self.assertNotIn(field, call['schema']['properties'])
-                            self.assertNotIn(field, call['schema']['required'])
-                        self.assertEqual(call['cwd'], str(self.source))
-                        self.assertEqual(context['project_description'], self.value['project_description'])
-                        self.assertNotIn('entries', context)
-                        self.assertNotIn('branch', context)
-                        if backend == 'codex':
-                            self.assertIn('--skip-git-repo-check', args)
-                            self.assertNotIn('features.shell_tool=false', args)
-                        else:
-                            self.assertEqual(call['permissions'], {'*': 'deny', 'read': 'allow',
-                                'glob': 'allow', 'grep': 'allow', 'external_directory': 'allow'})
-                            external = [rule for rule in call['permission_rules']
-                                if rule['action'] == 'external_directory' and rule['effect'] == 'allow']
-                            maps = Path(context['source_context']['maps_root'])
-                            self.assertEqual(external, [{'action': 'external_directory',
-                                'resource': maps.resolve().as_posix() + '/*', 'effect': 'allow'}])
-                    if not check:
-                        self.assertNotIn('architecture_document', invocations[0]['context'])
-                        self.assertEqual(invocations[1]['context']['architecture_document']['report_markdown'], manifest['study']['report_markdown'])
-                        review_context = invocations[1]['context']
-                        self.assertNotIn('document_sha256', review_context)
-                        self.assertNotIn('source_fingerprint', review_context)
-                        bindings = json.loads((run / 'revisions/001/review.logs/attempt-001/binding.json').read_text())
-                        target = next(mapping['identity'] for mapping in bindings['mappings']
-                                      if mapping['id'] == review_context['review_target_id'])
-                        self.assertEqual(target['document_sha256'], manifest['study']['review_plan']['document_sha256'])
-                        assert_architecture(self, run, manifest['study'], manifest['study_invocation'],
-                                            self.value.get('output_language', 'Russian'))
-                        self.assertEqual(len({call['context']['source_snapshot_id'] for call in invocations}), 1)
-                        self.assertEqual(manifest['study_invocation']['stage'], 'study')
-                        self.assertNotIn('document', manifest)
-                        self.assertNotIn('document_invocation', manifest)
-                        self.assertFalse((run / 'document.json').exists())
-                        self.assertFalse((run / 'document.logs').exists())
-                        self.assertTrue((run / 'ARCHITECTURE.md').is_file())
-                        self.assertTrue((run / 'ARCHITECTURE_REVIEW.md').is_file())
-                        for stage in ('study', 'review'):
-                            data = json.loads((run / f'{stage}.json').read_text())
-                            self.assertEqual(data, manifest[stage])
-                            meta = json.loads((run / 'revisions/001' / f'{stage}.logs/invocation.json').read_text())
-                            self.assertEqual(meta['stage'], stage)
-                            for field in ('contract_id', 'artifact_format', 'context_format'):
-                                self.assertNotIn(field, data)
-                            self.assertEqual(data['source_fingerprint'], before['source_fingerprint'])
-                    self.assertEqual(Folder(self.source).snapshot(), before)
+                            self.assertNotIn(field, data)
+                        self.assertEqual(data['source_fingerprint'], before['source_fingerprint'])
+                self.assertEqual(Folder(self.source).snapshot(), before)
 
     def test_mutation_stops_before_publishing_or_review_and_is_not_restored(self):
         self.env['AUDIT_TEST_MUTATE_SOURCE'] = '1'

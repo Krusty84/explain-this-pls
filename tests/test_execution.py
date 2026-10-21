@@ -25,13 +25,13 @@ class ExecutionTests(unittest.TestCase):
     def test_defaults_and_invalid_values(self):
         self.assertEqual(execution_settings(), {'stage_timeout_seconds': 3600,
             'review_enabled': False, 'read_loop_guard': True,
-            'idle_timeout_seconds': None, 'max_revision_rounds': 1, 'opencode_format_retries': 2,
+            'idle_timeout_seconds': None, 'max_revision_rounds': 1,
             'structured_output_repair_attempts': 0, 'http_timeout_seconds': 5, 'api_doc_timeout_seconds': 30})
         for key in ('stage_timeout_seconds', 'idle_timeout_seconds', 'http_timeout_seconds', 'api_doc_timeout_seconds'):
             for value in (True, False, 0, -1, float('nan'), float('inf'), 10 ** 1000, '3', [], {}):
                 with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                     execution_settings({key: value})
-        for key in ('opencode_format_retries', 'structured_output_repair_attempts'):
+        for key in ('structured_output_repair_attempts',):
             for value in (True, False, -1, 3, 1.0, None):
                 with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                     execution_settings({key: value})

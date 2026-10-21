@@ -60,20 +60,20 @@ class PrivateChainRecoveryTests(FolderFixture):
                 self.assertFalse((runner.session.run_dir / 'study.material.json').exists())
                 self.assertFalse((runner.session.run_dir / 'ARCHITECTURE.md').exists())
 
-    def test_wrong_xxx_task_never_retries_or_retains_material(self):
+
+    def test_wrong_task_never_retries_or_retains_material(self):
         for policy in ('strict', 'compromise'):
             config = self.config() | {'result_policy': policy, 'execution': {'structured_output_repair_attempts': 2}}
-            config['_agents']['study']['backend'] = 'xxx'
-            runner = Runner(config, self.base / ('xxx-' + policy))
+            runner = Runner(config, self.base / ('wrong-task-' + policy))
             context = {'source_directory': str(self.source),
                        'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
             calls = []
-            def invoke(command, cwd, env, payload, **kwargs):
+            def process(command, cwd, env, payload, **kwargs):
                 calls.append(payload)
                 wire = response(prompt_context(payload))
                 wire['task'] = 'architecture_comparison'
-                return wire, {}
-            with patch('src.backends.xxx.invoke', side_effect=invoke), self.assertRaises(ContractError) as caught:
+                return cli_result(command, wire)
+            with patch('src.runtime.process.process', side_effect=process), self.assertRaises(ContractError) as caught:
                 runner.invoke('study', context, runner.session.run_dir / 'study.logs')
             self.assertEqual(caught.exception.details.get('code'), 'TASK_IDENTITY_MISMATCH')
             self.assertEqual(len(calls), 1)

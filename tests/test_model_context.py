@@ -205,7 +205,7 @@ class ModelContextTests(unittest.TestCase):
                 self.assertLess(len(encoded), len(original))
                 self.assertEqual(source, before)
                 context_json = serialize_model_input({'source_context': projected})
-                prompt = build_model_prompt('', context_json, '{}', 'codex', source_index=True)
+                prompt = build_model_prompt('', context_json, '{}', source_index=True)
                 measured = input_measurements('', context_json, '{}', prompt,
                     source_context=source, transmitted_source_context=projected)
                 source_bytes = len(json.dumps(source, ensure_ascii=False).encode('utf-8'))

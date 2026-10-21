@@ -135,7 +135,7 @@ class RunSession:
             meta['models_reported'] = models
             meta['model_actual_source'] = 'backend usage metadata; may include multiple models'
             stage_models = list(dict.fromkeys(entry['model_actual'] for entry in meta['metrics']['by_model']
-                if entry.get('model_actual') and entry.get('origin') != 'compaction'))
+                if entry.get('model_actual')))
             if len(stage_models) == 1:
                 meta['model_actual'] = stage_models[0]
         self.metrics.record(self.stage_context(meta['stage'], context), meta)

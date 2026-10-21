@@ -36,7 +36,7 @@ or compare versions before planning changes.
 - macOS or Linux.
 - Python 3.11 or newer.
 - Git 2.34.1 or newer, only for Git mode.
-- An installed and configured coding-agent CLI: Codex CLI, OpenCode V2, or OpenCode 1.2.27 (XXX).
+- An installed and configured Codex CLI.
   Sign in before using explain-this-pls.
 
 ### Get Your Input Data
@@ -65,14 +65,8 @@ Choose how to provide your source code:
 
 ### Configuration
 
-Copy the example for your agent to `config.jsonc`, or use a project-specific name
+Copy the [Codex CLI example](config.codex.example.jsonc) to `config.jsonc`, or use a project-specific name
 such as `config_prj1.jsonc` or `config_superErp.jsonc`:
-
-- [Codex CLI](config.codex.example.jsonc)
-- [OpenCode V2](config.opencode.example.jsonc)
-- [OpenCode 1.2.27 / XXX](config.xxx.example.jsonc)
-
-For example, with Codex CLI:
 
 ```sh
 cp config.codex.example.jsonc config.jsonc
@@ -173,32 +167,22 @@ saved useful results, including failed or interrupted runs, become `PARTIAL`.
 
 | Field                    | Purpose                                                                                    |
 | ------------------------ | ------------------------------------------------------------------------------------------ |
-| `agent.backend`          | Coding agent: `codex`, `opencode` (V2), or `xxx` (OpenCode 1.2.27).                        |
-| `agent.executable`       | CLI command or path; defaults to `codex`, `opencode`, or `xxx`, respectively.              |
+| `agent.backend`          | Coding agent: `codex`.                                                                   |
+| `agent.executable`       | CLI command or path; defaults to `codex`.                                                 |
 | `agent.model`            | Optional model name; omit it or use `null` for the CLI's configured model.                 |
 | `agent.reasoning_effort` | Optional non-empty string with the model's native effort value; `null` keeps CLI settings. |
 
 The tool uses your CLI's existing login and settings. No separate API key is needed
 in this configuration.
 
-Set `reasoning_effort` beside `model`. Values depend on the model and backend;
+Set `reasoning_effort` beside `model`. Values depend on the model;
 the tool does not translate them to a common scale. Empty strings and other types
 are rejected as `INVALID_CONFIG`.
 
-| Backend     | How the value is passed                      |
-| ----------- | -------------------------------------------- |
-| Codex       | `-c 'model_reasoning_effort="high"'`         |
-| OpenCode V2 | `--model provider/model#high`                |
-| XXX         | `--variant high`; `model` can remain `null`. |
-
-For V2, an explicit effort requires a full `provider/model` name. An existing
-`#variant` suffix is kept if effort is absent or `null`. The same explicit value
-uses one suffix; a conflicting value or `#` in effort is `INVALID_CONFIG`.
-XXX checks CLI support for `--variant` but does not check the model's variant
-catalog. An unknown variant can be silently ignored by XXX.
+Codex receives the value through `-c 'model_reasoning_effort="high"'`.
 
 Stages inherit the shared value. Set a stage value to override it, or `null` to
-clear the runner's override and retain CLI settings, including a V2 model suffix:
+clear the runner's override and retain CLI settings:
 
 ```json
 {
@@ -214,7 +198,8 @@ clear the runner's override and retain CLI settings, including a V2 model suffix
 }
 ```
 
-Report revision uses the study agent's effort. Only active stages are checked.
+Report revision uses the study agent's effort. CLI checks apply only to active
+stages. All backend values must be `codex`, including inactive overrides.
 Invocation metadata records `reasoning_effort_requested`; it does not confirm
 that the model applied the value. Edit effort in the configuration file; the TUI
 model selector preserves it.
@@ -240,7 +225,7 @@ available.
 The [commented configuration](config.codex.example.jsonc) describes other options:
 
 - **Stage timeouts:** `execution.stage_timeout_seconds` defaults to one hour.
-- **Different agents per stage:** use `stage_agents` for study, review or comparison.
+- **Codex settings per stage:** use `stage_agents` for study, review or comparison.
 - **Legacy encodings:** use `source_decoding.rules` for encodings such as CP1251.
 - **Source navigation:** `source_context.mode` defaults to `"on-demand"`. The
   prompt lists every file; agents read symbol maps as needed from the supplied
@@ -277,7 +262,7 @@ alone does not call a model.
 
 The config table shows `Config | Mode | Source | Model | Effort | Results`.
 Model and Effort use the merged `study` settings; `CLI default` means no explicit
-value is set. OpenCode V2's `#variant` also supplies Effort. Results shows
+value is set. Results shows
 `COMPLETED`, `PARTIAL`, or `—` when no analysis is recorded.
 
 For Codex agents, **Models** lets you choose a model through **Use for**:

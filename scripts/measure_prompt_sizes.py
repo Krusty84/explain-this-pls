@@ -73,7 +73,7 @@ def measurements():
             template = (ROOT / 'prompts' / (stage + '.md')).read_text(encoding='utf-8')
             legacy = legacy_index(index)
             baseline_prompt = build_model_prompt(template,
-                serialize_model_input(dict(projected, source_context=legacy)), schema_json, 'codex', source_index=True)
+                serialize_model_input(dict(projected, source_context=legacy)), schema_json, source_index=True)
             baseline_bytes = len(baseline_prompt.encode('utf-8'))
             stages[stage] = {'legacy_rows_index_utf8_bytes': len(serialize_model_input(legacy).encode('utf-8')),
                              'legacy_rows_prompt_utf8_bytes': baseline_bytes}
@@ -82,7 +82,7 @@ def measurements():
                             for value in maps.values())
             for delivery, wire, stored in (('full', projected['source_context'], 0), ('on-demand', demand, map_bytes)):
                 context_json = serialize_model_input(dict(projected, source_context=wire))
-                prompt = build_model_prompt(template, context_json, schema_json, 'codex', source_index=True)
+                prompt = build_model_prompt(template, context_json, schema_json, source_index=True)
                 measured = input_measurements(template, context_json, schema_json, prompt,
                     source_context=index, transmitted_source_context=wire, stored_map_utf8_bytes=stored)
                 transmitted_bytes = len(prompt.encode('utf-8'))

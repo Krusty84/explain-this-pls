@@ -18,8 +18,7 @@ def replay(path, backend, *, context=None):
     fragments = (context or {}).get('source_context', {}).get('fragments', [])
     if fragments:
         observer.seed_prompt(fragments)
-    timing, native_start, records = 'unavailable', None, 0
-    missing_native_time = False
+    timing, records = 'unavailable', 0
     for line in path.read_text(encoding='utf-8').splitlines():
         if not line.strip():
             continue
@@ -59,26 +58,10 @@ def replay(path, backend, *, context=None):
             else:
                 observer._invalid('Unknown normalized replay record.')
         elif isinstance(event, dict):
-            # OpenCode CLI timestamps are epoch milliseconds. They are not
-            # monotonic; replay explicitly reports that weaker clock evidence.
-            timestamp = event.get('timestamp')
-            native_timed = backend in ('opencode', 'xxx') and type(timestamp) in (int, float) and math.isfinite(timestamp)
-            if native_timed:
-                if native_start is None:
-                    native_start = timestamp
-                timing = 'native-wall-clock'
-                elapsed = (timestamp - native_start) / 1000
-                observer.clock = lambda: elapsed
-            elif backend in ('opencode', 'xxx'):
-                observer.clock = lambda: 0.0
-            completed_before = observer.counts['calls']
             try:
                 observer.event(event)
             except (TypeError, ValueError):
                 observer._invalid('Malformed native replay event.')
-            if not native_timed and backend in ('opencode', 'xxx') and observer.counts['calls'] > completed_before:
-                observer._invalid('Completed native tool result has no reliable observation timestamp.')
-                missing_native_time = True
         else:
             observer._invalid('Malformed native replay event.')
         if observer.triggered:
@@ -87,11 +70,6 @@ def replay(path, backend, *, context=None):
     if timing == 'unavailable':
         metrics['observation']['limitations'].append('No per-call timestamps; stop time cannot be established.')
         metrics['observation']['coverage'] = 'partial' if metrics['calls'] else 'unavailable'
-    elif timing == 'native-wall-clock':
-        metrics['observation']['limitations'].append('Native wall-clock timestamps are weaker than recorded monotonic times.')
-        metrics['observation']['coverage'] = 'partial'
-        if missing_native_time:
-            timing = 'native-wall-clock-partial'
     return {'log': str(path), 'backend': backend, 'records_processed': records, 'timing': timing,
             'possible_stop': metrics['guard']['diagnostic'], 'metrics': metrics}
 
@@ -117,8 +95,8 @@ def main(argv=None):
     parser.add_argument('logs', type=Path, help='Directory containing saved attempt logs.')
     parser.add_argument('--attempt', action='append', required=True,
                         help='Relative attempt directory or log file; repeat to select more attempts.')
-    parser.add_argument('--backend', choices=('codex', 'opencode', 'xxx'), required=True)
-    parser.add_argument('--context', type=Path, help='Optional saved source context for native path ownership.')
+    parser.add_argument('--backend', choices=('codex',), required=True)
+    parser.add_argument('--context', type=Path, help='Optional saved source context for delivery accounting.')
     parser.add_argument('--output', type=Path, required=True, help='Output prefix; writes .json and .md.')
     args = parser.parse_args(argv)
     context = json.loads(args.context.read_text(encoding='utf-8')) if args.context else None

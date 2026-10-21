@@ -9,13 +9,11 @@ import tempfile
 import uuid
 from dataclasses import asdict
 from pathlib import Path
-from src.contracts.contracts import ContractError, strict_json, result_diagnostics, CONTRACT_ID, ARTIFACT_FORMAT, response_error
+from src.contracts.contracts import ContractError, strict_json, result_diagnostics, CONTRACT_ID, ARTIFACT_FORMAT
 from src.runtime.reporting import diagnostic
 from src.runtime.execution import Budget
 from src.runtime.tool_observer import ToolObserver
-from src.backends import codex, opencode_cli, xxx
-from src.backends.json_response import json_object_response
-from src.model.structured_output import retry_policy
+from src.backends import codex
 from src.reports.final_report import recoverable_material
 from src.analysis.ledger import prepare_result
 from src.analysis.evidence import source_catalog, SourceChanged
@@ -164,7 +162,7 @@ class ModelInvoker:
         context_json = serialize_model_input(projected)
         schema = binding.schema
         schema_json = serialize_model_input(schema)
-        prompt = build_model_prompt(template, context_json, schema_json, agent['backend'],
+        prompt = build_model_prompt(template, context_json, schema_json,
                                     source_index='source_context' in projected)
         measurements = input_measurements(template, context_json, schema_json, prompt,
             source_context=context.get('source_context'),
@@ -199,9 +197,6 @@ class ModelInvoker:
                     model_actual_source='unknown: backend has not reported model identity',
                     review_quality='NOT_MEASURED', publication_complete=False)
         meta.update(source_tools_enabled=not reports_only)
-        if agent['backend'] == 'xxx':
-            meta['retry_policy'] = retry_policy(0, 0, None)
-            meta['compatibility_profile'] = xxx.PROFILE
         if self.session.repo:
             meta['submodules'] = context.get('submodules', [])
         artifacts.save_json(destination / 'invocation.json', meta)
@@ -236,88 +231,39 @@ class ModelInvoker:
                 schema_path = state / 'output.schema.json'
                 artifacts.save_json(schema_path, schema)
                 try:
-                    if agent['backend'] == 'xxx':
-                        cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only,
-                                           schema=schema, source_maps_directory=source_maps_directory)
-                        data, provider_meta = xxx.invoke(cmd, cwd, env, payload, process=process_runtime.process,
-                            artifacts=attempt, budget=budget, meta=meta, observer=observer, process_options={
-                                'reporter': self.session.reporter, 'context': self.session.stage_context(stage, context),
-                                'clock': self.session.reporter.clock, 'progress_interval': self.session.reporter.progress_interval})
-                        meta['backend_result_valid'] = True
-                        meta['provider_metadata'] = {k: v for k, v in provider_meta.items() if k != 'metrics'}
-                        artifacts.save_json(attempt / 'extracted.json', data)
-                        self.attempts.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
-                        data = self.validator.validate_attempt(stage, data, context, attempt, meta, binding,
-                            expected_files=evidence_pins, expected_metadata=evidence_metadata)
-                    else:
-                        if agent['backend'] == 'opencode':
-                            opencode_cli.verify_version(meta['cli_version'])
-                        cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only,
-                                           schema=schema, source_maps_directory=source_maps_directory)
-                        r = None
-                        meta['prompt_sent'] = True
-                        try:
-                            r = process_runtime.process(cmd, cwd, env, payload, reporter=self.session.reporter,
-                                        context=self.session.stage_context(stage, context), log_dir=attempt,
-                                        clock=self.session.reporter.clock, progress_interval=self.session.reporter.progress_interval,
-                                        budget=budget, observer=observer)
-                        finally:
-                            # The private pipe log survives timeout/interruption even without a process result.
-                            with contextlib.suppress(OSError):
-                                output = r['stdout'] if r is not None else (attempt / 'stdout.log').read_bytes()
-                                meta['metrics'] = CLI_ADAPTERS[agent['backend']].collect_metrics(
-                                    output.decode('utf-8', errors='replace'), agent.get('model'))
-                        meta.update(returncode=r['returncode'], output_bytes=len(r['stdout']))
-                        if r['returncode']:
-                            raise AuditError(f'{agent["backend"]} exited with {r["returncode"]}; inspect private attempt logs.',
-                                code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='backend')
-                        output = (codex.read_response(schema_path)
-                                  if agent['backend'] == 'codex' else r['stdout'].decode('utf-8'))
-                        if agent['backend'] == 'opencode':
-                            try:
-                                answer, provider_meta = opencode_cli.completed_response(output)
-                            except ContractError as exc:
-                                if exc.failure_kind != 'INCOMPLETE_OUTPUT' or not exc.details.get('session_id'):
-                                    raise
-                                # V2 can exit before emitting step_finish; export confirms the same answer.
-                                export_dir = attempt / 'session-export'
-                                private_directory(export_dir)
-                                exported = process_runtime.process([agent['executable'], 'session', 'export', '--standalone',
-                                                    exc.details['session_id']], cwd, env, reporter=self.session.reporter,
-                                                   context=self.session.stage_context(stage, context), log_dir=export_dir,
-                                                   clock=self.session.reporter.clock, budget=budget)
-                                if exported['returncode']:
-                                    raise response_error('INCOMPLETE_OUTPUT', 'result',
-                                                         'OpenCode could not export the final session for verification.') from exc
-                                answer, provider_meta = opencode_cli.completed_response(
-                                    output, exported=exported['stdout'].decode('utf-8'),
-                                    agent_name=cmd[cmd.index('--agent') + 1])
-                            # Completion and usage survive a later JSON or contract failure.
-                            meta['provider_metadata'] = provider_meta
-                            meta.update({key: provider_meta[key] for key in ('session_id', 'message_id', 'finish_reason')})
-                            meta['metrics'] = opencode_cli.collect_metrics(
-                                output, agent.get('model'), completed=provider_meta.get('exported_finish'))
-                            try:
-                                data, response_meta = json_object_response(answer, allow_intro=True)
-                            except ContractError as exc:
-                                if 'response_normalization' in exc.details:
-                                    provider_meta['response_normalization'] = exc.details['response_normalization']
-                                raise
-                            provider_meta.update(response_meta)
-                        else:
-                            data, provider_meta = CLI_ADAPTERS[agent['backend']].parse_output(output)
-                        meta['backend_result_valid'] = True
-                        meta['provider_metadata'] = provider_meta
-                        model_usage = provider_meta.get('modelUsage')
-                        if type(model_usage) is dict and model_usage:
-                            meta['models_reported'] = list(model_usage)
-                            if len(model_usage) == 1:
-                                meta['model_actual'] = next(iter(model_usage))
-                            meta['model_actual_source'] = 'backend modelUsage; may include multiple models'
-                        artifacts.save_json(attempt / 'extracted.json', data)
-                        self.attempts.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
-                        data = self.validator.validate_attempt(stage, data, context, attempt, meta, binding,
-                            expected_files=evidence_pins, expected_metadata=evidence_metadata)
+                    cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only,
+                                       schema=schema)
+                    r = None
+                    meta['prompt_sent'] = True
+                    try:
+                        r = process_runtime.process(cmd, cwd, env, payload, reporter=self.session.reporter,
+                                    context=self.session.stage_context(stage, context), log_dir=attempt,
+                                    clock=self.session.reporter.clock, progress_interval=self.session.reporter.progress_interval,
+                                    budget=budget, observer=observer)
+                    finally:
+                        # The private pipe log survives timeout/interruption even without a process result.
+                        with contextlib.suppress(OSError):
+                            output = r['stdout'] if r is not None else (attempt / 'stdout.log').read_bytes()
+                            meta['metrics'] = CLI_ADAPTERS[agent['backend']].collect_metrics(
+                                output.decode('utf-8', errors='replace'), agent.get('model'))
+                    meta.update(returncode=r['returncode'], output_bytes=len(r['stdout']))
+                    if r['returncode']:
+                        raise AuditError(f'{agent["backend"]} exited with {r["returncode"]}; inspect private attempt logs.',
+                            code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='backend')
+                    output = codex.read_response(schema_path)
+                    data, provider_meta = CLI_ADAPTERS[agent['backend']].parse_output(output)
+                    meta['backend_result_valid'] = True
+                    meta['provider_metadata'] = provider_meta
+                    model_usage = provider_meta.get('modelUsage')
+                    if type(model_usage) is dict and model_usage:
+                        meta['models_reported'] = list(model_usage)
+                        if len(model_usage) == 1:
+                            meta['model_actual'] = next(iter(model_usage))
+                        meta['model_actual_source'] = 'backend modelUsage; may include multiple models'
+                    artifacts.save_json(attempt / 'extracted.json', data)
+                    self.attempts.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
+                    data = self.validator.validate_attempt(stage, data, context, attempt, meta, binding,
+                        expected_files=evidence_pins, expected_metadata=evidence_metadata)
                 finally:
                     observer.finish()
                     meta['tool_observation'] = observer.snapshot()
@@ -352,8 +298,6 @@ class ModelInvoker:
                 self.session.assert_source()
             meta['source_check_status'] = 'MATCHED_AT_BOUNDARIES'
             budget.check()
-            if agent['backend'] == 'xxx' and meta.get('model_actual'):
-                meta['model_actual_source'] = 'backend assistant-message metadata'
             if stage == 'review':
                 self.publisher.assert_review_files(context, destination.parent)
             self.publisher.assert_coverage_file(context)
@@ -384,7 +328,6 @@ class ModelInvoker:
                 artifacts.save_json(destination / 'invocation.json', meta)
             raise
 
-    def command(self, stage, state, agent, schema_path, env, *, reports_only=False, schema=None,
-                source_maps_directory=None):
+    def command(self, stage, state, agent, schema_path, env, *, reports_only=False, schema=None):
         return command(self.session, stage, state, agent, schema_path, env,
-                       reports_only=reports_only, schema=schema, source_maps_directory=source_maps_directory)
+                       reports_only=reports_only, schema=schema)

@@ -78,6 +78,7 @@ profile = json.loads((Path(os.environ['HOME']) / 'audit-profile.json').read_text
 assert profile['model'] == 'configured-model'
 assert not any(key.endswith('_API_KEY') for key in os.environ)
 call = {'args': args, 'cwd': str(Path.cwd()), 'home': os.environ['HOME'],
+        'pid': os.getpid(),
         'euid': os.geteuid(),
         'git_config_env': {k: v for k, v in os.environ.items() if k.startswith('GIT_CONFIG')}}
 if '--version' in args:
@@ -85,14 +86,14 @@ if '--version' in args:
     print('Fixture startup warning', file=sys.stderr)
     print(os.environ.get('AUDIT_TEST_CLI_VERSION', 'fixture-cli 1.0'))
 elif '--help' in args:
-    print('--ephemeral --output-schema --sandbox --json --output-last-message --skip-git-repo-check '
-          '--format --model --agent --standalone')
+    print('--ephemeral --output-schema --sandbox --json --output-last-message --skip-git-repo-check --model')
 else:
     prompt = sys.stdin.read()
     raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]
     context_text, schema_text = raw.split('\n\n# Required final JSON Schema\n', 1)
     context = json.loads(context_text)
     call['context'] = context
+    call['prompt'] = prompt
     call['schema'] = json.loads(schema_text)
     if '--output-schema' in args:
         assert json.loads(Path(args[args.index('--output-schema') + 1]).read_text()) == call['schema']
@@ -105,21 +106,47 @@ else:
     sys.dont_write_bytecode = True
     from ledger_response import response
     data = response(context)
+    scenario = os.environ.get('AUDIT_FAKE_CASE', '')
+    if scenario == 'schema-extra':
+        data['extra_private_key'] = ['private value']
+    if scenario == 'missing-claims' and stage == 'study':
+        del data['claims']
+    if scenario == 'claims-string':
+        data['claims'] = '[{"private":"' + 'x' * 21295
+    if scenario == 'claims-44' and stage == 'review':
+        data['claims'] = [dict(data['claims'][0], id=f'C-{i + 1:03d}', claim_ids=['C-PRIVATE']) for i in range(44)]
+        data['report_markdown'] = '\n'.join(claim['id'] for claim in data['claims'])
+    if scenario == 'partial-review' and stage == 'review':
+        data.update(completion_status='PARTIAL', limitations=['Synthetic incomplete review'])
+    if scenario == 'material-review' and stage == 'review':
+        data['claims'][0].update(outcome='UNVERIFIABLE', limitation='Insufficient static evidence')
+    if scenario == 'schema-error' or (scenario == 'fail-main-study' and context.get('branch') == 'main' and stage == 'study'):
+        data['completion_status'] = 'INVALID'
+    if scenario == 'wrong-identity':
+        data['source_snapshot_id' if 'source_snapshot_id' in data else 'source_commit'] = 'wrong'
+    if os.environ.get('AUDIT_FAKE_LOCAL_REFS'):
+        data['claims'][0]['evidence_ids'] = ['E-001']
+    if 'AUDIT_FAKE_CASE' in os.environ:
+        with open(os.environ['AUDIT_TEST_CALL_LOG'], 'a') as stream:
+            stream.write(json.dumps(call) + '\n')
+    if scenario == 'progress-barrier':
+        gate = Path(os.environ['AUDIT_FAKE_PROGRESS_GATE'])
+        (gate / (stage + '.ready')).touch()
+        deadline = time.monotonic() + 12
+        while not (gate / (stage + '.release')).exists():
+            if time.monotonic() > deadline:
+                raise RuntimeError('Progress fixture was not released')
+            time.sleep(.01)
+    if scenario == 'slow':
+        time.sleep(60)
     if stage == 'study' and (os.environ.get('AUDIT_TEST_PARTIAL') or
             context.get('branch') in json.loads(os.environ.get('AUDIT_TEST_PARTIAL_BRANCHES', '[]'))):
         data.update(completion_status='PARTIAL', limitations=['Fixture coverage is incomplete.'])
     if context.get('source_mode') == 'folder' and os.environ.get('AUDIT_TEST_MUTATE_SOURCE'):
         (Path(context['source_directory']) / 'modified.txt').write_text('agent modification')
-    if '--format' in args:
-        config = json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])
-        name = args[args.index('--agent') + 1]
-        call['permission_rules'] = config['agents'][name]['permissions']
-        call['permissions'] = {p['action']: p['effect'] for p in call['permission_rules']}
-        from cli_response import cli_result
-        sys.stdout.buffer.write(cli_result(args, data)['stdout'])
-    else:
-        from cli_response import cli_result
-        sys.stdout.buffer.write(cli_result(args, data)['stdout'])
+    from cli_response import cli_result
+    sys.stdout.buffer.write(cli_result(args, data)['stdout'])
 
-with open(os.environ['AUDIT_TEST_CALL_LOG'], 'a') as stream:
-    stream.write(json.dumps(call) + '\n')
+if 'AUDIT_FAKE_CASE' not in os.environ or '--help' in args or '--version' in args:
+    with open(os.environ['AUDIT_TEST_CALL_LOG'], 'a') as stream:
+        stream.write(json.dumps(call) + '\n')

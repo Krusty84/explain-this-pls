@@ -17,7 +17,7 @@ DEFAULT_EXECUTION = {'stage_timeout_seconds': 3600, 'idle_timeout_seconds': None
                      'review_enabled': False,
                      'read_loop_guard': True,
                      'max_revision_rounds': 1,
-                     'opencode_format_retries': 2, 'structured_output_repair_attempts': 0,
+                     'structured_output_repair_attempts': 0,
                      'http_timeout_seconds': 5, 'api_doc_timeout_seconds': 30}
 
 
@@ -44,10 +44,9 @@ def execution_settings(value=None):
         if not valid:
             raise ValueError(f'execution.{key} must be a positive finite number' +
                              (' or null.' if key == 'idle_timeout_seconds' else '.'))
-    for key in ('opencode_format_retries', 'structured_output_repair_attempts'):
-        retries = result[key]
-        if type(retries) is not int or not 0 <= retries <= 2:
-            raise ValueError(f'execution.{key} must be an integer from 0 to 2.')
+    retries = result['structured_output_repair_attempts']
+    if type(retries) is not int or not 0 <= retries <= 2:
+        raise ValueError('execution.structured_output_repair_attempts must be an integer from 0 to 2.')
     return result
 
 

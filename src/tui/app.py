@@ -272,8 +272,6 @@ class ExplainApp(App[int]):
             agent = config['_agents']['study']
             model = agent.get('model') or 'CLI default'
             effort = agent.get('reasoning_effort')
-            if effort is None and agent['backend'] == 'opencode':
-                effort = (agent.get('model') or '').partition('#')[2]
             effort = effort or 'CLI default'
             analysis = config['last_analysis']
             results = '—'

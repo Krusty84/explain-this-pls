@@ -102,7 +102,7 @@ class ModelCLITests(ModelFixture, unittest.TestCase):
                 self.assertEqual(json.loads(stdout)['catalogs'][0]['models'], [])
         self.assertEqual([call['args'] for call in self.calls()], [['debug', 'models']] * 2)
 
-    def test_unique_executables_and_mixed_backends(self):
+    def test_unique_executables_group_stage_catalogs(self):
         second = self.base / 'second-codex'
         second.write_bytes(self.cli.read_bytes())
         second.chmod(0o700)
@@ -114,18 +114,13 @@ class ModelCLITests(ModelFixture, unittest.TestCase):
         groups = json.loads(stdout)['catalogs']
         self.assertEqual([group['stages'] for group in groups], [['study', 'review'], ['compare']])
         self.assertEqual(len(self.calls()), 2)
-        self.config['stage_agents']['review'].update(backend='xxx', executable=sys.executable)
-        self.write_config()
-        code, stdout, stderr = self.invoke()
-        self.assertEqual(code, 0, stderr)
-        self.assertEqual(json.loads(stdout)['catalogs'][0]['stages'], ['study'])
 
-    def test_non_codex_invalid_catalog_and_conflicting_flags(self):
+    def test_unsupported_backend_invalid_catalog_and_conflicting_flags(self):
         self.config['agent'] = {'backend': 'xxx', 'executable': sys.executable}
         self.write_config()
         code, stdout, stderr = self.invoke()
         self.assertEqual((code, stdout), (1, ''))
-        self.assertIn('no active Codex', stderr)
+        self.assertIn('Unsupported backend: xxx', stderr)
         self.assertEqual(self.calls(), [])
         self.config['agent'] = {'backend': 'codex', 'executable': str(self.cli)}
         self.write_config()
@@ -354,12 +349,15 @@ class ModelTargetTests(ModelFixture, unittest.TestCase):
         self.assertFalse(config['execution']['review_enabled'])
 
     def test_inactive_codex_overrides_use_their_executable_and_model(self):
-        self.config['agent'] = {'backend': 'xxx', 'executable': sys.executable, 'model': 'shared'}
+        self.config['agent'] = {'backend': 'codex', 'executable': sys.executable, 'model': 'shared'}
         self.config['stage_agents'] = {'review': {'backend': 'codex', 'executable': './' + self.cli.name, 'model': 'review'},
-                                       'compare': {'backend': 'xxx', 'executable': '/missing/cli'}}
+                                       'compare': {'model': 'compare'}}
         self.write_config()
-        self.assertEqual(model_targets(load_config(self.path), self.path), {
-            'stage_agents.review.model': {'backend': 'codex', 'executable': str(self.cli), 'model': 'review'}})
+        targets = model_targets(load_config(self.path), self.path)
+        shared = {'backend': 'codex', 'executable': str(Path(sys.executable).resolve()), 'model': 'shared'}
+        self.assertEqual(targets, {'agent.model': shared, 'stage_agents.study.model': shared,
+            'stage_agents.review.model': {'backend': 'codex', 'executable': str(self.cli), 'model': 'review'},
+            'stage_agents.compare.model': shared | {'model': 'compare'}})
 
 
 class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
@@ -493,22 +491,6 @@ class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
                 config = load_config(self.path)
                 self.assertFalse(config['execution']['review_enabled'])
                 self.assertEqual(list(config['_agents']), ['study'])
-
-    async def test_models_button_allows_inactive_codex_with_non_codex_shared_agent(self):
-        self.config['agent'] = {'backend': 'xxx', 'executable': sys.executable}
-        for stage in ('review', 'compare'):
-            with self.subTest(stage=stage):
-                self.config['stage_agents'] = {stage: {'backend': 'codex', 'executable': str(self.cli)}}
-                self.write_config()
-                app = self.app()
-                async with app.run_test(size=(80, 24)) as pilot:
-                    self.assertFalse(app.query_one('#models', Button).disabled)
-                    await pilot.click('#models')
-                    screen = app.screen
-                    self.assertIsInstance(screen, ModelChooser)
-                    await self.ready(pilot, screen)
-                    self.assertEqual(list(screen.targets), ['stage_agents.' + stage + '.model'])
-                    self.assertEqual(screen.selected, 'public-model')
 
     async def test_stage_target_refresh_resets_checks_and_detects_external_change(self):
         app = self.app()

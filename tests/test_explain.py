@@ -22,7 +22,6 @@ from src.runtime.config import load_config
 from src.runtime.execution import repository_lock
 from src.runtime.artifacts import slug
 from src.runtime.reporting import Reporter
-from src.backends.opencode_cli import prepare_environment
 from src.backends import codex
 from src.contracts.contracts import ContractError, review_verdict, strict_json, validate_result
 from fixtures.ledger_response import response
@@ -382,7 +381,7 @@ class ConfigTests(unittest.TestCase):
     def test_single_branch_ignores_compare_settings(self):
         self.value['git_mode']['branches']=['master']
         self.value.update(
-            stage_agents={'compare':{'backend':'unavailable','executable':'/missing/cli'}},
+            stage_agents={'compare':{'backend':'codex','executable':'/missing/cli'}},
             prompts={'compare':'/missing/prompt'})
         cfg=self.load()
         self.assertEqual(set(cfg['_agents']),{'study','review'})
@@ -416,7 +415,7 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError,'Unknown configuration keys:.*additional_runtime_read_paths'):self.load()
     def test_stage_overrides_preserve_explicit_model_and_version(self):
         self.value['agent'].update(model='base-model',expected_version='test-version')
-        self.value['stage_agents']={'review':{'backend':'opencode','model':None}}
+        self.value['stage_agents']={'review':{'backend':'codex','model':None}}
         cfg=self.load()
         self.assertEqual(cfg['_agents']['study']['model'],'base-model')
         self.assertIsNone(cfg['_agents']['review']['model'])
@@ -428,7 +427,7 @@ class ConfigTests(unittest.TestCase):
     def test_all_examples_load_without_credentials(self):
         root=Path(__file__).resolve().parents[1]
         paths = list(root.glob('config*.example.json*'))
-        self.assertEqual(len(paths), 3)  # Includes the explicit XXX fork profile.
+        self.assertEqual(len(paths), 1)
         for path in paths:
             with self.subTest(path=path.name), patch.dict(os.environ,{},clear=True), \
                  patch('src.runtime.config.shutil.which',return_value=sys.executable):
@@ -455,34 +454,8 @@ class AdapterCommandTests(unittest.TestCase):
         self.assertNotIn('--ignore-user-config',cmd)
         self.assertNotIn('resume',cmd)
         self.assertIn('--skip-git-repo-check',self.command('codex','compare'))
-    def test_opencode_overlay_preserves_settings_and_scopes_permissions(self):
-        original={'provider':{'custom':{'options':{'baseURL':'https://example.invalid'}}},
-            'model':'custom/model','plugin':['auth-plugin'],'instructions':['rules.md'],
-            'agent':{'custom':{'mode':'primary','permission':{'*':'allow'}}},'default_agent':'custom'}
-        for stage in ('study','review','compare'):
-            with self.subTest(stage=stage):
-                env={'HOME':str(self.base),'OPENCODE_CONFIG':'/custom/config.json',
-                     'OPENCODE_CONFIG_CONTENT':json.dumps(original)}
-                name=prepare_environment(env,stage)
-                merged=json.loads(env['OPENCODE_CONFIG_CONTENT'])
-                runtime_agent=merged['agents'].pop(name)
-                if not merged['agents']: del merged['agents']
-                self.assertEqual(merged,original)
-                self.assertEqual(runtime_agent['mode'],'primary')
-                expected={'*':'deny'}
-                if stage!='compare':expected.update(read='allow',glob='allow',grep='allow')
-                self.assertEqual({p['action']:p['effect'] for p in runtime_agent['permissions']},expected)
-                self.assertEqual(env['OPENCODE_CONFIG'],'/custom/config.json')
-                self.assertFalse(any(key.startswith('OPENCODE_DISABLE') for key in env))
-                self.assertIn('--standalone',self.command('opencode',stage,env))
-    def test_invalid_opencode_overlay_does_not_discard_configuration(self):
-        for raw in ('not json','[]','{"agents": []}'):
-            env={'OPENCODE_CONFIG_CONTENT':raw}
-            with self.subTest(raw=raw),self.assertRaisesRegex(ContractError,'OPENCODE_CONFIG_CONTENT'):
-                prepare_environment(env,'study')
-            self.assertEqual(env['OPENCODE_CONFIG_CONTENT'],raw)
-    def test_explicit_models_override_cli_default_for_all_backends(self):
-        for backend in ('codex','opencode'):
+    def test_explicit_model_overrides_codex_cli_default(self):
+        for backend in ('codex',):
             cmd=self.command(backend,model='chosen-model')
             self.assertEqual(cmd[cmd.index('--model')+1],'chosen-model')
     def test_environment_preserves_profiles_path_and_credentials(self):
@@ -491,7 +464,7 @@ class AdapterCommandTests(unittest.TestCase):
             'XDG_CACHE_HOME':'/custom/cache','XDG_STATE_HOME':'/custom/state',
             'XDG_RUNTIME_DIR':'/custom/runtime','TMPDIR':'/custom/tmp',
             'CODEX_HOME':'/custom/codex',
-            'OPENCODE_CONFIG_DIR':'/custom/opencode','HTTPS_PROXY':'http://proxy.invalid',
+            'HTTPS_PROXY':'http://proxy.invalid',
             'OPENAI_API_KEY':'test-existing-key'}
         # Construct the Git runtime before intentionally replacing PATH. This test
         # checks child environment preservation, not Git discovery in a fake PATH.
@@ -499,10 +472,9 @@ class AdapterCommandTests(unittest.TestCase):
         self.addCleanup(runner.session.repo.close)
         with patch.dict(os.environ,inherited,clear=True):
             env=cli_env(self.repo_path)
-            for backend in ('codex','opencode'):
+            for backend in ('codex',):
                 agent=cfg['_agents']['study'] | {'backend':backend}
                 runner.invoker.command('study',self.base,agent,self.base/'schema.json',env)
-            prepare_environment(env,'study')
             for key,value in inherited.items():self.assertEqual(env[key],value)
             self.assertNotIn('CODEX_API_KEY',env)
             self.assertEqual(dict(os.environ),inherited)
@@ -520,11 +492,9 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
         cli.chmod(0o700)
         calls_path=self.base/'calls.jsonl'
         env={'HOME':str(home),'PATH':os.environ.get('PATH',os.defpath),
-             'AUDIT_TEST_CALL_LOG':str(calls_path),'PYTHONIOENCODING':'utf-8',
-             'OPENCODE_CONFIG_CONTENT':json.dumps({'provider':{'custom':{'options':{
-                 'baseURL':'https://example.invalid'}}},'plugin':['auth-plugin']})}
-        for backend in ('codex','opencode'):
-            version = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
+             'AUDIT_TEST_CALL_LOG':str(calls_path),'PYTHONIOENCODING':'utf-8'}
+        for backend in ('codex',):
+            version = 'fixture-cli 1.0'
             env['AUDIT_TEST_CLI_VERSION'] = version
             for check_only in (True,False):
                 with self.subTest(backend=backend,check_only=check_only):
@@ -562,9 +532,6 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                         compare='baseline_branch' in call['context']
                         self.assertEqual(Path(call['cwd']) == self.repo_path, not compare)
                         if not compare: self.assertEqual(call['cwd'], call['context']['repository'])
-                        if backend=='opencode':
-                            self.assertEqual(call['permissions']['*'],'deny')
-                            self.assertEqual(call['permissions'].get('read'),None if compare else 'allow')
                     if not check_only:
                         results=[run_dir/'comparison'/'compare.json']
                         bundle=json.loads((run_dir/'comparison'/'inputs.json').read_text())

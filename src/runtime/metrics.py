@@ -92,21 +92,6 @@ def codex_usage(events, requested=None, *, malformed=False):
     return measurement('codex', requested, measured=measured)
 
 
-def native_usage(raw, cost, source, complete):
-    raw = raw if type(raw) is dict else {}
-    cache = raw.get('cache') if type(raw.get('cache')) is dict else {}
-    incoming, outgoing, read, write, reasoning, total = [number(value, tokens=True) for value in (
-        raw.get('input'), raw.get('output'), cache.get('read'), cache.get('write'),
-        raw.get('reasoning'), raw.get('total'))]
-    incoming = add(incoming, read, write)
-    estimated = total is None
-    total = add(incoming, outgoing) if estimated else total
-    return usage({'input_tokens': incoming, 'output_tokens': outgoing, 'cache_read_tokens': read,
-                  'cache_write_tokens': write, 'reasoning_tokens': reasoning,
-                  'total_tokens': total, 'cost_usd': cost},
-                 source=source, complete=complete, estimated=estimated and total is not None)
-
-
 def group_usage(entries, keys):
     grouped = defaultdict(list)
     for entry in entries:

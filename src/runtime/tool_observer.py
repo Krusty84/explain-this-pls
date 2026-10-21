@@ -14,8 +14,6 @@ from collections import Counter, deque
 from dataclasses import dataclass, field
 import hashlib
 import json
-from pathlib import PurePosixPath
-import re
 import time
 
 from src.analysis.evidence import lines, source_catalog
@@ -69,16 +67,13 @@ class ToolObserver:
         self.terminal = False
         if backend == 'codex':
             self.limitations.add('Codex shell source coordinates and model request events are unavailable.')
-        elif backend not in ('opencode', 'xxx'):
+        else:
             self.limitations.add('Unsupported backend event format.')
         try:
             self.sources = source_catalog(self.context)
         except KeyError:
             self.sources = []
         self.snapshot_identity = digest([s['identity'] for s in self.sources])
-        inventory = self.context.get('_inventory')
-        self.inventory = ({e['path'] for e in inventory.get('entries', []) if e.get('type') == 'file'}
-                          if isinstance(inventory, dict) else None)
 
     def _reset(self):
         self.streak, self.streak_started = 0, None
@@ -171,84 +166,12 @@ class ToolObserver:
             self.limitations.add('No terminal backend event observed.')
         return self.snapshot()
 
-    def _source(self, path):
-        if not isinstance(path, str) or not self.sources:
-            return None
-        root = self.context.get('source_directory', self.context.get('repository'))
-        value = PurePosixPath(path)
-        if value.is_absolute():
-            if not root:
-                return None
-            try:
-                value = value.relative_to(PurePosixPath(root))
-            except ValueError:
-                return None
-        if '..' in value.parts or not value.parts:
-            return None
-        relative = str(value)
-        if self.inventory is not None and relative not in self.inventory:
-            return None
-        owners = [s for s in self.sources if s['root'] == '.' or relative.startswith(s['root'] + '/')]
-        if not owners:
-            return None
-        owner = max(owners, key=lambda s: len(s['root']))
-        return owner['id'], relative if owner['root'] == '.' else relative[len(owner['root']) + 1:]
-
-    def _read_lines(self, tool, arguments, output, *, native):
-        """Read only explicit native line prefixes; never shell commands or offsets."""
-        if not isinstance(tool, str) or tool.lower() != 'read' or not isinstance(arguments, dict) or not isinstance(output, str):
-            return [], []
-        if re.search(r'\.\.\. \(line truncated to \d+ chars\)(?:\n|$)', output):
-            return [], ['Truncated native source line.']
-        path = arguments.get('path') if native == 'opencode' else arguments.get('filePath')
-        owner = self._source(path)
-        if owner is None:
-            return [], ['Read source ownership unavailable.']
-        if native == 'opencode':
-            header, separator, body = output.partition('\n')
-            match = re.fullmatch(r'Read file (.*), lines (\d+)-(\d+)', header)
-            if not match or not separator:
-                return [], ['Unrecognized OpenCode V2 read result format.']
-            if self._source(match[1]) != owner:
-                return [], ['Ambiguous read result source ownership.']
-            body = re.sub(r'\n\[Output truncated\. Continue reading with offset: \d+\]$', '', body)
-            pattern = r'(\d+): (.*)'
-        elif native == 'xxx':
-            envelope = re.search(r'<type>file</type>\n<content>([\s\S]*?)\n</content>', output)
-            if envelope:
-                path_match = re.match(r'<path>(.*?)</path>\n', output)
-                if path_match is None or self._source(path_match[1]) != owner:
-                    return [], ['Ambiguous read result source ownership.']
-                body = envelope[1]
-                # The footer is supplied by the native read tool, outside numbered text.
-                body = re.split(r'\n\n\((?:End of file|Showing lines|Output capped at)', body, maxsplit=1)[0]
-                pattern = r'(\d+): (.*)'
-            else:
-                envelope = re.search(r'<file>\n([\s\S]*?)\n</file>', output)
-                if not envelope:
-                    return [], ['Unrecognized native read result format.']
-                body, pattern = envelope[1], r'(\d+)\| (.*)'
-        parsed = []
-        for line in body.split('\n') if body else []:
-            match = re.fullmatch(pattern, line)
-            if match is None:
-                return [], ['Ambiguous read result line coordinates.']
-            number, text = int(match[1]), match[2]
-            if number < 1 or (parsed and number != parsed[-1][2] + 1):
-                return [], ['Nonconsecutive read result line coordinates.']
-            parsed.append((*owner, number, text))
-        return parsed, []
-
     def event(self, event):
         """Accept one decoded native event; also used by timestamp-aware replay."""
         if self.triggered:
             return
         if self.backend == 'codex':
             completed = self._codex(event)
-        elif self.backend == 'opencode':
-            completed = self._opencode_v2(event)
-        elif self.backend == 'xxx':
-            completed = self._opencode_v1(event)
         else:
             completed = []
         for call in completed:
@@ -282,66 +205,6 @@ class ToolObserver:
             return [CompletedTool(item.get('id'), str(tool or 'unknown'), None, 'unknown', item, False,
                                   self.session_id, limitations=['Unsupported completed Codex item type.'])]
         return []
-
-    def _opencode_v2(self, event):
-        return self._native(event, 'opencode')
-
-    def _opencode_v1(self, event):
-        # V1 has independent dispatch and native session identity; it never uses exports.
-        return self._native(event, 'xxx')
-
-    def _native(self, event, backend):
-        kind, part = event.get('type'), event.get('part')
-        if not isinstance(part, dict):
-            if kind == 'tool_use':
-                self._invalid('Native tool event has no valid tool part.')
-            return []
-        session = event.get('sessionID', part.get('sessionID', self.session_id))
-        if kind == 'step_start':
-            if part.get('id'):
-                self._request((session, part.get('messageID'), part['id']))
-        if kind == 'step_finish' and part.get('reason') == 'stop':
-            self._terminal()
-        if kind != 'tool_use':
-            return []
-        call_id = part.get('callID') or part.get('id')
-        if isinstance(call_id, str) and (self.attempt_id, session, call_id) in self.seen:
-            return [CompletedTool(call_id, 'unknown', None, 'unknown', None, False, str(session))]
-        state = part.get('state')
-        if not isinstance(state, dict):
-            self._invalid('Native tool event has no valid state.')
-            return []
-        if state.get('status') in ('pending', 'running'):
-            if isinstance(call_id, str) and (self.attempt_id, session, call_id) not in self.seen:
-                self.pending[(session, call_id)] = (part.get('tool'), state.get('input'))
-                self._record(kind='pending', session_id=session, call_id=call_id)
-            return []
-        if state.get('status') not in ('completed', 'error'):
-            self._invalid('Native tool event has an unsupported state.')
-            return []
-        tool = part.get('tool')
-        tool = tool if isinstance(tool, str) and tool else 'unknown'
-        arguments, output = state.get('input'), state.get('output')
-        status = 'success' if state['status'] == 'completed' else 'error'
-        if status == 'error':
-            output = state.get('error')
-        metadata = state.get('metadata') if isinstance(state.get('metadata'), dict) else {}
-        read_metadata = metadata.get('metadata', {}) if backend == 'opencode' else metadata
-        read_metadata = read_metadata if isinstance(read_metadata, dict) else {}
-        complete = (output is not None and isinstance(arguments, dict) and tool != 'unknown'
-                    and not read_metadata.get('truncated', False)
-                    and not state.get('truncated', False))
-        source_lines, limitations = self._read_lines(tool, arguments, output, native=backend)
-        if (read_metadata.get('truncated', False) or state.get('truncated', False)
-                or isinstance(output, str) and re.search(r'\n\[Output truncated\. Continue reading with offset: \d+\]$', output)):
-            limitations.append('Truncated native tool result.')
-        if any('Truncated' in reason or 'Ambiguous' in reason or 'Nonconsecutive' in reason for reason in limitations):
-            complete = False
-        result = {key: value for key, value in state.items() if key not in ('status', 'input', 'time')}
-        if 'attachments' in part:
-            result['attachments'] = part['attachments']
-        return [CompletedTool(part.get('callID') or part.get('id'), tool, arguments,
-                              status, result, complete, str(session), source_lines, limitations)]
 
     def observe(self, call, *, observed_at=None):
         """Accept a completed normalized result. Timestamp is elapsed monotonic time."""
@@ -454,7 +317,7 @@ class ToolObserver:
                   'last_new_material_seconds': self.last_new,
                   'model_requests': len(self.requests) if request_available else None,
                   'model_requests_coverage': 'partial' if request_available else 'unavailable',
-                  'model_requests_reason': 'Only native request/step-start events establish model calls.',
+                  'model_requests_reason': 'Codex model request events are unavailable.',
                   'delivery': {'unique_lines': self.counts['delivery_unique_lines'] if delivery_available else None,
                                'repeated_lines': self.counts['delivery_repeated_lines'] if delivery_available else None,
                                'conflicting_lines': self.counts['delivery_conflicting_lines'] if delivery_available else None,

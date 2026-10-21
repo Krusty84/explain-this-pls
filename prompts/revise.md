@@ -134,7 +134,7 @@ follow first occurrence. Preserve null, empty values and original source lines.
 With delivery "full", symbols are inline. With delivery "on-demand", each file
 has symbol_count and symbols_ref; null means no saved symbol map. Resolve each
 non-null reference under the single absolute maps_root. Read needed JSON maps
-with native read-only tools and offset/limit pages; each map has its own tables.
+with native read-only tools; each map has its own tables.
 The complete inventory was parsed before this stage. Map selection by earlier
 agents does not restrict your access. If a map cannot be read, report the gap;
 there is no automatic full-index fallback. If source_context is absent, use

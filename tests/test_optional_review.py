@@ -41,7 +41,7 @@ class OptionalReviewConfigTests(FolderFixture):
                 self.load()
 
     def test_inactive_review_agent_and_prompts_are_not_resolved(self):
-        self.value.update(stage_agents={'review': {'backend': 'missing', 'executable': '/missing/cli'}},
+        self.value.update(stage_agents={'review': {'backend': 'codex', 'executable': '/missing/cli'}},
                           prompts={'review': '/missing/review', 'revise': '/missing/revise'})
         self.assertNotIn('review', self.load()['_agents'])
         self.value['execution'] = {'review_enabled': True}
@@ -57,7 +57,7 @@ class OptionalReviewConfigTests(FolderFixture):
 
     def test_all_examples_explicitly_disable_review(self):
         paths = list(Path(__file__).resolve().parents[1].glob('config*.example.jsonc'))
-        self.assertEqual(len(paths), 3)
+        self.assertEqual(len(paths), 1)
         for path in paths:
             with self.subTest(path=path), patch('src.runtime.config.shutil.which', return_value=sys.executable):
                 cfg = load_config(path)

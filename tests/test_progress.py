@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Preparation and stage presentation: deterministic ticks and offline PTY/XXX CLI I/O."""
+"""Preparation and stage presentation: deterministic ticks and offline PTY/Codex CLI I/O."""
 import io
 import json
 import os
@@ -25,11 +25,11 @@ from src.runtime.metrics import RunMetrics
 from src.runtime.session import RunSession
 from src.model.invocation import ModelInvoker
 from src.runtime.reporting import Reporter, SPINNER, cell_width
-import test_xxx as xxx_fixtures
+from fixtures.codex_runner import CodexFixture
 import test_reporting as cli_fixtures
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTEXT = {'branch': 'master', 'stage': 'study', 'backend': 'xxx'}
+CONTEXT = {'branch': 'master', 'stage': 'study', 'backend': 'codex'}
 SGR = re.compile(r'\x1b\[[0-9;]*m')
 
 
@@ -190,7 +190,7 @@ class ProgressTests(unittest.TestCase):
         session.reporter, session.mode, session.source_path = r, 'git', Path('/source/name')
         session.metrics = RunMetrics(r.clock)
         session.cfg = {'_agents': {stage: {'backend': backend} for stage, backend in
-                      (('study', 'xxx'), ('review', 'codex'), ('compare', 'opencode'))}}
+                      (('study', 'codex'), ('review', 'codex'), ('compare', 'codex'))}}
         started = session.stage_started('study', {'branch': 'topic'})
         self.assertEqual(started, r._progress.started)
         state = r._progress
@@ -475,15 +475,15 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(before, self.err.getvalue())
 
 
-class XXXProgressIntegrationTests(unittest.TestCase):
-    setUp = xxx_fixtures.XXXTests.setUp
-    run_case = xxx_fixtures.XXXTests.run_case
-    recorded = xxx_fixtures.XXXTests.recorded
-    prompts = xxx_fixtures.XXXTests.prompts
-    git = xxx_fixtures.XXXTests.git
-    init_git = xxx_fixtures.XXXTests.init_git
+class CodexProgressIntegrationTests(unittest.TestCase):
+    setUp = CodexFixture.setUp
+    run_case = CodexFixture.run_case
+    recorded = CodexFixture.recorded
+    prompts = CodexFixture.prompts
+    git = CodexFixture.git
+    init_git = CodexFixture.init_git
 
-    def test_silent_xxx_cli_study_and_review_update_before_response_in_real_pty(self):
+    def test_silent_codex_cli_study_and_review_update_before_response_in_real_pty(self):
         self.init_git(['main'])
         self.git('branch', '-m', 'master')
         self.value['git_mode'].update(branches=['master'], baseline_branch='master')
@@ -514,7 +514,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
                         break
                     self.assertIsNone(child.poll(), text)
                 else:
-                    self.fail('No moving spinner/timer during pending XXX CLI: ' + raw.decode())
+                    self.fail('No moving spinner/timer during pending Codex CLI: ' + raw.decode())
                 self.assertNotIn('[OK] master / ' + completed, text)
                 self.assertFalse((gate / (stage + '.release')).exists())
                 # Frames never scroll; there is no newline between their writes.
@@ -552,7 +552,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
             self.assertFalse(any(c in content for c in SPINNER), str(artifact))
         self.assertEqual(len(self.prompts()), 2)
 
-    def test_xxx_cli_plain_fallback_is_live_without_duplicate_waits(self):
+    def test_codex_cli_plain_fallback_is_live_without_duplicate_waits(self):
         for term, tty in (('xterm', False), ('dumb', True)):
             with self.subTest(term=term, tty=tty):
                 gate = self.root / term
@@ -583,7 +583,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
                     self.assertTrue(all(b - a >= .049 for a, b in zip(times, times[1:])))
                 r.close()
 
-    def test_xxx_cli_timeout_with_live_spinner_preserves_deadline_and_cleanup(self):
+    def test_codex_cli_timeout_with_live_spinner_preserves_deadline_and_cleanup(self):
         self.value['execution'] = {'stage_timeout_seconds': 5, 'idle_timeout_seconds': .6}
         class SizedReporter(Reporter):
             def _terminal_columns(self):
@@ -634,7 +634,7 @@ class XXXProgressIntegrationTests(unittest.TestCase):
         self.assertTrue(manifest['restoration']['restored'])
         self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
 
-    def test_ctrl_c_clears_live_xxx_cli_spinner_and_no_progress_remains_plain(self):
+    def test_ctrl_c_clears_live_codex_cli_spinner_and_no_progress_remains_plain(self):
         path = self.root / 'config.json'
         path.write_text(json.dumps(self.value))
         for quiet in (False, True):

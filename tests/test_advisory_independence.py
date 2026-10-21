@@ -24,42 +24,42 @@ class AdvisoryIndependenceTests(FolderFixture):
             for field in ('report_sections', 'claims', 'evidence', 'completion_status', 'limitations'):
                 self.assertIn(field, schema['required'])
 
-    def test_all_backends_publish_valid_documents_with_missing_or_malformed_advice(self):
+    def test_codex_publish_valid_documents_with_missing_or_malformed_advice(self):
         variants = ({}, {'subsystems': 'invalid', 'exclusions': 17, 'coverage': None, 'advisory': False},
                     {'subsystems': [dict(id='S-001', name='App', purpose='Observation.', paths=['absent'])],
                      'exclusions': [dict(path='absent', reason='Unconfirmed model observation.')],
                      'coverage': [dict(area_id='missing', status='NOT_INSPECTED', evidence_ids=['bad'], limitation='Unconfirmed.')],
                      'relevance_notes': ['vendor/ is outside the main architecture.']})
-        for backend in ('codex', 'opencode', 'xxx'):
-            for policy in ('strict', 'compromise'):
-                for advisory in variants:
-                    original = {}
+        backend = 'codex'
+        for policy in ('strict', 'compromise'):
+            for advisory in variants:
+                original = {}
 
-                    def change(runner, context, data):
-                        if context['stage'] == 'study':
-                            data.update(copy.deepcopy(advisory))
-                            original.update(copy.deepcopy(data))
+                def change(runner, context, data):
+                    if context['stage'] == 'study':
+                        data.update(copy.deepcopy(advisory))
+                        original.update(copy.deepcopy(data))
 
-                    with self.subTest(backend=backend, policy=policy, advisory=advisory):
-                        manifest, code = self.run_case(backend=backend, policy=policy, large=False,
-                                                      review=True, change=change)
-                        self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True),
-                                         manifest.get('diagnostics'))
-                        document = manifest['study']
-                        self.assertTrue(document['program_checks']['policy_satisfied'])
-                        self.assertEqual(document['report_markdown'],
-                                         render_document(original['report_sections'], original['claims'])[0])
-                        self.assertEqual(document['evidence'], original['evidence'])
-                        self.assertEqual(document['claims'][0]['statement'], original['claims'][0]['statement'])
-                        self.assertNotIn('study_material', manifest)
-                        attempt = Path(manifest['study_invocation']['artifact_directory'])
-                        self.assertEqual(json.loads((attempt / 'extracted.json').read_text()), original)
-                        self.assertFalse((attempt / 'recovered.json').exists())
-                        if advisory:
-                            self.assertEqual(json.loads(document['advisory']['raw_json']), advisory)
-                            self.assertTrue(document['advisory']['diagnostics'])
-                        self.assertEqual({p for area in manifest['coverage_plan']['areas'] for p in area['file_paths']},
-                                         {'app.py'})
+                with self.subTest(backend=backend, policy=policy, advisory=advisory):
+                    manifest, code = self.run_case(backend=backend, policy=policy, large=False,
+                                                  review=True, change=change)
+                    self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True),
+                                     manifest.get('diagnostics'))
+                    document = manifest['study']
+                    self.assertTrue(document['program_checks']['policy_satisfied'])
+                    self.assertEqual(document['report_markdown'],
+                                     render_document(original['report_sections'], original['claims'])[0])
+                    self.assertEqual(document['evidence'], original['evidence'])
+                    self.assertEqual(document['claims'][0]['statement'], original['claims'][0]['statement'])
+                    self.assertNotIn('study_material', manifest)
+                    attempt = Path(manifest['study_invocation']['artifact_directory'])
+                    self.assertEqual(json.loads((attempt / 'extracted.json').read_text()), original)
+                    self.assertFalse((attempt / 'recovered.json').exists())
+                    if advisory:
+                        self.assertEqual(json.loads(document['advisory']['raw_json']), advisory)
+                        self.assertTrue(document['advisory']['diagnostics'])
+                    self.assertEqual({p for area in manifest['coverage_plan']['areas'] for p in area['file_paths']},
+                                     {'app.py'})
 
     def test_model_exclusion_cannot_remove_sources_or_bypass_citation_checks(self):
         (self.source / 'src').mkdir()

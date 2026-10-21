@@ -1,18 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Shared orchestrator policy. Native runtime retries are a separate capability."""
+"""Shared orchestrator policy."""
 import json
 
 from src.contracts.contracts import workflow_satisfied, processing_satisfied
-
-
-def retry_policy(configured=0, performed=0, native=0):
-    return {'mode': 'bounded_format_repair' if configured else 'single_prompt_local_validation',
-            'orchestrator_repair_attempts_configured': configured,
-            'orchestrator_repair_attempts_performed': performed,
-            'orchestrator_retries': performed, 'format_retries_requested': native,
-            'native_enforcement_verified': False}
 
 
 def required_unresolved(context):

@@ -6,19 +6,16 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 from src.runtime.execution import Budget
-from src.backends import codex, opencode_cli, xxx
-from src.contracts.contracts import response_error
+from src.backends import codex
 from src.runtime.errors import AuditError
 from src.runtime.artifacts import neutral_temporary_base
 from src.runtime.process import cli_env
 from src.runtime import process as process_runtime
 
-CLI_ADAPTERS = {'codex': codex, 'opencode': opencode_cli, 'xxx': xxx}
+CLI_ADAPTERS = {'codex': codex}
 
 def check_cli(session) -> dict:
     result = {}
-    variant_executables = {agent['executable'] for agent in session.cfg['_agents'].values()
-        if agent['backend'] == 'xxx' and agent.get('reasoning_effort') is not None}
     for agent in session.cfg['_agents'].values():
         key = agent['backend'] + ':' + agent['executable']
         if key in result:
@@ -49,8 +46,6 @@ def check_cli(session) -> dict:
                     output = r['stderr']
                 texts.append(output.decode(errors='replace'))
             required = adapter.required_flags(session.mode)
-            if backend == 'xxx' and agent['executable'] in variant_executables:
-                required.append('--variant')
             if any(flag not in texts[1] for flag in required):
                 raise AuditError(f'{backend} lacks required CLI options: {required}',
                                  code='BACKEND_INCOMPATIBLE', failure_kind='BACKEND_INCOMPATIBLE',
@@ -58,34 +53,15 @@ def check_cli(session) -> dict:
             version = texts[0].strip()
             if agent.get('expected_version') and agent['expected_version'] != version:
                 raise AuditError(f'{backend} version differs from expected_version.', code='CLI_VERSION_MISMATCH')
-            if backend == 'opencode':
-                opencode_cli.verify_version(version)
             result[key] = {'version': version, 'required_flags': required}
-            if backend == 'xxx':
-                for arguments, marker in ((['export', '--help'], 'sessionID'),
-                                          (['session', 'delete', '--help'], 'sessionID')):
-                    checked = process_runtime.process([agent['executable'], *arguments], state, env,
-                                      reporter=session.reporter, budget=Budget(30))
-                    if checked['returncode'] or marker not in (checked['stdout'] + checked['stderr']).decode(errors='replace'):
-                        raise response_error('BACKEND_INCOMPATIBLE', 'compatibility',
-                                             'XXX requires export and session delete commands.')
-                result[key]['compatibility_profile'] = xxx.PROFILE
             session.reporter.emit('preflight_completed', check='cli', backend=backend, required_flags=required)
     session.versions = {k: v['version'] for k, v in result.items()}
     return result
 
-def command(session, stage: str, state: Path, agent: dict, schema_path: Path, env: dict, *, reports_only=False, schema=None,
-            source_maps_directory: Path | None = None) -> list[str]:
+def command(session, stage: str, state: Path, agent: dict, schema_path: Path, env: dict, *, reports_only=False, schema=None) -> list[str]:
     adapter = CLI_ADAPTERS.get(agent['backend'])
     if adapter:
         access_stage = 'compare' if reports_only else stage
-        kwargs = {}
-        if adapter is opencode_cli:
-            kwargs['agent_name'] = opencode_cli.prepare_environment(env, access_stage,
-                source_maps_directory=source_maps_directory)
-        elif adapter is xxx:
-            kwargs['agent_name'] = xxx.prepare_environment(env, access_stage,
-                source_maps_directory=source_maps_directory)
-        return adapter.build_command(agent, access_stage, session.mode, schema or session.schemas[stage], schema_path, **kwargs)
+        return adapter.build_command(agent, access_stage, session.mode, schema or session.schemas[stage], schema_path)
     raise AuditError('No CLI adapter for this backend.',
                      code='BACKEND_INCOMPATIBLE')

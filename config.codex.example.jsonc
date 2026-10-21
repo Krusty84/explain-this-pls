@@ -82,7 +82,6 @@
   },
 
   // One monotonic budget per stage. null disables the optional idle deadline.
-  // opencode_format_retries is retained for compatibility and has no effect.
   // Full inventory is parsed. Read symbol maps on demand with native read-only tools.
   "source_context": {
     "enabled": true,
@@ -100,18 +99,17 @@
     "max_revision_rounds": 1,
     "stage_timeout_seconds": 3600,
     "idle_timeout_seconds": null,
-    "opencode_format_retries": 2,
+    // Legacy compatibility keys; ignored by Codex. No orchestrator format retry.
     "http_timeout_seconds": 5,
     "api_doc_timeout_seconds": 30,
-    // Legacy compatibility key; ignored by all backends. No orchestrator format retry.
     "structured_output_repair_attempts": 1,
   },
 
   // Shared CLI settings. Authenticate/configure the CLI before starting the runner.
   "agent": {
-    // Supported backends: "codex", "opencode", "xxx".
+    // Supported backend: "codex".
     "backend": "codex",
-    // Command on PATH or executable path. Defaults: codex / opencode / xxx.
+    // Command on PATH or executable path. Default: codex.
     "executable": "codex",
     // null uses the model selected by the configured CLI.
     "model": "gpt-6-astra",
@@ -122,7 +120,6 @@
   },
 
   // Uncomment only the fields you want to override; omitted fields inherit agent.
-  // When changing backend, also override executable and any inherited model/effort/version.
   // model: null selects the CLI's model; expected_version: null clears version pinning.
   // reasoning_effort: null clears the runner's effort override; revision uses study.
   "stage_agents": {

@@ -604,9 +604,3 @@ def result_diagnostics(stage, value, context, mode='git'):
     # failures use a closed message, never source/response text.
     return {'schema_diagnostics': structural, 'semantic_diagnostics': {
         'violations': issues[:100], 'total_violations': len(issues), 'truncated': len(issues) > 100}}
-
-def transport_json(text):
-    try:
-        return strict_json(text)
-    except ContractError as exc:
-        raise response_error('TRANSPORT_ERROR', 'transport', 'Invalid transport JSON.', **exc.details) from exc

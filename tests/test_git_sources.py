@@ -81,7 +81,7 @@ class GitSourceTests(unittest.TestCase):
 
     def run_cli(self, backend, branches=('main', 'alias'), check=False, action=None, partial_branches=(), policy='compromise'):
         cli = self.base / ('fake-' + backend)
-        fixture = 'fake_xxx.py' if backend == 'xxx' else 'fake_cli.py'
+        fixture = 'fake_cli.py'
         cli.write_text('#!' + sys.executable + '\nimport runpy\nrunpy.run_path(' + repr(str(ROOT / 'tests/fixtures' / fixture)) + ', run_name="__main__")\n')
         cli.chmod(0o700)
         calls = self.base / ('calls-' + backend + '.jsonl')
@@ -92,10 +92,8 @@ class GitSourceTests(unittest.TestCase):
                   'execution': {'review_enabled': True, 'stage_timeout_seconds': 1 if action == 'wait' else 60}, 'continue_on_error': False}
         config_path = self.base / 'config.json'
         config_path.write_text(json.dumps(config))
-        env = {'PATH': os.environ['PATH'], 'HOME': str(self.home), 'AUDIT_TEST_CALL_LOG': str(calls),
-               'AUDIT_FAKE_CALLS': str(calls), 'AUDIT_FAKE_BACKEND': backend, 'AUDIT_FAKE_CAPTURE_SOURCES': '1'}
+        env = {'PATH': os.environ['PATH'], 'HOME': str(self.home), 'AUDIT_TEST_CALL_LOG': str(calls)}
         env['AUDIT_TEST_PARTIAL_BRANCHES'] = json.dumps(partial_branches)
-        if backend == 'opencode': env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23'
         if action: env['AUDIT_TEST_ACTION'] = json.dumps({'stage': 'study', 'kind': action, 'seconds': 3})
         command = [sys.executable, '-B', str(ROOT / 'explain.py'), '--config', str(config_path)]
         if check: command.append('--check')
@@ -105,39 +103,39 @@ class GitSourceTests(unittest.TestCase):
         records = [json.loads(line) for line in calls.read_text().splitlines()]
         return result, manifest, records
 
-    def test_all_backends_analyze_original_repository_sequentially(self):
+    def test_codex_analyze_original_repository_sequentially(self):
         self.topic()
         original = self.git('rev-parse', 'HEAD')
-        for backend in ('codex', 'xxx', 'opencode'):
-            with self.subTest(backend=backend):
-                result, manifest, calls = self.run_cli(backend, ('topic', 'main', 'alias'))
-                self.assertEqual(result.returncode, 0, result.stderr)
-                observed = [c for c in calls if 'source_files' in c]
-                self.assertEqual([c['context']['branch'] for c in observed],
-                                 ['topic'] * 2 + ['main'] * 2 + ['alias'] * 2)
-                for call in observed:
-                    self.assertEqual(Path(call['cwd']), self.path)
-                    content = 'TOPIC_SENTINEL\n' if call['context']['branch'] == 'topic' else 'HEAD_SENTINEL\n'
-                    self.assertEqual(call['source_files']['app.py'], content)
-                    self.assertFalse(any('.git' in p.split('/') for p in call['source_files']))
-                    self.assertNotIn('source_snapshot', call['context'])
-                for item in manifest['branches']:
-                    evidence = item['study']['program_checks']['evidence'][0]
-                    self.assertEqual(evidence['source_identity'],
-                        {'mode': 'git', 'branch': item['branch'], 'commit': manifest['pins'][item['branch']]})
-                    content = b'TOPIC_SENTINEL\n' if item['branch'] == 'topic' else b'HEAD_SENTINEL\n'
-                    self.assertEqual(evidence['file_sha256'], hashlib.sha256(content).hexdigest())
-                    inventory_path = Path(manifest['final_report']).parent / item['directory'] / 'source.inventory.json'
-                    self.assertTrue(inventory_path.is_file())
-                    self.assertNotIn(self.path, inventory_path.parents)
-                self.assertEqual(manifest['comparison']['completion_status'], 'COMPLETE')
-                bundle = json.loads((Path(manifest['final_report']).parent / 'comparison/inputs.json').read_text())
-                self.assertEqual(bundle['git_deltas']['main']['changes'][0]['path'], 'app.py')
-                self.assertTrue(manifest['restoration']['restored'])
-                self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
-                self.assertEqual(self.git('rev-parse', 'HEAD'), original)
-                self.assertEqual(self.git('status', '--porcelain'), '')
-                self.assertFalse({'source_snapshot', 'snapshot_plans', 'working_tree', 'temporary_sources_removed'} & manifest.keys())
+        backend = 'codex'
+        with self.subTest(backend=backend):
+            result, manifest, calls = self.run_cli(backend, ('topic', 'main', 'alias'))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            observed = [c for c in calls if 'source_files' in c]
+            self.assertEqual([c['context']['branch'] for c in observed],
+                             ['topic'] * 2 + ['main'] * 2 + ['alias'] * 2)
+            for call in observed:
+                self.assertEqual(Path(call['cwd']), self.path)
+                content = 'TOPIC_SENTINEL\n' if call['context']['branch'] == 'topic' else 'HEAD_SENTINEL\n'
+                self.assertEqual(call['source_files']['app.py'], content)
+                self.assertFalse(any('.git' in p.split('/') for p in call['source_files']))
+                self.assertNotIn('source_snapshot', call['context'])
+            for item in manifest['branches']:
+                evidence = item['study']['program_checks']['evidence'][0]
+                self.assertEqual(evidence['source_identity'],
+                    {'mode': 'git', 'branch': item['branch'], 'commit': manifest['pins'][item['branch']]})
+                content = b'TOPIC_SENTINEL\n' if item['branch'] == 'topic' else b'HEAD_SENTINEL\n'
+                self.assertEqual(evidence['file_sha256'], hashlib.sha256(content).hexdigest())
+                inventory_path = Path(manifest['final_report']).parent / item['directory'] / 'source.inventory.json'
+                self.assertTrue(inventory_path.is_file())
+                self.assertNotIn(self.path, inventory_path.parents)
+            self.assertEqual(manifest['comparison']['completion_status'], 'COMPLETE')
+            bundle = json.loads((Path(manifest['final_report']).parent / 'comparison/inputs.json').read_text())
+            self.assertEqual(bundle['git_deltas']['main']['changes'][0]['path'], 'app.py')
+            self.assertTrue(manifest['restoration']['restored'])
+            self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
+            self.assertEqual(self.git('rev-parse', 'HEAD'), original)
+            self.assertEqual(self.git('status', '--porcelain'), '')
+            self.assertFalse({'source_snapshot', 'snapshot_plans', 'working_tree', 'temporary_sources_removed'} & manifest.keys())
 
     def test_initial_dirty_and_untracked_states_are_rejected(self):
         for kind in ('tracked', 'staged', 'untracked'):

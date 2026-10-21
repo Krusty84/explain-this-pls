@@ -140,39 +140,34 @@ class RecursiveFixture:
 
 
 class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
-    def test_full_cli_reads_each_checkout_for_every_backend_and_restores(self):
+    def test_full_cli_reads_each_checkout_for_codex_and_restores(self):
         before = self.state()
-        for backend in ('codex', 'opencode', 'xxx'):
-            with self.subTest(backend=backend):
-                if backend == 'xxx':
-                    self.cli.write_text('#!' + sys.executable + '\nimport runpy\nrunpy.run_path(' +
-                        repr(str(ROOT / 'tests/fixtures/fake_xxx.py')) + ', run_name="__main__")\n')
-                    self.env.update(AUDIT_FAKE_CALLS=str(self.calls), AUDIT_FAKE_CAPTURE_SOURCES='1')
-                self.config['agent']['backend'] = backend
-                self.env['AUDIT_TEST_CLI_VERSION'] = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
-                self.env['OPENCODE_CONFIG_CONTENT'] = '{"provider":{"custom":{"options":{"baseURL":"https://example.invalid"}}}}'
-                result, manifest = self.execute()
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(manifest['status'], 'COMPLETE')
-                self.assertTrue(manifest['restoration']['restored'])
-                self.assert_original(before)
-                calls = [json.loads(s) for s in self.calls.read_text().splitlines()]
-                stages = [c for c in calls if 'context' in c]
-                self.assertEqual(len(stages), 5)
-                for call in stages[:-1]:
-                    self.assertEqual(call['observed'], self.expected[call['context']['branch']])
-                changes = stages[-1]['context']['git_deltas']['topic']
-                self.assertEqual({d['path'] for d in changes['changes']},
-                                 {'app.py', CHILD + '/app.py', LEAF + '/app.py'})
-                delta = changes['submodule_changes']
-                self.assertEqual({d['path'] for d in delta}, {CHILD, LEAF})
-                for item in delta:
-                    self.assertEqual(item['baseline_commit'], self.expected['master'][item['path']]['commit'])
-                    self.assertEqual(item['branch_commit'], self.expected['topic'][item['path']]['commit'])
-                run_dir = Path(manifest['final_report']).parent
-                for branch in manifest['branches']:
-                    assert_architecture(self, run_dir / branch['directory'], branch['study'],
-                                        branch['study_invocation'], 'Russian')
+        backend = 'codex'
+        with self.subTest(backend=backend):
+            self.config['agent']['backend'] = backend
+            self.env['AUDIT_TEST_CLI_VERSION'] = 'fixture-cli 1.0'
+            result, manifest = self.execute()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(manifest['status'], 'COMPLETE')
+            self.assertTrue(manifest['restoration']['restored'])
+            self.assert_original(before)
+            calls = [json.loads(s) for s in self.calls.read_text().splitlines()]
+            stages = [c for c in calls if 'context' in c]
+            self.assertEqual(len(stages), 5)
+            for call in stages[:-1]:
+                self.assertEqual(call['observed'], self.expected[call['context']['branch']])
+            changes = stages[-1]['context']['git_deltas']['topic']
+            self.assertEqual({d['path'] for d in changes['changes']},
+                             {'app.py', CHILD + '/app.py', LEAF + '/app.py'})
+            delta = changes['submodule_changes']
+            self.assertEqual({d['path'] for d in delta}, {CHILD, LEAF})
+            for item in delta:
+                self.assertEqual(item['baseline_commit'], self.expected['master'][item['path']]['commit'])
+                self.assertEqual(item['branch_commit'], self.expected['topic'][item['path']]['commit'])
+            run_dir = Path(manifest['final_report']).parent
+            for branch in manifest['branches']:
+                assert_architecture(self, run_dir / branch['directory'], branch['study'],
+                                    branch['study_invocation'], 'Russian')
 
     def test_published_submodule_citations_keep_paths_and_pinned_commits(self):
         self.config['output_language'] = 'English'

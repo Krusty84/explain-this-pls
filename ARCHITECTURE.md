@@ -3,8 +3,7 @@
 ## Overview
 
 `explain-this-pls` is a local Python orchestrator for legacy code analysis.
-It calls Codex, OpenCode V2, or XXX based on OpenCode 1.2.27 and saves Markdown
-and JSON reports. Model access uses installed CLIs.
+It calls Codex and saves Markdown and JSON reports. Model access uses the installed CLI.
 
 `folder` mode analyzes a directory. `git` mode analyzes selected local branches.
 Stages and branches run sequentially. `study` is the main stage.
@@ -32,7 +31,7 @@ src/
   runtime/                 Lifecycle, processes, limits, events, metrics
   analysis/                Sources, evidence, coverage, document revisions
   model/                   Context, agent invocation, response validation
-  backends/                CLI adapters and Codex model catalog
+  backends/                Codex CLI adapter and model catalog
   contracts/               Schemas and data consistency checks
   reports/                 Document assembly and publication
   tui/                     Textual interface and audit worker process
@@ -40,7 +39,7 @@ prompts/                   study, review, revise, compare templates
 schemas/                   Response and saved-artifact JSON Schema files
 tests/                     unittest; tests/fixtures/ contains fake CLIs
 scripts/                   Prompt measurement and log replay
-config.*.example.jsonc     Configuration examples for three backends
+config.codex.example.jsonc Codex configuration example
 ```
 
 ## Main Runtime Components
@@ -104,7 +103,7 @@ mismatches. Explicit `--output text` or `--output json` cannot combine with `--t
 
 1. [load_config](src/runtime/config.py) reads JSON/JSONC, validates fields,
    resolves paths relative to the config file, and merges `stage_agents` overrides
-   into `agent`. Stage configuration checks apply to active stages.
+   into `agent`. CLI checks apply to active stages. All backend values must be `codex`.
    The source and `reports_dir` must be disjoint.
 2. Preflight checks source state and CLI capabilities without model calls.
    Git mode pins branch commits, original HEAD/ref, and recursive submodules,
@@ -119,7 +118,7 @@ mismatches. Explicit `--output text` or `--output json` cannot combine with `--t
    [BindingRegistry](src/model/model_boundary.py) binds responses to the source
    snapshot and review target. The CLI receives the prompt through stdin.
    Study, review, and revise run in the source directory; compare runs in a
-   temporary directory. All three adapters receive the same
+   temporary directory. The Codex adapter receives the
    [source navigation index](#full-source-index) when source context is enabled.
 5. The adapter extracts a completed JSON response. [ResultValidator](src/model/validation.py)
    checks identity, schema, and data consistency. Study/review evidence IDs are
@@ -234,16 +233,15 @@ rows contain `symbol_count` and `symbols_ref`. Each file with symbols has one
 multiline `M-000001.json`-style map under the attempt's `source-maps/` directory;
 other files have a null reference. Each map contains complete declarations and
 its own value tables, without source bodies. The payload supplies one absolute
-`maps_root`. Agents read maps as needed through native tools with `offset`/`limit`
-pages, then verify claims against original source. Every stage can read every map,
+`maps_root`. Agents read maps as needed through native read-only tools,
+then verify claims against original source. Every stage can read every map,
 regardless of earlier agents' selections. A failed map read remains an analysis
 gap; it does not trigger a hidden full-index fallback.
 
 The attempt and maps exist before the final prompt is built. AttemptStore saves
 maps atomically and records their byte sizes and SHA-256 values. Verification
 before launch and publication rejects changed, missing or substituted maps. Codex
-retains its read-only sandbox; OpenCode and XXX allow the current attempt's map
-directory without opening neighboring reports or logs.
+retains its read-only sandbox.
 
 The run-local cache keeps maps and metadata, not source text, and validates pinned
 state before reuse. Each attempt saves `source-context.manifest.json` with processing
@@ -330,8 +328,8 @@ Local repair under `compromise` searches only the same pinned file, within three
 lines of each original boundary, and requires a unique match. It does not
 approximate internal whitespace, identifiers or values. Original responses remain
 unchanged; private attempt files retain corrections and full diffs. No extra model
-call runs. `structured_output_repair_attempts` is a legacy setting ignored by all
-backends; the orchestrator sends no format-repair request.
+call runs. `structured_output_repair_attempts` is a legacy setting ignored by
+Codex; the orchestrator sends no format-repair request.
 
 ### Document Contract Migration
 
@@ -485,9 +483,7 @@ source text.
 Neither the initial index nor reads of saved symbol maps add delivered or tool-read
 source lines. Source coverage comes from reads of the original source files.
 
-OpenCode V2 and XXX/OpenCode V1 observe completed native tools and supported numbered
-Read output. XXX keeps its separate session ownership and deletion checks. Codex
-uses completed items and exact shell command/result comparisons; shell source-line
+Codex uses completed items and exact shell command/result comparisons; shell source-line
 coordinates and model request counts are unavailable. Unknown output formats keep
 conservative partial metrics.
 
@@ -496,10 +492,8 @@ conservative partial metrics.
 | Backend                                      | Protocol and boundary                                                                                                                                              |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [Codex](src/backends/codex.py)               | `exec --ephemeral --sandbox read-only --output-schema --json`; final response comes from a separate file. Compare disables the shell tool.                         |
-| [OpenCode V2](src/backends/opencode_cli.py)  | `run --standalone --format json`; a temporary profile permits source reads and searches. Events confirm completion; session export verifies a missing final event. |
-| [XXX / OpenCode 1.2.27](src/backends/xxx.py) | One `run --format json`, mandatory export, and history verification including compaction. Confirmed owned sessions are deleted.                                    |
 
-CLIs use the user's existing configuration and authentication.
+The CLI uses the user's existing configuration and authentication.
 [preflight.py](src/backends/preflight.py) checks versions and required commands.
 [codex_models.py](src/backends/codex_models.py) provides the Codex catalog and
 explicit access checks outside the analysis pipeline.
@@ -539,8 +533,6 @@ Tests use temporary sources and fake CLIs. Main checks cover the
 [pipeline](tests/test_model_pipeline.py), [Git and submodules](tests/test_submodules.py),
 [bindings](tests/test_model_boundary.py), [publication](tests/test_publication.py),
 [response conversion](tests/test_conversion_integrity.py), and [TUI](tests/test_tui.py).
-Installed OpenCode and XXX smoke tests require `EXPLAIN_OPENCODE_SMOKE=1` and
-`EXPLAIN_XXX_COMPACTION_SMOKE=1`, respectively. The XXX test calls a real model.
 
 ### Replay Completed Tool Calls
 
@@ -549,7 +541,7 @@ attempts without starting a model:
 
 ```sh
 python scripts/replay_tool_observation.py /path/to/logs \
-  --attempt study.logs/attempt-001 --backend opencode \
+  --attempt study.logs/attempt-001 --backend codex \
   --output /path/to/replay
 ```
 
@@ -557,12 +549,12 @@ Repeat `--attempt` to select more attempts. The command prefers `tool-events.jso
 and falls back to `stdout.log`. `--output` is a file prefix: the example writes
 `/path/to/replay.json` and `/path/to/replay.md`. These files contain the possible stop
 time, call number, streak, metrics and observation limits. Optional `--context`
-accepts saved orchestration context for source ownership and prompt delivery.
+accepts saved orchestration context for source identity and prompt delivery.
 The JSON report uses the permanent format `tool-observer-replay`. Records with
 an unknown `format` are invalid; native CLI events have no format marker.
-Recorded monotonic times reproduce the live rule. Native wall-clock timestamps
-provide weaker evidence; logs without timestamps cannot establish the time
-threshold. Tests use small fixtures and need no external report directory.
+Recorded monotonic times reproduce the live rule. Codex `stdout.log` has no
+observation timestamps and cannot establish the time threshold. Tests use small
+fixtures and need no external report directory.
 
 ### Compare Source Context and Loop Protection
 

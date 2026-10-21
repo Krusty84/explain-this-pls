@@ -23,19 +23,11 @@ def call(number, result='same', *, tool='read', arguments=None, rows=None, compl
                          session, rows or [])
 
 
-def native(number, *, output=None, backend='opencode', truncated=False, path='/source/unit.py'):
-    # V2.0.23 captured transport shape; V1.2.27 upstream read.ts envelope.
-    if output is None:
-        output = (f'Read file {path}, lines 1-2\n1: abc\n2: xyz' if backend == 'opencode' else
-                  f'<path>{path}</path>\n<type>file</type>\n<content>1: abc\n2: xyz\n\n(End of file - total 2 lines)\n</content>')
-    arguments = {'path' if backend == 'opencode' else 'filePath': path, 'offset': 1, 'limit': 200}
-    metadata = {'metadata': {'truncated': truncated}} if backend == 'opencode' else {'truncated': truncated}
-    return {'type': 'tool_use', 'timestamp': number * 3000, 'sessionID': 'ses_unit',
-            'part': {'id': 'prt_' + str(number), 'messageID': 'msg_unit', 'sessionID': 'ses_unit',
-                     'type': 'tool', 'tool': 'read', 'callID': 'call_' + str(number),
-                     'state': {'status': 'completed', 'input': arguments,
-                               'output': output, 'metadata': metadata,
-                               'time': {'start': number * 3000, 'end': number * 3000 + 1}}}}
+def codex_event(number, *, output='abc\nxyz', truncated=False, command='cat /source/unit.py'):
+    return {'type': 'item.completed', 'item': {
+        'id': 'call_' + str(number), 'type': 'command_execution', 'command': command,
+        'aggregated_output': output, 'exit_code': 0, 'status': 'completed',
+        'truncated': truncated}}
 
 
 CONTEXT = {'source_mode': 'folder', 'source_directory': '/source', 'source_fingerprint': 'snapshot',
@@ -45,7 +37,7 @@ CONTEXT = {'source_mode': 'folder', 'source_directory': '/source', 'source_finge
 class ToolObserverTests(unittest.TestCase):
     def observer(self, **kwargs):
         clock = Clock()
-        return ToolObserver('opencode', clock=clock, **kwargs), clock
+        return ToolObserver('codex', clock=clock, **kwargs), clock
 
     def test_both_thresholds_and_first_repeat_completion_start(self):
         observer, clock = self.observer()
@@ -153,86 +145,41 @@ class ToolObserverTests(unittest.TestCase):
 
     def test_chunked_json_and_unicode(self):
         observer, _ = self.observer(context=CONTEXT)
-        event = native(0)
-        event['part']['state']['output'] = event['part']['state']['output'].replace('abc', 'λ')
-        raw = (json.dumps(event, ensure_ascii=False) + '\n').encode()
+        raw = (json.dumps(codex_event(0, output='λ\nxyz'), ensure_ascii=False) + '\n').encode()
         for byte in raw:
             observer.feed(bytes([byte]))
         observer.finish()
         self.assertEqual(observer.snapshot()['calls'], 1)
-        self.assertEqual(observer.snapshot()['unique_lines'], 2)
+        self.assertEqual(observer.snapshot()['line_coverage'], 'unavailable')
+        self.assertIsNone(observer.snapshot()['unique_lines'])
 
     def test_stop_inside_single_large_chunk(self):
         clock = Clock()
         def advance(record): clock.now += 3
-        observer = ToolObserver('opencode', clock=clock, context=CONTEXT, event_sink=advance)
-        observer.feed(''.join(json.dumps(native(n)) + '\n' for n in range(80)))
+        observer = ToolObserver('codex', clock=clock, context=CONTEXT, event_sink=advance)
+        observer.feed(''.join(json.dumps(codex_event(n)) + '\n' for n in range(80)))
         self.assertTrue(observer.triggered)
         self.assertEqual(observer.snapshot()['calls'], 51)
 
-    def test_native_versions_source_coordinates_and_status(self):
-        for backend in ('opencode', 'xxx'):
-            with self.subTest(backend=backend):
-                observer = ToolObserver(backend, context=CONTEXT)
-                observer.event(native(1, backend=backend))
-                observer.event(native(2, backend=backend))
-                observer.event(native(3, truncated=True, backend=backend))
-                metrics = observer.snapshot()
-                self.assertEqual(metrics['unique_lines'], 2)
-                self.assertEqual(metrics['repeated_lines'], 4)
-                self.assertEqual(metrics['fully_repeated_reads'], 1)
-                self.assertEqual(metrics['consecutive_confirmed_repeats'], 0)
-                self.assertEqual(metrics['incomplete_results'], 1)
-
     def test_external_symbol_map_reads_keep_repeat_guard_without_source_coverage(self):
         path = '/reports/study/attempt-001/source-maps/M-000001.json'
-        for backend in ('codex', 'opencode', 'xxx'):
-            with self.subTest(backend=backend):
-                clock = Clock()
-                observer = ToolObserver(backend, context=CONTEXT, clock=clock)
-                if backend == 'codex':
-                    observer.event({'type': 'item.completed', 'item': {
-                        'id': 'source', 'type': 'command_execution', 'command': 'cat /source/unit.py',
-                        'aggregated_output': 'abc\nxyz', 'exit_code': 0, 'status': 'completed'}})
-                else:
-                    observer.event(native(0, backend=backend))
-                before = observer.snapshot()
-                source_lines = dict(observer.tool_lines)
-                delivered = dict(observer.delivered)
-                for number in range(1, 52):
-                    clock.now = number * 3
-                    if backend == 'codex':
-                        observer.event({'type': 'item.completed', 'item': {
-                            'id': 'map-' + str(number), 'type': 'command_execution',
-                            'command': 'cat ' + path, 'aggregated_output': '{"symbols": []}',
-                            'exit_code': 0, 'status': 'completed'}})
-                    else:
-                        event = native(number, backend=backend, path=path)
-                        event['part']['state']['output'] = event['part']['state']['output'].replace(
-                            'abc', '{"symbols": [').replace('xyz', ']}')
-                        observer.event(event)
-                metrics = observer.snapshot()
-                self.assertEqual(metrics['calls'], 52)
-                self.assertEqual(metrics['successful_results'], 52)
-                self.assertEqual(metrics['incomplete_results'], 0)
-                self.assertEqual(metrics['exact_repeats'], 50)
-                self.assertTrue(observer.triggered)
-                self.assertEqual(metrics['unique_lines'], before['unique_lines'])
-                self.assertEqual(metrics['delivery']['unique_lines'], before['delivery']['unique_lines'])
-                self.assertEqual(observer.tool_lines, source_lines)
-                self.assertEqual(observer.delivered, delivered)
-
-    def test_changed_native_semantic_metadata_is_not_exact_repeat(self):
-        observer, _ = self.observer()
-        event = native(0)
-        event['part']['tool'] = 'grep'
-        observer.event(event)
-        changed = native(1)
-        changed['part']['tool'] = 'grep'
-        changed['part']['state']['metadata']['matched_files'] = 2
-        observer.event(changed)
-        self.assertEqual(observer.snapshot()['exact_repeats'], 0)
-        self.assertEqual(observer.snapshot()['consecutive_confirmed_repeats'], 0)
+        clock = Clock()
+        observer = ToolObserver('codex', context=CONTEXT, clock=clock)
+        observer.event(codex_event(0))
+        before = observer.snapshot()
+        for number in range(1, 52):
+            clock.now = number * 3
+            observer.event(codex_event(number, command='cat ' + path, output='{"symbols": []}'))
+        metrics = observer.snapshot()
+        self.assertEqual(metrics['calls'], 52)
+        self.assertEqual(metrics['successful_results'], 52)
+        self.assertEqual(metrics['incomplete_results'], 0)
+        self.assertEqual(metrics['exact_repeats'], 50)
+        self.assertTrue(observer.triggered)
+        self.assertEqual(metrics['unique_lines'], before['unique_lines'])
+        self.assertEqual(metrics['delivery']['unique_lines'], before['delivery']['unique_lines'])
+        self.assertEqual(observer.tool_lines, {})
+        self.assertEqual(observer.delivered, {})
 
     def test_conflicting_source_stays_ambiguous(self):
         observer, _ = self.observer()
@@ -240,119 +187,6 @@ class ToolObserverTests(unittest.TestCase):
             observer.observe(call(n, rows=[('s', 'p', 1, content)]))
             self.assertEqual(observer.snapshot()['consecutive_confirmed_repeats'], 0)
         self.assertEqual(observer.snapshot()['conflicting_lines'], 3)
-
-    def test_native_long_line_truncation_never_confirms_repeat(self):
-        for backend in ('opencode', 'xxx'):
-            observer = ToolObserver(backend, context=CONTEXT)
-            for n in range(2):
-                event = native(n, backend=backend)
-                event['part']['state']['output'] = event['part']['state']['output'].replace(
-                    'abc', 'abc... (line truncated to 2000 chars)')
-                observer.event(event)
-            self.assertEqual(observer.snapshot()['incomplete_results'], 2)
-            self.assertEqual(observer.snapshot()['consecutive_confirmed_repeats'], 0)
-
-    def test_truncated_read_without_source_ownership_cannot_stop(self):
-        for backend in ('opencode', 'xxx'):
-            for context in (None, CONTEXT):
-                with self.subTest(backend=backend, context=context):
-                    clock = Clock()
-                    observer = ToolObserver(backend, context=context, clock=clock)
-                    for n in range(51):
-                        clock.now = 3 * n
-                        event = native(n, backend=backend, path='/outside/unit.py')
-                        event['part']['state']['output'] = event['part']['state']['output'].replace(
-                            'abc', 'abc... (line truncated to 2000 chars)')
-                        observer.event(event)
-                    self.assertFalse(observer.triggered)
-                    self.assertEqual(observer.snapshot()['incomplete_results'], 51)
-                    self.assertEqual(observer.snapshot()['consecutive_confirmed_repeats'], 0)
-
-    def test_native_output_path_mismatch_resets(self):
-        observer, _ = self.observer(context=CONTEXT)
-        event = native(0)
-        event['part']['state']['output'] = event['part']['state']['output'].replace('/source/unit.py', '/other/unit.py')
-        observer.event(event)
-        self.assertEqual(observer.snapshot()['incomplete_results'], 1)
-
-    def test_native_error_and_running_events(self):
-        observer, _ = self.observer(context=CONTEXT)
-        event = native(0)
-        event['part']['state']['status'] = 'running'
-        observer.event(event)
-        event['part']['state'] = {'status': 'error', 'input': {}, 'error': 'failed'}
-        observer.event(event)
-        self.assertEqual(observer.snapshot()['calls'], 1)
-        self.assertEqual(observer.snapshot()['error_results'], 1)
-
-    def test_native_malformed_state_resets_but_running_does_not(self):
-        for state in (None, 'bad', {}, {'status': 'new-status'}):
-            with self.subTest(state=state):
-                observer, _ = self.observer()
-                observer.observe(call(0))
-                observer.observe(call(1))
-                event = native(2)
-                event['part']['state'] = {'status': 'running'}
-                observer.event(event)
-                self.assertEqual(observer.snapshot()['consecutive_confirmed_repeats'], 1)
-                event['part']['state'] = state
-                observer.event(event)
-                self.assertEqual(observer.snapshot()['consecutive_confirmed_repeats'], 0)
-                self.assertEqual(observer.snapshot()['invalid_events'], 1)
-
-    def test_native_changed_completed_event_does_not_reset(self):
-        observer, _ = self.observer(context=CONTEXT)
-        observer.event(native(0))
-        observer.event(native(1))
-        event = native(1)
-        event['part']['state'] = None
-        observer.event(event)
-        self.assertEqual(observer.snapshot()['consecutive_confirmed_repeats'], 1)
-        self.assertEqual(observer.snapshot()['calls'], 2)
-        self.assertEqual(observer.snapshot()['invalid_events'], 0)
-
-    def test_native_invalid_tool_name_is_incomplete(self):
-        observer, _ = self.observer(context=CONTEXT)
-        event = native(1)
-        event['part']['tool'] = ['read']
-        observer.event(event)
-        self.assertEqual(observer.snapshot()['calls_by_tool'], {'unknown': 1})
-        self.assertEqual(observer.snapshot()['incomplete_results'], 1)
-
-    def test_native_unfinished_tool_and_new_request_do_not_claim_complete(self):
-        observer, _ = self.observer(context=CONTEXT)
-        observer.event(native(0))
-        observer.event({'type': 'step_finish', 'part': {'reason': 'stop'}})
-        event = native(1)
-        event['part']['state']['status'] = 'running'
-        observer.event(event)
-        metrics = observer.finish()
-        self.assertEqual(metrics['observation']['coverage'], 'partial')
-        self.assertIn('Tool calls without completed results.', metrics['observation']['limitations'])
-        observer, _ = self.observer(context=CONTEXT)
-        observer.event({'type': 'step_finish', 'part': {'reason': 'stop'}})
-        observer.event({'type': 'step_start', 'sessionID': 's', 'part': {'id': 'request', 'messageID': 'm'}})
-        self.assertFalse(observer.terminal)
-
-    def test_native_reads_do_not_assume_requested_offset_limit(self):
-        observer, _ = self.observer(context=CONTEXT)
-        event = native(1)
-        event['part']['state']['input'].update(offset=900, limit=800)
-        observer.event(event)
-        self.assertEqual(observer.snapshot()['unique_lines'], 2)
-        self.assertTrue(all(key[-1] in (1, 2) for key in observer.tool_lines))
-
-    def test_same_submodule_path_distinct_and_excluded_unavailable(self):
-        context = {'repository': '/source', 'branch': 'unit', 'source_commit': 'a',
-                   'submodules': [{'path': 'first', 'expected_commit': 'b'}, {'path': 'second', 'expected_commit': 'c'}],
-                   '_inventory': {'entries': [{'type': 'file', 'path': 'first/unit.py'},
-                                              {'type': 'file', 'path': 'second/unit.py'}]}}
-        observer, _ = self.observer(context=context)
-        observer.event(native(1, path='/source/first/unit.py'))
-        observer.event(native(2, path='/source/second/unit.py'))
-        observer.event(native(3, path='/source/excluded.py'))
-        self.assertEqual(observer.snapshot()['unique_lines'], 4)
-        self.assertEqual(observer.snapshot()['line_coverage'], 'partial')
 
     def test_codex_only_completed_items_exact_no_coordinates(self):
         observer = ToolObserver('codex', context=CONTEXT)
@@ -398,11 +232,11 @@ class ToolObserverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'tool-events.jsonl'
             path.write_text('\n'.join(json.dumps(r) for r in saved), encoding='utf-8')
-            result = replay(path, 'opencode')
+            result = replay(path, 'codex')
             self.assertEqual(result['possible_stop'], observer.diagnostic)
             self.assertEqual(result['timing'], 'monotonic-recorded')
             output = Path(folder) / 'report'
-            self.assertEqual(main([folder, '--attempt', '.', '--backend', 'opencode', '--output', str(output)]), 0)
+            self.assertEqual(main([folder, '--attempt', '.', '--backend', 'codex', '--output', str(output)]), 0)
             self.assertTrue(output.with_suffix('.json').is_file())
             self.assertEqual(json.loads(output.with_suffix('.json').read_text())['format'], 'tool-observer-replay')
             self.assertIn('No live model calls', output.with_suffix('.md').read_text())
@@ -422,9 +256,9 @@ class ToolObserverTests(unittest.TestCase):
         for marker in ('unsupported-format', None):
             with self.subTest(format=marker), tempfile.TemporaryDirectory() as folder:
                 path = Path(folder) / 'events.jsonl'
-                path.write_text(json.dumps(native(0) | {'format': marker}), encoding='utf-8')
+                path.write_text(json.dumps(codex_event(0) | {'format': marker}), encoding='utf-8')
                 with patch.object(ToolObserver, 'event') as native_event:
-                    result = replay(path, 'opencode')
+                    result = replay(path, 'codex')
                 native_event.assert_not_called()
                 self.assertEqual(result['metrics']['invalid_events'], 1)
                 self.assertEqual(result['metrics']['calls'], 0)
@@ -451,30 +285,28 @@ class ToolObserverTests(unittest.TestCase):
         saved = []
         observer, clock = self.observer(context=CONTEXT, event_sink=saved.append)
         observer.seed_prompt([{'source_id': 'source-001', 'path': 'unit.py', 'start_line': 1, 'text': 'abc\nxyz'}])
-        observer.event({'type': 'step_start', 'sessionID': 's', 'part': {'id': 'request', 'messageID': 'm'}})
-        observer.event(native(0))
-        observer.event(native(1))
-        observer.event(native(1))
+        observer._request(('s', 'm', 'request'))
+        observer.event(codex_event(0))
+        observer.event(codex_event(1))
+        observer.event(codex_event(1))
         observer.feed('bad json\n')
-        observer.event({'type': 'step_finish', 'part': {'reason': 'stop'}})
+        observer.event({'type': 'turn.completed'})
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'events.jsonl'
             path.write_text('\n'.join(json.dumps(r) for r in saved))
-            result = replay(path, 'opencode')
+            result = replay(path, 'codex')
             self.assertEqual(result['metrics'], observer.finish())
 
-    def test_replay_preserves_unfinished_native_call_after_terminal_event(self):
-        saved = []
-        observer = ToolObserver('opencode', clock=lambda: 0.0, event_sink=saved.append)
-        event = native(0)
-        event['part']['state']['status'] = 'running'
-        observer.event(event)
-        observer.event({'type': 'step_finish', 'part': {'reason': 'stop'}})
+    def test_replay_preserves_pending_call_after_terminal_event(self):
+        records = [{'format': 'tool-observer', 'observed_at_seconds': 0, **record} for record in (
+            {'kind': 'pending', 'session_id': 'session', 'call_id': 'unfinished'},
+            {'kind': 'terminal'})]
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'events.jsonl'
-            path.write_text('\n'.join(json.dumps(r) for r in saved))
-            result = replay(path, 'opencode')
-            self.assertEqual(result['metrics'], observer.finish())
+            path.write_text('\n'.join(json.dumps(record) for record in records))
+            result = replay(path, 'codex')
+            self.assertEqual(result['timing'], 'monotonic-recorded')
+            self.assertEqual(result['metrics']['observation']['coverage'], 'unavailable')
             self.assertIn('Tool calls without completed results.', result['metrics']['observation']['limitations'])
 
     def test_replay_nonfinite_and_incomplete_normalized_records(self):
@@ -483,35 +315,11 @@ class ToolObserverTests(unittest.TestCase):
             path.write_text('\n'.join(json.dumps({'format': 'tool-observer', 'observed_at_seconds': t,
                                                    'call': {'unexpected': True}})
                                       for t in (float('inf'), float('nan'), 4)))
-            result = replay(path, 'opencode')
+            result = replay(path, 'codex')
             self.assertEqual(result['metrics']['invalid_events'], 3)
             self.assertIsNone(result['possible_stop'])
 
-    def test_replay_missing_native_call_time_resets(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / 'stdout.log'
-            events = [native(n) for n in range(51)]
-            del events[-2]['timestamp']
-            path.write_text('\n'.join(json.dumps(e) for e in events))
-            result = replay(path, 'opencode', context=CONTEXT)
-            self.assertIsNone(result['possible_stop'])
-            self.assertEqual(result['timing'], 'native-wall-clock-partial')
-            self.assertEqual(result['metrics']['consecutive_confirmed_repeats'], 1)
 
-    def test_replay_untimed_duplicate_or_pending_does_not_reset(self):
-        for state in ('completed', 'running', 'pending'):
-            with self.subTest(state=state), tempfile.TemporaryDirectory() as folder:
-                path = Path(folder) / 'stdout.log'
-                events = [native(n) for n in range(51)]
-                extra = native(49 if state == 'completed' else 999)
-                extra['part']['state']['status'] = state
-                del extra['timestamp']
-                events.insert(50, extra)
-                path.write_text('\n'.join(json.dumps(e) for e in events))
-                result = replay(path, 'opencode', context=CONTEXT)
-                self.assertEqual(result['possible_stop']['call'], 51)
-                self.assertEqual(result['possible_stop']['consecutive_confirmed_repeats'], 50)
-                self.assertEqual(result['metrics']['invalid_events'], 0)
 
 
 if __name__ == '__main__':

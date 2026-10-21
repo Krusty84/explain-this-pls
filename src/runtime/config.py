@@ -18,7 +18,7 @@ from src.runtime.artifacts import inside, overlap
 ROOT = Path(__file__).resolve().parents[2]
 STAGES = ('study', 'review', 'compare')
 SOURCE_STAGES = ('study', 'review')
-BACKENDS = {'codex': 'codex', 'opencode': 'opencode', 'xxx': 'xxx'}
+BACKENDS = {'codex': 'codex'}
 
 def resolve_agent(agent: dict, path: Path) -> dict:
     agent = dict(agent)
@@ -30,18 +30,6 @@ def resolve_agent(agent: dict, path: Path) -> dict:
     effort = agent.get('reasoning_effort')
     if effort is not None and (not isinstance(effort, str) or not effort.strip()):
         raise AuditError('agent.reasoning_effort must be a nonempty string or null.', code='INVALID_CONFIG')
-    if backend == 'opencode' and effort is not None:
-        if '#' in effort:
-            raise AuditError('OpenCode reasoning_effort cannot contain "#".', code='INVALID_CONFIG')
-        model = agent.get('model')
-        if not isinstance(model, str):
-            raise AuditError('OpenCode reasoning_effort requires agent.model in provider/model form.', code='INVALID_CONFIG')
-        selector, suffix, variant = model.partition('#')
-        provider, slash, name = selector.partition('/')
-        if not slash or not provider.strip() or not name.strip():
-            raise AuditError('OpenCode reasoning_effort requires agent.model in provider/model form.', code='INVALID_CONFIG')
-        if suffix and variant != effort:
-            raise AuditError('OpenCode model variant conflicts with agent.reasoning_effort.', code='INVALID_CONFIG')
     executable_name = agent.get('executable') or BACKENDS[backend]
     if not isinstance(executable_name, str):
         raise AuditError('agent.executable must be a string.')
@@ -162,11 +150,17 @@ def load_config(path: Path, *, text: str | None = None) -> dict:
     for section in ('stage_agents', 'prompts'):
         if 'catalog' in value[section]:
             raise AuditError(f'Remove {section}.catalog: the Catalog stage has been removed.', code='INVALID_CONFIG')
+    backend = value['agent'].get('backend')
+    if backend not in BACKENDS:
+        raise AuditError(f'Unsupported backend: {backend}')
     for stage in value['stage_agents']:
         if stage not in STAGES:
             raise AuditError(f'Unknown stage override: {stage}')
-        if stage in stages and type(value['stage_agents'][stage]) is not dict:
+        if type(value['stage_agents'][stage]) is not dict:
             raise AuditError(f'stage_agents.{stage} must be a JSON object.')
+        backend = value['stage_agents'][stage].get('backend', value['agent']['backend'])
+        if backend not in BACKENDS:
+            raise AuditError(f'Unsupported backend: {backend}')
     value['_agents'] = {}
     for stage in ('study', *(s for s in stages if s != 'study')):
         agent = dict(value['agent'])

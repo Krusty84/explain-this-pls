@@ -29,10 +29,8 @@ def serialize_model_input(value):
     return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
 
 
-def build_model_prompt(template, context_json, schema_json, backend, *, source_index=False):
-    instruction = ('Return exactly one JSON object matching the supplied schema as your final answer; no fences or surrounding prose.'
-        if backend in ('xxx', 'opencode') else
-        'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.')
+def build_model_prompt(template, context_json, schema_json, *, source_index=False):
+    instruction = 'Return the supplied schema object through the backend structured-output mechanism; no fences or surrounding prose.'
     index_instruction = ('\n\n# Source index reading instruction\n' + SOURCE_INDEX_INSTRUCTION
                          if source_index else '')
     return (template + '\n\n# Backend output instruction\n' + instruction + index_instruction +

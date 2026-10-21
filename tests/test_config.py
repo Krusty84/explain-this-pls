@@ -55,35 +55,49 @@ class ConfigTests(FolderFixture):
     def test_removed_settings_are_unknown_before_backend_lookup(self):
         original = copy.deepcopy(self.value)
         for mode in ('git', 'folder'):
-            for backend in ('codex', 'opencode', 'xxx'):
-                for key, value in (('multi_session', True), ('max_source_bytes_per_session', 262144)):
-                    self.value = copy.deepcopy(original)
-                    self.value.update(mode=mode, git_mode={'repository': './source',
-                        'branches': ['main'], 'baseline_branch': 'main'})
-                    self.value['agent']['backend'] = backend
-                    self.value[key] = value
-                    with self.subTest(mode=mode, backend=backend, key=key), patch('src.runtime.process.process') as process:
-                        with self.assertRaisesRegex(AuditError, 'Unknown configuration keys:.*' + key):
-                            self.config()
-                        process.assert_not_called()
+            for key, value in (('multi_session', True), ('max_source_bytes_per_session', 262144)):
+                self.value = copy.deepcopy(original)
+                self.value.update(mode=mode, git_mode={'repository': './source',
+                    'branches': ['main'], 'baseline_branch': 'main'})
+                self.value[key] = value
+                with self.subTest(mode=mode, key=key), patch('src.runtime.process.process') as process:
+                    with self.assertRaisesRegex(AuditError, 'Unknown configuration keys:.*' + key):
+                        self.config()
+                    process.assert_not_called()
 
     def test_unsupported_backend_is_rejected_before_cli_in_both_modes(self):
         original = copy.deepcopy(self.value)
         for mode in ('git', 'folder'):
-            targets = ('agent', 'study', 'review') + (('compare',) if mode == 'git' else ())
-            for target in targets:
-                self.value = copy.deepcopy(original)
-                self.value['mode'] = mode
-                self.value['git_mode'] = {'repository': './source', 'branches': ['main', 'feature'],
-                                          'baseline_branch': 'main'}
-                if target == 'agent':
-                    self.value['agent']['backend'] = 'unsupported-backend'
-                else:
-                    self.value['stage_agents'] = {target: {'backend': 'unsupported-backend'}}
-                with self.subTest(mode=mode, target=target), patch('src.runtime.process.process') as process:
-                    with self.assertRaisesRegex(AuditError, '^Unsupported backend: unsupported-backend$'):
-                        self.config()
-                    process.assert_not_called()
+            for review_enabled in (False, True):
+                for backend in ('opencode', 'xxx', 'unsupported-backend'):
+                    for target in ('agent', 'study', 'review', 'compare'):
+                        self.value = copy.deepcopy(original)
+                        self.value.update(mode=mode, execution={'review_enabled': review_enabled},
+                            git_mode={'repository': './source', 'branches': ['main', 'feature'],
+                                      'baseline_branch': 'main'})
+                        if target == 'agent':
+                            self.value['agent']['backend'] = backend
+                            self.value['stage_agents'] = {'study': {'backend': 'codex'}}
+                        else:
+                            self.value['stage_agents'] = {target: {'backend': backend}}
+                        with self.subTest(mode=mode, review_enabled=review_enabled, backend=backend, target=target), \
+                                patch('src.runtime.config.shutil.which') as which, \
+                                patch('src.runtime.process.process') as process:
+                            with self.assertRaisesRegex(AuditError, '^Unsupported backend: ' + backend + '$'):
+                                self.config()
+                            which.assert_not_called()
+                            process.assert_not_called()
+
+    def test_removed_execution_setting_is_unknown_before_any_cli(self):
+        for value in (0, 2, False):
+            self.value.setdefault('execution', {})['opencode_format_retries'] = value
+            with self.subTest(value=value), patch('src.runtime.config.shutil.which') as which, \
+                    patch('src.runtime.process.process') as process:
+                with self.assertRaisesRegex(AuditError, 'execution must be an object containing only documented settings.') as caught:
+                    self.config()
+                self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
+                which.assert_not_called()
+                process.assert_not_called()
 
     def test_source_context_and_read_guard_defaults_and_disable(self):
         config = self.config()
@@ -159,55 +173,53 @@ class ConfigTests(FolderFixture):
         self.assertTrue(config['_prompt_paths']['revise'].endswith('revise.md'))
 
     def test_reasoning_effort_is_optional_and_preserves_native_values(self):
-        for backend in ('codex', 'opencode', 'xxx'):
-            self.value['agent'].update(backend=backend, model='provider/model')
-            self.value['agent'].pop('reasoning_effort', None)
-            with self.subTest(backend=backend, omitted=True):
-                self.assertNotIn('reasoning_effort', self.config()['_agents']['study'])
-            for effort in (None, 'high', 'native-level', ' native-level '):
-                self.value['agent']['reasoning_effort'] = effort
-                with self.subTest(backend=backend, effort=effort):
-                    self.assertEqual(self.config()['_agents']['study']['reasoning_effort'], effort)
-            if backend != 'opencode':
-                self.value['agent'].pop('model')
-                self.assertEqual(self.config()['_agents']['study']['reasoning_effort'], ' native-level ')
+        self.value['agent']['model'] = 'chosen-model'
+        self.value['agent'].pop('reasoning_effort', None)
+        self.assertNotIn('reasoning_effort', self.config()['_agents']['study'])
+        for effort in (None, 'high', 'native-level', ' native-level '):
+            self.value['agent']['reasoning_effort'] = effort
+            with self.subTest(effort=effort):
+                self.assertEqual(self.config()['_agents']['study']['reasoning_effort'], effort)
+        self.value['agent'].pop('model')
+        self.assertEqual(self.config()['_agents']['study']['reasoning_effort'], ' native-level ')
 
-    def test_reasoning_effort_inherits_and_overrides_for_each_active_stage(self):
+    def test_agent_settings_inherit_and_override_for_each_active_stage(self):
         base = copy.deepcopy(self.value)
-        for backend in ('codex', 'opencode', 'xxx'):
-            for target in ('study', 'review', 'compare'):
-                for effort in ('custom-level', None):
-                    self.value = copy.deepcopy(base)
-                    self.value.update(mode='git', git_mode={'repository': './source',
-                        'branches': ['main', 'feature'], 'baseline_branch': 'main'},
-                        stage_agents={target: {'reasoning_effort': effort}})
-                    self.value['agent'].update(backend=backend, model='provider/model', reasoning_effort='high')
-                    with self.subTest(backend=backend, target=target, effort=effort):
-                        agents = self.config()['_agents']
-                        self.assertEqual(set(agents), {'study', 'review', 'compare'})
-                        for stage, agent in agents.items():
-                            self.assertEqual(agent['reasoning_effort'], effort if stage == target else 'high')
+        for target in ('study', 'review', 'compare'):
+            for effort in ('custom-level', None):
+                self.value = copy.deepcopy(base)
+                override = {'executable': str(self.base / 'chosen-cli'), 'reasoning_effort': effort,
+                    'model': 'chosen-model' if effort else None, 'expected_version': 'chosen-version' if effort else None}
+                self.value.update(mode='git', git_mode={'repository': './source',
+                    'branches': ['main', 'feature'], 'baseline_branch': 'main'},
+                    stage_agents={target: override})
+                self.value['agent'].update(executable=str(self.base / 'shared-cli'), model='shared-model',
+                    reasoning_effort='high', expected_version='shared-version')
+                with self.subTest(target=target, effort=effort), \
+                        patch('src.runtime.config.shutil.which', side_effect=lambda executable: executable):
+                    agents = self.config()['_agents']
+                    self.assertEqual(set(agents), {'study', 'review', 'compare'})
+                    for stage, agent in agents.items():
+                        self.assertEqual(agent, self.value['agent'] | (override if stage == target else {}))
 
     def test_invalid_reasoning_effort_fails_before_any_cli(self):
         base = copy.deepcopy(self.value)
-        for backend in ('codex', 'opencode', 'xxx'):
-            for target in ('agent', 'study', 'review', 'compare'):
-                for effort in ('', ' \t ', False, 1, 1.5, [], {}):
-                    self.value = copy.deepcopy(base)
-                    self.value.update(mode='git', git_mode={'repository': './source',
-                        'branches': ['main', 'feature'], 'baseline_branch': 'main'})
-                    self.value['agent'].update(backend=backend, model='provider/model')
-                    if target == 'agent':
-                        self.value['agent']['reasoning_effort'] = effort
-                    else:
-                        self.value['stage_agents'] = {target: {'reasoning_effort': effort}}
-                    with self.subTest(backend=backend, target=target, effort=effort), \
-                            patch('src.runtime.process.process') as process:
-                        with self.assertRaises(AuditError) as caught:
-                            self.config()
-                        self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
-                        self.assertIn('reasoning_effort', str(caught.exception))
-                        process.assert_not_called()
+        for target in ('agent', 'study', 'review', 'compare'):
+            for effort in ('', ' \t ', False, 1, 1.5, [], {}):
+                self.value = copy.deepcopy(base)
+                self.value.update(mode='git', git_mode={'repository': './source',
+                    'branches': ['main', 'feature'], 'baseline_branch': 'main'})
+                self.value['agent']['model'] = 'chosen-model'
+                if target == 'agent':
+                    self.value['agent']['reasoning_effort'] = effort
+                else:
+                    self.value['stage_agents'] = {target: {'reasoning_effort': effort}}
+                with self.subTest(target=target, effort=effort), patch('src.runtime.process.process') as process:
+                    with self.assertRaises(AuditError) as caught:
+                        self.config()
+                    self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
+                    self.assertIn('reasoning_effort', str(caught.exception))
+                    process.assert_not_called()
 
     def test_inactive_stages_do_not_validate_reasoning_effort(self):
         self.value.update(execution={'review_enabled': False},
@@ -224,36 +236,6 @@ class ConfigTests(FolderFixture):
         with self.assertRaises(AuditError) as caught:
             self.config()
         self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
-
-    def test_opencode_reasoning_effort_requires_provider_model_and_consistent_suffix(self):
-        self.value['agent'].update(backend='opencode', reasoning_effort='high')
-        invalid_models = (None, 1, [], '', 'model', '/model', 'provider/', ' /model', 'provider/ ',
-            'provider/model#', '#provider/model', 'provider/model#other', 'provider/model#high#high')
-        for model in invalid_models:
-            self.value['agent']['model'] = model
-            with self.subTest(model=model), patch('src.runtime.config.shutil.which') as which:
-                with self.assertRaises(AuditError) as caught:
-                    self.config()
-                self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
-                which.assert_not_called()
-        for model in ('provider/model', 'provider/model#high'):
-            self.value['agent']['model'] = model
-            with self.subTest(model=model):
-                self.assertEqual(self.config()['_agents']['study']['model'], model)
-        self.value['agent'].update(model='provider/model', reasoning_effort='high#other')
-        with self.assertRaises(AuditError) as caught:
-            self.config()
-        self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
-
-    def test_opencode_models_without_reasoning_effort_keep_existing_validation(self):
-        self.value['agent'].update(backend='opencode', reasoning_effort=None)
-        for model in (None, '', 'model', 'provider/model#native'):
-            self.value['agent']['model'] = model
-            with self.subTest(model=model):
-                self.assertEqual(self.config()['_agents']['study']['model'], model)
-        self.value['agent'].pop('reasoning_effort')
-        self.value['agent']['model'] = 'model'
-        self.assertEqual(self.config()['_agents']['study']['model'], 'model')
 
     def test_decoding_is_normalized_and_invalid_settings_fail_before_any_cli(self):
         self.value['source_decoding'] = {'rules': [{'path': 'src/old', 'encoding': 'windows-1251'},

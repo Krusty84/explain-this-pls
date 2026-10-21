@@ -21,7 +21,6 @@ from fixtures.ledger_response import prompt_context, response
 from test_folder import FolderFixture
 from test_revision_pipeline import initial_finding
 import test_startup as startup
-import test_xxx as native
 
 
 class NormalizerTests(unittest.TestCase):
@@ -59,8 +58,8 @@ class NormalizerTests(unittest.TestCase):
         metrics = measurement('codex', 'requested', measured=usage({'total_tokens': 100}))
         for invocation in ('one', 'one', 'two'):
             registry.record(context, {'invocation_id': invocation, 'backend': 'codex', 'metrics': metrics})
-        registry.record(context, {'invocation_id': 'two', 'backend': 'opencode',
-                                 'metrics': measurement('opencode', 'requested', 'reported',
+        registry.record(context, {'invocation_id': 'two', 'backend': 'codex',
+                                 'metrics': measurement('codex', 'requested', 'reported',
                                                         usage({'total_tokens': 100, 'cost_usd': 0.1}))})
         clock[0] = 5
         registry.finish_stage(context, 'FAILED')
@@ -69,7 +68,7 @@ class NormalizerTests(unittest.TestCase):
         self.assertEqual(result['attempts'], 2)
         self.assertEqual(result['usage']['total_tokens'], 200)
         self.assertEqual({row['backend']: row['usage']['total_tokens'] for row in result['by_backend']},
-                         {'codex': 100, 'opencode': 100})
+                         {'codex': 200})
         self.assertEqual(result['by_model'][1]['model_actual'], 'reported')
         self.assertEqual(result['duration_seconds'], 9)
         self.assertEqual(result['stages'][0]['duration_seconds'], 5)
@@ -99,44 +98,42 @@ class PipelineMetricsTests(FolderFixture):
         self.assertNotIn('Total usage:', Path(manifest['final_report']).read_text())
 
     def test_errors_timeouts_and_interruptions_retain_cli_usage(self):
-        for backend in ('codex', 'opencode'):
-            for failure in ('exit', 'timeout', 'interrupt', 'validation'):
-                cfg = self.config()
-                for agent in cfg['_agents'].values():
-                    agent['backend'] = backend
-                cfg['continue_on_error'] = False
-                runner = Runner(cfg, self.base / (backend + failure))
-                if backend == 'opencode':
-                    runner.session.versions[backend + ':' + cfg['_agents']['study']['executable']] = 'opencode v2.0.23'
-                def answer(command, cwd, env, payload, **kwargs):
-                    context = prompt_context(payload)
-                    data = response(context)
-                    failed = context['stage'] == 'study'
-                    if failed and failure == 'validation':
-                        data['unexpected'] = 'invalid schema'
-                    result = cli_result(command, data)
-                    if failed and failure in ('timeout', 'interrupt'):
-                        output = result['stdout'] + (b'\n{"type":"turn.started"}\n' if backend == 'codex' else b'')
-                        (kwargs['log_dir'] / 'stdout.log').write_bytes(output)
-                        if failure == 'interrupt':
-                            raise KeyboardInterrupt()
-                        raise response_error('STAGE_TIMEOUT', 'execution', 'Fixture timeout')
-                    if failed and failure == 'exit':
-                        result['returncode'] = 17
-                    return result
-                with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=answer):
-                    manifest, code = runner.run()
-                with self.subTest(backend=backend, failure=failure):
-                    self.assertNotEqual(code, 0)
-                    metrics = manifest['metrics']
-                    self.assertEqual(metrics['attempts'], 1)
-                    self.assertEqual(metrics['usage']['total_tokens'], 120)
-                    self.assertEqual(metrics['stages'][-1]['status'], 'FAILED')
-                    if backend == 'codex' and failure in ('timeout', 'interrupt'):
-                        self.assertEqual(metrics['usage']['coverage']['total_tokens'], 'partial')
-                    attempt = json.loads((runner.session.run_dir / 'revisions/001/study.logs/attempt-001/invocation.json').read_text())
-                    self.assertEqual(attempt['metrics']['attempts'], 1)
-                    self.assertGreaterEqual(attempt['metrics']['duration_seconds'], 0)
+        backend = 'codex'
+        for failure in ('exit', 'timeout', 'interrupt', 'validation'):
+            cfg = self.config()
+            for agent in cfg['_agents'].values():
+                agent['backend'] = backend
+            cfg['continue_on_error'] = False
+            runner = Runner(cfg, self.base / (backend + failure))
+            def answer(command, cwd, env, payload, **kwargs):
+                context = prompt_context(payload)
+                data = response(context)
+                failed = context['stage'] == 'study'
+                if failed and failure == 'validation':
+                    data['unexpected'] = 'invalid schema'
+                result = cli_result(command, data)
+                if failed and failure in ('timeout', 'interrupt'):
+                    output = result['stdout'] + (b'\n{"type":"turn.started"}\n' if backend == 'codex' else b'')
+                    (kwargs['log_dir'] / 'stdout.log').write_bytes(output)
+                    if failure == 'interrupt':
+                        raise KeyboardInterrupt()
+                    raise response_error('STAGE_TIMEOUT', 'execution', 'Fixture timeout')
+                if failed and failure == 'exit':
+                    result['returncode'] = 17
+                return result
+            with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=answer):
+                manifest, code = runner.run()
+            with self.subTest(backend=backend, failure=failure):
+                self.assertNotEqual(code, 0)
+                metrics = manifest['metrics']
+                self.assertEqual(metrics['attempts'], 1)
+                self.assertEqual(metrics['usage']['total_tokens'], 120)
+                self.assertEqual(metrics['stages'][-1]['status'], 'FAILED')
+                if backend == 'codex' and failure in ('timeout', 'interrupt'):
+                    self.assertEqual(metrics['usage']['coverage']['total_tokens'], 'partial')
+                attempt = json.loads((runner.session.run_dir / 'revisions/001/study.logs/attempt-001/invocation.json').read_text())
+                self.assertEqual(attempt['metrics']['attempts'], 1)
+                self.assertGreaterEqual(attempt['metrics']['duration_seconds'], 0)
 
 
 class CLIMetricsTests(unittest.TestCase):
@@ -147,60 +144,33 @@ class CLIMetricsTests(unittest.TestCase):
 
     def test_json_manifest_text_and_no_progress_agree(self):
         for mode, attempts in (('folder', 2), ('git', 5)):
-            for backend in ('codex', 'opencode'):
-                args = self.prepare(mode)
-                config = json.loads(self.config_path.read_text().split('\n', 1)[1])
-                config['agent']['backend'] = backend
-                version = 'opencode v2.0.23' if backend == 'opencode' else 'fixture-cli 1.0'
-                self.env['AUDIT_TEST_CLI_VERSION'] = version
-                config['agent']['expected_version'] = version
-                self.config_path.write_text(json.dumps(config))
-                result = subprocess.run([sys.executable, '-B', str(startup.ROOT / 'explain.py'),
-                    *args, '--output', 'json', '--no-progress'], env=self.env,
-                    capture_output=True, text=True, timeout=30)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                summary = json.loads(result.stdout)
-                manifest = json.loads(Path(summary['manifest']).read_text())
-                metrics = summary['metrics']
-                self.assertEqual(metrics, manifest['metrics'])
-                self.assertEqual(metrics['attempts'], attempts)
-                self.assertEqual(metrics['usage']['total_tokens'], 120 * attempts)
-                self.assertEqual(result.stderr.count('Tokens: 120'), attempts)
-                out = io.StringIO()
-                reporter = Reporter(stdout=out, stderr=io.StringIO(), progress=False)
-                reporter.finish(summary, manifest, check_only=False, config_path=self.config_path)
-                reporter.close()
-                self.assertIn('Total usage:', out.getvalue())
-                self.assertIn(str(120 * attempts), out.getvalue())
-                self.assertIn('Agent-estimated cost', out.getvalue())
+            backend = 'codex'
+            args = self.prepare(mode)
+            config = json.loads(self.config_path.read_text().split('\n', 1)[1])
+            config['agent']['backend'] = backend
+            version = 'fixture-cli 1.0'
+            self.env['AUDIT_TEST_CLI_VERSION'] = version
+            config['agent']['expected_version'] = version
+            self.config_path.write_text(json.dumps(config))
+            result = subprocess.run([sys.executable, '-B', str(startup.ROOT / 'explain.py'),
+                *args, '--output', 'json', '--no-progress'], env=self.env,
+                capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(result.stdout)
+            manifest = json.loads(Path(summary['manifest']).read_text())
+            metrics = summary['metrics']
+            self.assertEqual(metrics, manifest['metrics'])
+            self.assertEqual(metrics['attempts'], attempts)
+            self.assertEqual(metrics['usage']['total_tokens'], 120 * attempts)
+            self.assertEqual(result.stderr.count('Tokens: 120'), attempts)
+            out = io.StringIO()
+            reporter = Reporter(stdout=out, stderr=io.StringIO(), progress=False)
+            reporter.finish(summary, manifest, check_only=False, config_path=self.config_path)
+            reporter.close()
+            self.assertIn('Total usage:', out.getvalue())
+            self.assertIn(str(120 * attempts), out.getvalue())
+            self.assertIn('Agent-estimated cost', out.getvalue())
         result = subprocess.run([sys.executable, '-B', str(startup.ROOT / 'explain.py'),
             *self.prepare('folder', check=True), '--output', 'json'], env=self.env,
             capture_output=True, text=True, timeout=30)
         self.assertEqual(json.loads(result.stdout)['metrics']['attempts'], 0)
-
-
-class XXXMetricsTests(unittest.TestCase):
-    setUp = native.XXXTests.setUp
-    run_case = native.XXXTests.run_case
-
-    def test_cli_normal_error_and_no_format_repair_totals(self):
-        for scenario in ('', 'backend-error', 'schema-extra'):
-            self.value['execution'] = {'structured_output_repair_attempts': 1}
-            manifest, code = self.run_case(scenario)
-            attempts = 2 if not scenario else 1
-            metrics = manifest['metrics']
-            self.assertEqual(metrics['attempts'], attempts)
-            self.assertEqual(metrics['usage']['total_tokens'], 10 * attempts)
-            self.assertTrue(metrics['usage']['total_tokens_estimated'])
-            self.assertEqual(metrics['usage']['cost_usd'], 0)
-            self.assertEqual(metrics['usage']['coverage']['total_tokens'],
-                             'partial' if scenario == 'backend-error' else 'complete')
-            files = [p for p in self.run_dir.rglob('attempt-*/invocation.json')
-                     if 'metrics' in json.loads(p.read_text())]
-            self.assertEqual(len(files), attempts)
-            self.assertEqual(sum(json.loads(p.read_text())['metrics']['usage']['total_tokens'] for p in files),
-                             metrics['usage']['total_tokens'])
-            for path in files:
-                if path.parent.name == 'attempt-002':
-                    attempt = json.loads(path.read_text())
-                    self.assertLess(attempt['metrics']['duration_seconds'], attempt['duration_seconds'])

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Offline ordinary studies through each backend's transport contract."""
+"""Offline ordinary studies through the Codex transport contract."""
 import json
 import os
 from pathlib import Path
@@ -11,7 +11,6 @@ from src.runtime.runner import Runner
 from src.runtime.process import process as real_process
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import response, prompt_context
-from fixtures.xxx_protocol import transcript
 
 
 def run_case(self, *, backend='codex', large=True, change=None, review=False,
@@ -25,18 +24,12 @@ def run_case(self, *, backend='codex', large=True, change=None, review=False,
     self.value['agent']['backend'] = backend
     cfg = self.config()
     runner = Runner(cfg, self.base / f'run-{len(list(self.base.glob("run-*")))}', reporter=reporter)
-    runner.session.versions[backend + ':' + cfg['_agents']['study']['executable']] = '2.0.0' if backend == 'opencode' else 'fixture'
-    calls, exports = [], {}
+    calls = []
     selectors = subsystem_paths or paths
 
     def process(command, cwd, env, payload=b'', **kwargs):
         if Path(command[0]).name == 'git':
             return real_process(command, cwd, env, payload, **kwargs)
-        if backend == 'xxx' and command[1] == 'export':
-            return dict(returncode=0, stdout=json.dumps(exports[command[2]]).encode(), stderr=b'')
-        if backend == 'xxx' and command[1:3] == ['session', 'delete']:
-            exports.pop(command[3])
-            return dict(returncode=0, stdout=b'', stderr=b'')
         context = prompt_context(payload)
         calls.append(dict(context=context, command=command, cwd=cwd, env=env.copy(), prompt=payload.decode()))
         data = response(context)
@@ -46,12 +39,6 @@ def run_case(self, *, backend='codex', large=True, change=None, review=False,
                 for i, path in enumerate(selectors)]
         if change:
             change(runner, context, data)
-        if backend == 'xxx':
-            sid = f'ses_study{len(calls)}'
-            output, exported = transcript(data, session=sid, agent=command[command.index('--agent') + 1],
-                prompt=payload.decode(), cwd=str(cwd), model='fixture/study-model')
-            exports[sid] = exported
-            return dict(returncode=0, stdout=output.encode(), stderr=b'')
         return cli_result(command, data)
 
     with patch.dict(os.environ, {'AUDIT_TEST_SUBSYSTEM_PATHS': json.dumps(selectors)}), \

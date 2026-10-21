@@ -222,10 +222,10 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 repository = self.base / 'repository_with_a_longer_name'
                 results = self.base / 'saved-results'
                 results.mkdir()
-                model = 'provider/a-much-longer-study-model#native'
+                model = 'a-much-longer-study-model'
                 value.update(mode='git', git_mode={'repository': str(repository), 'branches': ['main'],
                     'baseline_branch': 'main'}, project_description='Обновлённый проект [bold]',
-                    agent={'backend': 'opencode', 'executable': sys.executable, 'model': model},
+                    agent={'backend': 'codex', 'executable': sys.executable, 'model': model, 'reasoning_effort': 'high'},
                     last_analysis={'status': 'COMPLETED', 'finished_at': '2026-10-17T15:00:00+03:00',
                                    'results_dir': str(results)})
                 self.path.write_text(json.dumps(value))
@@ -236,7 +236,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                     reader.assert_called_once_with(self.path)
                 self.assertEqual(app.selected, self.path)
                 self.assertEqual([cell.plain for cell in table.get_row(str(self.path))],
-                    [self.path.name, 'git', str(repository), model, 'native', 'COMPLETED'])
+                    [self.path.name, 'git', str(repository), model, 'high', 'COMPLETED'])
                 self.assertGreater(list(table.columns.values())[3].content_width, old_width)
                 self.assertGreaterEqual(list(table.columns.values())[3].content_width, len(model))
                 project, separator, files = app.query_one('#config-preview', Static).content.renderables
@@ -250,7 +250,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                      'Results: COMPLETED'])
                 self.assertFalse(app.query_one('#run', Button).disabled)
                 self.assertFalse(app.query_one('#check', Button).disabled)
-                self.assertTrue(app.query_one('#models', Button).disabled)
+                self.assertFalse(app.query_one('#models', Button).disabled)
                 self.assertEqual(app.configs[str(self.path)][1]['project_description'], value['project_description'])
                 self.assertEqual(self.path.read_bytes(), before)
                 worker.assert_not_called()
@@ -342,7 +342,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                             self.assertTrue(app.query_one('#' + button, Button).disabled)
                         worker.assert_not_called()
 
-    async def test_config_columns_show_study_model_and_effort_with_native_variant(self):
+    async def test_config_columns_show_study_model_and_effort(self):
         value = jsonc(self.path.read_text())
         cases = [({}, {}, 'CLI default', 'CLI default'),
                  ({'model': 'shared', 'reasoning_effort': 'high'},
@@ -351,12 +351,6 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                   {'study': {'model': 'study-model', 'reasoning_effort': 'medium'}}, 'study-model', 'medium'),
                  ({'model': 'shared', 'reasoning_effort': 'high'},
                   {'study': {'model': None, 'reasoning_effort': None}}, 'CLI default', 'CLI default'),
-                 ({'backend': 'opencode', 'model': 'provider/model#native'}, {}, 'provider/model#native', 'native'),
-                 ({'backend': 'opencode', 'model': 'provider/model#native', 'reasoning_effort': None},
-                  {}, 'provider/model#native', 'native'),
-                 ({'backend': 'opencode', 'model': 'provider/model', 'reasoning_effort': 'high'},
-                  {}, 'provider/model', 'high'),
-                 ({'model': 'model#native'}, {}, 'model#native', 'CLI default'),
                  ({'model': '[bold]model\x1b[31m', 'reasoning_effort': '[red]high'},
                   {}, '[bold]model\\x1b[31m', '[red]high')]
         app = self.app(self.path)

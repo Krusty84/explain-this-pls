@@ -23,7 +23,7 @@ from fixtures.ledger_response import response
 import test_explain as git_fixtures
 import test_folder as folder_fixtures
 import test_structured_output as native_fixtures
-import test_xxx as xxx_fixtures
+from fixtures.codex_runner import CodexFixture
 
 
 def semantic_failure(data):
@@ -44,14 +44,14 @@ def response_for(context):
 class CompromiseFolder(folder_fixtures.FolderFixture):
     def test_normalized_study_acceptance_and_contract_rejection_remain_distinct(self):
         for policy in ('strict', 'compromise'):
-            for backend in ('codex', 'opencode'):
-                def local(stage, data):
-                    if stage == 'study': data['claims'][0]['evidence_ids'] = ['E-001']
-                    return data
-                manifest, code = self.run_case(local, backend=backend, policy=policy)
-                self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
-                self.assertEqual(manifest['study']['normalization_provenance']['replacement_count'], 1)
-                self.assertEqual(manifest['review']['claim_registry'], manifest['study']['claims'])
+            backend = 'codex'
+            def local(stage, data):
+                if stage == 'study': data['claims'][0]['evidence_ids'] = ['E-001']
+                return data
+            manifest, code = self.run_case(local, backend=backend, policy=policy)
+            self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
+            self.assertEqual(manifest['study']['normalization_provenance']['replacement_count'], 1)
+            self.assertEqual(manifest['review']['claim_registry'], manifest['study']['claims'])
         def malformed(stage, data):
             if stage == 'study': data['claims'] = 'PRIVATE_MALFORMED_CLAIMS' + '{' * 21295
             return data
@@ -75,8 +75,6 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             agent['backend'] = backend
         run_dir = self.base / ('run-' + str(len(list(self.base.glob('run-*')))))
         runner = Runner(config, run_dir)
-        if backend == 'opencode':
-            runner.session.versions[backend + ':' + config['_agents']['study']['executable']] = 'opencode v2.0.23'
         calls, originals = [], {}
 
         def process(command, cwd, env, payload, **kwargs):
@@ -105,24 +103,24 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
                 data['subsystems'] = [dict(id='S-001', name='App', purpose='Fixture.', paths=['PRIVATE_UNKNOWN'])]
                 data['exclusions'] = [dict(path='PRIVATE_EXCLUSION', reason='Unknown exclusion.')]
             return data
-        for backend in ('codex', 'opencode'):
-            with self.subTest(backend=backend):
-                manifest, code = self.run_case(change, backend=backend)
-                self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
-                self.assertEqual(manifest['coverage_plan']['origin'], 'SOURCE_INVENTORY')
-                self.assertIsNotNone(manifest['study'])
-                self.assertNotIn('study_material', manifest)
-                self.assertEqual(manifest['revisions'][0]['review']['verdict'], 'PASS')
-                advisory = manifest['study']['advisory']
-                self.assertEqual(json.loads(advisory['raw_json'])['subsystems'], self.originals['study']['subsystems'])
-                self.assertTrue(advisory['diagnostics'])
-                attempt = Path(manifest['revisions'][0]['study_invocation']['artifact_directory'])
-                self.assertEqual(json.loads((attempt / 'extracted.json').read_text()), self.originals['study'])
-                self.assertFalse((attempt / 'recovery.json').exists())
-                self.assertTrue((self.run_dir / 'coverage.plan.json').exists())
-                final = Path(manifest['final_report']).read_text()
-                self.assertNotIn('PRIVATE_UNKNOWN', final)
-                self.assertNotIn('PRIVATE_EXCLUSION', final)
+        backend = 'codex'
+        with self.subTest(backend=backend):
+            manifest, code = self.run_case(change, backend=backend)
+            self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
+            self.assertEqual(manifest['coverage_plan']['origin'], 'SOURCE_INVENTORY')
+            self.assertIsNotNone(manifest['study'])
+            self.assertNotIn('study_material', manifest)
+            self.assertEqual(manifest['revisions'][0]['review']['verdict'], 'PASS')
+            advisory = manifest['study']['advisory']
+            self.assertEqual(json.loads(advisory['raw_json'])['subsystems'], self.originals['study']['subsystems'])
+            self.assertTrue(advisory['diagnostics'])
+            attempt = Path(manifest['revisions'][0]['study_invocation']['artifact_directory'])
+            self.assertEqual(json.loads((attempt / 'extracted.json').read_text()), self.originals['study'])
+            self.assertFalse((attempt / 'recovery.json').exists())
+            self.assertTrue((self.run_dir / 'coverage.plan.json').exists())
+            final = Path(manifest['final_report']).read_text()
+            self.assertNotIn('PRIVATE_UNKNOWN', final)
+            self.assertNotIn('PRIVATE_EXCLUSION', final)
 
     def test_strict_study_advisory_paths_do_not_require_recovery(self):
         def change(stage, data):
@@ -137,29 +135,29 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         self.assertTrue(manifest['study']['program_checks']['policy_satisfied'])
         self.assertTrue(manifest['study']['advisory']['diagnostics'])
 
-    def test_semantic_review_is_retained_for_both_cli_adapters(self):
-        for backend in ('codex', 'opencode'):
-            with self.subTest(backend=backend):
-                manifest, code = self.run_case(lambda s, d: semantic_failure(d) if s == 'review' else d, backend=backend)
-                self.assertEqual((manifest['status'], code), ('PARTIAL', 2))
-                self.assertFalse(manifest['accepted'])
-                self.assertIsNone(manifest['review'])
-                self.assertTrue(manifest['revisions'][0]['review_usable'])
-                self.assertFalse((self.run_dir / 'review.json').exists())
-                self.assertFalse((self.run_dir / 'ARCHITECTURE_REVIEW.md').exists())
-                text = Path(manifest['final_report']).read_text()
-                self.assertIn('Проверка реестра не завершена', text)
-                self.assertIn('C-001', text)
-                self.assertIn('Operational evidence was unavailable.', text)
-                self.assertIn('Insufficient evidence according to the agent', text)
-                expanded = json.loads((self.run_dir / 'revisions/001/study.logs/attempt-001/expanded.json').read_text())
-                self.assertEqual(expanded['report_sections'], self.originals['study']['report_sections'])
-                self.assertIn(materialize_study(expanded)['report_markdown'], text)
-                self.assertIn(self.originals['review']['report_markdown'], text)
-                self.assertEqual([s for s, _ in self.calls], ['study', 'review'])
-                raw = json.loads((self.run_dir / 'revisions/001/review.logs/attempt-001/extracted.json').read_text())
-                self.assertEqual(raw, self.originals['review'])
-                self.assertEqual(json.loads((self.run_dir / 'revisions/001/review.logs/attempt-001/invocation.json').read_text())['status'], 'FAILED')
+    def test_semantic_review_is_retained_for_codex(self):
+        backend = 'codex'
+        with self.subTest(backend=backend):
+            manifest, code = self.run_case(lambda s, d: semantic_failure(d) if s == 'review' else d, backend=backend)
+            self.assertEqual((manifest['status'], code), ('PARTIAL', 2))
+            self.assertFalse(manifest['accepted'])
+            self.assertIsNone(manifest['review'])
+            self.assertTrue(manifest['revisions'][0]['review_usable'])
+            self.assertFalse((self.run_dir / 'review.json').exists())
+            self.assertFalse((self.run_dir / 'ARCHITECTURE_REVIEW.md').exists())
+            text = Path(manifest['final_report']).read_text()
+            self.assertIn('Проверка реестра не завершена', text)
+            self.assertIn('C-001', text)
+            self.assertIn('Operational evidence was unavailable.', text)
+            self.assertIn('Insufficient evidence according to the agent', text)
+            expanded = json.loads((self.run_dir / 'revisions/001/study.logs/attempt-001/expanded.json').read_text())
+            self.assertEqual(expanded['report_sections'], self.originals['study']['report_sections'])
+            self.assertIn(materialize_study(expanded)['report_markdown'], text)
+            self.assertIn(self.originals['review']['report_markdown'], text)
+            self.assertEqual([s for s, _ in self.calls], ['study', 'review'])
+            raw = json.loads((self.run_dir / 'revisions/001/review.logs/attempt-001/extracted.json').read_text())
+            self.assertEqual(raw, self.originals['review'])
+            self.assertEqual(json.loads((self.run_dir / 'revisions/001/review.logs/attempt-001/invocation.json').read_text())['status'], 'FAILED')
 
     def test_missing_study_field_is_reviewed_without_promoting_original(self):
         def change(stage, data):
@@ -304,16 +302,16 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         def missing_claims(stage, data):
             data.pop('claims')
             return data
-        for backend in ('codex', 'opencode'):
-            for policy in ('strict', 'compromise'):
-                with self.subTest(backend=backend, policy=policy):
-                    manifest, code = self.run_case(missing_claims, backend=backend, policy=policy)
-                    self.assertEqual(code, 2 if policy == 'compromise' else 1)
-                    self.assertFalse(manifest['accepted'])
-                    if policy == 'compromise':
-                        self.assertNotIn('claims', manifest['study_material'])
-                        self.assertEqual(self.calls[1][1]['claim_registry'], [])
-                        self.assertIn('Восстановленный текст', Path(manifest['final_report']).read_text())
+        backend = 'codex'
+        for policy in ('strict', 'compromise'):
+            with self.subTest(backend=backend, policy=policy):
+                manifest, code = self.run_case(missing_claims, backend=backend, policy=policy)
+                self.assertEqual(code, 2 if policy == 'compromise' else 1)
+                self.assertFalse(manifest['accepted'])
+                if policy == 'compromise':
+                    self.assertNotIn('claims', manifest['study_material'])
+                    self.assertEqual(self.calls[1][1]['claim_registry'], [])
+                    self.assertIn('Восстановленный текст', Path(manifest['final_report']).read_text())
 
     def test_markdown_study_never_reaches_review_or_final_narrative(self):
         def markdown_study(stage, data):
@@ -321,17 +319,17 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
                 data.pop('report_sections')
                 data['report_markdown'] = '# Unsupported study'
             return data
-        for backend in ('codex', 'opencode'):
-            for policy in ('strict', 'compromise'):
-                with self.subTest(backend=backend, policy=policy):
-                    manifest, code = self.run_case(markdown_study, backend=backend, policy=policy)
-                    self.assertEqual((code, manifest['status'], manifest['accepted']), (1, 'FAILED', False))
-                    self.assertEqual([stage for stage, _ in self.calls], ['study'])
-                    self.assertNotIn('study_material', manifest)
-                    self.assertNotIn('# Unsupported study', Path(manifest['final_report']).read_text())
-                    directory = Path(manifest['final_report']).parent
-                    for name in ('study.json', 'study.material.json', 'ARCHITECTURE.md', 'review.plan.json'):
-                        self.assertFalse(list(directory.rglob(name)))
+        backend = 'codex'
+        for policy in ('strict', 'compromise'):
+            with self.subTest(backend=backend, policy=policy):
+                manifest, code = self.run_case(markdown_study, backend=backend, policy=policy)
+                self.assertEqual((code, manifest['status'], manifest['accepted']), (1, 'FAILED', False))
+                self.assertEqual([stage for stage, _ in self.calls], ['study'])
+                self.assertNotIn('study_material', manifest)
+                self.assertNotIn('# Unsupported study', Path(manifest['final_report']).read_text())
+                directory = Path(manifest['final_report']).parent
+                for name in ('study.json', 'study.material.json', 'ARCHITECTURE.md', 'review.plan.json'):
+                    self.assertFalse(list(directory.rglob(name)))
 
 
 class CompromiseGit(unittest.TestCase):
@@ -432,81 +430,59 @@ class CompromiseGit(unittest.TestCase):
 
 
 class CompromiseNative(unittest.TestCase):
-    setUp = native_fixtures.XXXOutputTests.setUp
-    stage = native_fixtures.XXXOutputTests.stage
-    prompts = native_fixtures.XXXOutputTests.prompts
-    recorded = xxx_fixtures.XXXTests.recorded
+    setUp = native_fixtures.CodexOutputTests.setUp
+    stage = native_fixtures.CodexOutputTests.stage
+    prompts = native_fixtures.CodexOutputTests.prompts
+    recorded = CodexFixture.recorded
 
     def config(self):
-        config = native_fixtures.XXXOutputTests.config(self)
+        config = native_fixtures.CodexOutputTests.config(self)
         config.pop('result_policy')
         return config
 
     def test_cli_retains_material_without_format_retries(self):
-        for backend in ('xxx',):
-            for repairs in (0, 1, 2):
-                before = len(self.prompts())
-                data, meta = self.stage(backend, 'schema-extra', repairs)
-                self.assertIsNone(data)
-                self.assertIn('usable_material', meta)
-                self.assertEqual(len(self.prompts()) - before, 1)
-                self.assertFalse((self.destination.parent / 'study.json').exists())
+        backend = 'codex'
+        for repairs in (0, 1, 2):
+            before = len(self.prompts())
+            data, meta = self.stage('schema-extra', repairs)
+            self.assertIsNone(data)
+            self.assertIn('usable_material', meta)
+            self.assertEqual(len(self.prompts()) - before, 1)
+            self.assertFalse((self.destination.parent / 'study.json').exists())
 
     def test_single_response_retains_original_facts(self):
-        for backend in ('xxx',):
-            for scenario in ('schema-extra', 'material-review'):
-                data, meta = self.stage(backend, scenario, 2, stage='review')
-                self.assertIsNone(data)
-                original = json.loads((self.destination / 'attempt-001/extracted.json').read_text())
-                self.assertEqual(meta['usable_material']['report_markdown'], original['report_markdown'])
-                self.assertEqual(meta['recovery_source_attempt'], str(self.destination / 'attempt-001'))
-
-    def test_foreign_session_and_cleanup_failure_cannot_be_recovered(self):
-        for scenario in ('foreign-session', 'delete-failed'):
-            with self.assertRaises(ContractError):
-                self.stage('xxx', scenario)
-            self.assertTrue(self.last_runner.session.critical_failure)
-            self.assertFalse((self.destination.parent / 'study.material.json').exists())
+        backend = 'codex'
+        for scenario in ('schema-extra', 'material-review'):
+            data, meta = self.stage(scenario, 2, stage='review')
+            self.assertIsNone(data)
+            original = json.loads((self.destination / 'attempt-001/extracted.json').read_text())
+            self.assertEqual(meta['usable_material']['report_markdown'], original['report_markdown'])
+            self.assertEqual(meta['recovery_source_attempt'], str(self.destination / 'attempt-001'))
 
 
 class NativeFinalPipeline(unittest.TestCase):
-    git = xxx_fixtures.XXXTests.git
-    init_git = xxx_fixtures.XXXTests.init_git
-    run_case = xxx_fixtures.XXXTests.run_case
-    recorded = xxx_fixtures.XXXTests.recorded
-    prompts = xxx_fixtures.XXXTests.prompts
+    git = CodexFixture.git
+    init_git = CodexFixture.init_git
+    run_case = CodexFixture.run_case
+    recorded = CodexFixture.recorded
+    prompts = CodexFixture.prompts
 
     def setUp(self):
-        xxx_fixtures.XXXTests.setUp(self)
+        CodexFixture.setUp(self)
         self.value.pop('result_policy')
 
     def test_native_pipeline_generates_final_without_extra_model_call(self):
-        for backend in ('xxx',):
-            self.value['agent']['backend'] = backend
-            self.env['AUDIT_FAKE_BACKEND'] = backend
-            for scenario in ('partial-review', 'material-review'):
-                before = len(self.prompts())
-                manifest, code = self.run_case(scenario)
-                self.assertEqual(code, 2)
-                self.assertEqual(len(self.prompts()) - before, 2)
-                self.assertTrue(Path(manifest['final_report']).is_file())
-                if scenario == 'material-review':
-                    self.assertIsNone(manifest['review'])
-                    self.assertIn('review_material', manifest['revisions'][0])
-
-    def test_cleanup_failure_remains_fatal_even_with_a_study(self):
-        from src.runtime import process as process_runtime
-        original_process = process_runtime.process
-        def failed_delete(command, *args, **kwargs):
-            if command[1:3] == ['session', 'delete'] and kwargs.get('context', {}).get('stage') == 'review':
-                return {'returncode': 1, 'stdout': b'', 'stderr': b'cleanup failed'}
-            return original_process(command, *args, **kwargs)
-        with patch('src.runtime.process.process', side_effect=failed_delete):
-            manifest, code = self.run_case('material-review')
-        self.assertEqual((manifest['status'], code), ('FAILED', 1))
-        self.assertTrue(manifest['critical_failure'])
-        self.assertTrue(manifest['has_usable_material'])
-        self.assertNotIn('review_material', manifest)
+        backend = 'codex'
+        self.value['agent']['backend'] = backend
+        for scenario in ('partial-review', 'material-review'):
+            before = len(self.prompts())
+            manifest, code = self.run_case(scenario)
+            self.assertEqual(code, 2)
+            self.assertEqual(len(self.prompts()) - before, 2)
+            self.assertTrue(Path(manifest['final_report']).is_file())
+            if scenario == 'material-review':
+                self.assertIsNone(manifest['review'])
+                self.assertIn('review_material', manifest['revisions'][0])
 
 
 if __name__ == '__main__':
