@@ -22,15 +22,23 @@ def inspect_sources(context):
     call['source_files'] = {}
     for relative, record in expected.items():
         path = root / relative
-        commit = subprocess.check_output(['git', '-C', str(path), 'rev-parse', 'HEAD']).decode().strip()
-        assert commit == record['commit'], (relative, commit, record)
-        assert subprocess.run(['git', '-C', str(path), 'symbolic-ref', '-q', 'HEAD'],
-                              capture_output=True).returncode == 1
+        # Private global scope also works with Git builds that ignore command-scope trust.
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir='/tmp') as trusted:
+            value = str(path.resolve()).replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\t', '\\t').replace('\b', '\\b')
+            assert not str(path.resolve()).endswith('/*')
+            trusted.write('[safe]\n\tdirectory =\n\tdirectory = "' + value + '"\n')
+            trusted.flush()
+            env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_CONFIG')}
+            env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=trusted.name)
+            commit = subprocess.check_output(['git', '-C', str(path), 'rev-parse', 'HEAD'], env=env).decode().strip()
+            assert commit == record['commit'], (relative, commit, record)
+            assert subprocess.run(['git', '-C', str(path), 'symbolic-ref', '-q', 'HEAD'],
+                                  env=env, capture_output=True).returncode == 1
+            names = subprocess.check_output(['git', '-C', str(path), 'ls-files', '-z'], env=env).split(b'\0')
         content = (path / 'app.py').read_text()
         if 'content' in record:
             assert content == record['content'], (relative, content, record)
         observed[relative] = {'commit': commit, 'content': content}
-        names = subprocess.check_output(['git', '-C', str(path), 'ls-files', '-z']).split(b'\0')
         for name in names:
             if name:
                 source = path / os.fsdecode(name)

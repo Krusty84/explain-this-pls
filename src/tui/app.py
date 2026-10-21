@@ -342,7 +342,7 @@ class ExplainApp(App[int]):
                           (' (Missing)' if not Path(analysis['results_dir']).is_dir() else ''),
                           'Finished: ' + finished, 'Results directory: ' + s(analysis['results_dir'])]
         lines = [Text.assemble(line) for line in lines]
-        content = (Group(Text('\n').join(lines[:2]), Text('─' * 40, style='dim'),
+        content = (Group(Text('\n').join(lines[:2]), Rule(characters='─', style='dim'),
                          Text('\n').join(lines[2:]), fit=False)
                    if config is not None else Text('\n').join(lines))
         self.query_one('#config-preview', Static).update(content)
