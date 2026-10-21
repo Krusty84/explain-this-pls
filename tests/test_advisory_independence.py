@@ -38,7 +38,7 @@ class AdvisoryIndependenceTests(FolderFixture):
                 def change(runner, context, data):
                     if context['stage'] == 'study':
                         data.update(copy.deepcopy(advisory))
-                        original.update(copy.deepcopy(data))
+                        original[context['phase']] = copy.deepcopy(data)
 
                 with self.subTest(backend=backend, policy=policy, advisory=advisory):
                     manifest, code = self.run_case(backend=backend, policy=policy, large=False,
@@ -48,12 +48,12 @@ class AdvisoryIndependenceTests(FolderFixture):
                     document = manifest['study']
                     self.assertTrue(document['program_checks']['policy_satisfied'])
                     self.assertEqual(document['report_markdown'],
-                                     render_document(original['report_sections'], original['claims'])[0])
-                    self.assertEqual(document['evidence'], original['evidence'])
-                    self.assertEqual(document['claims'][0]['statement'], original['claims'][0]['statement'])
+                                     render_document(original['write']['report_sections'], original['collect']['claims'])[0])
+                    self.assertEqual(document['evidence'], original['collect']['evidence'])
+                    self.assertEqual(document['claims'][0]['statement'], original['collect']['claims'][0]['statement'])
                     self.assertNotIn('study_material', manifest)
                     attempt = Path(manifest['study_invocation']['artifact_directory'])
-                    self.assertEqual(json.loads((attempt / 'extracted.json').read_text()), original)
+                    self.assertEqual(json.loads((attempt / 'extracted.json').read_text()), original['write'])
                     self.assertFalse((attempt / 'recovered.json').exists())
                     if advisory:
                         self.assertEqual(json.loads(document['advisory']['raw_json']), advisory)
@@ -67,7 +67,7 @@ class AdvisoryIndependenceTests(FolderFixture):
         plans, inventories = [], []
         for valid_pointer in (True, False):
             def change(runner, context, data):
-                if context['stage'] == 'study':
+                if context['stage'] == 'study' and context.get('phase') == 'collect':
                     data['exclusions'] = [dict(path='src/', reason='Model considers this irrelevant.')]
                     data['relevance_notes'] = ['src/ does not belong to the main architecture.']
                     data['evidence'][0]['path'] = 'src/main.py'
@@ -97,6 +97,8 @@ class AdvisoryIndependenceTests(FolderFixture):
             def change(runner, context, data):
                 if context['stage'] != 'study':
                     return
+                if context.get('phase') != ('write' if failure == 'sections' else 'collect'):
+                    return
                 data.update(subsystems='invalid', exclusions=None, coverage=False)
                 if failure == 'sections':
                     data['report_sections'] = 'Invalid report structure.'
@@ -120,7 +122,7 @@ class AdvisoryIndependenceTests(FolderFixture):
 
     def test_partial_document_preserves_its_limitations_and_registry(self):
         def change(runner, context, data):
-            if context['stage'] == 'study':
+            if context['stage'] == 'study' and context.get('phase') == 'collect':
                 data.update(completion_status='PARTIAL', limitations=['Runtime behavior remains unverified.'],
                             subsystems=None, coverage='unverified')
 

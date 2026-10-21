@@ -68,7 +68,7 @@ class FolderHashingTests(FolderFixture):
                 self.assertEqual(code, 0, manifest['errors'])
                 self.assertEqual(snapshots.call_count, 1)
                 self.assertEqual(hashes[blob], 1)
-                self.assertEqual(len(stages), 0 if check else 4 if revise else 2 if review else 1)
+                self.assertEqual(len(stages), 0 if check else 5 if revise else 3 if review else 2)
                 for revision in manifest.get('revisions', []):
                     for stage in ('study', 'review'):
                         for evidence in (revision.get(stage) or {}).get('program_checks', {}).get('evidence', []):
@@ -224,7 +224,7 @@ class RecursiveHashingTests(RecursiveFixture, unittest.TestCase):
             manifest, code = runner.run()
         self.assertEqual(code, 0, manifest['errors'])
         self.assertIn('compare', stages)
-        self.assertEqual(stages.count('study'), 3)
+        self.assertEqual(stages.count('study'), 5)
         self.assertEqual(hashes[b'original\n'], 3)  # One file in each checked-out submodule/root.
         for path in self.paths:
             self.assertEqual(hashes[f'topic: {path}\n'.encode()], 1)

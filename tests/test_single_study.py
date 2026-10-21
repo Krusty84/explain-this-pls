@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Large sources use one initial study with full source access with Codex."""
+"""Large sources collect evidence before authoring the initial document."""
 import json
 import subprocess
 
@@ -23,21 +23,23 @@ class SingleStudyTests(FolderFixture):
             manifest, code = self.run_case(backend=backend,
                 subsystem_paths=['.', 'part2.py', 'part3.py', 'part4.py', 'part5.py'])
             self.assertEqual(code, 0, manifest.get('diagnostics'))
-            self.assertEqual([c['context']['stage'] for c in self.calls], ['study'])
+            self.assertEqual([c['context']['phase'] for c in self.calls], ['collect', 'write'])
             document = manifest if self.value['mode'] == 'folder' else manifest['branches'][0]
             self.assertEqual(document['coverage_plan']['counts']['files'], 301)
             self.assertNotIn('coverage', document['study'])
             self.assertTrue(document['study']['program_checks']['policy_satisfied'])
             self.assertFalse(document['study']['program_checks']['coverage']['completeness_measured'])
-            self.assertTrue(document['study_invocation']['source_tools_enabled'])
-            self.assertEqual(self.calls[-1]['cwd'], self.source)
+            self.assertFalse(document['study_invocation']['source_tools_enabled'])
+            self.assertEqual(self.calls[0]['cwd'], self.source)
+            self.assertNotEqual(self.calls[-1]['cwd'], self.source)
             inventory = json.loads(next(self.runner.session.run_dir.rglob('source.inventory.json')).read_text())
             self.assertGreater(sum(e.get('size', 0) for e in inventory['entries']), 262144)
             self.assertEqual({p.name for p in self.runner.session.run_dir.rglob('*.plan.json')},
                              {'coverage.plan.json', 'review.plan.json'})
             self.assertTrue(all(row['stage'] in ('study', 'review')
                                 for row in manifest['metrics']['stages']))
-            self.assertNotIn('features.shell_tool=false', self.calls[-1]['command'])
+            self.assertNotIn('features.shell_tool=false', self.calls[0]['command'])
+            self.assertIn('features.shell_tool=false', self.calls[-1]['command'])
 
     def test_large_folder(self):
         self.large_source()

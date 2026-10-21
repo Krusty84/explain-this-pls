@@ -58,6 +58,10 @@ class RunState:
                            else 'No architecture report available.')
             else:
                 row['result'] = 'Report text recovered; some checks did not pass.'
+        elif name == 'study_phase_started':
+            row = self.row(context)
+            row.update(phase=context['phase'], result='Collecting claims and source evidence.' if context['phase'] == 'collect'
+                       else 'Writing the architecture report from the frozen evidence package.')
         elif name == 'citation_warning':
             warning = dict(context, message=citation_warning_message(context))
             row = self.row(context) if context.get('stage') else self.preparation

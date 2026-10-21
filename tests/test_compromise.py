@@ -46,24 +46,27 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         for policy in ('strict', 'compromise'):
             backend = 'codex'
             def local(stage, data):
-                if stage == 'study': data['claims'][0]['evidence_ids'] = ['E-001']
+                if stage == 'collect': data['claims'][0]['evidence_ids'] = ['E-001']
                 return data
             manifest, code = self.run_case(local, backend=backend, policy=policy)
             self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
-            self.assertEqual(manifest['study']['normalization_provenance']['replacement_count'], 1)
+            package = json.loads((self.run_dir / 'revisions/001/study.evidence.json').read_text())
+            self.assertEqual(package['normalization_provenance']['replacement_count'], 1)
             self.assertEqual(manifest['review']['claim_registry'], manifest['study']['claims'])
         def malformed(stage, data):
-            if stage == 'study': data['claims'] = 'PRIVATE_MALFORMED_CLAIMS' + '{' * 21295
+            if stage == 'collect': data['claims'] = 'PRIVATE_MALFORMED_CLAIMS' + '{' * 21295
             return data
         manifest, code = self.run_case(malformed, policy='compromise')
-        self.assertEqual((code, manifest['status'], manifest['accepted']), (2, 'PARTIAL', False))
+        self.assertEqual((code, manifest['status'], manifest['accepted']), (1, 'FAILED', False))
         final = Path(manifest['final_report']).read_text()
         self.assertIn('CLAIMS_TYPE_MISMATCH at $.claims; expected array, got string', final)
         self.assertNotIn('PRIVATE_MALFORMED_CLAIMS', final)
         self.assertNotIn('Review incomplete or evidence insufficient', final)
         self.assertNotIn('Проверка не завершена или данных недостаточно', final)
         self.assertNotIn('Старый', final)
-        self.assertFalse(manifest['revisions'][0]['review']['program_checks']['policy_satisfied'])
+        self.assertIsNone(manifest['revisions'][0]['review'])
+        self.assertNotIn('study_material', manifest)
+        self.assertEqual([stage for stage, _ in self.calls], ['collect'])
 
     def run_case(self, change=None, *, backend='codex', policy=None, continue_on_error=True, atomic_override=None):
         config = self.config()
@@ -81,6 +84,8 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             context = json.loads(payload.decode().split('# Authoritative orchestration context (data)\n')[1]
                                  .split('\n\n# Required final JSON Schema')[0])
             stage = context.get('stage') or ('review' if 'architecture_document' in context else 'study')
+            if context.get('phase') == 'collect':
+                stage = 'collect'
             calls.append((stage, context))
             data = response_for(context)
             outcome = change(stage, data) if change else data
@@ -99,7 +104,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
 
     def test_invalid_advisory_scope_preserves_the_valid_document(self):
         def change(stage, data):
-            if stage == 'study':
+            if stage in ('collect', 'study'):
                 data['subsystems'] = [dict(id='S-001', name='App', purpose='Fixture.', paths=['PRIVATE_UNKNOWN'])]
                 data['exclusions'] = [dict(path='PRIVATE_EXCLUSION', reason='Unknown exclusion.')]
             return data
@@ -124,12 +129,12 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
 
     def test_strict_study_advisory_paths_do_not_require_recovery(self):
         def change(stage, data):
-            if stage == 'study':
+            if stage in ('collect', 'study'):
                 data['subsystems'] = [dict(id='S-001', name='App', purpose='Fixture.', paths=['unknown'])]
             return data
         manifest, code = self.run_case(change, policy='strict')
         self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
-        self.assertEqual([s for s, _ in self.calls], ['study', 'review'])
+        self.assertEqual([s for s, _ in self.calls], ['collect', 'study', 'review'])
         attempt = Path(manifest['revisions'][0]['study_invocation']['artifact_directory'])
         self.assertFalse((attempt / 'recovered.json').exists())
         self.assertTrue(manifest['study']['program_checks']['policy_satisfied'])
@@ -150,11 +155,12 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             self.assertIn('C-001', text)
             self.assertIn('Operational evidence was unavailable.', text)
             self.assertIn('Insufficient evidence according to the agent', text)
-            expanded = json.loads((self.run_dir / 'revisions/001/study.logs/attempt-001/expanded.json').read_text())
+            attempt = Path(manifest['study_invocation']['artifact_directory'])
+            expanded = json.loads((attempt / 'assembled.json').read_text())
             self.assertEqual(expanded['report_sections'], self.originals['study']['report_sections'])
             self.assertIn(materialize_study(expanded)['report_markdown'], text)
             self.assertIn(self.originals['review']['report_markdown'], text)
-            self.assertEqual([s for s, _ in self.calls], ['study', 'review'])
+            self.assertEqual([s for s, _ in self.calls], ['collect', 'study', 'review'])
             raw = json.loads((self.run_dir / 'revisions/001/review.logs/attempt-001/extracted.json').read_text())
             self.assertEqual(raw, self.originals['review'])
             self.assertEqual(json.loads((self.run_dir / 'revisions/001/review.logs/attempt-001/invocation.json').read_text())['status'], 'FAILED')
@@ -170,8 +176,8 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
         self.assertIsNone(manifest['review'])
         self.assertIsNotNone(manifest['revisions'][0]['review'])
         self.assertFalse(manifest['accepted'])
-        self.assertFalse(self.calls[1][1]['document_strictly_valid'])
-        self.assertIn('validation_issues', self.calls[1][1]['architecture_document'])
+        self.assertFalse(self.calls[2][1]['document_strictly_valid'])
+        self.assertIn('validation_issues', self.calls[2][1]['architecture_document'])
         self.assertFalse((self.run_dir / 'study.json').exists())
 
     def test_malformed_ledger_is_not_used_as_structured_evidence(self):
@@ -213,11 +219,12 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
 
     def test_recovered_study_stops_calls_when_requested(self):
         def change(stage, data):
-            data['extra'] = True
+            if stage == 'study':
+                data['extra'] = True
             return data
         manifest, code = self.run_case(change, continue_on_error=False)
         self.assertEqual(code, 2)
-        self.assertEqual(len(self.calls), 1)
+        self.assertEqual([stage for stage, _ in self.calls], ['collect', 'study'])
         self.assertIn('study_material', manifest)
 
     def test_broken_json_wrong_identity_and_wrong_task_are_not_recovered(self):
@@ -300,18 +307,18 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
 
     def test_missing_claims_has_no_registry_or_positive_acceptance(self):
         def missing_claims(stage, data):
-            data.pop('claims')
+            if stage == 'collect':
+                data.pop('claims')
             return data
         backend = 'codex'
         for policy in ('strict', 'compromise'):
             with self.subTest(backend=backend, policy=policy):
                 manifest, code = self.run_case(missing_claims, backend=backend, policy=policy)
-                self.assertEqual(code, 2 if policy == 'compromise' else 1)
+                self.assertEqual(code, 1)
                 self.assertFalse(manifest['accepted'])
-                if policy == 'compromise':
-                    self.assertNotIn('claims', manifest['study_material'])
-                    self.assertEqual(self.calls[1][1]['claim_registry'], [])
-                    self.assertIn('Восстановленный текст', Path(manifest['final_report']).read_text())
+                self.assertNotIn('study_material', manifest)
+                self.assertIsNone(manifest['review'])
+                self.assertEqual([stage for stage, _ in self.calls], ['collect'])
 
     def test_markdown_study_never_reaches_review_or_final_narrative(self):
         def markdown_study(stage, data):
@@ -324,7 +331,7 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             with self.subTest(backend=backend, policy=policy):
                 manifest, code = self.run_case(markdown_study, backend=backend, policy=policy)
                 self.assertEqual((code, manifest['status'], manifest['accepted']), (1, 'FAILED', False))
-                self.assertEqual([stage for stage, _ in self.calls], ['study'])
+                self.assertEqual([stage for stage, _ in self.calls], ['collect', 'study'])
                 self.assertNotIn('study_material', manifest)
                 self.assertNotIn('# Unsupported study', Path(manifest['final_report']).read_text())
                 directory = Path(manifest['final_report']).parent
@@ -374,7 +381,7 @@ class CompromiseGit(unittest.TestCase):
         manifest, code, calls = self.pipeline()
         self.assertEqual((manifest['status'], code), ('PARTIAL', 2))
         self.assertFalse(any(b['accepted'] for b in manifest['branches']))
-        self.assertEqual(len(calls), 6)
+        self.assertEqual(len(calls), 8)
         self.assertEqual(calls[-1][0], 'compare')
         self.assertEqual(set(manifest['comparison']['unresolved_branches']), set(self.config()['git_mode']['branches']))
         text = Path(manifest['final_report']).read_text()
@@ -405,7 +412,7 @@ class CompromiseGit(unittest.TestCase):
     def test_single_branch_and_stop_after_recovered_review(self):
         manifest, code, calls = self.pipeline(single=True, cont=False)
         self.assertEqual(code, 2)
-        self.assertEqual([s for s, _ in calls], ['study', 'review'])
+        self.assertEqual([s for s, _ in calls], ['study', 'study', 'review'])
         self.assertNotIn('comparison', manifest)
 
     def test_restoration_failure_stays_failed_with_prior_material(self):
@@ -431,16 +438,26 @@ class CompromiseGit(unittest.TestCase):
 
 class CompromiseNative(unittest.TestCase):
     setUp = native_fixtures.CodexOutputTests.setUp
-    stage = native_fixtures.CodexOutputTests.stage
     prompts = native_fixtures.CodexOutputTests.prompts
     recorded = CodexFixture.recorded
+
+    def stage(self, scenario, repairs=0, stage='study', settings=None):
+        invoke = Runner.invoke
+
+        def revised(runner, stage, context, destination):
+            if stage == 'study':
+                context = dict(context, prompt_variant='revise')
+            return invoke(runner, stage, context, destination)
+
+        with patch.object(Runner, 'invoke', revised):
+            return native_fixtures.CodexOutputTests.stage(self, scenario, repairs, stage, settings)
 
     def config(self):
         config = native_fixtures.CodexOutputTests.config(self)
         config.pop('result_policy')
         return config
 
-    def test_cli_retains_material_without_format_retries(self):
+    def test_revision_cli_retains_material_without_format_retries(self):
         backend = 'codex'
         for repairs in (0, 1, 2):
             before = len(self.prompts())
@@ -478,7 +495,7 @@ class NativeFinalPipeline(unittest.TestCase):
             before = len(self.prompts())
             manifest, code = self.run_case(scenario)
             self.assertEqual(code, 2)
-            self.assertEqual(len(self.prompts()) - before, 2)
+            self.assertEqual(len(self.prompts()) - before, 3)
             self.assertTrue(Path(manifest['final_report']).is_file())
             if scenario == 'material-review':
                 self.assertIsNone(manifest['review'])

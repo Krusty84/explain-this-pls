@@ -30,26 +30,28 @@ class CitationPipelineTests(test_folder.FolderFixture):
 
     @staticmethod
     def mismatch(runner, context, data):
-        if context['stage'] == 'study':
+        if context['stage'] == 'study' and context.get('phase') != 'write':
             data['evidence'][0]['quote'] = 'private unmatched source text'
 
-    def test_codex_continue_study_and_review_with_warnings(self):
+    def test_codex_preserves_partial_study_and_review_with_warnings(self):
         backend = 'codex'
         with self.subTest(backend=backend):
             reporter = Reporter(stdout=io.StringIO(), stderr=io.StringIO(), progress=False)
             self.addCleanup(reporter.close)
             manifest, code = self.run_case(backend=backend, policy='compromise', review=True,
                                          change=self.mismatch, reporter=reporter)
-            self.assertEqual(code, 0, manifest.get('diagnostics'))
-            self.assertEqual(manifest['status'], 'COMPLETE_WITH_WARNINGS')
-            self.assertEqual([c['context']['stage'] for c in self.calls],
-                             ['study', 'review'])
-            self.assertTrue(processing_satisfied(manifest))
+            self.assertEqual(code, 2, manifest.get('diagnostics'))
+            self.assertEqual(manifest['status'], 'PARTIAL')
+            self.assertEqual([c['context'].get('phase', c['context']['stage']) for c in self.calls],
+                             ['collect', 'write', 'review'])
+            self.assertFalse(processing_satisfied(manifest))
             self.assertFalse(workflow_satisfied(manifest))
             self.assertFalse(accepted(manifest))
             checks = manifest['study']['program_checks']
             self.assertFalse(checks['policy_satisfied'])
-            self.assertTrue(checks['continuation_allowed'])
+            self.assertFalse(checks['continuation_allowed'])
+            self.assertEqual(manifest['study']['completion_status'], 'PARTIAL')
+            self.assertEqual(checks['completion_self_assessment'], 'COMPLETE')
             self.assertEqual(checks['evidence_counts']['QUOTE_MISMATCH'], 1)
             warnings = checks['citation_warnings']
             self.assertEqual(len(warnings), 1)
@@ -80,7 +82,7 @@ class CitationPipelineTests(test_folder.FolderFixture):
             with self.subTest(kind=kind):
                 def change(runner, context, data):
                     self.mismatch(runner, context, data)
-                    if context['stage'] != 'study':
+                    if context['stage'] != 'study' or context.get('phase') == 'write':
                         return
                     if kind == 'range':
                         data['evidence'][1]['end_line'] = 999
@@ -92,15 +94,15 @@ class CitationPipelineTests(test_folder.FolderFixture):
 
     def test_direct_study_with_quote_warning_still_publishes(self):
         def change(runner, context, data):
-            if context['stage'] == 'study':
+            if context['stage'] == 'study' and context.get('phase') != 'write':
                 data['evidence'][0]['quote'] = 'unmatched text'
         manifest, code = self.run_case(large=False, policy='compromise', change=change)
-        self.assertEqual(code, 0, manifest.get('diagnostics'))
-        self.assertEqual(manifest['status'], 'COMPLETE_WITH_WARNINGS')
+        self.assertEqual(code, 2, manifest.get('diagnostics'))
+        self.assertEqual(manifest['status'], 'PARTIAL')
         self.assertFalse(manifest['study']['program_checks']['policy_satisfied'])
         self.assertTrue((self.runner.session.run_dir / 'ARCHITECTURE.md').exists())
         meta = manifest['study_invocation']
-        attempt = Path(meta['artifact_directory'])
+        attempt = Path(meta['phase_invocations'][0]['artifact_directory'])
         details = json.loads((attempt / 'quote-diagnostics.json').read_text())
         self.assertEqual(details[0]['action'], 'UNRESOLVED')
         self.assertIn('-unmatched text', details[0]['diff'])
@@ -134,20 +136,22 @@ class CitationPipelineTests(test_folder.FolderFixture):
                 context = dict(source_directory=str(self.source), source_fingerprint=inventory['source_fingerprint'])
                 calls = []
                 def answer(command, cwd, env, payload, **kwargs):
-                    data = response(prompt_context(payload))
-                    data['evidence'][0].update(start_line=1 if kind == 'range' else 2,
-                        end_line=1 if kind == 'range' else 2,
-                        quote='def main():\n    return 42' if kind == 'range' else '        return 42')
-                    data['evidence'][0]['id'] = 'E-1'
+                    current = prompt_context(payload)
+                    data = response(current)
+                    if current.get('phase') == 'collect':
+                        data['evidence'][0].update(start_line=1 if kind == 'range' else 2,
+                            end_line=1 if kind == 'range' else 2,
+                            quote='def main():\n    return 42' if kind == 'range' else '        return 42')
+                        data['evidence'][0]['id'] = 'E-1'
                     calls.append(copy.deepcopy(data))
                     return cli_result(command, data)
                 with patch('src.runtime.process.process', side_effect=answer):
                     data, meta = runner.invoke('study', context, runner.session.run_dir / 'study.logs')
-                self.assertEqual(len(calls), 1)
+                self.assertEqual(len(calls), 2)
                 self.assertTrue(data['program_checks']['policy_satisfied'])
                 self.assertEqual(data['program_checks']['citation_warnings'][0]['action'], 'CORRECTED')
                 self.assertEqual(data['program_checks']['citation_warnings'][0]['evidence_id'], 'study:E-001')
-                attempt = Path(meta['artifact_directory'])
+                attempt = Path(meta['phase_invocations'][0]['artifact_directory'])
                 self.assertEqual(json.loads((attempt / 'extracted.json').read_text()), calls[0])
                 original = json.loads((attempt / 'expanded.json').read_text())
                 corrected = json.loads((attempt / 'quote-corrected.json').read_text())
@@ -157,7 +161,15 @@ class CitationPipelineTests(test_folder.FolderFixture):
                 self.assertEqual(journal['output_sha256'], sha(canonical(corrected)))
                 self.assertEqual(normalization['input_sha256'], journal['output_sha256'])
                 self.assertNotEqual(normalization['normalized_sha256'], journal['output_sha256'])
-                self.assertEqual(data['materialization_provenance']['normalized_sha256'], normalization['normalized_sha256'])
+                package = json.loads((runner.session.run_dir / 'study.evidence.json').read_text())
+                self.assertEqual(package['normalization_provenance']['normalized_sha256'], normalization['normalized_sha256'])
+                self.assertEqual(package['study'], json.loads((attempt / 'normalized.json').read_text()))
+                writer_attempt = Path(meta['artifact_directory'])
+                self.assertEqual(json.loads((writer_attempt / 'extracted.json').read_text()), calls[1])
+                assembled = json.loads((writer_attempt / 'assembled.json').read_text())
+                self.assertEqual(meta['assembly_provenance']['evidence_package_sha256'], sha(canonical(package)))
+                self.assertEqual(meta['assembly_provenance']['assembled_sha256'], sha(canonical(assembled)))
+                self.assertEqual(data['materialization_provenance']['normalized_sha256'], sha(canonical(assembled)))
                 self.assertIn('study.logs/attempt-001/quote-corrections.json', meta['attempt_hashes'])
                 validate_materialized(data)
 
@@ -167,7 +179,7 @@ class CitationGitPipelineTests(unittest.TestCase):
     tearDown = git_fixtures.RepoFixture.tearDown
     git = git_fixtures.RepoFixture.git
 
-    def test_quote_warnings_allow_unverified_comparison_and_restore_git(self):
+    def test_quote_warnings_keep_comparison_partial_and_restore_git(self):
         for review in (False, True):
             with self.subTest(review=review):
                 config = git_fixtures.RepoFixture.config(self)
@@ -181,7 +193,7 @@ class CitationGitPipelineTests(unittest.TestCase):
                     context = prompt_context(payload)
                     calls.append(context)
                     data = response(context)
-                    if context['stage'] == 'study' and context['branch'] == 'master':
+                    if context.get('phase') == 'collect' and context['branch'] == 'master':
                         data['evidence'][0]['quote'] = 'private unmatched text'
                     elif context['stage'] == 'compare':
                         refs = []
@@ -198,15 +210,16 @@ class CitationGitPipelineTests(unittest.TestCase):
 
                 with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=answer):
                     manifest, code = runner.run()
-                self.assertEqual((code, manifest['status']), (0, 'COMPLETE_WITH_WARNINGS'), manifest.get('diagnostics'))
+                self.assertEqual((code, manifest['status']), (2, 'PARTIAL'), manifest.get('diagnostics'))
                 self.assertEqual(calls[-1]['stage'], 'compare')
-                self.assertEqual(calls[-1]['required_unresolved_branches'], [])
+                self.assertEqual(calls[-1]['required_unresolved_branches'], ['master'])
+                self.assertEqual(manifest['comparison']['unresolved_branches'], ['master'])
                 checks = manifest['comparison']['program_checks']
                 self.assertFalse(checks['policy_satisfied'])
-                self.assertTrue(checks['continuation_allowed'])
+                self.assertFalse(checks['continuation_allowed'])
                 self.assertEqual(checks['citation_warnings'][0]['branch'], 'master')
                 self.assertFalse(manifest['workflow_satisfied'])
-                self.assertTrue(manifest['processing_completed'])
+                self.assertFalse(manifest['processing_completed'])
                 self.assertEqual(self.repo.symbolic(), 'master')
                 self.assertEqual(self.repo.head(), self.master)
                 for branch in manifest['branches']:

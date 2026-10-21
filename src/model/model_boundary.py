@@ -8,7 +8,7 @@ import copy
 import json
 import secrets
 
-from src.contracts.contracts import contract_violation, validate_schema, document_contract, MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS
+from src.contracts.contracts import contract_violation, validate_schema, document_contract, result_schema
 from src.analysis.evidence import canonical, sha
 from src.model.model_context import project_model_context
 
@@ -187,7 +187,7 @@ class Binding:
 
     @property
     def schema(self):
-        return (MODEL_FOLDER_SCHEMAS if self._mode == 'folder' else MODEL_SCHEMAS)[self._stage]
+        return result_schema(self._stage, self._context, self._mode, model=True)
 
     def expand(self, raw, allow_invalid=False):
         self.validate_identity(raw)

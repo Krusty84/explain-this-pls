@@ -114,6 +114,16 @@ FOLDER_SCHEMAS = {
                  {'source_directory': string(), 'source_fingerprint': string()}))
     for stage in ('study', 'review')
 }
+STUDY_PHASE_SCHEMAS = {
+    phase: obj(**{key: spec for key, spec in SCHEMAS['study']['properties'].items()
+                  if key not in omitted})
+    for phase, omitted in (('collect', ('report_sections',)), ('write', ('evidence', 'claims')))
+}
+FOLDER_STUDY_PHASE_SCHEMAS = {
+    phase: obj(**{key: spec for key, spec in FOLDER_SCHEMAS['study']['properties'].items()
+                  if key not in omitted})
+    for phase, omitted in (('collect', ('report_sections',)), ('write', ('evidence', 'claims')))
+}
 
 def model_schemas(internal):
     """Backend contracts contain opaque bindings; internal schemas retain hashes."""
@@ -138,6 +148,23 @@ def model_schemas(internal):
 
 MODEL_SCHEMAS = model_schemas(SCHEMAS)
 MODEL_FOLDER_SCHEMAS = model_schemas(FOLDER_SCHEMAS)
+MODEL_STUDY_PHASE_SCHEMAS = {
+    phase: model_schemas({'study': schema})['study'] for phase, schema in STUDY_PHASE_SCHEMAS.items()
+}
+MODEL_FOLDER_STUDY_PHASE_SCHEMAS = {
+    phase: model_schemas({'study': schema})['study'] for phase, schema in FOLDER_STUDY_PHASE_SCHEMAS.items()
+}
+
+
+def result_schema(stage, context, mode='git', *, model=False):
+    phase = context.get('phase') if stage == 'study' else None
+    if phase in STUDY_PHASE_SCHEMAS:
+        schemas = ((MODEL_FOLDER_STUDY_PHASE_SCHEMAS if mode == 'folder' else MODEL_STUDY_PHASE_SCHEMAS)
+                   if model else (FOLDER_STUDY_PHASE_SCHEMAS if mode == 'folder' else STUDY_PHASE_SCHEMAS))
+        return schemas[phase]
+    schemas = ((MODEL_FOLDER_SCHEMAS if mode == 'folder' else MODEL_SCHEMAS)
+               if model else (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS))
+    return schemas[stage]
 
 STUDY_ADVISORY_KEYS = ('subsystems', 'exclusions', 'coverage', 'relevance_notes', 'advisory')
 
@@ -426,7 +453,7 @@ def references(refs, allowed, path, *, namespaces=None):
 
 def validate_wire_identity(stage, value, context, mode='git'):
     """Structural and pinned-identity prerequisites; performs no repair."""
-    validate_schema(document_contract(stage, value), (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage])
+    validate_schema(document_contract(stage, value), result_schema(stage, context, mode))
     if stage in ('study', 'review'):
         identity = ('source_directory', 'source_fingerprint') if mode == 'folder' else ('branch', 'source_commit')
         for key in identity:
@@ -448,6 +475,8 @@ def validate_result(stage, value, context, mode='git'):
     nonblank(value)
     if value['completion_status'] != 'COMPLETE' and not value['limitations']:
         raise ContractError('PARTIAL/BLOCKED requires explicit limitations')
+    if stage == 'study' and context.get('phase') == 'write':
+        return
     if stage in ('study', 'review'):
         unique_ids(value['evidence'], r'E-[0-9]{3,}', '$.evidence')
         for i, e in enumerate(value['evidence']):
@@ -458,14 +487,16 @@ def validate_result(stage, value, context, mode='git'):
         evidence_ids = {stage + ':' + e['id'] for e in value['evidence']}
         unique_ids(value['claims'], r'C-[0-9]{3,}', '$.claims')
     if stage == 'study':
-        from src.reports.document_rendering import validate_sections, inspect_required_diagrams
-        validate_sections(value['report_sections'], value['claims'])
+        if context.get('phase') != 'collect':
+            from src.reports.document_rendering import validate_sections, inspect_required_diagrams
+            validate_sections(value['report_sections'], value['claims'])
         for i, claim in enumerate(value['claims']):
             references(claim['evidence_ids'], evidence_ids, f'$.claims[{i}].evidence_ids', namespaces={'study'})
             if claim['epistemic_kind'] != 'FACT' and not claim['uncertainty'].strip():
                 raise ContractError('Hypothesis/unknown requires a concrete missing check or limitation')
-        inspect_required_diagrams(value['report_sections'], value['claims'],
-                                  completion_status=value['completion_status'])
+        if context.get('phase') != 'collect':
+            inspect_required_diagrams(value['report_sections'], value['claims'],
+                                      completion_status=value['completion_status'])
         if context.get('previous_revision'):
             from src.analysis.revisions import registry_diff
             registry_diff(context['previous_revision']['study'], value)
@@ -565,7 +596,7 @@ def validate_result(stage, value, context, mode='git'):
 
 def result_diagnostics(stage, value, context, mode='git'):
     value = document_contract(stage, value)
-    schema = (FOLDER_SCHEMAS if mode == 'folder' else SCHEMAS)[stage]
+    schema = result_schema(stage, context, mode)
     structural = schema_diagnostics(value, schema)
     issues = []
     if not structural['total_violations']:

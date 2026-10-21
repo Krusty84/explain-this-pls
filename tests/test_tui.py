@@ -475,6 +475,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'stage_completed',
                 'context': dict(context, status='PARTIAL', elapsed_seconds=3, metrics=metrics, report_path='/tmp/[report].md')}))
             table.move_cursor(row=1)
+            table.focus()
             await pilot.pause()
             self.assertIn('/tmp/[report].md', str(app.query_one('#step-details', Static).content))
             payload = {'result': {'status': 'PARTIAL', 'exit_code': 2, 'review_enabled': False,
@@ -484,6 +485,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             app.complete(payload)
             await pilot.pause()
             self.assertEqual(app.query_one('#run-tabs', TabbedContent).active, 'summary-tab')
+            self.assertIs(app.focused, app.query_one('#summary', DataTable))
             self.assertEqual(app.last_exit_code, 2)
             self.assertFalse(app.query_one('#back', Button).disabled)
             await pilot.resize_terminal(120, 40)

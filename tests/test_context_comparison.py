@@ -78,8 +78,9 @@ class ContextComparisonTests(FolderFixture):
         with patch.object(Runner, 'check_cli', return_value={'version': '1'}), \
                 patch('src.runtime.process.process', side_effect=process):
             report = run_comparison(config, baseline, facts, self.base / 'pipeline', live=True)
-        self.assertEqual([p['stage'] for p in prompts], ['study'] * 3)
-        self.assertEqual(['source_context' in p for p in prompts], [False, False, True])
+        self.assertEqual([p['stage'] for p in prompts], ['study'] * 6)
+        self.assertEqual([p['phase'] for p in prompts], ['collect', 'write'] * 3)
+        self.assertEqual(['source_context' in p for p in prompts], [False, False, False, False, True, False])
         self.assertEqual([r['outcome'] for r in report['attempts']], ['successful'] * 3)
         self.assertTrue(all(Path(r['result_path']).is_file() for r in report['attempts']))
 
@@ -205,7 +206,7 @@ class GitContextComparisonTests(unittest.TestCase):
         with patch.object(Runner, 'check_cli', return_value={'version': '1'}), \
                 patch('src.runtime.process.process', side_effect=process):
             report = run_comparison(config, baseline, facts, fixture.base / 'comparison', live=True)
-        self.assertEqual(seen, [pins['test01']] * 3)
+        self.assertEqual(seen, [pins['test01']] * 6)
         self.assertEqual([r['outcome'] for r in report['attempts']], ['successful'] * 3)
         self.assertTrue(report['restoration']['restored'])
         self.assertEqual(fixture.git('branch', '--show-current').strip(), 'master')

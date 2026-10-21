@@ -16,7 +16,8 @@ from src.runtime.tool_observer import ToolObserver
 from src.backends import codex
 from src.reports.final_report import recoverable_material
 from src.analysis.ledger import prepare_result
-from src.analysis.evidence import source_catalog, SourceChanged
+from src.analysis.evidence import source_catalog, resolve_evidence, read_confined, SourceChanged
+from src.analysis.study_phases import freeze_collection
 from src.model.model_context import (CONTEXT_FORMAT, build_model_prompt, input_measurements,
                                      on_demand_source_index, serialize_model_input)
 from src.analysis.coverage_plan import inventory_summary, build_coverage_plan
@@ -39,6 +40,9 @@ class ModelInvoker:
         context = dict(context)
         context['stage'] = stage
         context['result_policy'] = 'compromise' if self.session.compromise else 'strict'
+        initial_study = stage == 'study' and not context.get('previous_revision') and context.get('prompt_variant') != 'revise'
+        if initial_study:
+            context['phase'] = 'collect'
         self.publisher.assert_coverage_file(context)
         if stage != 'compare':
             context['sources'] = source_catalog(context)
@@ -77,10 +81,19 @@ class ModelInvoker:
         candidate = None
         candidate_attempt = None
         try:
+            collection_meta = None
+            if initial_study:
+                package, collection_meta = self._invoke_once(stage, context, destination, budget=budget,
+                    evidence_pins=evidence_pins, evidence_metadata=evidence_metadata, binding=binding,
+                    binding_hashes=binding_hashes, attempt_hashes=attempt_hashes, preparation=preparation)
+                context = dict(context, phase='write', evidence_package=package)
+                context.pop('source_context', None)
+                binding = self.session.bindings.bind(stage, context, self.session.mode)
+                preparation = None
             return self._invoke_once(stage, context, destination, budget=budget,
                                      evidence_pins=evidence_pins, evidence_metadata=evidence_metadata, binding=binding,
                                      binding_hashes=binding_hashes, attempt_hashes=attempt_hashes,
-                                     preparation=preparation)
+                                     preparation=preparation, collection_meta=collection_meta)
         except ContractError as exc:
             self.attempts.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
             if not (destination / 'invocation.json').is_file():
@@ -92,6 +105,7 @@ class ModelInvoker:
             attempt = Path(meta['artifact_directory'])
             # Retain only the verified original response under the compromise policy.
             if (self.session.compromise
+                    and context.get('phase') != 'collect'
                     and meta.get('source_integrity_verified')
                     and meta.get('validation_failed') and meta.get('backend_result_valid')
                     and meta.get('model_identity_verified')
@@ -128,13 +142,15 @@ class ModelInvoker:
 
     def _invoke_once(self, stage, context, destination, *, budget,
                      evidence_pins=None, evidence_metadata=None, binding, binding_hashes, attempt_hashes,
-                     preparation=None):
+                     preparation=None, collection_meta=None):
         attempt_started = self.session.reporter.clock()
         self.attempts.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
         agent = self.session.cfg['_agents'][stage]
+        phase = context.get('phase') if stage == 'study' else None
         variant = context.get('prompt_variant', stage)
-        template = Path(self.session.cfg['_prompt_paths'][variant]).read_text()
-        reports_only = stage == 'compare'
+        template_path = Path(__file__).resolve().parents[2] / 'prompts' / 'collect.md' if phase == 'collect' else Path(self.session.cfg['_prompt_paths'][variant])
+        template = template_path.read_text()
+        reports_only = stage == 'compare' or phase == 'write'
         private_directory(destination)
         # Exclusive creation preserves every orchestrator-managed attempt.
         number = 1
@@ -197,6 +213,15 @@ class ModelInvoker:
                     model_actual_source='unknown: backend has not reported model identity',
                     review_quality='NOT_MEASURED', publication_complete=False)
         meta.update(source_tools_enabled=not reports_only)
+        if phase:
+            meta['phase'] = phase
+            self.session.reporter.emit('study_phase_started', **self.session.stage_context(stage, context))
+        if collection_meta:
+            meta['phase_invocations'] = [{key: collection_meta[key] for key in
+                ('phase', 'invocation_id', 'artifact_directory', 'status', 'duration_seconds')}]
+            for key in ('citation_corrections', 'citation_correction_provenance'):
+                if key in collection_meta:
+                    meta[key] = collection_meta[key]
         if self.session.repo:
             meta['submodules'] = context.get('submodules', [])
         artifacts.save_json(destination / 'invocation.json', meta)
@@ -232,7 +257,7 @@ class ModelInvoker:
                 artifacts.save_json(schema_path, schema)
                 try:
                     cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only,
-                                       schema=schema)
+                                       schema=schema, writer_only=phase == 'write')
                     r = None
                     meta['prompt_sent'] = True
                     try:
@@ -250,6 +275,9 @@ class ModelInvoker:
                     if r['returncode']:
                         raise AuditError(f'{agent["backend"]} exited with {r["returncode"]}; inspect private attempt logs.',
                             code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='backend')
+                    if phase == 'write' and observer.snapshot()['calls']:
+                        raise AuditError('The report author used a tool outside its evidence-only scope.',
+                                         code='WRITER_TOOL_CALL', failure_layer='execution')
                     output = codex.read_response(schema_path)
                     data, provider_meta = CLI_ADAPTERS[agent['backend']].parse_output(output)
                     meta['backend_result_valid'] = True
@@ -277,15 +305,23 @@ class ModelInvoker:
                 budget.check()
             # Publish after the CLI exits and temporary invocation files are removed.
             try:
-                data = prepare_result(stage, data, context, evidence_pins, expected_metadata=evidence_metadata,
-                                      citation_corrections=meta.get('citation_corrections'))
+                if phase == 'collect':
+                    resolutions = resolve_evidence('study', data['evidence'], context, evidence_pins,
+                                                   expected_metadata=evidence_metadata)
+                    data = freeze_collection(data, resolutions, citation_corrections=meta.get('citation_corrections'),
+                                             normalization_provenance=meta['normalization_provenance'])
+                else:
+                    data = prepare_result(stage, data, context, evidence_pins, expected_metadata=evidence_metadata,
+                                          citation_corrections=meta.get('citation_corrections'))
+                if phase == 'write':
+                    data['program_checks']['completion_self_assessment'] = meta['author_completion_self_assessment']
                 if stage == 'study' and data.get('advisory'):
                     meta['advisory_diagnostics'] = data['advisory']['diagnostics']
                     self.attempts.save_attempt_value(attempt, 'advisory.json', data['advisory'], meta)
                 for warning in data.get('program_checks', {}).get('citation_warnings', []):
                     self.session.reporter.emit('citation_warning', **(warning | self.session.stage_context(stage, context)),
                                        evidence_branch=warning.get('branch'))
-                if stage in ('study', 'review'):
+                if stage in ('study', 'review') and phase != 'collect':
                     data['normalization_provenance'] = meta['normalization_provenance']
             except SourceChanged as exc:
                 meta['source_integrity_verified'] = False
@@ -302,15 +338,41 @@ class ModelInvoker:
                 self.publisher.assert_review_files(context, destination.parent)
             self.publisher.assert_coverage_file(context)
             self.attempts.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
+            if phase == 'collect':
+                content = (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+                package_path = destination.parent / 'study.evidence.json'
+                if package_path.exists() or package_path.is_symlink():
+                    try:
+                        existing = read_confined(self.session.run_dir,
+                            str(package_path.relative_to(self.session.run_dir)), len(content))
+                        if existing != content:
+                            raise ValueError('changed')
+                    except (OSError, ValueError, SourceChanged) as exc:
+                        self.session.critical_failure = True
+                        raise AuditError('Frozen evidence package cannot be replaced.',
+                                         code='MODEL_BINDING_CHANGED', failure_layer='integrity') from exc
+                else:
+                    artifacts.atomic(package_path, content)
+                attempt_hashes['study.evidence.json'] = {'sha256': digest(content), 'bytes': len(content)}
+                self.attempts.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
+                meta.update(status='SUCCEEDED', finished_at=now(), collection_complete=True,
+                            duration_seconds=round(self.session.reporter.clock() - attempt_started, 3))
+                self.session.record_attempt_metrics(meta, context, attempt_started)
+                artifacts.save_json(attempt / 'invocation.json', meta)
+                artifacts.save_json(destination / 'invocation.json', meta)
+                self.session.reporter.emit('study_phase_completed', **self.session.stage_context(stage, context))
+                return data, meta
             report_hash = self.publisher.publish_result(stage, data, destination)
             artifact_hashes = {name: {'sha256': digest(blob), 'bytes': len(blob)}
                                for name, blob in self.publisher.artifact_contents(stage, data).items()}
             meta.update(status='SUCCEEDED', finished_at=now(), report_sha256=report_hash, publication_complete=True)
             meta['artifact_hashes'] = artifact_hashes
-            meta['duration_seconds'] = round(budget.clock() - budget.started, 3)
+            meta['duration_seconds'] = round(self.session.reporter.clock() - attempt_started, 3)
             self.session.record_attempt_metrics(meta, context, attempt_started)
             artifacts.save_json(attempt / 'invocation.json', meta)
             artifacts.save_json(destination / 'invocation.json', meta)
+            if phase:
+                self.session.reporter.emit('study_phase_completed', **self.session.stage_context(stage, context))
             return data, meta
         except BaseException as exc:
             meta['tool_observation'] = observer.snapshot()
@@ -320,7 +382,7 @@ class ModelInvoker:
             if meta.get('cleanup_errors'):
                 self.session.critical_failure = True
             meta.update(status='FAILED', finished_at=now(), error=asdict(diagnostic(exc)),
-                        publication_complete=False, duration_seconds=round(budget.clock() - budget.started, 3))
+                        publication_complete=False, duration_seconds=round(self.session.reporter.clock() - attempt_started, 3))
             self.session.record_attempt_metrics(meta, context, attempt_started)
             # A failing diagnostic write must not mask the original exception.
             with contextlib.suppress(OSError):
@@ -328,6 +390,6 @@ class ModelInvoker:
                 artifacts.save_json(destination / 'invocation.json', meta)
             raise
 
-    def command(self, stage, state, agent, schema_path, env, *, reports_only=False, schema=None):
+    def command(self, stage, state, agent, schema_path, env, *, reports_only=False, schema=None, writer_only=False):
         return command(self.session, stage, state, agent, schema_path, env,
-                       reports_only=reports_only, schema=schema)
+                       reports_only=reports_only, schema=schema, writer_only=writer_only)

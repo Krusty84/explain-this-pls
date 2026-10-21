@@ -13,21 +13,25 @@ def help_command(executable: str) -> list[str]:
     return [executable, 'exec', '--help']
 
 
-def required_flags(mode: str) -> list[str]:
+def required_flags(mode: str, *, writer_only=False) -> list[str]:
     flags = ['--ephemeral', '--output-schema', '--sandbox', '--json', '--output-last-message']
     flags.append('--skip-git-repo-check')
+    if writer_only:
+        flags += ['--ignore-user-config', '--ignore-rules']
     return flags
 
 
 def build_command(agent: dict, stage: str, mode: str, schema: dict,
-                  schema_path: Path) -> list[str]:
+                  schema_path: Path, *, writer_only=False) -> list[str]:
     compare = stage == 'compare'
     cmd = [agent['executable'], 'exec', '--ephemeral', '--color', 'never', '--sandbox', 'read-only',
         '--output-schema', str(schema_path), '--json',
         '--output-last-message', str(schema_path.with_name('final.response.json')), '-c', 'approval_policy="never"',
         '-c', 'web_search="disabled"']
     cmd += ['--skip-git-repo-check']
-    if compare:
+    if writer_only:
+        cmd += ['--ignore-user-config', '--ignore-rules']
+    if compare or writer_only:
         cmd += ['-c', 'features.shell_tool=false']
     if agent.get('model'):
         cmd += ['--model', agent['model']]

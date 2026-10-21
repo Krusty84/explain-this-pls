@@ -33,11 +33,14 @@ class ResultRegressions(unittest.TestCase):
             self.assertNotIn('secret', str(detail))
 
     def test_public_schemas_equal_python_source(self):
-        from src.contracts.contracts import MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS
+        from src.contracts.contracts import (MODEL_SCHEMAS, MODEL_FOLDER_SCHEMAS,
+            MODEL_STUDY_PHASE_SCHEMAS, MODEL_FOLDER_STUDY_PHASE_SCHEMAS)
         from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS, COVERAGE_PLAN
         root = Path(__file__).resolve().parents[1]
         expected_paths = {root / 'schemas/coverage-plan.schema.json'}
         for prefix, schemas in (('', MODEL_SCHEMAS), ('folder-', MODEL_FOLDER_SCHEMAS),
+                                ('study-', MODEL_STUDY_PHASE_SCHEMAS),
+                                ('folder-study-', MODEL_FOLDER_STUDY_PHASE_SCHEMAS),
                                 ('saved-', SAVED_SCHEMAS), ('saved-folder-', SAVED_FOLDER_SCHEMAS)):
             for stage, schema in schemas.items():
                 path = root / 'schemas' / f'{prefix}{stage}.schema.json'

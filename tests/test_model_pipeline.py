@@ -47,11 +47,12 @@ class HashlessPipelineTests(FolderFixture):
     def test_all_revision_prompts_omit_service_hashes_and_preserve_private_chain(self):
         runner, manifest, code, calls = self.execute_case(lambda r, c, d: initial_finding(c['stage'], c, d))
         self.assertEqual(code, 0)
-        self.assertEqual([c['stage'] for c, _, _ in calls], ['study', 'review', 'study', 'review'])
+        self.assertEqual([c.get('phase', c['stage']) for c, _, _ in calls],
+                         ['collect', 'write', 'review', 'study', 'review'])
         self.assertEqual(len({c['source_snapshot_id'] for c, _, _ in calls}), 1)
         targets = [c['review_target_id'] for c, _, _ in calls if c['stage'] == 'review']
         self.assertEqual(len(set(targets)), 2)
-        self.assertEqual(calls[3][0]['previous_revision']['review']['review_target_id'], targets[0])
+        self.assertEqual(calls[4][0]['previous_revision']['review']['review_target_id'], targets[0])
         hashes = set(service_hashes(manifest))
         self.assertTrue(hashes)
         for context, prompt, raw in calls:
@@ -62,8 +63,8 @@ class HashlessPipelineTests(FolderFixture):
             self.assertNotIn('source_fingerprint', raw)
             if context['stage'] == 'review':
                 self.assertNotIn('target', raw)
-        attempts = list(runner.session.run_dir.rglob('attempt-001'))
-        self.assertEqual(len(attempts), 4)
+        attempts = [path for path in runner.session.run_dir.rglob('attempt-*') if path.is_dir()]
+        self.assertEqual(len(attempts), 5)
         for attempt in attempts:
             raw = json.loads((attempt / 'extracted.json').read_text())
             expanded = json.loads((attempt / 'expanded.json').read_text())
@@ -78,7 +79,14 @@ class HashlessPipelineTests(FolderFixture):
             self.assertEqual(list(service_hashes(json.loads((attempt / 'schema.json').read_text()))), [])
             normalized = json.loads((attempt / 'normalized.json').read_text())
             provenance = meta['normalization_provenance']
-            self.assertEqual(provenance['input_sha256'], sha(canonical(expanded)))
+            if meta.get('phase') == 'write':
+                assembled = json.loads((attempt / 'assembled.json').read_text())
+                self.assertEqual(meta['assembly_provenance']['writer_sha256'], sha(canonical(expanded)))
+                self.assertEqual(meta['assembly_provenance']['assembled_sha256'], sha(canonical(assembled)))
+                self.assertEqual(provenance['input_sha256'], sha(canonical(assembled)))
+                self.assertEqual(normalized, assembled)
+            else:
+                self.assertEqual(provenance['input_sha256'], sha(canonical(expanded)))
             self.assertEqual(provenance['normalized_sha256'], sha(canonical(normalized)))
         self.assertTrue(manifest['study']['program_checks']['evidence'][0]['file_sha256'])
         final = Path(manifest['final_report']).read_text()

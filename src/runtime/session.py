@@ -96,6 +96,7 @@ class RunSession:
                 'commit': context.get('source_commit'),
                 'stage': context.get('prompt_variant', stage) if stage == 'study' else stage,
                 'revision_id': context.get('revision_id'),
+                **({'phase': context['phase']} if context.get('phase') else {}),
                 **({'generated_by': context['generated_by']} if context.get('generated_by') else {}),
                 'backend': None if context.get('generated_by') == 'orchestrator' else
                     self.cfg['_agents'].get(stage, {}).get('backend')}

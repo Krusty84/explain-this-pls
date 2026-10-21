@@ -16,6 +16,8 @@ CLI_ADAPTERS = {'codex': codex}
 
 def check_cli(session) -> dict:
     result = {}
+    writers = {agent['backend'] + ':' + agent['executable']
+               for stage, agent in session.cfg['_agents'].items() if stage == 'study'}
     for agent in session.cfg['_agents'].values():
         key = agent['backend'] + ':' + agent['executable']
         if key in result:
@@ -45,7 +47,7 @@ def check_cli(session) -> dict:
                 elif not output.strip():
                     output = r['stderr']
                 texts.append(output.decode(errors='replace'))
-            required = adapter.required_flags(session.mode)
+            required = adapter.required_flags(session.mode, writer_only=key in writers)
             if any(flag not in texts[1] for flag in required):
                 raise AuditError(f'{backend} lacks required CLI options: {required}',
                                  code='BACKEND_INCOMPATIBLE', failure_kind='BACKEND_INCOMPATIBLE',
@@ -58,10 +60,11 @@ def check_cli(session) -> dict:
     session.versions = {k: v['version'] for k, v in result.items()}
     return result
 
-def command(session, stage: str, state: Path, agent: dict, schema_path: Path, env: dict, *, reports_only=False, schema=None) -> list[str]:
+def command(session, stage: str, state: Path, agent: dict, schema_path: Path, env: dict, *, reports_only=False, writer_only=False, schema=None) -> list[str]:
     adapter = CLI_ADAPTERS.get(agent['backend'])
     if adapter:
-        access_stage = 'compare' if reports_only else stage
-        return adapter.build_command(agent, access_stage, session.mode, schema or session.schemas[stage], schema_path)
+        access_stage = 'compare' if reports_only and not writer_only else stage
+        return adapter.build_command(agent, access_stage, session.mode, schema or session.schemas[stage], schema_path,
+                                     writer_only=writer_only)
     raise AuditError('No CLI adapter for this backend.',
                      code='BACKEND_INCOMPATIBLE')

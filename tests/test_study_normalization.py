@@ -227,7 +227,14 @@ class NormalizationPipelineTests(FolderFixture):
 
     def invoke(self, runner, context, data):
         def process(command, cwd, env, payload, **kwargs):
-            model_data = model_wire(data, prompt_context(payload), context)
+            model_context = prompt_context(payload)
+            phase_data = copy.deepcopy(data)
+            if model_context.get('phase') == 'collect':
+                phase_data.pop('report_sections', None)
+            elif model_context.get('phase') == 'write':
+                phase_data.pop('claims', None)
+                phase_data.pop('evidence', None)
+            model_data = model_wire(phase_data, model_context, context)
             return cli_result(command, model_data)
         with patch('src.runtime.process.process', side_effect=process):
             return runner.invoke('study', context, runner.session.run_dir / 'study.logs')
@@ -244,20 +251,38 @@ class NormalizationPipelineTests(FolderFixture):
             expanded = strict_json((attempt / 'expanded.json').read_text())
             normalized = strict_json((attempt / 'normalized.json').read_text())
             journal = strict_json((attempt / 'normalization.json').read_text())
-            self.assertEqual(extracted, model_wire(original, prompt_context((attempt / 'input.prompt.txt').read_bytes()), context))
-            self.assertEqual(expanded, original)
+            collected = {key: value for key, value in original.items() if key != 'report_sections'}
+            self.assertEqual(extracted, model_wire(collected, prompt_context((attempt / 'input.prompt.txt').read_bytes()), context))
+            self.assertEqual(expanded, collected)
             self.assertEqual(raw, original)
-            candidate, changes = normalize_evidence('study', expanded, context, 'folder')
+            candidate, changes = normalize_evidence('study', expanded, dict(context, phase='collect'), 'folder')
             self.assertEqual(normalized, candidate)
             self.assertEqual((attempt / 'extracted.json').read_bytes(), extracted_bytes)
             provenance = normalization_provenance(expanded, candidate, changes)
             self.assertEqual(journal, provenance | {'changes': changes})
             self.assertEqual(provenance['replacement_count'], int(local))
-            self.assertEqual(provenance['input_sha256'], sha(canonical(original)))
+            self.assertEqual(provenance['input_sha256'], sha(canonical(collected)))
             self.assertEqual(provenance['normalized_sha256'], sha(canonical(normalized)))
-            self.assertEqual(saved['normalization_provenance'], provenance)
-            self.assertEqual(meta['normalization_provenance'], provenance)
-            self.assertEqual(saved['claims'], materialize_study(candidate)['claims'])
+            package = strict_json((runner.session.run_dir / 'study.evidence.json').read_text())
+            self.assertEqual(package['normalization_provenance'], provenance)
+            self.assertEqual(package['study'], candidate)
+            writer_attempt = runner.session.run_dir / 'study.logs/attempt-002'
+            writer_raw = strict_json((writer_attempt / 'expanded.json').read_text())
+            writer_model = strict_json((writer_attempt / 'extracted.json').read_text())
+            expected_writer = {key: value for key, value in original.items() if key not in ('claims', 'evidence')}
+            self.assertEqual(writer_raw, expected_writer)
+            self.assertEqual(writer_model, model_wire(expected_writer,
+                prompt_context((writer_attempt / 'input.prompt.txt').read_bytes()), context))
+            assembled = strict_json((writer_attempt / 'assembled.json').read_text())
+            self.assertEqual(assembled, candidate | {'report_sections': original['report_sections']})
+            self.assertEqual(meta['assembly_provenance']['writer_sha256'], sha(canonical(writer_raw)))
+            self.assertEqual(meta['assembly_provenance']['evidence_package_sha256'], sha(canonical(package)))
+            self.assertEqual(meta['assembly_provenance']['assembled_sha256'], sha(canonical(assembled)))
+            assembly_normalization = normalization_provenance(assembled, assembled, [])
+            self.assertEqual(saved['normalization_provenance'], assembly_normalization)
+            self.assertEqual(meta['normalization_provenance'], assembly_normalization)
+            self.assertEqual(saved['materialization_provenance']['normalized_sha256'], sha(canonical(assembled)))
+            self.assertEqual(saved['claims'], materialize_study(assembled)['claims'])
             self.assertEqual(saved['review_plan']['registry_sha256'], sha(canonical(saved['claims'])))
             self.assertEqual(saved['report_markdown'], materialize_study(raw)['report_markdown'])
             assert_architecture(self, runner.session.run_dir, saved, meta, runner.session.cfg['output_language'])
@@ -279,16 +304,20 @@ class NormalizationPipelineTests(FolderFixture):
                 self.assertNotIn('UNKNOWN_EVIDENCE_REFERENCE', json.dumps(meta['usable_material']['validation_issues']))
             attempt = runner.session.run_dir / 'study.logs/attempt-001'
             validation = strict_json((attempt / 'validation.json').read_text())
-            self.assertFalse(validation['valid'])
+            self.assertTrue(validation['valid'])
             self.assertEqual(validation['validated_object'], 'normalized.json')
             self.assertEqual(validation['normalization_provenance']['replacement_count'], 1)
-            self.assertEqual(validation['error']['details']['path'], '$.report_sections[0].blocks[0].claim_ids[0]')
-            self.assertNotIn('SECRET_LOCATOR', json.dumps(validation))
+            writer_validation = strict_json((runner.session.run_dir / 'study.logs/attempt-002/validation.json').read_text())
+            self.assertFalse(writer_validation['valid'])
+            self.assertEqual(writer_validation['validated_object'], 'expanded.json')
+            self.assertEqual(writer_validation['error']['details']['path'], '$.report_sections[0].blocks[0].claim_ids[0]')
+            self.assertNotIn('SECRET_LOCATOR', json.dumps(writer_validation))
             self.assertFalse((runner.session.run_dir / 'study.json').exists())
 
     def test_large_string_claims_retained_without_conversion_or_acceptance(self):
         for policy in ('strict', 'compromise'):
             runner, context, data = self.prepare(policy=policy)
+            context['prompt_variant'] = 'revise'
             data['claims'] = '[{"secret":"' + 'x' * 21295
             if policy == 'strict':
                 with self.assertRaises(ContractError) as caught: self.invoke(runner, context, data)
@@ -343,8 +372,10 @@ class NormalizationPipelineTests(FolderFixture):
             else:
                 data['evidence'][0]['path'] = 'missing.py'
             saved, meta = self.invoke(runner, context, data)
-            self.assertEqual(saved['normalization_provenance']['replacement_count'], 1)
-            self.assertEqual(saved['completion_status'], data['completion_status'])
+            package = strict_json((runner.session.run_dir / 'study.evidence.json').read_text())
+            self.assertEqual(package['normalization_provenance']['replacement_count'], 1)
+            self.assertEqual(package['study']['completion_status'], data['completion_status'])
+            self.assertEqual(saved['completion_status'], 'PARTIAL')
             self.assertFalse(saved['program_checks']['policy_satisfied'])
             if mutation == 'missing-evidence-file':
                 self.assertEqual(saved['program_checks']['evidence'][0]['status'], 'NOT_FOUND')

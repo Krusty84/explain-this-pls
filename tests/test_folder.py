@@ -488,14 +488,14 @@ class FolderPipelineTests(FolderFixture):
         manifest, code, stages = self.run_pipeline(doc_status='BLOCKED')
         self.assertEqual(code, 2)
         self.assertEqual(manifest['status'], 'PARTIAL')
-        self.assertEqual(stages, ['study'])
+        self.assertEqual(stages, ['study', 'study'])
         self.assertEqual(manifest['errors'], [])
 
     def test_partial_document_is_reviewed_but_not_accepted(self):
         manifest, code, stages = self.run_pipeline(doc_status='PARTIAL')
         self.assertEqual(code, 2)
         self.assertFalse(manifest['accepted'])
-        self.assertEqual(stages, ['study', 'review'])
+        self.assertEqual(stages, ['study', 'study', 'review'])
 
     def test_stage_failure_stops_even_with_continue_on_error(self):
         for stage in ('study', 'review'):
@@ -567,7 +567,7 @@ class FolderCLIIntegrationTests(FolderFixture):
                 self.assertEqual(output['workflow_satisfied'], not check)
                 calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
                 stages = [c['context']['stage'] for c in calls if 'context' in c]
-                self.assertEqual(stages, [] if check else ['study'])
+                self.assertEqual(stages, [] if check else ['study', 'study'])
                 if not check:
                     manifest = json.loads(Path(output['manifest']).read_text())
                     self.assertFalse(manifest['accepted'])
@@ -596,7 +596,7 @@ class FolderCLIIntegrationTests(FolderFixture):
                 fingerprints.add(inventory['source_fingerprint'])
                 self.assertFalse(any('.git' in entry['path'].split('/') for entry in inventory['entries']))
                 calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-                self.assertEqual(sum('context' in call for call in calls), 0 if check else 1)
+                self.assertEqual(sum('context' in call for call in calls), 0 if check else 2)
         self.assertEqual(len(fingerprints), 1)
 
     def test_unsafe_selected_paths_fail_preflight_with_and_without_source_context(self):
@@ -654,8 +654,8 @@ class FolderCLIIntegrationTests(FolderFixture):
                 self.assertEqual(snapshot['folder_mode']['path'], str(self.source))
                 calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
                 invocations = [c for c in calls if 'context' in c]
-                self.assertEqual(len(calls), 2 if check else 4)
-                self.assertEqual(len(invocations), 0 if check else 2)
+                self.assertEqual(len(calls), 2 if check else 5)
+                self.assertEqual(len(invocations), 0 if check else 3)
                 self.assertFalse((run / 'comparison').exists())
                 self.assertFalse((self.source / '.git').exists())
                 for call in invocations:
@@ -663,16 +663,21 @@ class FolderCLIIntegrationTests(FolderFixture):
                     for field in ('contract_id', 'artifact_format', 'context_format'):
                         self.assertNotIn(field, call['schema']['properties'])
                         self.assertNotIn(field, call['schema']['required'])
-                    self.assertEqual(call['cwd'], str(self.source))
+                    if context.get('phase') == 'write':
+                        self.assertNotEqual(call['cwd'], str(self.source))
+                        self.assertIn('features.shell_tool=false', args)
+                        self.assertNotIn('source_context', context)
+                    else:
+                        self.assertEqual(call['cwd'], str(self.source))
+                        self.assertNotIn('features.shell_tool=false', args)
                     self.assertEqual(context['project_description'], self.value['project_description'])
                     self.assertNotIn('entries', context)
                     self.assertNotIn('branch', context)
                     self.assertIn('--skip-git-repo-check', args)
-                    self.assertNotIn('features.shell_tool=false', args)
                 if not check:
                     self.assertNotIn('architecture_document', invocations[0]['context'])
-                    self.assertEqual(invocations[1]['context']['architecture_document']['report_markdown'], manifest['study']['report_markdown'])
-                    review_context = invocations[1]['context']
+                    self.assertEqual(invocations[2]['context']['architecture_document']['report_markdown'], manifest['study']['report_markdown'])
+                    review_context = invocations[2]['context']
                     self.assertNotIn('document_sha256', review_context)
                     self.assertNotIn('source_fingerprint', review_context)
                     bindings = json.loads((run / 'revisions/001/review.logs/attempt-001/binding.json').read_text())

@@ -33,7 +33,8 @@ class PrivateChainRecoveryTests(FolderFixture):
             with self.subTest(filename=filename):
                 runner = Runner(self.config() | {'result_policy': 'compromise'}, self.base / filename)
                 context = {'source_directory': str(self.source),
-                           'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
+                           'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint'],
+                           'prompt_variant': 'revise'}
                 original = runner.invoker.validator.validate_attempt
                 changed = []
                 def process(command, cwd, env, payload, **kwargs):
@@ -81,21 +82,25 @@ class PrivateChainRecoveryTests(FolderFixture):
             self.assertFalse((runner.session.run_dir / 'study.logs/attempt-002').exists())
 
     def test_review_cannot_change_published_study_conversion_chain(self):
-        for filename in ('extracted.json', 'expanded.json', 'normalized.json', 'normalization.json',
-                         'materialized.json', 'provenance.json'):
-            with self.subTest(filename=filename):
-                runner = Runner(self.config(), self.base / ('later-' + filename))
+        files = [('attempt-001', filename) for filename in
+                 ('extracted.json', 'expanded.json', 'normalized.json', 'normalization.json')]
+        files += [('attempt-002', filename) for filename in
+                  ('extracted.json', 'expanded.json', 'assembled.json', 'normalized.json',
+                   'normalization.json', 'materialized.json', 'provenance.json')]
+        for attempt, filename in files:
+            with self.subTest(attempt=attempt, filename=filename):
+                runner = Runner(self.config(), self.base / ('later-' + attempt + '-' + filename))
                 calls = []
                 def process(command, cwd, env, payload, **kwargs):
                     context = prompt_context(payload)
                     calls.append(context['stage'])
                     if context['stage'] == 'review':
-                        corrupt_json(runner.session.run_dir / 'revisions/001/study.logs/attempt-001' / filename)
+                        corrupt_json(runner.session.run_dir / 'revisions/001/study.logs' / attempt / filename)
                     return cli_result(command, response(context))
                 with patch.object(runner, 'check_cli', return_value={}), \
                         patch('src.runtime.process.process', side_effect=process):
                     manifest, code = runner.run()
-                self.assertEqual(calls, ['study', 'review'])
+                self.assertEqual(calls, ['study', 'study', 'review'])
                 self.assertEqual((code, manifest['status'], manifest['critical_failure']), (1, 'FAILED', True))
                 self.assertFalse(manifest['publication_complete'])
                 self.assertTrue(any(d.get('failure_layer') == 'integrity' for d in manifest['diagnostics']))

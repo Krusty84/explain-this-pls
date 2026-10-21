@@ -1,0 +1,119 @@
+{
+  "type": "object",
+  "properties": {
+    "completion_status": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "PARTIAL",
+        "BLOCKED"
+      ]
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "task": {
+      "type": "string",
+      "enum": [
+        "architecture_documentation"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "start_line": {
+            "type": "integer"
+          },
+          "end_line": {
+            "type": "integer"
+          },
+          "quote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source_id",
+          "path",
+          "start_line",
+          "end_line",
+          "quote"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "statement": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "epistemic_kind": {
+            "type": "string",
+            "enum": [
+              "FACT",
+              "HYPOTHESIS",
+              "UNKNOWN"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "uncertainty": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "statement",
+          "scope",
+          "epistemic_kind",
+          "evidence_ids",
+          "uncertainty"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "source_directory": {
+      "type": "string"
+    },
+    "source_snapshot_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "completion_status",
+    "limitations",
+    "task",
+    "evidence",
+    "claims",
+    "source_directory",
+    "source_snapshot_id"
+  ],
+  "additionalProperties": false
+}

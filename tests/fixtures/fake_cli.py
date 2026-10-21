@@ -94,7 +94,8 @@ if '--version' in args:
     print('Fixture startup warning', file=sys.stderr)
     print(os.environ.get('AUDIT_TEST_CLI_VERSION', 'fixture-cli 1.0'))
 elif '--help' in args:
-    print('--ephemeral --output-schema --sandbox --json --output-last-message --skip-git-repo-check --model')
+    print('--ephemeral --output-schema --sandbox --json --output-last-message --skip-git-repo-check --model '
+          '--ignore-user-config --ignore-rules')
 else:
     prompt = sys.stdin.read()
     raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]
@@ -107,7 +108,7 @@ else:
         assert json.loads(Path(args[args.index('--output-schema') + 1]).read_text()) == call['schema']
     stage = context.get('stage') or ('compare' if 'baseline_branch' in context else
                                     'review' if 'architecture_document' in context else 'study')
-    if stage != 'compare' and context.get('source_mode') == 'git':
+    if stage != 'compare' and context.get('phase') != 'write' and context.get('source_mode') == 'git':
         inspect_sources(context)
     action(stage)
     sys.path.insert(0, str(Path(__file__).parent))
@@ -117,7 +118,7 @@ else:
     scenario = os.environ.get('AUDIT_FAKE_CASE', '')
     if scenario == 'schema-extra':
         data['extra_private_key'] = ['private value']
-    if scenario == 'missing-claims' and stage == 'study':
+    if scenario == 'missing-claims' and stage == 'study' and context.get('phase') != 'write':
         del data['claims']
     if scenario == 'claims-string':
         data['claims'] = '[{"private":"' + 'x' * 21295
@@ -132,7 +133,7 @@ else:
         data['completion_status'] = 'INVALID'
     if scenario == 'wrong-identity':
         data['source_snapshot_id' if 'source_snapshot_id' in data else 'source_commit'] = 'wrong'
-    if os.environ.get('AUDIT_FAKE_LOCAL_REFS'):
+    if os.environ.get('AUDIT_FAKE_LOCAL_REFS') and 'claims' in data:
         data['claims'][0]['evidence_ids'] = ['E-001']
     if 'AUDIT_FAKE_CASE' in os.environ:
         with open(os.environ['AUDIT_TEST_CALL_LOG'], 'a') as stream:

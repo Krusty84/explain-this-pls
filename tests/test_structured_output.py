@@ -71,7 +71,7 @@ class CodexOutputTests(unittest.TestCase):
         self.assertEqual(original['claims'][0]['evidence_ids'], ['E-001'])
         self.assertEqual(normalized['claims'][0]['evidence_ids'], ['study:E-001'])
         self.assertTrue(meta['publication_complete'])
-        self.assertEqual(len(self.prompts()), 1)
+        self.assertEqual(len(self.prompts()), 2)
 
     def test_schema_errors_never_consume_legacy_repair_setting(self):
         for repairs in (0, 1, 2):
@@ -153,7 +153,7 @@ class NativeGitComparisonTests(unittest.TestCase):
                 manifest, code = self.run_case(scenario)
             self.assertEqual(code, expected_code, manifest)
             self.assertFalse(any(b['accepted'] for b in manifest['branches']))
-            self.assertEqual(len(self.prompts()) - start, 2 if scenario == 'schema-error' else 4)
+            self.assertEqual(len(self.prompts()) - start, 2 if scenario == 'schema-error' else 6)
             result = manifest['comparison']
             self.assertEqual(result['completion_status'], 'BLOCKED')
             self.assertEqual(result['compared_branches'], ['other'])

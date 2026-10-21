@@ -112,7 +112,7 @@ class OptionalReviewPipelineTests(PipelineMixin, FolderFixture):
                 self.assertTrue(workflow_satisfied(manifest))
                 self.assertFalse(manifest['accepted'])
                 self.assertFalse(accepted(manifest))
-                self.assertEqual([c['stage'] for c in self.calls], ['study'])
+                self.assertEqual([c['phase'] for c in self.calls], ['collect', 'write'])
                 self.assertEqual(manifest['selected_revision'], '001')
                 self.assertEqual(len(manifest['revisions']), 1)
                 for item in (manifest, manifest['revisions'][0], manifest['revision_history'][0]):
@@ -126,7 +126,7 @@ class OptionalReviewPipelineTests(PipelineMixin, FolderFixture):
                 self.assertTrue((self.run_dir / 'review.plan.json').is_file())
                 skipped = next(s for s in manifest['metrics']['stages'] if s['stage'] == 'review')
                 self.assertEqual((skipped['status'], skipped['attempts'], skipped['usage']['total_tokens']), ('SKIPPED', 0, 0))
-                self.assertEqual(manifest['metrics']['attempts'], 1)
+                self.assertEqual(manifest['metrics']['attempts'], 2)
                 report = (self.run_dir / 'FINAL_REPORT.md').read_text()
                 self.assertIn('Review is disabled by configuration', report)
                 self.assertNotIn('review: Result n/a', report)
@@ -151,9 +151,9 @@ class OptionalReviewPipelineTests(PipelineMixin, FolderFixture):
                 if ctx['stage'] == 'study':
                     if case == 'partial':
                         data.update(completion_status='PARTIAL', limitations=['Incomplete inspection.'])
-                    elif case == 'evidence':
+                    elif case == 'evidence' and ctx.get('phase') != 'write':
                         data['evidence'][0]['end_line'] = 99
-                    elif case == 'recovered':
+                    elif case == 'recovered' and ctx.get('phase') == 'write':
                         data['unexpected'] = True
                     elif case == 'changed':
                         (self.source / 'app.py').write_text('changed source\n')
@@ -220,7 +220,7 @@ class OptionalReviewGitTests(PipelineMixin, unittest.TestCase):
                 with self.subTest(policy=policy, branches=branches):
                     manifest, code = self.run_pipeline(self.config(policy, branches), self.difference)
                     self.assertEqual((manifest['status'], code), ('COMPLETE', 0), manifest.get('diagnostics'))
-                    stages = ['study'] * len(branches) + (['compare'] if len(branches) > 1 else [])
+                    stages = ['study', 'study'] * len(branches) + (['compare'] if len(branches) > 1 else [])
                     self.assertEqual([c['stage'] for c in self.calls], stages)
                     for branch in manifest['branches']:
                         self.assertTrue(branch['workflow_satisfied'])
@@ -236,7 +236,7 @@ class OptionalReviewGitTests(PipelineMixin, unittest.TestCase):
     def test_bad_comparison_support_never_completes_processing(self):
         for case in ('one_side', 'insufficient', 'confirmed', 'wrong_revision', 'unknown_claim', 'hypothesis'):
             def change(ctx, data):
-                if case == 'hypothesis' and ctx['stage'] == 'study':
+                if case == 'hypothesis' and ctx['stage'] == 'study' and ctx.get('phase') != 'write':
                     data['claims'][0].update(epistemic_kind='HYPOTHESIS', uncertainty='Requires another check.')
                 self.difference(ctx, data)
                 if ctx['stage'] == 'compare':

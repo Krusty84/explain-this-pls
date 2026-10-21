@@ -69,6 +69,16 @@ def response(context):
         data['report_sections'] = sections()
         data.update(task='architecture_documentation', claims=[dict(id='C-001', statement='Has an entry point',
             scope='Static source inspection.', epistemic_kind='FACT', evidence_ids=['study:E-001'], uncertainty='')])
+        if context.get('phase') == 'collect':
+            del data['report_sections']
+        elif context.get('phase') == 'write':
+            claims = context['evidence_package']['study']['claims']
+            for section in data['report_sections']:
+                for block in section['blocks']:
+                    if block['claim_ids']:
+                        block['claim_ids'] = [claim['id'] for claim in claims]
+            del data['claims']
+            del data['evidence']
     return data
 
 

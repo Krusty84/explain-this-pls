@@ -28,7 +28,7 @@ class CitationIntegrityTests(FolderFixture):
     @staticmethod
     def model_answer(context):
         data = response(context)
-        if context['stage'] == 'study':
+        if context['stage'] == 'study' and context.get('phase') != 'write':
             data['evidence'][0].update(start_line=2, end_line=2, quote='        return 42')
         return data
 
@@ -64,7 +64,7 @@ class CitationIntegrityTests(FolderFixture):
                 with patch.object(runner, 'check_cli', return_value={}), \
                         patch('src.runtime.process.process', side_effect=process):
                     manifest, code = runner.run()
-                self.assertEqual(calls, ['study', 'review'])
+                self.assertEqual(calls, ['study', 'study', 'review'])
                 self.assertEqual((code, manifest['status'], manifest['critical_failure']), (1, 'FAILED', True))
                 self.assertFalse(manifest['publication_complete'])
                 self.assertTrue(any(d.get('failure_layer') == 'integrity' for d in manifest['diagnostics']))
@@ -95,7 +95,7 @@ class CitationIntegrityTests(FolderFixture):
 
         with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process):
             manifest, code = runner.run()
-        self.assertEqual(calls, ['study', 'review'])
+        self.assertEqual(calls, ['study', 'study', 'review'])
         self.assertEqual((code, manifest['status'], manifest['critical_failure']), (1, 'FAILED', True))
         self.assertFalse(manifest['publication_complete'])
         self.assertTrue(any(d.get('failure_layer') == 'integrity' for d in manifest['diagnostics']))

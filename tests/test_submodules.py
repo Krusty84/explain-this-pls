@@ -153,9 +153,12 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
             self.assert_original(before)
             calls = [json.loads(s) for s in self.calls.read_text().splitlines()]
             stages = [c for c in calls if 'context' in c]
-            self.assertEqual(len(stages), 5)
+            self.assertEqual(len(stages), 7)
             for call in stages[:-1]:
-                self.assertEqual(call['observed'], self.expected[call['context']['branch']])
+                if call['context'].get('phase') == 'write':
+                    self.assertNotIn('observed', call)
+                else:
+                    self.assertEqual(call['observed'], self.expected[call['context']['branch']])
             changes = stages[-1]['context']['git_deltas']['topic']
             self.assertEqual({d['path'] for d in changes['changes']},
                              {'app.py', CHILD + '/app.py', LEAF + '/app.py'})
@@ -179,7 +182,7 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
             context = prompt_context(payload)
             calls.append(context['stage'])
             data = response(context)
-            if context['stage'] == 'study':
+            if context['stage'] == 'study' and context.get('phase') != 'write':
                 data['evidence'] = [dict(id=f'E-{i:03d}', source_id=source['id'], path='app.py',
                                          start_line=1, end_line=1, quote='')
                                     for i, source in enumerate(context['sources'], 1)]
@@ -189,7 +192,7 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
         with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=answer):
             manifest, code = runner.run()
         self.assertEqual(code, 0, manifest.get('diagnostics'))
-        self.assertEqual(calls, ['study', 'review', 'study', 'review', 'compare'])
+        self.assertEqual(calls, ['study', 'study', 'review', 'study', 'study', 'review', 'compare'])
         for branch in manifest['branches']:
             text = assert_architecture(self, runner.session.run_dir / branch['directory'], branch['study'],
                                        branch['study_invocation'], 'English')

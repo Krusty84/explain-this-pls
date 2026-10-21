@@ -518,8 +518,9 @@ class CodexProgressIntegrationTests(unittest.TestCase):
                 self.assertNotIn('[OK] master / ' + completed, text)
                 self.assertFalse((gate / (stage + '.release')).exists())
                 # Frames never scroll; there is no newline between their writes.
-                span = text.split('[RUN] master / ' + label, 1)[1]
-                self.assertNotIn('\n', span)
+                span = text.rsplit('\n', 1)[-1]
+                self.assertGreaterEqual(len(re.findall(r'\[RUN\] master / ' + re.escape(label) +
+                                                       r'  (.) (\d\d:\d\d)', span)), 3)
                 (gate / (stage + '.release')).touch()
             stdout, _ = child.communicate(timeout=12)
             while select.select([master], [], [], .1)[0]:
@@ -550,7 +551,7 @@ class CodexProgressIntegrationTests(unittest.TestCase):
             content = artifact.read_text()
             self.assertNotIn('\x1b', content, str(artifact))
             self.assertFalse(any(c in content for c in SPINNER), str(artifact))
-        self.assertEqual(len(self.prompts()), 2)
+        self.assertEqual(len(self.prompts()), 3)
 
     def test_codex_cli_plain_fallback_is_live_without_duplicate_waits(self):
         for term, tty in (('xterm', False), ('dumb', True)):

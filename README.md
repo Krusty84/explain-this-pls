@@ -10,6 +10,12 @@ by default. Analyze a folder, study a Git branch, or compare several branches.
 Agents are instructed to read the code without running the project's builds or
 tests.
 
+The initial study uses two calls: collect source evidence, then write the report
+from the frozen claims and evidence. Python checks citations before writing.
+Unresolved evidence produces a partial report. Both calls use the study agent
+settings and share its timeout. Optional revision keeps its existing source
+access and complete response contract.
+
 ## Features
 
 - **Architecture reports** explaining the system's main parts and workflows,
@@ -175,6 +181,14 @@ saved useful results, including failed or interrupted runs, become `PARTIAL`.
 The tool uses your CLI's existing login and settings. No separate API key is needed
 in this configuration.
 
+The initial writer runs in a neutral directory with source shell tools disabled
+and user configuration and rules ignored. It receives only the frozen evidence
+package. Explicit model and effort settings still apply. If either is omitted or
+null, the writer uses the isolated CLI default; it does not inherit that value
+from your CLI profile. Collection, revision, review and comparison retain their
+current profile behavior. The CLI must support `--ignore-user-config` and
+`--ignore-rules`; the prerequisite check verifies both options.
+
 Set `reasoning_effort` beside `model`. Values depend on the model;
 the tool does not translate them to a common scale. Empty strings and other types
 are rejected as `INVALID_CONFIG`.
@@ -224,7 +238,8 @@ available.
 
 The [commented configuration](config.codex.example.jsonc) describes other options:
 
-- **Stage timeouts:** `execution.stage_timeout_seconds` defaults to one hour.
+- **Stage timeouts:** `execution.stage_timeout_seconds` defaults to one hour,
+  shared by initial evidence collection and report writing.
 - **Codex settings per stage:** use `stage_agents` for study, review or comparison.
 - **Legacy encodings:** use `source_decoding.rules` for encodings such as CP1251.
 - **Source navigation:** `source_context.mode` defaults to `"on-demand"`. The
@@ -243,6 +258,12 @@ The included prompts are ready to use. To customize them, copy an existing
 template, keep its required response format, and set its path in `prompts`.
 Store custom templates outside the source directory. See the
 [commented configuration](config.codex.example.jsonc) for examples.
+
+`prompts.study` customizes only the initial writer. It must return report sections
+and metadata, with claim links from the supplied package; it must not return
+claims or evidence. Adapt older study templates to this contract. The bundled
+[collector](prompts/collect.md) prompt is fixed and has no configuration override.
+`prompts.revise` still returns the complete report, claims and evidence.
 
 ### Run explain-this-pls
 

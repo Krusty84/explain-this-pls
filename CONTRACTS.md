@@ -40,6 +40,11 @@ The review and revision sections below describe the opt-in reviewed workflow.
 
 The orchestrator selects the required response schema for each stage and validates
 its structure locally.
+Initial Study has two internal phases: `collect` returns identity, status,
+limitations, claims and evidence; `write` returns identity, status, limitations
+and report sections. The `study-collect` and `study-write` wire schemas and their
+`folder-` variants define these responses. The full study schema remains the
+contract for revision responses and the program-assembled initial Study.
 `schemas/{study,review,compare}.schema.json` and the
 available `folder-` variants
 are **model wire** schemas generated from `MODEL_SCHEMAS` / `MODEL_FOLDER_SCHEMAS`
@@ -49,6 +54,29 @@ files are generated from `src/contracts/saved_contracts.py` and locally validate
 The `evidence-ledger` contract requires the saved schema or explicitly marked
 recovery material for rendering.
 Unsupported results are rejected without modifying their artifacts.
+
+Both initial phases use the Study agent and one stage timeout. The fixed collector
+prompt investigates the pinned source. After normalization and optional citation
+correction, Python resolves evidence and freezes `study.evidence.json` in the
+initial revision directory. Its bytes and both attempts' private artifacts are
+guarded by the Study invocation hashes. A collection contract or identity failure
+does not invoke the writer or create recovered report material.
+
+The writer receives the package and task context without a source index or symbol
+maps. It uses a neutral directory, disabled source shell, and no user CLI config
+or rules. Explicit agent model and effort settings still apply; null settings use
+the isolated CLI defaults. `prompts.study` controls this authoring call;
+`prompts.revise` retains the full source-reading revision contract.
+
+Python copies the frozen registry into the authored Study, unions limitations,
+and chooses the worse collection/author status. Unresolved evidence forces at
+least PARTIAL under both result policies. This status is set before materializing
+the document; `completion_self_assessment` retains the author's original status.
+The writer's original response, assembled Study and collection package remain
+distinct artifacts. Assembly provenance binds their hashes; the final normalization
+and materialization hashes cover the full assembled Study. Later successful
+revision may return COMPLETE. Matching source text still does not establish
+semantic support.
 
 Internal contract, schema, format and processing-rule identifiers are permanent
 and carry no version numbers. Keep these identifiers when schemas change; update
@@ -60,7 +88,8 @@ and document revision numbers remain valid.
 
 | Data | Authority |
 | --- | --- |
-| `completion_status`, narrative, claims, evidence pointers, findings, assessments, relevance observations, omission-search activity | Agent; completion is a self-assessment |
+| Narrative, claims, evidence pointers, findings, assessments, relevance observations, omission-search activity | Agent |
+| `completion_status` | Agent self-assessment; Python bounds the initial assembled Study by both phases and evidence resolution |
 | Transport completion/error/timeout/interruption and cleanup | Backend adapter and runner |
 | Expected source identities, review target, contract/artifact identifiers in invocation metadata and manifest | Orchestrator |
 | `program_checks` (including coverage and diagram checks), `verdict`, frozen plan, hashes, file distribution, reverse links, tables | Python, after local wire validation |
@@ -78,7 +107,8 @@ records `rule: "MODEL_BINDING"`, `hash_format: "canonical-json-utf8"`,
 after verified expansion they cover the whole original wire and expanded canonical
 objects, not pretty-printed artifact bytes. Binding records are private
 and do not enter model context. Expanding an ID adds no facts or positive status.
-Studies and revisions supply their own registry arrays under the full study wire schema.
+Initial collection supplies registry arrays; Python adds them to the authored
+sections. Revisions supply their own arrays under the full study wire schema.
 Transport/stdout and stderr remain private attempt artifacts. A saved `study.json`,
 `review.json` or `compare.json` is a separate representation with processed wire
 fields and `program_checks`. Study narrative is authored as sections/blocks;
@@ -889,9 +919,10 @@ published, strictly valid study and review, when review completion_status is
 COMPLETE and there are HIGH/MEDIUM findings. LOW-only findings, incomplete review,
 transport failures and recovered contract-invalid material do not trigger it.
 prompts.revise supplies a separate prompt to the existing study agent; no revision
-backend profile is introduced. Each substantive invocation has its own budget.
-Analysis has at most four substantive stage invocations per snapshot: study and,
-when enabled, review plus one revision and repeat review.
+backend profile is introduced. Each stage has its own budget; initial collection
+and writing share the Study budget. Analysis has at most four stage runs per
+snapshot: study and, when enabled, review plus one revision and repeat review.
+These stage runs make at most five model calls because initial Study has two phases.
 
 The program compares registries for added, removed and changed claims. Coordinate
 changes alone are not semantic edits; unchanged assertions retain their IDs.

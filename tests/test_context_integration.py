@@ -93,6 +93,9 @@ class PreparedContextTests(FolderFixture):
         contexts.append([call['context'].get('source_context') for call in self.calls])
         for call in self.calls:
             context = call['context']
+            if context.get('phase') == 'write':
+                self.assertNotIn('source_context', context)
+                continue
             index = decode_source_context(context['source_context'])
             self.assertEqual(index['mode'], 'index-only')
             self.assertEqual(index['fragments'], [])
@@ -115,7 +118,7 @@ class PreparedContextTests(FolderFixture):
         for path in attempts:
             self.assert_prompt_measurements(path)
         manifests = list(self.runner.session.run_dir.rglob('source-context.manifest.json'))
-        self.assertEqual(len(manifests), len(self.calls))
+        self.assertEqual(len(manifests), len(self.calls) - 1)
         for path in manifests:
             preparation = json.loads(path.read_text())
             self.assertEqual(preparation['mode'], 'index-only')
@@ -136,6 +139,9 @@ class PreparedContextTests(FolderFixture):
         self.assertEqual(code, 0, manifest.get('diagnostics'))
         roots = []
         for call in self.calls:
+            if call['context'].get('phase') == 'write':
+                self.assertNotIn('source_context', call['context'])
+                continue
             wire = call['context']['source_context']
             self.assertEqual(wire['delivery'], 'on-demand')
             self.assertNotIn('symbols', wire['file_columns'])
@@ -155,10 +161,13 @@ class PreparedContextTests(FolderFixture):
             self.assertEqual(len(list(root.glob('*.json'))), 2)
             for path in root.glob('*.json'):
                 self.assertGreater(len(path.read_text().splitlines()), 1)
-        self.assertEqual(len(set(roots)), len(self.calls))
+        self.assertEqual(len(set(roots)), len(self.calls) - 1)
         for path in self.runner.session.run_dir.rglob('attempt-*/invocation.json'):
             self.assert_prompt_measurements(path)
             meta = json.loads(path.read_text())
+            if meta.get('phase') == 'write':
+                self.assertNotIn('source_index', meta['input_measurements'])
+                continue
             stored = sum(p.stat().st_size for p in (path.parent / 'source-maps').glob('*.json'))
             self.assertEqual(meta['input_measurements']['source_index']['stored_map_utf8_bytes'], stored)
             preparation = json.loads((path.parent / 'source-context.manifest.json').read_text())

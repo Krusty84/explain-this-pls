@@ -584,6 +584,9 @@ class Reporter(NullReporter):
             if self._progress and self._progress_line(self._progress) is not None:
                 return []
             return ['[RUN] ' + self.stage_message(c, active)]
+        if name == 'study_phase_started':
+            message = 'Collecting claims and source evidence.' if c['phase'] == 'collect' else 'Writing the architecture report from the frozen evidence package.'
+            return ['[RUN] ' + self.stage_message(c, message)]
         if name == 'process_waiting':
             if not self.progress or (self._progress and self._progress_line(self._progress) is not None):
                 return []

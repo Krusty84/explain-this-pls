@@ -539,6 +539,8 @@ class ExplainApp(App[int]):
             self.exit(self.last_exit_code)
 
     def show_summary(self):
+        # Hiding a focused pane can focus another child and reactivate that pane.
+        self.screen.set_focus(None)
         self.query_one('#run-tabs', TabbedContent).active = 'summary-tab'
         self.call_after_refresh(self.query_one('#summary', DataTable).focus)
 

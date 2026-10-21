@@ -180,6 +180,12 @@ def _coverage(plan):
 def project_model_context(stage, context):
     """Return an independent projection while retaining every substantive value."""
     result = copy.deepcopy(context)
+    if stage == 'study' and result.get('phase') == 'write':
+        allowed = {'stage', 'phase', 'source_mode', 'branch', 'source_commit', 'source_directory',
+                   'source_fingerprint', 'source_snapshot_id', 'output_language', 'project_description',
+                   'priority_scenarios', 'sources', 'evidence_package', 'revision_id', 'result_policy',
+                   'review_enabled', 'source_filter', 'inventory_summary'}
+        result = {key: value for key, value in result.items() if key in allowed}
     result.pop('_inventory', None)
     result.pop('_coverage_plan_path', None)
     if stage in ('compare', 'repair') or result.get('prompt_variant') == 'repair':

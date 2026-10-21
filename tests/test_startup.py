@@ -195,11 +195,11 @@ class StartupCLIIntegrationTests(unittest.TestCase):
         else:
             self.assertNotIn('last_analysis', jsonc(self.config_path.read_text()))
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        self.assertEqual(len(calls), 2 if check else 7 if mode == 'git' else 4)
+        self.assertEqual(len(calls), 2 if check else 9 if mode == 'git' else 5)
         self.assertIn('--version', calls[0]['args'])
         self.assertIn('--help', calls[1]['args'])
         stages = [call for call in calls if 'context' in call]
-        self.assertEqual(len(stages), 0 if check else 5 if mode == 'git' else 2)
+        self.assertEqual(len(stages), 0 if check else 7 if mode == 'git' else 3)
         for call in calls:
             self.assertEqual(call['euid'], os.geteuid())
             self.assertEqual(call['git_config_env'], {})
@@ -287,7 +287,7 @@ class StartupCLIIntegrationTests(unittest.TestCase):
                 self.repo.clean()
                 self.assertEqual({path: path.read_bytes() for path in paths}, before)
                 calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-                self.assertEqual(len(calls), 2 if check else 7)
+                self.assertEqual(len(calls), 2 if check else 9)
                 for call in calls:
                     self.assertEqual(call['git_config_env'], {'GIT_CONFIG_SYSTEM': str(system_config)})
                     self.assertFalse(any('safe.directory' in arg for arg in call['args']))

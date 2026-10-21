@@ -30,7 +30,7 @@ class ArchitectureFolderPipelineTests(FolderFixture):
                         manifest, code = self.run_case(large=False, policy=policy, review=review)
                         self.assertEqual(code, 0, manifest.get('diagnostics'))
                         self.assertEqual([c['context']['stage'] for c in self.calls],
-                                         ['study', 'review'] if review else ['study'])
+                                         ['study', 'study', 'review'] if review else ['study', 'study'])
                         study = manifest['study']
                         assert_architecture(self, self.runner.session.run_dir, study,
                                             manifest['study_invocation'], language)
@@ -44,10 +44,11 @@ class ArchitectureFolderPipelineTests(FolderFixture):
         for policy in ('strict', 'compromise'):
             with self.subTest(policy=policy):
                 def change(runner, context, data):
-                    data['report_sections'][2]['blocks'][0]['markdown'] = '## Extra section\n'
+                    if context.get('phase') == 'write':
+                        data['report_sections'][2]['blocks'][0]['markdown'] = '## Extra section\n'
                 manifest, code = self.run_case(large=False, policy=policy, change=change)
                 self.assertNotEqual(code, 0)
-                self.assertEqual([c['context']['stage'] for c in self.calls], ['study'])
+                self.assertEqual([c['context']['phase'] for c in self.calls], ['collect', 'write'])
                 self.assertFalse(list(self.runner.session.run_dir.rglob('ARCHITECTURE.md')))
                 revision = manifest['revisions'][0]
                 error = revision['study_invocation']['error']
@@ -63,6 +64,8 @@ class ArchitectureFolderPipelineTests(FolderFixture):
                     authored = {}
 
                     def change(runner, context, data):
+                        if context.get('phase') != 'write':
+                            return
                         sections = {section['key']: section for section in data['report_sections']}
                         missing = ('components', 'data_and_state') if defect == 'both' else (defect,)
                         for key in missing:
@@ -81,7 +84,7 @@ class ArchitectureFolderPipelineTests(FolderFixture):
                     manifest, code = self.run_case(large=False, policy=policy, change=change)
                     self.assertNotEqual(code, 0)
                     self.assertFalse(manifest['accepted'])
-                    self.assertEqual([call['context']['stage'] for call in self.calls], ['study'])
+                    self.assertEqual([call['context']['phase'] for call in self.calls], ['collect', 'write'])
                     self.assertFalse(list(self.runner.session.run_dir.rglob('ARCHITECTURE.md')))
                     revision = manifest['revisions'][0]
                     self.assertIsNone(revision['study'])
@@ -93,7 +96,7 @@ class ArchitectureFolderPipelineTests(FolderFixture):
                     attempt = Path(invocation['artifact_directory'])
                     raw = json.loads((attempt / 'extracted.json').read_text())
                     self.assertEqual(raw['report_sections'], authored['report_sections'])
-                    self.assertEqual(raw['claims'], authored['claims'])
+                    self.assertNotIn('claims', raw)
                     if policy == 'compromise':
                         self.assertTrue(invocation['material_retained'])
                         material = revision['study_material']
@@ -103,6 +106,8 @@ class ArchitectureFolderPipelineTests(FolderFixture):
 
     def test_partial_diagram_omission_preserves_authored_material(self):
         def change(runner, context, data):
+            if context.get('phase') != 'write':
+                return
             data.update(completion_status='PARTIAL', limitations=['Data ownership must be checked.'])
             section = next(section for section in data['report_sections'] if section['key'] == 'data_and_state')
             section['blocks'] = [dict(markdown='Data ownership must be checked before a diagram can be built.',
@@ -114,7 +119,7 @@ class ArchitectureFolderPipelineTests(FolderFixture):
                 manifest, code = self.run_case(large=False, change=change)
                 self.assertNotEqual(code, 0)
                 self.assertFalse(manifest['accepted'])
-                self.assertEqual([call['context']['stage'] for call in self.calls], ['study'])
+                self.assertEqual([call['context']['phase'] for call in self.calls], ['collect', 'write'])
                 study = manifest['study']
                 self.assertEqual(study['completion_status'], 'PARTIAL')
                 self.assertEqual(study['program_checks']['diagrams']['missing_sections'], ['data_and_state'])
@@ -157,7 +162,8 @@ class ArchitectureGitPipelineTests(unittest.TestCase):
                     manifest, code = runner.run()
                 self.assertEqual(code, 0, manifest.get('diagnostics'))
                 self.assertEqual([c['stage'] for c in calls],
-                                 ['study'] if len(branches) == 1 else ['study', 'study', 'compare'])
+                                 ['study', 'study'] if len(branches) == 1 else
+                                 ['study', 'study', 'study', 'study', 'compare'])
                 for branch in manifest['branches']:
                     assert_architecture(self, runner.session.run_dir / branch['directory'], branch['study'],
                                         branch['study_invocation'], language)

@@ -63,7 +63,14 @@ class PublicationTests(FolderFixture):
 
     def process_for(self, data, context):
         def process(command, cwd, env, payload, **kwargs):
-            return self.result(command, model_wire(data, prompt_context(payload), context))
+            supplied = prompt_context(payload)
+            wire = model_wire(data, supplied, context)
+            if supplied.get('phase') == 'collect':
+                wire.pop('report_sections', None)
+            elif supplied.get('phase') == 'write':
+                wire.pop('claims', None)
+                wire.pop('evidence', None)
+            return self.result(command, wire)
         return process
 
     def test_invocation_through_parent_symlink_preserves_results_and_recovery(self):
@@ -77,13 +84,13 @@ class PublicationTests(FolderFixture):
                            'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
                 data = response(context)
                 if policy == 'compromise':
-                    data['claims'] = 'invalid'
+                    data['report_sections'][2]['blocks'][0]['markdown'] = '## Unexpected section\n'
                 destination = alias / policy / 'study.logs'
                 with patch('src.runtime.process.process', side_effect=self.process_for(data, context)):
                     saved, meta = runner.invoke('study', context, destination)
-                attempt = runner.session.run_dir / 'study.logs/attempt-001'
+                attempt = runner.session.run_dir / 'study.logs/attempt-002'
                 self.assertEqual(meta['artifact_directory'], str(attempt))
-                self.assertTrue((destination / 'attempt-001').samefile(attempt))
+                self.assertTrue((destination / 'attempt-002').samefile(attempt))
                 summary = json.loads((destination / 'invocation.json').read_text())
                 self.assertEqual(summary['artifact_directory'], str(attempt))
                 self.assertFalse(runner.session.critical_failure)
@@ -132,18 +139,19 @@ class PublicationTests(FolderFixture):
         destination = runner.session.run_dir / 'study.logs'
         with patch('src.runtime.process.process', side_effect=self.process_for(data, context)):
             runner.invoke('study', context, destination)
-        attempt = destination / 'attempt-001'
-        first = {str(p.relative_to(attempt)): p.read_bytes() for p in attempt.rglob('*') if p.is_file()}
+        attempts = list(destination.glob('attempt-*'))
+        first = {str(p.relative_to(destination)): p.read_bytes()
+                 for attempt in attempts for p in attempt.rglob('*') if p.is_file()}
         with patch('src.runtime.process.process', side_effect=self.process_for(data | {'unexpected_field': True}, context)):
             with self.assertRaises(ContractError):
                 runner.invoke('study', context, destination)
-        self.assertEqual(first, {str(p.relative_to(attempt)): p.read_bytes()
-                                 for p in attempt.rglob('*') if p.is_file()})
+        self.assertEqual(first, {str(p.relative_to(destination)): p.read_bytes()
+                                 for attempt in attempts for p in attempt.rglob('*') if p.is_file()})
         summary = json.loads((destination / 'invocation.json').read_text())
-        self.assertEqual(summary['attempt'], 'attempt-002')
+        self.assertEqual(summary['attempt'], 'attempt-003')
         self.assertEqual(summary['status'], 'FAILED')
         self.assertEqual(summary['error']['failure_kind'], 'SCHEMA_ERROR')
-        self.assertIn('unexpected_field', (destination / 'attempt-002/extracted.json').read_text())
+        self.assertIn('unexpected_field', (destination / 'attempt-003/extracted.json').read_text())
         self.assertNotIn('unexpected_field', (runner.session.run_dir / 'study.json').read_text())
         for path in runner.session.run_dir.rglob('*'):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700 if path.is_dir() else 0o600)
@@ -202,7 +210,7 @@ class PublicationTests(FolderFixture):
         with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process) as invoked:
             manifest, code = runner.run()
         self.assertEqual(code, 0)
-        self.assertEqual(invoked.call_count, 2)
+        self.assertEqual(invoked.call_count, 3)
         path = runner.session.run_dir / 'coverage.plan.json'
         blob = path.read_bytes()
         meta = manifest['study_invocation']
@@ -245,7 +253,7 @@ class PublicationTests(FolderFixture):
                     self.assertEqual(invoked.call_count, 0)
                 else:
                     self.assertFalse(manifest['revisions'][0]['study_invocation']['publication_complete'])
-                    self.assertEqual(invoked.call_count, 1)
+                    self.assertEqual(invoked.call_count, 2)
                 self.assertNotIn('      Report: ', err.getvalue())
 
     def test_document_bytes_plan_and_wire_are_separate(self):
@@ -264,11 +272,15 @@ class PublicationTests(FolderFixture):
         for block in saved['block_map']:
             self.assertIn(block['locator']['quote'].encode(), architecture)
         self.assertEqual(saved['review_plan']['document_sha256'], hashlib.sha256(expected.encode()).hexdigest())
-        wire = json.loads((runner.session.run_dir / 'study.logs/attempt-001/extracted.json').read_text())
-        model_context = prompt_context((runner.session.run_dir / 'study.logs/attempt-001/input.prompt.txt').read_bytes())
-        self.assertEqual(wire, model_wire(data, model_context, context))
-        self.assertEqual(json.loads((runner.session.run_dir / 'study.logs/attempt-001/expanded.json').read_text()), data)
-        self.assertNotIn('program_checks', wire)
+        logs = runner.session.run_dir / 'study.logs'
+        for attempt, omitted in (('attempt-001', ('report_sections',)), ('attempt-002', ('claims', 'evidence'))):
+            expected_wire = {key: value for key, value in data.items() if key not in omitted}
+            wire = json.loads((logs / attempt / 'extracted.json').read_text())
+            model_context = prompt_context((logs / attempt / 'input.prompt.txt').read_bytes())
+            self.assertEqual(wire, model_wire(expected_wire, model_context, context))
+            self.assertEqual(json.loads((logs / attempt / 'expanded.json').read_text()), expected_wire)
+            self.assertNotIn('program_checks', wire)
+        self.assertEqual(json.loads((logs / 'attempt-002/assembled.json').read_text()), data)
         for field in ('contract_id', 'artifact_format', 'context_format'):
             self.assertNotIn(field, wire)
             self.assertNotIn(field, saved)
@@ -284,7 +296,7 @@ class PublicationTests(FolderFixture):
                 patch('src.reports.publication.render_architecture', return_value='## Unexpected\n'):
             with self.assertRaises(ContractError):
                 runner.invoke('study', context, runner.session.run_dir / 'study.logs')
-        invoked.assert_called_once()
+        self.assertEqual(invoked.call_count, 2)
         self.assertFalse((runner.session.run_dir / 'ARCHITECTURE.md').exists())
         self.assertFalse((runner.session.run_dir / 'study.json').exists())
 
@@ -313,7 +325,7 @@ class PublicationTests(FolderFixture):
                         patch('src.reports.publication.render_architecture', side_effect=render):
                     with self.assertRaises(ContractError) as caught:
                         runner.invoke('study', context, runner.session.run_dir / 'study.logs')
-                invoked.assert_called_once()
+                self.assertEqual(invoked.call_count, 2)
                 self.assertIn(caught.exception.details['code'],
                               ('REQUIRED_DIAGRAM_MISSING', 'DIAGRAM_PUBLICATION_MISMATCH'))
                 if defect == 'closing_fence':

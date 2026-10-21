@@ -650,8 +650,8 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                 self.assertTrue(result.stdout.startswith('[OK] Local setup checked.' if check else '[OK] Analysis complete.'))
                 calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
                 invocations = [call for call in calls if 'context' in call]
-                self.assertEqual(len(calls), 2 if check else 4)
-                self.assertEqual(len(invocations), 0 if check else 2)
+                self.assertEqual(len(calls), 2 if check else 5)
+                self.assertEqual(len(invocations), 0 if check else 3)
                 self.assertNotIn('Comparing branch reports', result.stderr)
                 self.assertNotIn('Branch report comparison ready', result.stderr)
                 manifests = list((self.reports / self.repo_path.name).glob('*/manifest.json'))
@@ -676,8 +676,11 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                         self.assertTrue((branch_dir / report).is_file())
                     for call in invocations:
                         self.assertEqual(call['context']['source_mode'], 'git')
-                        self.assertEqual(Path(call['cwd']), self.repo_path)
-                        self.assertEqual(call['cwd'], call['context']['repository'])
+                        if call['context'].get('phase') == 'write':
+                            self.assertNotEqual(Path(call['cwd']), self.repo_path)
+                        else:
+                            self.assertEqual(Path(call['cwd']), self.repo_path)
+                            self.assertEqual(call['cwd'], call['context']['repository'])
                 self.assertEqual(self.repo.symbolic(), 'master')
                 self.assertEqual(self.repo.head(), self.master)
                 self.repo.clean()
@@ -982,12 +985,13 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
         run = Path(output['manifest']).parent
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         model_calls = [call for call in calls if 'context' in call]
-        self.assertEqual(len(model_calls), 2)
-        for call, stage in zip(model_calls, ('study', 'review')):
+        self.assertEqual(len(model_calls), 3)
+        attempts = (('study', 'attempt-001'), ('study', 'attempt-002'), ('review', 'attempt-001'))
+        for call, (stage, attempt) in zip(model_calls, attempts, strict=True):
             self.assertEqual(call['context']['project_description'], description.strip())
             logs = (run / 'revisions/001') / (stage + '.logs')
-            meta = json.loads((logs / 'invocation.json').read_text())
-            payload = (logs / meta['attempt'] / 'input.prompt.txt').read_bytes()
+            meta = json.loads((logs / attempt / 'invocation.json').read_text())
+            payload = (logs / attempt / 'input.prompt.txt').read_bytes()
             self.assertEqual(meta['status'], 'SUCCEEDED')
             self.assertEqual(meta['input_bytes'], len(payload))
             self.assertGreater(len(payload), 800000)

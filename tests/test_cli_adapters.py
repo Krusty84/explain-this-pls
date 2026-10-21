@@ -74,6 +74,25 @@ class CLIAdapterTests(unittest.TestCase):
                     flags.clear()
                     self.assertEqual(adapter.required_flags(mode), expected)
 
+    def test_initial_writer_disables_source_tools_and_profile_loading(self):
+        session = SimpleNamespace(mode='folder', schemas={'study': {}})
+        state, schema_path = Path('/state'), Path('/state/schema.json')
+        agent = {'backend': 'codex', 'executable': 'codex', 'model': 'chosen-model',
+                 'reasoning_effort': 'high'}
+        writer = preflight.command(session, 'study', state, agent, schema_path, {},
+                                   reports_only=True, writer_only=True)
+        for flag in ('--ignore-user-config', '--ignore-rules', 'features.shell_tool=false'):
+            self.assertIn(flag, writer)
+        self.assertEqual(writer[writer.index('--model') + 1], 'chosen-model')
+        self.assertIn('model_reasoning_effort="high"', writer)
+        for stage in ('study', 'review', 'compare'):
+            command = codex.build_command(agent, stage, 'folder', {}, schema_path)
+            self.assertNotIn('--ignore-user-config', command)
+            self.assertNotIn('--ignore-rules', command)
+            self.assertEqual('features.shell_tool=false' in command, stage == 'compare')
+        self.assertEqual(codex.required_flags('folder', writer_only=True),
+                         codex.required_flags('folder') + ['--ignore-user-config', '--ignore-rules'])
+
     def test_codex_reasoning_effort_is_a_quoted_config_override(self):
         agent = {'executable': 'codex', 'model': 'chosen-model', 'reasoning_effort': 'high'}
         command = codex.build_command(agent, 'compare', 'git', {}, Path('/state/schema.json'))
@@ -146,7 +165,7 @@ class CLIPreflightTests(unittest.TestCase):
         for backend in ADAPTERS:
             with self.subTest(backend=backend):
                 runner = self.runner(backend)
-                flags = REQUIRED_FLAGS[backend] + (['--skip-git-repo-check'] if backend == 'codex' else [])
+                flags = ADAPTERS[backend].required_flags('folder', writer_only=True)
                 responses = [
                     {'returncode': 0, 'stdout': b'fixture 1.0\n', 'stderr': b'startup warning'},
                     {'returncode': 0, 'stdout': b'CLI help\n', 'stderr': ' '.join(flags).encode()},
@@ -163,7 +182,7 @@ class CLIPreflightTests(unittest.TestCase):
 
     def test_missing_required_options_still_fail_before_invocation(self):
         for backend in ADAPTERS:
-            flags = REQUIRED_FLAGS[backend] + (['--skip-git-repo-check'] if backend == 'codex' else [])
+            flags = ADAPTERS[backend].required_flags('folder', writer_only=True)
             for missing in flags:
                 with self.subTest(backend=backend, missing=missing):
                     runner = self.runner(backend)
@@ -180,6 +199,20 @@ class CLIPreflightTests(unittest.TestCase):
                     self.assertEqual(caught.exception.failure_kind, 'BACKEND_INCOMPATIBLE')
                     self.assertEqual(caught.exception.failure_layer, 'compatibility')
                     self.assertEqual(runner.session.versions, {})
+
+    def test_writer_capabilities_apply_to_the_study_executable_only(self):
+        runner = self.runner('codex')
+        study = runner.session.cfg['_agents']['study']
+        review = dict(study, executable='/configured/reviewer')
+        runner.session.cfg['_agents'] = {'review': review, 'study': study}
+        base, writer = codex.required_flags('folder'), codex.required_flags('folder', writer_only=True)
+        version = {'returncode': 0, 'stdout': b'fixture 1.0', 'stderr': b''}
+        with patch('src.runtime.process.process', side_effect=[
+                version, {'returncode': 0, 'stdout': ' '.join(base).encode(), 'stderr': b''},
+                version, {'returncode': 0, 'stdout': ' '.join(writer).encode(), 'stderr': b''}]):
+            result = runner.check_cli()
+        self.assertEqual(result['codex:/configured/reviewer']['required_flags'], base)
+        self.assertEqual(result['codex:/configured/agent']['required_flags'], writer)
 
 
 if __name__ == '__main__':

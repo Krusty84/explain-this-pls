@@ -20,7 +20,8 @@ def run_case(self, *, backend='codex', large=True, change=None, review=False,
         if not (self.source / path).exists():
             (self.source / path).write_text('def main(): return 42\n')
     self.value.update(result_policy=policy, continue_on_error=keep_going,
-                      execution={'review_enabled': review}, stage_agents={'study': {'model': 'fixture/study-model'}})
+                      execution=self.value.get('execution', {}) | {'review_enabled': review},
+                      stage_agents={'study': {'model': 'fixture/study-model'}})
     self.value['agent']['backend'] = backend
     cfg = self.config()
     runner = Runner(cfg, self.base / f'run-{len(list(self.base.glob("run-*")))}', reporter=reporter)
@@ -31,9 +32,10 @@ def run_case(self, *, backend='codex', large=True, change=None, review=False,
         if Path(command[0]).name == 'git':
             return real_process(command, cwd, env, payload, **kwargs)
         context = prompt_context(payload)
-        calls.append(dict(context=context, command=command, cwd=cwd, env=env.copy(), prompt=payload.decode()))
+        calls.append(dict(context=context, command=command, cwd=cwd, env=env.copy(), prompt=payload.decode(),
+                          budget=kwargs.get('budget')))
         data = response(context)
-        if context['stage'] == 'study':
+        if context['stage'] == 'study' and context.get('phase') != 'write':
             data['evidence'] = [dict(id=f'E-{i + 1:03d}', source_id='source-001',
                 path='app.py' if path == '.' else path, start_line=1, end_line=1, quote='')
                 for i, path in enumerate(selectors)]

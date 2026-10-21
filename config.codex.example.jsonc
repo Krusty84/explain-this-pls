@@ -82,6 +82,7 @@
   },
 
   // One monotonic budget per stage. null disables the optional idle deadline.
+  // Initial study shares this budget across evidence collection and report writing.
   // Full inventory is parsed. Read symbol maps on demand with native read-only tools.
   "source_context": {
     "enabled": true,
@@ -111,9 +112,9 @@
     "backend": "codex",
     // Command on PATH or executable path. Default: codex.
     "executable": "codex",
-    // null uses the model selected by the configured CLI.
+    // null uses CLI defaults; the initial writer ignores the user's CLI profile.
     "model": "gpt-6-astra",
-    // Native model effort, e.g. "high". null keeps the CLI's configured effort.
+    // Native model effort, e.g. "high". null keeps CLI defaults (isolated for the writer).
     "reasoning_effort": null,
     // null disables version pinning; otherwise use the exact --version output.
     "expected_version": null,
@@ -123,7 +124,7 @@
   // model: null selects the CLI's model; expected_version: null clears version pinning.
   // reasoning_effort: null clears the runner's effort override; revision uses study.
   "stage_agents": {
-    // Substantive revision always uses study.
+    // Initial collection/writing and substantive revision use study settings.
     "study": {
       // "backend": "codex",
       // "executable": "codex",
@@ -156,8 +157,11 @@
 
   // Omitted entries use bundled prompts, even if this config is moved elsewhere.
   // Custom prompts must be outside the source directory and match the output schema.
+  // Evidence collection uses a fixed bundled prompt with no override.
   "prompts": {
+    // Initial writer only: sections/metadata and claim links, no claims/evidence registry.
     // "study": "./custom-prompts/study.md",
+    // Revision retains its complete report/claims/evidence contract and source access.
     // "revise": "./custom-prompts/revise.md",
     // "review": "./custom-prompts/review.md",
     // "compare": "./custom-prompts/compare.md", // Git mode with two or more branches only.

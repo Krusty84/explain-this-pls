@@ -521,8 +521,8 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                     self.assertEqual(result.stderr.count('Project description is missing.'),int(check_only))
                     calls=[json.loads(line) for line in calls_path.read_text().splitlines()]
                     invocations=[call for call in calls if 'context' in call]
-                    self.assertEqual(len(calls),2 if check_only else 9)
-                    self.assertEqual(len(invocations),0 if check_only else 7)
+                    self.assertEqual(len(calls),2 if check_only else 12)
+                    self.assertEqual(len(invocations),0 if check_only else 10)
                     for call in invocations:
                         for field in ('contract_id', 'artifact_format', 'context_format'):
                             self.assertNotIn(field,call['schema']['properties'])
@@ -530,8 +530,9 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                         self.assertEqual(call['home'],str(home))
                         self.assertEqual(call['context']['project_description'],cfg['project_description'])
                         compare='baseline_branch' in call['context']
-                        self.assertEqual(Path(call['cwd']) == self.repo_path, not compare)
-                        if not compare: self.assertEqual(call['cwd'], call['context']['repository'])
+                        source_access=not compare and call['context'].get('phase') != 'write'
+                        self.assertEqual(Path(call['cwd']) == self.repo_path, source_access)
+                        if source_access: self.assertEqual(call['cwd'], call['context']['repository'])
                     if not check_only:
                         results=[run_dir/'comparison'/'compare.json']
                         bundle=json.loads((run_dir/'comparison'/'inputs.json').read_text())
@@ -542,8 +543,8 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                             self.assertEqual(branch['study_invocation']['stage'],'study')
                             self.assertEqual(bundle['branches'][index]['study'],branch['study'])
                             self.assertNotIn('document',bundle['branches'][index])
-                            self.assertNotIn('architecture_document',invocations[index*2]['context'])
-                            review_context=invocations[index*2+1]['context']
+                            self.assertNotIn('architecture_document',invocations[index*3]['context'])
+                            review_context=invocations[index*3+2]['context']
                             self.assertEqual(review_context['architecture_document']['report_markdown'],branch['study']['report_markdown'])
                             branch_dir=run_dir/branch['directory']
                             self.assertNotIn('document_sha256', review_context)

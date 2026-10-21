@@ -90,10 +90,11 @@ class PipelineMetricsTests(FolderFixture):
             manifest, code = runner.run()
         self.assertEqual(code, 0)
         metrics = manifest['metrics']
-        self.assertEqual(metrics['attempts'], 4)
-        self.assertEqual(metrics['usage']['total_tokens'], 480)
+        self.assertEqual(metrics['attempts'], 5)
+        self.assertEqual(metrics['usage']['total_tokens'], 600)
         self.assertEqual([r['stage'] for r in metrics['stages']], ['study', 'review', 'revise', 'review'])
-        self.assertEqual(err.getvalue().count('Tokens: 120'), 4)
+        self.assertEqual(err.getvalue().count('Tokens: 240'), 1)
+        self.assertEqual(err.getvalue().count('Tokens: 120'), 3)
         self.assertEqual(json.loads((runner.session.run_dir / 'manifest.json').read_text())['metrics'], metrics)
         self.assertNotIn('Total usage:', Path(manifest['final_report']).read_text())
 
@@ -143,7 +144,7 @@ class CLIMetricsTests(unittest.TestCase):
     prepare = startup.StartupCLIIntegrationTests.prepare
 
     def test_json_manifest_text_and_no_progress_agree(self):
-        for mode, attempts in (('folder', 2), ('git', 5)):
+        for mode, attempts in (('folder', 3), ('git', 7)):
             backend = 'codex'
             args = self.prepare(mode)
             config = json.loads(self.config_path.read_text().split('\n', 1)[1])
@@ -162,7 +163,8 @@ class CLIMetricsTests(unittest.TestCase):
             self.assertEqual(metrics, manifest['metrics'])
             self.assertEqual(metrics['attempts'], attempts)
             self.assertEqual(metrics['usage']['total_tokens'], 120 * attempts)
-            self.assertEqual(result.stderr.count('Tokens: 120'), attempts)
+            self.assertEqual(result.stderr.count('Tokens: 240'), 1 if mode == 'folder' else 2)
+            self.assertEqual(result.stderr.count('Tokens: 120'), 1 if mode == 'folder' else 3)
             out = io.StringIO()
             reporter = Reporter(stdout=out, stderr=io.StringIO(), progress=False)
             reporter.finish(summary, manifest, check_only=False, config_path=self.config_path)
