@@ -14,20 +14,31 @@ from src.runtime.reporting import diagnostic
 from src.runtime.execution import Budget
 from src.runtime.tool_observer import ToolObserver
 from src.backends import codex
+from src.backends.codex_capabilities import (MCP_AUXILIARY_TOOLS, MCP_NO_SOURCE_TOOLS,
+                                             probe_command, verify_trace, verify_mcp_text_delivery)
 from src.reports.final_report import recoverable_material
 from src.analysis.ledger import prepare_result
 from src.analysis.evidence import source_catalog, resolve_evidence, read_confined, SourceChanged
 from src.analysis.study_phases import freeze_collection
 from src.model.model_context import (CONTEXT_FORMAT, build_model_prompt, input_measurements,
-                                     on_demand_source_index, serialize_model_input)
+                                     mcp_source_index, on_demand_source_index, serialize_model_input)
 from src.analysis.coverage_plan import inventory_summary, build_coverage_plan
 from src.runtime.errors import AuditError, UnsafeRepository
 from src.runtime.artifacts import now, digest, private_directory, neutral_temporary_base, append_observation
 from src.runtime.process import cli_env
-from src.backends.preflight import CLI_ADAPTERS, command
+from src.backends.preflight import CLI_ADAPTERS, command, profile_key
 from src.model.attempts import AttemptStore
 from src.model.validation import ResultValidator
 from src.runtime import artifacts, process as process_runtime
+
+
+def mcp_profile(session, agent):
+    profile = getattr(session, 'mcp_capabilities', {}).get(profile_key(agent))
+    if profile is None:
+        raise AuditError('The configured Codex agent has no verified MCP capability profile.',
+                         code='MCP_COMPATIBILITY', failure_layer='compatibility',
+                         details={'native_fallback': False})
+    return profile
 
 class ModelInvoker:
     def __init__(self, session, publisher):
@@ -151,6 +162,8 @@ class ModelInvoker:
         template_path = Path(__file__).resolve().parents[2] / 'prompts' / 'collect.md' if phase == 'collect' else Path(self.session.cfg['_prompt_paths'][variant])
         template = template_path.read_text()
         reports_only = stage == 'compare' or phase == 'write'
+        mcp_mode = self.session.cfg.get('source_access', {}).get('mode', 'native') == 'mcp'
+        invocation_id = str(uuid.uuid4())
         private_directory(destination)
         # Exclusive creation preserves every orchestrator-managed attempt.
         number = 1
@@ -161,7 +174,7 @@ class ModelInvoker:
                 break
             except FileExistsError:
                 number += 1
-        # Assemble only this stage's inputs; the configured CLI profile remains available.
+        # Assemble only this stage's permitted inputs.
         projected = binding.project(context)
         source_maps_directory, source_maps = None, {}
         if ('source_context' in projected and
@@ -175,11 +188,33 @@ class ModelInvoker:
             self.attempts.save_attempt_value(attempt, 'source-maps/' + name, value, meta)
         stored_bytes = sum(attempt_hashes[str((attempt / 'source-maps' / name)
                            .relative_to(destination.parent))]['bytes'] for name in source_maps)
+        mcp_manifest, mcp_manifest_sha256 = None, None
+        mcp_catalog = None
+        profile = None
+        if mcp_mode:
+            profile = mcp_profile(self.session, agent)
+            mcp_catalog = attempt / 'model-catalog.json'
+            self.attempts.save_attempt_value(attempt, 'model-catalog.json', profile['catalog'], meta)
+        if mcp_mode and not reports_only:
+            if source_maps_directory is None:
+                raise AuditError('MCP source access requires the prepared on-demand source index.',
+                                 code='MCP_PREPARATION_FAILED', failure_layer='integrity')
+            from src.mcp.service import prepare_manifest
+            map_files = {name: dict(path=str(source_maps_directory / name),
+                **attempt_hashes[str((source_maps_directory / name).relative_to(destination.parent))])
+                for name in source_maps}
+            manifest = prepare_manifest(context, context['source_context'], projected['source_context'],
+                map_files, attempt_id=invocation_id, expected_metadata=evidence_metadata)
+            self.attempts.save_attempt_value(attempt, 'mcp/manifest.json', manifest, meta)
+            mcp_manifest = attempt / 'mcp' / 'manifest.json'
+            mcp_manifest_sha256 = attempt_hashes[str(mcp_manifest.relative_to(destination.parent))]['sha256']
+            projected['source_context'] = mcp_source_index(projected['source_context'])
         context_json = serialize_model_input(projected)
         schema = binding.schema
         schema_json = serialize_model_input(schema)
         prompt = build_model_prompt(template, context_json, schema_json,
-                                    source_index='source_context' in projected)
+                                    source_index='source_context' in projected,
+                                    source_access='mcp' if mcp_mode else 'native')
         measurements = input_measurements(template, context_json, schema_json, prompt,
             source_context=context.get('source_context'),
             transmitted_source_context=projected.get('source_context'), stored_map_utf8_bytes=stored_bytes)
@@ -188,13 +223,13 @@ class ModelInvoker:
             preparation = dict(preparation, original_bytes=index_sizes['original_utf8_bytes'],
                 transmitted_bytes=index_sizes['transmitted_utf8_bytes'],
                 saved_bytes=index_sizes['saved_utf8_bytes'], reduction_percent=index_sizes['reduction_percent'])
-            preparation['delivery'] = self.session.source_context.settings['mode']
+            preparation['delivery'] = 'mcp' if mcp_mode else self.session.source_context.settings['mode']
             preparation['packed_full_index_utf8_bytes'] = index_sizes['packed_full_index_utf8_bytes']
             preparation['stored_map_utf8_bytes'] = stored_bytes
             if source_maps_directory is not None:
                 preparation['files'] = [dict(file, symbols_transmitted=0) for file in preparation['files']]
         payload = prompt.encode('utf-8')
-        meta.update({'stage': stage, 'invocation_id': str(uuid.uuid4()), 'started_at': now(),
+        meta.update({'stage': stage, 'invocation_id': invocation_id, 'started_at': now(),
             'backend': agent['backend'], 'executable': agent['executable'],
             'model_requested': agent.get('model'), 'reasoning_effort_requested': agent.get('reasoning_effort'),
             'cli_version': self.session.versions.get(agent['backend'] + ':' + agent['executable']),
@@ -213,6 +248,10 @@ class ModelInvoker:
                     model_actual_source='unknown: backend has not reported model identity',
                     review_quality='NOT_MEASURED', publication_complete=False)
         meta.update(source_tools_enabled=not reports_only)
+        if mcp_mode:
+            meta['source_access'] = {'mode': 'mcp', 'enabled': not reports_only}
+            if mcp_manifest is not None:
+                meta['source_access'].update(manifest=str(mcp_manifest), manifest_sha256=mcp_manifest_sha256)
         if phase:
             meta['phase'] = phase
             self.session.reporter.emit('study_phase_started', **self.session.stage_context(stage, context))
@@ -232,8 +271,13 @@ class ModelInvoker:
         if preparation is not None:
             artifacts.save_json(attempt / 'source-context.manifest.json', preparation)
             meta['source_context_manifest'] = str(attempt / 'source-context.manifest.json')
+        observer_context = context
+        if mcp_manifest is not None:
+            observer_context = dict(context, _mcp_source_access={
+                'server': 'explain_this_pls', 'manifest_sha256': mcp_manifest_sha256,
+                'attempt_id': invocation_id, 'receipts_path': str(mcp_manifest.parent / 'served.jsonl')})
         observer = ToolObserver(agent['backend'], enabled=self.session.execution['read_loop_guard'],
-                                clock=self.session.reporter.clock, context=context, attempt_id=meta['invocation_id'],
+                                clock=self.session.reporter.clock, context=observer_context, attempt_id=meta['invocation_id'],
                                 event_sink=lambda event: append_observation(attempt / 'tool-events.jsonl', event))
         observer.seed_prompt(context.get('source_context', {}).get('fragments', []))
         try:
@@ -247,7 +291,7 @@ class ModelInvoker:
                 self.session.assert_source()
             with tempfile.TemporaryDirectory(prefix='archaudit-invocation-', dir=neutral_temporary_base(self.session.source_path)) as raw:
                 state = Path(raw).resolve()
-                cwd = state if reports_only else self.session.source_path
+                cwd = state if reports_only or mcp_mode else self.session.source_path
                 env = cli_env(cwd)
                 if self.session.repo:
                     for key in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE',
@@ -256,8 +300,28 @@ class ModelInvoker:
                 schema_path = state / 'output.schema.json'
                 artifacts.save_json(schema_path, schema)
                 try:
-                    cmd = self.command(stage, state, agent, schema_path, env, reports_only=reports_only,
-                                       schema=schema, writer_only=phase == 'write')
+                    launch_agent = dict(agent, model=profile['proof']['model']) if mcp_mode else agent
+                    cmd = self.command(stage, state, launch_agent, schema_path, env, reports_only=reports_only,
+                                       schema=schema, writer_only=phase == 'write',
+                                       **({'mcp_catalog': mcp_catalog} if mcp_mode else {}),
+                                       **({'mcp_manifest': mcp_manifest, 'mcp_manifest_sha256': mcp_manifest_sha256}
+                                          if mcp_manifest is not None else {}))
+                    if mcp_mode:
+                        expected_tools = set(MCP_NO_SOURCE_TOOLS)
+                        if mcp_manifest is not None:
+                            expected_tools.update(MCP_AUXILIARY_TOOLS)
+                            expected_tools.update('mcp__' + codex.MCP_SERVER_NAME + '__' + tool
+                                                  for tool in ('search_symbols', 'read_source'))
+                        proof = probe_command(cmd, state, env, expected_tools=expected_tools,
+                                              process_fn=process_runtime.process,
+                                              reporter=self.session.reporter, budget=budget)
+                        self.attempts.save_attempt_value(attempt, 'mcp-capabilities.json', proof, meta)
+                        meta['source_access'].update(proof)
+                        self.attempts.assert_binding_files(binding, context, destination.parent,
+                                                           binding_hashes | attempt_hashes)
+                        trace_root = attempt / 'codex-trace'
+                        private_directory(trace_root)
+                        env['CODEX_ROLLOUT_TRACE_ROOT'] = str(trace_root)
                     r = None
                     meta['prompt_sent'] = True
                     try:
@@ -273,8 +337,29 @@ class ModelInvoker:
                                 output.decode('utf-8', errors='replace'), agent.get('model'))
                     meta.update(returncode=r['returncode'], output_bytes=len(r['stdout']))
                     if r['returncode']:
+                        if mcp_mode:
+                            mcp_error = codex.mcp_failure(r['stdout'], r['stderr'])
+                            if mcp_error is not None:
+                                raise mcp_error
                         raise AuditError(f'{agent["backend"]} exited with {r["returncode"]}; inspect private attempt logs.',
                             code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='backend')
+                    if mcp_mode:
+                        actual = verify_trace(trace_root, expected_tools, expected_model=profile['proof']['model'])
+                        if actual['toolset_sha256'] != proof['toolset_sha256']:
+                            raise AuditError('Codex changed its verified MCP tool schemas during the model run.',
+                                             code='MCP_COMPATIBILITY', failure_layer='compatibility',
+                                             details={'native_fallback': False})
+                        delivery = verify_mcp_text_delivery(trace_root, r['stdout'])
+                        meta['source_access'].update(delivery)
+                        self.attempts.save_attempt_value(attempt, 'mcp-capabilities-observed.json', actual, meta)
+                        for path in sorted(trace_root.rglob('*')):
+                            if path.is_file() or path.is_symlink():
+                                blob = read_confined(self.session.run_dir, str(path.relative_to(self.session.run_dir)))
+                                attempt_hashes[str(path.relative_to(destination.parent))] = {
+                                    'sha256': digest(blob), 'bytes': len(blob)}
+                        meta['source_access']['inference_requests'] = actual['inference_requests']
+                        meta['model_actual'] = actual['model']
+                        meta['model_actual_source'] = 'verified Codex inference request trace'
                     if phase == 'write' and observer.snapshot()['calls']:
                         raise AuditError('The report author used a tool outside its evidence-only scope.',
                                          code='WRITER_TOOL_CALL', failure_layer='execution')
@@ -295,6 +380,28 @@ class ModelInvoker:
                 finally:
                     observer.finish()
                     meta['tool_observation'] = observer.snapshot()
+                    if mcp_manifest is not None:
+                        receipts = mcp_manifest.parent / 'served.jsonl'
+                        served = []
+                        if receipts.exists() or receipts.is_symlink():
+                            blob = read_confined(self.session.run_dir, str(receipts.relative_to(self.session.run_dir)))
+                            served = [strict_json(line) for line in blob.decode('utf-8').splitlines() if line.strip()]
+                            if any(type(row) is not dict or row.get('attempt_id') != invocation_id or row.get('state') != 'SERVED'
+                                   or type(row.get('request_id')) is not str or type(row.get('result_sha256')) is not str
+                                   for row in served):
+                                raise AuditError('MCP receipts do not belong to this attempt.',
+                                                 code='MCP_RECEIPT_CHANGED', failure_layer='integrity')
+                            attempt_hashes[str(receipts.relative_to(destination.parent))] = {
+                                'sha256': digest(blob), 'bytes': len(blob)}
+                        if not observer.mcp_receipts <= {(row['request_id'], row['result_sha256']) for row in served}:
+                            raise AuditError('Observed MCP receipts disappeared or changed.',
+                                             code='MCP_RECEIPT_CHANGED', failure_layer='integrity')
+                        meta['source_access']['served_calls'] = len(served)
+                        if (any(row.get('result_summary', {}).get('error', {}).get('code') == 'SOURCE_CHANGED'
+                                for row in served) or
+                                meta['tool_observation'].get('mcp', {}).get('errors', {}).get('SOURCE_CHANGED')):
+                            raise UnsafeRepository('MCP detected a changed pinned source or private artifact.',
+                                code='SOURCE_CHANGED', failure_kind='SOURCE_CHANGED', failure_layer='integrity')
                     self.attempts.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
                     self.publisher.assert_coverage_file(context)
                     if self.session.folder:
@@ -390,6 +497,10 @@ class ModelInvoker:
                 artifacts.save_json(destination / 'invocation.json', meta)
             raise
 
-    def command(self, stage, state, agent, schema_path, env, *, reports_only=False, schema=None, writer_only=False):
+    def command(self, stage, state, agent, schema_path, env, *, reports_only=False, schema=None, writer_only=False,
+                mcp_manifest=None, mcp_manifest_sha256=None, mcp_catalog=None):
         return command(self.session, stage, state, agent, schema_path, env,
-                       reports_only=reports_only, schema=schema, writer_only=writer_only)
+                       reports_only=reports_only, schema=schema, writer_only=writer_only,
+                       **({'mcp_catalog': mcp_catalog} if mcp_catalog is not None else {}),
+                       **({'mcp_manifest': mcp_manifest, 'mcp_manifest_sha256': mcp_manifest_sha256}
+                          if mcp_manifest is not None else {}))

@@ -14,9 +14,10 @@ from collections import Counter, deque
 from dataclasses import dataclass, field
 import hashlib
 import json
+from pathlib import Path
 import time
 
-from src.analysis.evidence import lines, source_catalog
+from src.analysis.evidence import lines, source_catalog, valid_path
 
 REPEAT_CALLS = 50
 REPEAT_SECONDS = 120
@@ -41,6 +42,7 @@ class CompletedTool:
     session_id: str = ''
     source_lines: list = field(default_factory=list)
     limitations: list = field(default_factory=list)
+    mcp: dict | None = None
 
 
 class ToolObserver:
@@ -74,6 +76,10 @@ class ToolObserver:
         except KeyError:
             self.sources = []
         self.snapshot_identity = digest([s['identity'] for s in self.sources])
+        self.mcp_access = self.context.get('_mcp_source_access', {})
+        self.mcp_counts = Counter()
+        self.mcp_errors = Counter()
+        self.mcp_receipts = set()
 
     def _reset(self):
         self.streak, self.streak_started = 0, None
@@ -198,6 +204,9 @@ class ToolObserver:
             return [CompletedTool(item.get('id'), tool, {'command': item.get('command')},
                                   status, output, complete, self.session_id)]
         if tool == 'mcp_tool_call':
+            if (item.get('server') == self.mcp_access.get('server') and
+                    item.get('tool') in ('search_symbols', 'read_source')):
+                return [self._source_mcp(item)]
             return [CompletedTool(item.get('id'), str(item.get('server')) + '/' + str(item.get('tool')),
                                   item.get('arguments'), 'error' if item.get('error') else 'success',
                                   item.get('result'), item.get('result') is not None, self.session_id)]
@@ -206,11 +215,127 @@ class ToolObserver:
                                   self.session_id, limitations=['Unsupported completed Codex item type.'])]
         return []
 
+    def _source_mcp(self, item):
+        """Count source text only when a private SERVED receipt matches its bytes."""
+        tool, arguments, result = item['tool'], item.get('arguments'), item.get('result')
+        observation = {'tool': tool, 'request': arguments, 'delivery_state': 'UNVERIFIED',
+                       'inspection_state': 'INSPECTED_UNVERIFIED', 'text_utf8_bytes': 0,
+                       'returned': None, 'error': None}
+        call = CompletedTool(item.get('id'), item['server'] + '/' + tool, arguments,
+                             'error' if item.get('error') or item.get('status') == 'failed' else 'success',
+                             result, False, self.session_id, mcp=observation)
+        try:
+            if item.get('error') or (call.status == 'error' and result is None):
+                observation['error'] = 'TOOL_CALL_FAILED'
+                raise ValueError('Source MCP call failed before a verified result was observed.')
+            if (not isinstance(item.get('id'), str) or not item['id'] or
+                    not isinstance(arguments, dict) or not isinstance(result, dict) or
+                    item.get('status') not in ('completed', 'failed') or item.get('truncated')):
+                raise ValueError('Source MCP result is incomplete or has an unknown envelope.')
+            content = result.get('content')
+            if (not isinstance(content, list) or len(content) != 1 or
+                    not isinstance(content[0], dict) or content[0].get('type') != 'text' or
+                    not isinstance(content[0].get('text'), str)):
+                raise ValueError('Source MCP result text was not observed.')
+            payload = json.loads(content[0]['text'])
+            if not isinstance(payload, dict):
+                raise ValueError('Source MCP result text is not a JSON object.')
+            for key in ('structuredContent', 'structured_content'):
+                if result.get(key) is not None and result[key] != payload:
+                    raise ValueError('Source MCP text differs from its structured result.')
+            meta = payload.get('_meta', {})
+            if (not isinstance(meta, dict) or not isinstance(meta.get('request_id'), str) or
+                    not meta['request_id'] or meta.get('manifest_sha256') != self.mcp_access.get('manifest_sha256') or
+                    meta.get('attempt_id') != self.mcp_access.get('attempt_id') or
+                    meta.get('state') != 'SERVED' or meta.get('inspection') != 'INSPECTED_UNVERIFIED'):
+                raise ValueError('Source MCP result identity does not match this attempt.')
+            receipt_found = False
+            for raw in Path(self.mcp_access['receipts_path']).read_text(encoding='utf-8').splitlines():
+                try:
+                    receipt = json.loads(raw)
+                except ValueError:
+                    continue
+                if (isinstance(receipt, dict) and receipt.get('state') == 'SERVED' and
+                        receipt.get('inspection') == 'INSPECTED_UNVERIFIED' and
+                        receipt.get('attempt_id') == meta['attempt_id'] and
+                        receipt.get('request_id') == meta['request_id'] and receipt.get('tool') == tool and
+                        receipt.get('arguments') == arguments and receipt.get('result_sha256') == digest(payload)):
+                    receipt_found = True
+                    break
+            if not receipt_found:
+                raise ValueError('Source MCP result has no matching private SERVED receipt.')
+            observation.update(request_id=meta['request_id'], manifest_sha256=meta['manifest_sha256'])
+            if isinstance(payload.get('error'), dict):
+                observation['error'] = str(payload['error'].get('code', 'TOOL_ERROR'))
+                observation['delivery_state'] = 'DELIVERED_OBSERVED'
+                call.status, call.complete = 'error', True
+            elif result.get('isError') or result.get('is_error'):
+                raise ValueError('Source MCP result has an unexplained protocol error.')
+            elif tool == 'read_source':
+                self._source_mcp_lines(call, payload)
+                observation['delivery_state'] = 'DELIVERED_OBSERVED'
+            else:
+                call.complete = True
+                observation['delivery_state'] = 'DELIVERED_OBSERVED'
+            self.mcp_receipts.add((meta['request_id'], digest(payload)))
+        except (KeyError, TypeError, OSError, UnicodeError, ValueError) as exc:
+            call.source_lines = []
+            call.complete = False
+            call.limitations.append(str(exc) if isinstance(exc, ValueError) else
+                                    'Source MCP result or its private receipt could not be verified.')
+        return call
+
+    def _source_mcp_lines(self, call, payload):
+        arguments = call.arguments
+        sid, path = arguments.get('source_id'), arguments.get('path')
+        source = next((source for source in self.sources if source['id'] == sid), None)
+        if source is None or not valid_path(path):
+            raise ValueError('Source MCP returned an unknown source locator.')
+        relative = path if source['root'] == '.' else source['root'] + '/' + path
+        owners = [source for source in self.sources if source['root'] == '.' or relative.startswith(source['root'] + '/')]
+        inventory = {entry['path']: entry.get('sha256') for entry in self.context.get('_inventory', {}).get('entries', [])
+                     if entry.get('type') == 'file'}
+        if (max(owners, key=lambda source: len(source['root']))['id'] != sid or
+                relative not in inventory or not inventory[relative] or payload.get('sha256') != inventory[relative] or
+                payload.get('source_id') != sid or payload.get('path') != path):
+            raise ValueError('Source MCP result differs from the pinned inventory.')
+        start, end = payload.get('start_line'), payload.get('end_line')
+        requested_start, requested_end = arguments.get('start_line'), arguments.get('end_line')
+        total, text = payload.get('total_lines'), payload.get('text')
+        complete, more, following = payload.get('complete'), payload.get('has_more'), payload.get('next_start_line')
+        if (any(type(number) is not int for number in (start, end, requested_start, requested_end, total)) or
+                requested_start < 1 or requested_end < requested_start or total < 0 or
+                not isinstance(text, str) or '\r\n' in text or type(complete) is not bool or type(more) is not bool or
+                not isinstance(payload.get('encoding'), str)):
+            raise ValueError('Source MCP returned invalid source coordinates or text metadata.')
+        rows = lines(text)
+        empty = total == 0 and start == 1 and end == 0 and not rows
+        if (start != requested_start or (not empty and (end < start or end > min(total, requested_end))) or
+                len(rows) != max(0, end - start + 1) or more == complete or
+                (more and (type(following) is not int or following != end + 1)) or
+                (not more and following is not None) or
+                (complete and not empty and end != requested_end)):
+            raise ValueError('Source MCP source text does not match its returned line range.')
+        call.source_lines = [(sid, path, start + offset, line.removesuffix('\n'))
+                             for offset, line in enumerate(rows)]
+        call.complete = complete
+        call.mcp.update(text_utf8_bytes=len(text.encode('utf-8')),
+                        returned={'source_id': sid, 'path': path, 'start_line': start, 'end_line': end,
+                                  'complete': complete, 'has_more': more, 'next_start_line': following})
+
     def observe(self, call, *, observed_at=None):
         """Accept a completed normalized result. Timestamp is elapsed monotonic time."""
         if self.triggered:
             return
         now = self.clock() - self.started if observed_at is None else observed_at
+        if call.mcp is not None:
+            new_rows, repeated_rows = [], []
+            for row in call.source_lines:
+                sid, path, number, text = row
+                previous = self.tool_lines.get((self.snapshot_identity, sid, path, number))
+                (repeated_rows if previous == digest(text) else new_rows).append(row)
+            call.mcp.update(new_ranges=self._source_ranges(new_rows),
+                            repeated_ranges=self._source_ranges(repeated_rows))
         self._record(observed_at_seconds=now, call=call.__dict__)
         identity = (self.attempt_id, call.session_id, call.call_id)
         if call.call_id and identity in self.seen:
@@ -232,6 +357,20 @@ class ToolObserver:
         self.counts[status] += 1
         self.limitations.update(call.limitations)
         self.counts['complete_results' if call.complete else 'incomplete_results'] += 1
+        if call.mcp is not None:
+            observation = call.mcp
+            self.mcp_counts['calls'] += 1
+            self.mcp_counts[observation['tool'] + '_calls'] += 1
+            self.mcp_counts['delivered_observed'] += observation['delivery_state'] == 'DELIVERED_OBSERVED'
+            self.mcp_counts['unverified_results'] += observation['delivery_state'] != 'DELIVERED_OBSERVED'
+            self.mcp_counts['incomplete_results'] += not call.complete
+            self.mcp_counts['text_utf8_bytes'] += observation['text_utf8_bytes']
+            self.mcp_counts['unique_lines'] += sum(row['end_line'] - row['start_line'] + 1 for row in observation['new_ranges'])
+            self.mcp_counts['repeated_lines'] += sum(row['end_line'] - row['start_line'] + 1 for row in observation['repeated_ranges'])
+            if observation.get('error'):
+                self.mcp_errors[observation['error']] += 1
+                self.mcp_counts['read_errors'] += observation['tool'] == 'read_source'
+                self.mcp_counts['decoding_errors'] += observation['error'] in ('DECODE_ERROR', 'ENCODING_MISMATCH', 'BINARY_CONTENT')
         signature = digest([call.tool, call.arguments, call.result])
         exact = signature in self.exact
         new, repeated, conflicting = 0, 0, 0
@@ -254,7 +393,8 @@ class ToolObserver:
         self.counts['conflicting_lines'] += conflicting
         if call.source_lines:
             self.counts['reads_with_coordinates'] += 1
-        elif call.tool.lower() in ('read', 'command_execution'):
+        elif (call.tool.lower() in ('read', 'command_execution') or
+              call.mcp is not None and call.mcp['tool'] == 'read_source' and call.mcp['returned'] is None):
             self.counts['reads_without_coordinates'] += 1
         if new and repeated:
             self.counts['mixed_reads'] += 1
@@ -293,6 +433,17 @@ class ToolObserver:
             if self.enabled:
                 self.triggered, self.diagnostic = True, self.would_stop
 
+    @staticmethod
+    def _source_ranges(rows):
+        result = []
+        for sid, path, number, _ in rows:
+            if (result and result[-1]['source_id'] == sid and result[-1]['path'] == path and
+                    result[-1]['end_line'] + 1 == number):
+                result[-1]['end_line'] = number
+            else:
+                result.append({'source_id': sid, 'path': path, 'start_line': number, 'end_line': number})
+        return result
+
     def snapshot(self):
         line_coverage = ('unavailable' if not self.counts['reads_with_coordinates'] else
                          'partial' if self.counts['reads_without_coordinates'] else 'complete')
@@ -307,7 +458,7 @@ class ToolObserver:
                   'unique_lines': self.counts['tool_unique_lines'] if line_coverage != 'unavailable' else None,
                   'repeated_lines': self.counts['tool_repeated_lines'] if line_coverage != 'unavailable' else None,
                   'line_coverage': line_coverage,
-                  'line_coverage_reason': 'Only explicit native source line coordinates are counted.',
+                  'line_coverage_reason': 'Only explicit source coordinates from verified completed tool results are counted.',
                   'mixed_reads': self.counts['mixed_reads'] if line_coverage != 'unavailable' else None,
                   'conflicting_lines': self.counts['conflicting_lines'] if line_coverage != 'unavailable' else None,
                   'fully_repeated_reads': self.counts['fully_repeated_reads'] if line_coverage != 'unavailable' else None,
@@ -334,4 +485,12 @@ class ToolObserver:
             'source_lines': {'status': line_coverage, 'reason': result['line_coverage_reason']},
             'model_requests': {'status': result['model_requests_coverage'], 'reason': result['model_requests_reason']},
         }
+        if self.mcp_counts['calls']:
+            result['mcp'] = {key: self.mcp_counts[key] for key in (
+                'calls', 'search_symbols_calls', 'read_source_calls', 'delivered_observed', 'unverified_results',
+                'read_errors', 'decoding_errors', 'incomplete_results', 'text_utf8_bytes', 'unique_lines', 'repeated_lines')}
+            result['mcp'].update(errors=dict(sorted(self.mcp_errors.items())),
+                                 delivery_state='DELIVERED_OBSERVED' if self.mcp_counts['delivered_observed'] else 'UNVERIFIED',
+                                 inspection_state='INSPECTED_UNVERIFIED',
+                                 served_state='SERVED', served_observation='Private server receipts; not model inspection.')
         return result

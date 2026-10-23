@@ -32,6 +32,7 @@ src/
   analysis/                Sources, evidence, coverage, document revisions
   model/                   Context, agent invocation, response validation
   backends/                Codex CLI adapter and model catalog
+  mcp/                     Local stdio source search and confined source reads
   contracts/               Schemas and data consistency checks
   reports/                 Document assembly and publication
   tui/                     Textual interface and audit worker process
@@ -271,6 +272,157 @@ rule, or strict UTF-8. The map shows the encoding, but these rules do not change
 native CLI decoding. No UTF-8 file copies are created on disk. An agent must report
 a gap if it cannot read the original text exactly.
 
+### MCP Source Access
+
+`source_access.mode` accepts `native` (default) and `mcp`. Native behavior stays
+unchanged. MCP requires `source_context.enabled=true` and `mode="on-demand"`;
+conflicting settings fail configuration validation.
+
+MCP uses Codex `app-server --stdio` with ephemeral threads. Both `thread/start`
+and `turn/start` receive `environments=[]`. The returned thread must have no
+environment or runtime workspace root. This removes native
+shell, file, image, patch and delegation tools while retaining the local MCP
+server. The independent `shell_tool` feature is also disabled. Feature flags or
+the CLI version alone do not establish compatibility.
+
+Preflight reads a bundled model catalog in an empty private Codex home. A pinned
+copy keeps model identities and instructions, selects direct tools, and removes
+model-selected native tools. An offline probe uses the same stdio transport and
+a `file:` model provider with zero retries. It opens no model connection or
+listener. Codex must record an actual inference request before the provider
+fails. The verifier checks both `tools` and `input[].additional_tools`, including
+namespaces. Only the two source MCP tools and four auxiliary functions are
+allowed: `list_mcp_resources`, `list_mcp_resource_templates`, `read_mcp_resource`
+and `request_user_input`. Write, Compare and preflight have only
+`request_user_input`, with no MCP server. The source server advertises no resources. Unknown,
+deferred or built-in tool types fail closed.
+
+Each attempt repeats this probe with its actual schema, model, catalog and
+manifest before sending its prompt. Each real inference request must retain
+the verified model and exact tool schemas. Private capability proofs and request
+traces are pinned with the other attempt artifacts. Incompatible protocols,
+configuration, missing traces or unexpected tools produce `MCP_COMPATIBILITY`.
+There is no version allowlist, bypass switch or automatic native fallback.
+
+Codex may omit repeated schemas on response continuations. These requests inherit
+tools only through a verified `previous_response_id` linked to an earlier
+completed inference in the same private trace. Unknown or forward references,
+model changes and additional native tools fail compatibility.
+
+`src/mcp/server.py` uses the official
+[Python MCP SDK 1.26.0](https://pypi.org/project/mcp/1.26.0/), pinned in requirements.
+Its Python floor is 3.10, within this project's Python 3.11+ requirement.
+The only transport is stdio. The server opens no network connection or listener,
+starts no command or parser, and writes no source file. Diagnostics use stderr.
+Source text and comments remain untrusted data.
+
+SourceContextBuilder prepares the pinned inventory through the existing
+`parse_symbols()`. Each source-reading attempt saves the existing independent
+symbol maps and a private `mcp/manifest.json`. AttemptStore pins their bytes and
+SHA-256 values before launch and rechecks them before publication. The manifest
+binds the source catalog, inventory, decoding rules, file metadata and map hashes
+to this attempt. The server receives its absolute path and expected hash, verifies
+the maps, and searches the loaded declarations without parsing again. Cache use
+does not cross unchecked source identities. Failed and unsupported maps remain
+visible in the complete file list.
+
+The MCP model projection retains every selected file, encoding, line count,
+map status and symbol count. It omits declarations, `maps_root` and `symbols_ref`.
+The full internal index remains available to the orchestrator. The prompt directs
+the model to MCP. Temporary Codex `-c` arguments register the required server with
+only these two tools; user `~/.codex/config.toml` is never changed. The SDK marks
+both as read-only, non-destructive and closed-world. Temporary per-tool approval
+overrides approve only these two known tools. Global approval remains `never`;
+unknown interactive requests are denied. The launch path
+uses isolated Python (`-I -B`), a private working directory and disabled shell,
+apps, plugins, hooks, notifications, skills and delegation. It reads effective
+configuration before creating a thread. Inherited MCP servers are explicitly
+disabled in temporary arguments, followed by a fresh configuration check. If
+the CLI cannot represent an inherited server name safely, the check fails.
+Authentication remains in the user's existing Codex home; credentials are not
+copied. Only regular `AGENTS.md` or `AGENTS.override.md` files directly in that
+home may supply bootstrap rules. No path component may be a symlink. The source
+stage also rejects these paths if they overlap the pinned source directory.
+Allowed paths are recorded in the private capability proof and CLI events.
+Project instruction paths are rejected. These bootstrap rules are configuration;
+they do not grant model source tools. Existing configuration files are never written. Forced settings that
+conflict with these controls fail compatibility. Registration occurs only for Study/Collect,
+Review and substantive Revision. Study/Write and Compare receive no MCP server.
+A required server startup failure produces `MCP_STARTUP`, without native fallback.
+
+| Tool | Inputs | Behavior |
+| --- | --- | --- |
+| `search_symbols` | `query`; optional `source_id`, `path`, `kind`, `limit`, `cursor` | Case-sensitive exact names first, then substring matches; deterministic source/path/coordinate order. Returns declaration coordinates and map status, `has_more` and `cursor`. Cursors bind the query and attempt. |
+| `read_source` | `source_id`, `path`, `start_line`, `end_line` | Returns original text, actual inclusive coordinates, total lines, encoding, original SHA-256 and explicit continuation fields. |
+
+Read requests must name a file owned by that source ID in the filtered inventory.
+Nested submodule roots cannot be read through their parent source IDs. Reads use
+`_read_confined()` with pinned metadata and no symlink traversal. SHA-256 always
+covers the original bytes on each read. Changed bytes return `SOURCE_CHANGED`
+without text. `decode_source()` applies BOM and configured rules; `lines()` keeps
+the existing CRLF normalization and final unterminated line. Binary content,
+invalid decoding, unsafe paths and ranges produce structured errors. An empty
+file requested as 1..1 returns text `""`, `total_lines=0`, coordinates 1..0.
+Other out-of-range requests fail.
+
+Each result JSON body is bounded to 65,536 UTF-8 bytes. Search pages contain whole
+declarations; read pages contain whole lines. `complete=true` means the requested
+range was returned in full. A partial page has `has_more=true` and the next line;
+the caller retains the original requested end. A line that cannot fit produces
+`LINE_TOO_LARGE`; it is never cut. MCP text content contains the full result JSON,
+including source text; structured content contains the same value. Client-side
+loss or truncation cannot establish observed delivery.
+
+`mcp/served.jsonl` records `SERVED` receipts with request arguments, attempt and
+request IDs, returned coordinates, errors, exact result hash and text size. The
+orchestrator pins the completed log after the child exits. A served
+`SOURCE_CHANGED` blocks publication even without an observed result event.
+Missing or changed receipts for observed results also block publication.
+ToolObserver records
+`DELIVERED_OBSERVED` only when a completed Codex event contains the full matching
+text result and private receipt. It checks file ownership, pinned hash and returned
+coordinates before counting source lines. It records requested and returned
+ranges, new and repeated ranges, errors, UTF-8 text bytes and partial results.
+Both states retain `INSPECTED_UNVERIFIED`: receiving text does not prove that the
+model studied it or checked a claim. Existing evidence, citation, report and metric
+meanings stay unchanged. The permanent `tool-observer` format supports replay.
+
+Before publication, the orchestrator also checks each completed successful
+`read_source` result against `function_call_output` or `custom_tool_call_output`
+in actual inference requests. The complete JSON result, including source text
+and receipt identity, must be present. Missing, metadata-only or truncated
+results produce `MCP_DELIVERY`. `source_text_delivery_verified` records this
+transport check with result and UTF-8 byte counts; it does not establish inspection
+or any architectural fact. Zero read results mean no source text was verified.
+
+Offline tests cover the service, real SDK stdio exchange, observer, capability
+and delivery traces, and mocked Collect/Write/Review/Revise orchestration. The
+installed-CLI test probes compatibility without a model connection. The separate
+authenticated test requires `EXPLAIN_TEST_CODEX` to name the executable. It checks
+the complete source result in both Codex events and actual model input, then
+checks a nonce known only from the source in the final response. It also verifies
+the exact tool set and unchanged source. A missing CLI or authentication is an
+explicit skip, never a simulated model success.
+
+Validation on 2026-10-22 passed with `codex-cli 0.163.0-alpha.11` and
+`gpt-6.1-sol`: both tools ran, the following model request contained all 63 source
+bytes for lines 1–2, the final response returned the source-only nonce, and the
+source snapshot stayed unchanged. ToolObserver recorded two deliveries and two
+unique lines with `INSPECTED_UNVERIFIED`. All three inference requests retained
+the permitted tools. The host had Windows Codex and POSIX Python; the test used
+a checked Windows–WSL path/stdio bridge. Only verified deterministic path and
+launcher mappings were canonicalized. Native Linux Codex was not available for
+a separate live run. The bridge is test infrastructure, not a production fallback.
+
+Run the separate authenticated test from the project Python environment:
+
+```sh
+EXPLAIN_TEST_CODEX="$(command -v codex)" python -B -m unittest discover \
+  -s tests -p test_mcp_codex.py -k test_real_model_receives_mcp_source_text -v
+```
+
+The normal offline suite does not send this authenticated request.
+
 ## Contracts and State
 
 [contracts.py](src/contracts/contracts.py) defines response schemas.
@@ -493,13 +645,17 @@ conservative partial metrics.
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [Codex](src/backends/codex.py)               | `exec --ephemeral --sandbox read-only --output-schema --json`; final response comes from a separate file. Compare disables the shell tool.                         |
 
-The CLI uses the user's existing configuration and authentication.
+Native source-reading stages use the user's existing CLI configuration.
+The native writer ignores user configuration and rules. The MCP transport
+validates effective configuration and disables inherited tools through temporary
+overrides; CLI authentication remains available.
 [preflight.py](src/backends/preflight.py) checks versions and required commands.
 [codex_models.py](src/backends/codex_models.py) provides the Codex catalog and
 explicit access checks outside the analysis pipeline.
 
 [requirements.txt](requirements.txt) pins `textual` for the TUI, `pathspec` for
-`.gitignore`, `ast-grep-py` for the [source index](#full-source-index), and
+`.gitignore`, `ast-grep-py` for the [source index](#full-source-index), `mcp` for
+the [local stdio source server](#mcp-source-access), and
 `markdown-it-py` for Markdown validation.
 
 ### Codex Model Catalog

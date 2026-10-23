@@ -90,6 +90,13 @@
     // enabled=false disables map preparation and export in either mode.
     "mode": "on-demand",
   },
+  // Default: native. MCP requires enabled=true and on-demand above.
+  // MCP requires app-server isolation and a verified actual request tool set.
+  // Compatibility failure stops the run; there is no native fallback.
+  // No user Codex configuration changes or automatic native fallback.
+  "source_access": {
+    "mode": "native",
+  },
   "execution": {
     // Stop only after 50 confirmed repeated tool results spanning 120 seconds.
     // false keeps observation metrics and disables this stop.

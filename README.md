@@ -242,6 +242,8 @@ The [commented configuration](config.codex.example.jsonc) describes other option
   shared by initial evidence collection and report writing.
 - **Codex settings per stage:** use `stage_agents` for study, review or comparison.
 - **Legacy encodings:** use `source_decoding.rules` for encodings such as CP1251.
+- **Source access:** `source_access.mode` defaults to `"native"`. `"mcp"` requires
+  `source_context.enabled: true` and `source_context.mode: "on-demand"`.
 - **Source navigation:** `source_context.mode` defaults to `"on-demand"`. The
   prompt lists every file; agents read symbol maps as needed from the supplied
   attempt directory. All files are still parsed before the stage starts. Set

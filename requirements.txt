@@ -2,3 +2,4 @@ textual==8.2.8
 pathspec==0.12.1
 ast-grep-py==0.50.0
 markdown-it-py==4.2.0
+mcp==1.26.0

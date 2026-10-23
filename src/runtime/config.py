@@ -20,6 +20,16 @@ STAGES = ('study', 'review', 'compare')
 SOURCE_STAGES = ('study', 'review')
 BACKENDS = {'codex': 'codex'}
 
+def source_access_settings(value=None):
+    if value is None:
+        value = {}
+    if type(value) is not dict or set(value) - {'mode'}:
+        raise ValueError('source_access accepts mode only.')
+    mode = value.get('mode', 'native')
+    if mode not in ('native', 'mcp'):
+        raise ValueError('source_access.mode must be native or mcp.')
+    return {'mode': mode}
+
 def resolve_agent(agent: dict, path: Path) -> dict:
     agent = dict(agent)
     if set(agent) - {'backend', 'executable', 'model', 'reasoning_effort', 'expected_version'}:
@@ -73,7 +83,7 @@ def load_config(path: Path, *, text: str | None = None) -> dict:
     allowed = {'reports_dir', 'agent', 'stage_agents',
         'output_language', 'priority_scenarios', 'continue_on_error', 'project_description', 'prompts',
         'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy', 'source_decoding',
-        'source_filter', 'source_context', 'last_analysis'}
+        'source_filter', 'source_context', 'source_access', 'last_analysis'}
     if set(value) - allowed:
         raise AuditError(f'Unknown configuration keys: {set(value) - allowed}')
     try:
@@ -81,8 +91,14 @@ def load_config(path: Path, *, text: str | None = None) -> dict:
             raise ValueError('execution must be a JSON object.')
         if 'source_context' in value and value['source_context'] is None:
             raise ValueError('source_context must be a JSON object.')
+        if 'source_access' in value and value['source_access'] is None:
+            raise ValueError('source_access must be a JSON object.')
         value['execution'] = execution_settings(value.get('execution'))
         value['source_context'] = source_context_settings(value.get('source_context'))
+        value['source_access'] = source_access_settings(value.get('source_access'))
+        if (value['source_access']['mode'] == 'mcp' and
+                value['source_context'] != {'enabled': True, 'mode': 'on-demand'}):
+            raise ValueError('source_access.mode=mcp requires source_context.enabled=true and mode=on-demand.')
         value['source_decoding'] = normalize_source_decoding(value.get('source_decoding'))
         value['source_filter'] = normalize_source_filter(value.get('source_filter', {}))
         value['last_analysis'] = last_analysis_settings(value.get('last_analysis'), path)
