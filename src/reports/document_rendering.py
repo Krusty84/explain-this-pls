@@ -257,7 +257,8 @@ def validate_published_architecture(markdown, language, *, canonical=None):
     if canonical is not None:
         validate_materialized(canonical)
         canonical_diagrams = {key: [] for key in REQUIRED_DIAGRAMS}
-        document = lines(canonical['report_markdown'])
+        parts = canonical['report_markdown'].split('\n')
+        document = [part + '\n' for part in parts[:-1]] + ([parts[-1]] if parts[-1] else [])
         for block in canonical['block_map']:
             key = block['section_key']
             if key in canonical_diagrams:
@@ -266,6 +267,22 @@ def validate_published_architecture(markdown, language, *, canonical=None):
                     for token in _markdown_tokens(fragment) if _is_plantuml(token))
         if diagrams != canonical_diagrams or inspection != inspect_materialized_diagrams(canonical):
             raise contract_violation('DIAGRAM_PUBLICATION_MISMATCH', '$.ARCHITECTURE.md')
+        # Navigation stays outside the exact author fragments, in canonical order.
+        from src.reports.navigation import block_marker
+        heading_lines = [token.map[0] for token in tokens if token.type == 'heading_open' and token.tag == 'h2']
+        published_lines = re.split(r'(?<=\n)|(?<=\r)(?!\n)', markdown)
+        for index, start in enumerate(heading_lines):
+            end = heading_lines[index + 1] if index + 1 < len(heading_lines) else len(published_lines)
+            section = ''.join(published_lines[start:end])
+            position = 0
+            for block in (b for b in canonical['block_map'] if b['section_index'] == index):
+                marker = block_marker(block, canonical)
+                fragment = ''.join(document[block['locator']['start_line'] - 1:block['locator']['end_line']])
+                found = section.find(marker, position)
+                if (markdown.count(marker) != 1 or found < 0
+                        or not section.startswith(marker + fragment + '\n', found)):
+                    raise contract_violation('AUTHOR_BLOCK_PUBLICATION_MISMATCH', '$.ARCHITECTURE.md')
+                position = found + len(marker) + len(fragment)
     return _require_diagrams(inspection, canonical['completion_status'] if canonical else 'COMPLETE',
                              {key: '$.ARCHITECTURE.md' for key in REQUIRED_DIAGRAMS})
 

@@ -54,21 +54,23 @@ class HashlessMarkdownTests(unittest.TestCase):
                 before = copy.deepcopy(document)
                 markdown = render_stage(stage, document)
                 self.assert_no_service_hashes(markdown)
-                self.assertIn('| ID | Source | Path : lines | Locator status | Encoding |', markdown)
-                self.assertIn('| source-001 | app.py:1-1 | RESOLVED | utf-8 |', markdown)
+                self.assertIn('| ID | File:lines | Check | Encoding | Source identity | Used in |', markdown)
+                self.assertIn('<code>app.py:1–1</code> | Resolved; locator resolved; no quote supplied | <code>utf-8</code>', markdown)
                 self.assertIn('The source computes SHA-256.', markdown)
                 self.assertEqual(document, before)
                 self.assertEqual(len(document['program_checks']['evidence'][0]['file_sha256']), 64)
 
-    def test_final_report_and_unselected_revision_preserve_authored_hash_semantics(self):
+    def test_final_report_omits_unselected_narrative_and_preserves_authored_hash_semantics(self):
         original = copy.deepcopy((self.study, self.review))
         manifest = dict(status='PARTIAL', branch='main', study=self.study, review=self.review,
             selected_revision='001', revisions=[dict(revision_id='002', study=self.study, review=self.review)])
         markdown, _ = render_final_report(dict(status='PARTIAL', branches=[manifest]),
                                           {'branches': ['main']}, 'git', 'English')
         self.assert_no_service_hashes(markdown)
-        self.assertIn('Additional material for revision 002', markdown)
-        self.assertIn(self.narrative, markdown)
+        self.assertIn('Other revision 002', markdown)
+        self.assertNotIn(self.narrative, markdown)
+        from src.reports.presentation import render_architecture
+        self.assertIn(self.narrative, render_architecture(self.study))
         self.assertEqual((self.study, self.review), original)
 
     def test_unsupported_normalization_provenance_is_rejected(self):

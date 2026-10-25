@@ -64,8 +64,9 @@ class CitationPipelineTests(test_folder.FolderFixture):
                                 manifest['study_invocation'], self.runner.session.cfg['output_language'])
             self.assertGreater(len(architecture), len(document['report_markdown']))
             evidence_id = warnings[0]['evidence_id'].split(':', 1)[1]
-            self.assertIn(f'[{evidence_id}](#source-{evidence_id.lower()})', architecture)
-            self.assertIn('QUOTE_MISMATCH', architecture)
+            self.assertIn(f'](#report-source-study-{evidence_id.lower()})', architecture)
+            from src.reports.presentation import label
+            self.assertIn(label('QUOTE_MISMATCH', self.runner.session.cfg['output_language']), architecture)
             self.assertNotIn('private unmatched source text', reporter.stderr.getvalue())
 
     def test_strict_keeps_unmatched_quotes_without_allowing_continuation(self):

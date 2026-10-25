@@ -120,7 +120,7 @@
     // Command on PATH or executable path. Default: codex.
     "executable": "codex",
     // null uses CLI defaults; the initial writer ignores the user's CLI profile.
-    "model": "gpt-6-astra",
+    "model": "gpt-6.1-sol",
     // Native model effort, e.g. "high". null keeps CLI defaults (isolated for the writer).
     "reasoning_effort": null,
     // null disables version pinning; otherwise use the exact --version output.

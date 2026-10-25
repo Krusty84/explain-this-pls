@@ -76,7 +76,9 @@ class Runner:
                 manifest['status'], code = 'FAILED', 1
             try:
                 report, useful = render_final_report(manifest, self.session.source, self.session.mode,
-                                                     self.session.cfg.get('output_language', 'Russian'))
+                    self.session.cfg.get('output_language', 'Russian'),
+                    available_files={str(p.relative_to(self.session.run_dir)) for p in self.session.run_dir.rglob('*')
+                                     if p.is_file()})
                 path = self.session.run_dir / 'FINAL_REPORT.md'
                 artifacts.atomic(path, report)
                 manifest.update(final_report=str(path), has_usable_material=useful)

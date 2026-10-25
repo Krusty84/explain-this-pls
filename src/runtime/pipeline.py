@@ -207,7 +207,7 @@ class SourcePipeline:
             meta['local_validation'] = True
             self.session.assert_source()
             data = prepare_result('compare', data, context | {'generated_by': 'orchestrator'})
-            meta['report_sha256'] = self.publisher.publish_result('compare', data, destination)
+            meta['report_sha256'] = self.publisher.publish_result('compare', data, destination, context=context)
             meta.update(status='SUCCEEDED', finished_at=now(), publication_complete=True)
             artifacts.save_json(destination / 'invocation.json', meta)
             return data, meta

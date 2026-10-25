@@ -18,7 +18,7 @@ from src.analysis.ledger import prepare_result
 from src.analysis.evidence import source_catalog
 from src.contracts.contracts import ContractError
 from src.reports.document_rendering import materialize_study
-from src.reports.presentation import render_architecture, render_citation_warnings, render_source_references, render_stage
+from src.reports.presentation import render_architecture, render_citation_warnings, render_source_references, render_stage, label
 from src.runtime.reporting import Reporter
 from src.tui.state import RunState
 
@@ -58,24 +58,24 @@ class CitationPresentationTests(unittest.TestCase):
 
     def test_one_claim_one_evidence_and_registry_definition(self):
         rendered = render_architecture(presentation_data())
-        self.assertIn('*Sources: [E-001](#source-e-001)*', rendered)
-        self.assertIn('<a id="source-e-001"></a><code>E-001</code>', rendered)
+        self.assertIn('*Sources: [<code>app.py:1–1</code>](#report-source-study-e-001)*', rendered)
+        self.assertIn('<a id="report-source-study-e-001"></a><code>study:E-001</code>', rendered)
         self.assertIn('<code>app.py:1–1</code>', rendered)
-        self.assertIn('RESOLVED; locator resolved; no quote supplied', rendered)
+        self.assertIn('Resolved; locator resolved; no quote supplied', rendered)
 
-    def test_registry_has_four_columns_and_keeps_quote_verification_distinct(self):
+    def test_registry_has_usage_columns_and_keeps_quote_verification_distinct(self):
         wire = response(dict(branch='main', source_commit='a' * 40))
         wire['evidence'].append(wire['evidence'][0] | dict(id='E-002', quote='verified quote'))
         wire['claims'][0]['evidence_ids'].append('study:E-002')
         for language, header, matched, unquoted in (
-                ('English', 'ID | File:lines | Source | Check', 'quote matched', 'no quote supplied'),
-                ('Russian', 'ID | Файл:строки | Источник | Проверка', 'цитата совпала', 'цитата не задана')):
+                ('English', 'ID | File:lines | Source | Check | Used in', 'quote matched', 'no quote supplied'),
+                ('Russian', 'ID | Файл:строки | Источник | Проверка | Места использования', 'цитата совпала', 'цитата не задана')):
             with self.subTest(language=language):
                 rendered = render_architecture(presentation_data(wire), language)
                 self.assertIn('| ' + header + ' |', rendered)
-                rows = [line for line in rendered.splitlines() if '<a id="source-e-' in line]
+                rows = [line for line in rendered.splitlines() if '<a id="report-source-study-e-' in line]
                 self.assertEqual(len(rows), 2)
-                self.assertTrue(all(len(row.split('|')) == 6 for row in rows))
+                self.assertTrue(all(len(row.split('|')) == 7 for row in rows))
                 self.assertIn(unquoted, rows[0])
                 self.assertIn(matched, rows[1])
                 self.assertNotIn('verified quote', rendered)
@@ -113,11 +113,11 @@ class CitationPresentationTests(unittest.TestCase):
         wire['report_sections'][0]['blocks'][0]['claim_ids'] = ['C-002', 'C-001']
         rendered = render_architecture(presentation_data(wire))
         references = next(line for line in rendered.splitlines() if line.startswith('*Sources:'))
-        self.assertEqual(references.count('[E-001]'), 1)
-        self.assertLess(references.index('[E-001]'), references.index('[E-003]'))
-        self.assertLess(references.index('[E-003]'), references.index('[E-002]'))
+        self.assertEqual(references.count('#report-source-study-e-001'), 1)
+        self.assertLess(references.index('#report-source-study-e-001'), references.index('#report-source-study-e-003'))
+        self.assertLess(references.index('#report-source-study-e-003'), references.index('#report-source-study-e-002'))
         for identifier in ('001', '002', '003'):
-            self.assertIn(f'<a id="source-e-{identifier}"></a>', rendered)
+            self.assertIn(f'<a id="report-source-study-e-{identifier}"></a>', rendered)
 
     def test_repeated_text_uses_own_block_ids_and_shared_evidence_recurs(self):
         wire = response(dict(branch='main', source_commit='a' * 40))
@@ -128,9 +128,9 @@ class CitationPresentationTests(unittest.TestCase):
         rendered = render_architecture(presentation_data(wire))
         refs = [line for line in rendered.splitlines() if line.startswith('*Sources:')]
         self.assertEqual(len(refs), 5)
-        self.assertIn('[E-001]', refs[0]); self.assertIn('[E-002]', refs[1])
+        self.assertIn('#report-source-study-e-001', refs[0]); self.assertIn('#report-source-study-e-002', refs[1])
         self.assertEqual(refs[0], refs[2])
-        self.assertNotIn('[E-001]', refs[1])
+        self.assertNotIn('#report-source-study-e-001', refs[1])
 
     def test_unbound_introduction_and_unproved_claims_have_no_fake_reference(self):
         wire = response(dict(branch='main', source_commit='a' * 40))
@@ -139,9 +139,9 @@ class CitationPresentationTests(unittest.TestCase):
         wire['report_sections'][0]['blocks'] = [dict(markdown='Introduction.', claim_ids=[]),
             dict(markdown='Not verified.', claim_ids=['C-001', 'C-002'])]
         rendered = render_architecture(presentation_data(wire))
-        self.assertIn('Introduction.\n\nNot verified.\n\n*Limitation:', rendered)
-        self.assertIn('<code>C-001</code> (HYPOTHESIS)', rendered)
-        self.assertIn('<code>C-002</code> (UNKNOWN)', rendered)
+        self.assertIn('Introduction.\n\n<a id="report-block-b-001-002"></a>\n\nNot verified.\n\n*Limitation:', rendered)
+        self.assertIn('Has an entry point (Hypothesis)', rendered)
+        self.assertIn('Has an entry point (Unknown)', rendered)
         self.assertNotIn('*Sources:', rendered)
 
     def test_bad_locators_have_explicit_statuses(self):
@@ -152,8 +152,8 @@ class CitationPresentationTests(unittest.TestCase):
                 data['review_plan']['sources'] = []
             rendered = render_architecture(data)
             references = next(line for line in rendered.splitlines() if line.startswith('*Sources:'))
-            self.assertIn(status, references)
-            self.assertNotIn('RESOLVED', rendered)
+            self.assertIn(label(status), references)
+            self.assertNotIn('Resolved; locator resolved', rendered)
             if status == 'QUOTE_MISMATCH': self.assertIn('quote not verified', references)
             if status == 'UNKNOWN_SOURCE': self.assertIn('Source missing', rendered)
 
@@ -212,7 +212,7 @@ class CitationPresentationTests(unittest.TestCase):
         for block in data['block_map']:
             self.assertIn(block['locator']['quote'], rendered)
         self.assertIn('### Source registry', rendered)
-        self.assertIn('QUOTE_MISMATCH', rendered)
+        self.assertIn('Quote mismatch', rendered)
 
     def test_removing_only_renderer_elements_recovers_exact_canonical_bytes(self):
         wire = json.loads((Path(__file__).parent / 'fixtures' / 'architecture_presentation.json').read_text())
@@ -233,11 +233,14 @@ class CitationPresentationTests(unittest.TestCase):
                    {entry['id']: entry for entry in data['review_plan']['sources']})
         inserted = {paragraph for block in data['block_map']
                     for paragraph in render_source_references(block, *indexes).split('\n\n') if paragraph}
-        removed = set()
+        removed = set(range(headings[0]))
         for token in tokens:
+            if token.type == 'html_block' and re.fullmatch(r'<a id="report-[^"]+"></a>\n', token.content):
+                removed.update(range(token.map[0], token.map[1] + 1))
             if token.type == 'paragraph_open':
                 start, end = token.map
-                if ''.join(published_lines[start:end]).removesuffix('\n') in inserted:
+                paragraph = ''.join(published_lines[start:end]).removesuffix('\n')
+                if paragraph in inserted or re.fullmatch(r'<a id="report-[^"]+"></a>', paragraph):
                     self.assertEqual(published_lines[end], '\n')
                     removed.update(range(start, end + 1))
             if token.type == 'heading_open' and token.tag == 'h3' and published_lines[token.map[0]] == '### Source registry\n':
@@ -267,16 +270,16 @@ class CitationPresentationTests(unittest.TestCase):
                     self.assertIn(block['locator']['quote'], narrative)
                 children = [child for token in tokens for child in (token.children or [])]
                 destinations = [child.attrGet('href').removeprefix('#') for child in children
-                                if child.type == 'link_open' and child.attrGet('href').startswith('#source-e-')]
+                                if child.type == 'link_open' and child.attrGet('href').startswith('#report-source-study-e-')]
                 definitions = [match.group(1) for child in children if child.type == 'html_inline'
-                               and (match := re.fullmatch(r'<a id="(source-e-[0-9]+)">', child.content))]
+                               and (match := re.fullmatch(r'<a id="(report-source-study-e-[0-9]+)">', child.content))]
                 self.assertTrue(destinations)
                 self.assertEqual(len(definitions), len(set(definitions)))
                 self.assertEqual(set(destinations), set(definitions))
                 for entry, resolution in zip(data['evidence'], data['program_checks']['evidence']):
                     row = next(line for line in rendered.splitlines()
-                               if f'<a id="source-{entry["id"].lower()}"></a>' in line)
-                    self.assertIn(resolution['status'], row)
+                               if f'<a id="report-source-study-{entry["id"].lower()}"></a>' in line)
+                    self.assertIn(label(resolution['status'], language), row)
 
     def test_warning_tables_are_deterministic_escaped_and_do_not_show_quotes(self):
         first = warning()
@@ -304,10 +307,10 @@ class CitationPresentationTests(unittest.TestCase):
             wire['evidence'][0]['quote'] = 'PRIVATE WRONG QUOTE'
             doc = prepare_result('study', wire, context)
             rendered = render_stage('study', doc)
-        self.assertIn('Citation checks required: study:E-001 (UNRESOLVED)', rendered)
+        self.assertIn('Citation checks required: study:E-001 (Unresolved)', rendered)
         self.assertIn('strict policy checks satisfied: False', rendered)
-        self.assertIn('| FACT |', rendered)
-        self.assertIn('QUOTE_MISMATCH', rendered)
+        self.assertIn('| Fact |', rendered)
+        self.assertIn('Quote mismatch', rendered)
         self.assertNotIn('PRIVATE WRONG QUOTE', rendered)
         self.assertFalse(doc['program_checks']['policy_satisfied'])
         self.assertTrue(doc['program_checks']['continuation_allowed'])

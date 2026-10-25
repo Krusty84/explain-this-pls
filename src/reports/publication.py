@@ -11,6 +11,8 @@ from src.reports.document_rendering import validate_materialized, validate_publi
 from src.analysis.evidence import SourceChanged, read_confined
 from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
 from src.reports.presentation import render_stage, render_architecture
+from src.reports.review import render_review
+from src.reports.comparison import render_comparison
 from src.analysis.coverage_plan import verify_coverage_plan
 from src.analysis.revisions import completed_pair
 from src.runtime.errors import AuditError
@@ -74,7 +76,7 @@ class ReportPublisher:
                         raise AuditError('Published revision artifact changed.', code='REVIEW_TARGET_CHANGED',
                                          failure_layer='integrity') from exc
 
-    def publish_result(self, stage, data, destination):
+    def publish_result(self, stage, data, destination, *, context=None):
         try:
             if stage == 'study':
                 validate_materialized(data)
@@ -82,7 +84,7 @@ class ReportPublisher:
         except ContractError as exc:
             raise AuditError('Computed artifact failed local validation.', code='ARTIFACT_CONTRACT_ERROR',
                              failure_layer='publication') from exc
-        contents = self.artifact_contents(stage, data)
+        contents = self.artifact_contents(stage, data, context=context)
         # Published revision files are immutable, including JSON and annotations.
         for name, content in contents.items():
             path = destination.parent / name
@@ -100,10 +102,17 @@ class ReportPublisher:
                 artifacts.atomic(path, content)
         return digest(contents[ARTIFACTS[stage]])
 
-    def artifact_contents(self, stage, data):
+    def artifact_contents(self, stage, data, *, context=None):
         def encoded(value):
             return (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
-        report = render_architecture(data, self.session.cfg.get('output_language')) if stage == 'study' else render_stage(stage, data, self.session.cfg.get('output_language'))
+        language = self.session.cfg.get('output_language')
+        study = (context or {}).get('architecture_document')
+        if stage == 'study':
+            report = render_architecture(data, language)
+        elif stage == 'review':
+            report = render_review(data, language, study)
+        else:
+            report = render_comparison(data, language, context)
         if stage == 'study':
             validate_published_architecture(report, self.session.cfg.get('output_language'), canonical=data)
         contents = {ARTIFACTS[stage]: report.encode('utf-8'),
@@ -116,6 +125,8 @@ class ReportPublisher:
                              'claim.registry.json': encoded(data['claims']), 'review.plan.json': encoded(data['review_plan'])})
             if data.get('registry_diff') is not None:
                 contents['registry.diff.json'] = encoded(data['registry_diff'])
+        elif stage == 'review':
+            contents['review.annotated.md'] = render_stage(stage, data, language, study=study).encode('utf-8')
         return contents
 
     def assert_review_files(self, context, directory):
@@ -161,7 +172,7 @@ class ReportPublisher:
         names = ['study.json', 'study.material.json', 'study.original.md', 'study.annotated.md',
                  'ARCHITECTURE.md', 'claim.registry.json', 'review.plan.json', 'registry.diff.json']
         if completed_pair(selected):
-            names += ['review.json', 'review.original.md', 'ARCHITECTURE_REVIEW.md']
+            names += ['review.json', 'review.original.md', 'review.annotated.md', 'ARCHITECTURE_REVIEW.md']
         expected_files = {}
         for stage in ('study', 'review'):
             meta = selected.get(stage + '_invocation') or {}

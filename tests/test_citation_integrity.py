@@ -88,9 +88,9 @@ class CitationIntegrityTests(FolderFixture):
                 preserved[extracted] = extracted.read_bytes()
                 report = directory / 'ARCHITECTURE.md'
                 text = report.read_text()
-                reference = '[E-001](#source-e-001)'
+                reference = '(#report-source-study-e-001)'
                 self.assertIn(reference, text)
-                report.write_text(text.replace(reference, '[E-001](#source-e-999)', 1))
+                report.write_text(text.replace(reference, '(#report-source-study-e-999)', 1))
             return cli_result(command, self.model_answer(context))
 
         with patch.object(runner, 'check_cli', return_value={}), patch('src.runtime.process.process', side_effect=process):
@@ -122,8 +122,8 @@ class CitationIntegrityTests(FolderFixture):
         extracted = extracted_path.read_bytes()
         expected = report.read_bytes()
         self.assertIn(b'### Source registry\n', expected)
-        self.assertIn(b'RESOLVED; locator resolved; quote matched', expected)
-        tampered = expected.replace(b'RESOLVED; locator resolved; quote matched', b'TAMPERED; locator resolved; quote matched', 1)
+        self.assertIn(b'Resolved; locator resolved; quote matched', expected)
+        tampered = expected.replace(b'Resolved; locator resolved; quote matched', b'TAMPERED; locator resolved; quote matched', 1)
         report.write_bytes(tampered)
         with self.assertRaises(AuditError) as caught:
             runner.publisher.publish_result('study', data, destination)

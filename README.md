@@ -349,19 +349,36 @@ Each run saves results in `reports_dir/<source-name>/<run-id>/`, for example
 
 | Report                   | Contents                                                                  |
 | ------------------------ | ------------------------------------------------------------------------- |
-| `FINAL_REPORT.md`        | Start here: studies, reviews, comparison and limitations in one document. |
-| `ARCHITECTURE.md`        | How the system works, with component and data-flow diagrams.              |
-| `ARCHITECTURE_REVIEW.md` | Tables of review assessments, source references, findings and gaps.       |
-| `BRANCH_COMPARISON.md`   | A table of differences from the baseline, for two or more Git branches.   |
+| `FINAL_REPORT.md`        | Start here: run status, selected revision, review state, severity counts, up to five findings per source, and links. |
+| `ARCHITECTURE.md`        | Five ordered sections, author blocks and diagrams; contents, source labels and return links. |
+| `ARCHITECTURE_REVIEW.md` | Findings first: claim, problem, impact, correction, evidence status and architecture block; then unchecked claims and review limits. |
+| `BRANCH_COMPARISON.md`   | Both statements, category, explanation, confirmation status and evidence for each compared branch and revision. |
+| `study.annotated.md`    | Full study claim and evidence registries, coverage and program diagnostics. |
+| `review.annotated.md`   | Full review claim and evidence registries, findings, omission search, prior-finding checks and citation warnings. |
+| `study.original.md`, `review.original.md` | Unchanged canonical study text and original reviewer text. |
+| `manifest.json`         | Full run diagnostics, revision history, publication records and checks. |
 
 `FINAL_REPORT.md` is directly in the run folder. In Git mode, `ARCHITECTURE.md`
 and `ARCHITECTURE_REVIEW.md` are under `branches/<branch-id>/`, and the comparison,
 when applicable, is under `comparison/`. In folder mode, the architecture report
 and review are directly in the run folder.
 
-Review findings and citation warnings appear in `FINAL_REPORT.md`. Reports include
-references to source files and lines. PlantUML diagrams are included as source;
-use a PlantUML-capable viewer to display them.
+Read `FINAL_REPORT.md`, then the selected architecture and review. Open the annotated
+files for complete technical registries. Earlier revisions remain under
+`revisions/<revision-id>/` inside the source's result directory; the summary links to
+them without copying their contents. A partial review stays with its own revision.
+
+Source labels show paths and lines and link to evidence entries. Return links show
+every architecture block that uses the source. Review evidence uses the frozen
+study of the same revision. Canonical line coordinates name `study.original.md`;
+architecture links use block anchors. These links work in both revision directories
+and selected copies. Local navigation requires a Markdown viewer that supports
+explicit HTML anchors. Source paths are not live-checkout links: a pinned source
+address is required for a direct source link. Comparison uses supplied reports only;
+missing evidence remains an explicit limitation.
+
+Program labels support Russian and English; author text is unchanged. PlantUML
+diagrams are included as source; use a PlantUML-capable viewer to display them.
 
 ### Understand the outcome
 

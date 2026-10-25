@@ -4,7 +4,6 @@
 """Deterministic report assembly. No model calls or promotion of recovered text."""
 from __future__ import annotations
 
-import html
 from src.contracts.contracts import (SCHEMAS, accepted, workflow_satisfied, processing_satisfied,
                                      has_program_checks, schema_diagnostics)
 
@@ -75,160 +74,174 @@ def comparison_possible(entries, baseline):
             and any(b['branch'] != baseline and usable_study(b) for b in entries))
 
 
-def retained_review_observations(document, study, language):
+def render_final_report(manifest, source, mode, language='Russian', *, available_files=None):
+    from pathlib import Path
+    from src.reports.navigation import anchor, link
     from src.reports.presentation import cell, label, russian
-    observations = document.get('review_observations')
-    if not observations:
-        return []
-    ru = russian(language)
-    registry = {c['id']: c for c in (study or {}).get('claims', [])}
-    out = ['> ' + ('Ниже — сохранённые оценки агента из ответа с нарушениями контракта; приёмка не пройдена.' if ru else
-                   'Retained agent assessments from a contract-invalid response follow; policy acceptance failed.'), '',
-           '| ID | ' + ('Исходное утверждение | Оценка агента | Ограничение' if ru else
-                       'Frozen statement | Agent assessment | Limitation') + ' |', '| --- | --- | --- | --- |']
-    for claim in observations['claims']:
-        out += ['| ' + ' | '.join(cell(v) for v in (claim['id'], registry.get(claim['id'], {}).get('statement', '—'),
-                  label(claim['outcome'], language), claim['limitation'])) + ' |']
-    for finding in observations['findings']:
-        out += ['- ' + cell(finding['id'] + ' / ' + finding['severity'] + ': ' + finding['impact'] + ' ' + finding['proposed_correction'])]
-    return out + ['']
-
-
-def render_final_report(manifest, source, mode, language='Russian'):
-    from src.reports.presentation import cell, label, render_stage, render_coverage, russian
+    from src.reports.review import ordered_findings
     ru = russian(language)
     def t(r, e): return r if ru else e
     entries = report_entries(manifest, source, mode)
     useful = any(usable_study(b) for b in entries)
     review_enabled = manifest.get('review_enabled', True)
-    out = ['# ' + (t('Сводка исследования и автоматизированного ревью', 'Study and automated review summary')
-                  if review_enabled else t('Сводка исследования', 'Study summary')), '',
-        t('Статус обработки: ', 'Processing status: ') + manifest['status'], '',
-        t('Сводка содержит выбранную версию исследования и оценки агентов. '
-          'Условия политики не устанавливают достоверность документа. Качество содержательного ревью не измерено.',
-          'Contains the selected study revision and agent assessments. '
-          'Policy checks do not establish factual correctness. Semantic review quality is not measured.'), '']
-    if not review_enabled:
-        out += ['> ' + t('Ревью отключено конфигурацией; отчёт не проходил отдельную проверку.',
-                          'Review is disabled by configuration; the report has not undergone a separate review.'), '']
+    available = {Path(path).as_posix() for path in available_files} if available_files is not None else {'manifest.json'}
+    if available_files is None:
+        for entry in entries:
+            states = [entry] + entry.get('revisions', [])
+            for state in states:
+                for stage in ('study', 'review'):
+                    meta = state.get(stage + '_invocation') or {}
+                    names = set(meta.get('artifact_hashes', {})) | set(meta.get('material_hashes', {}))
+                    available.update((Path(state.get('directory', '.')) / name).as_posix() for name in names)
+        meta = manifest.get('comparison_invocation') or {}
+        available.update('comparison/' + name for name in meta.get('artifact_hashes', {}))
+    def target(directory, name): return (Path(directory) / name).as_posix()
+    def reference(title, directory, name, fragment=''):
+        path = target(directory, name)
+        return link(title, path, fragment) if path in available else ''
+    def materials(directory):
+        names = [('ARCHITECTURE.md', t('Архитектура', 'Architecture')),
+                 ('ARCHITECTURE_REVIEW.md', t('Ревью', 'Review')),
+                 ('study.annotated.md', t('Реестр исследования', 'Study registry')),
+                 ('review.annotated.md', t('Реестр ревью', 'Review registry')),
+                 ('study.original.md', t('Авторские блоки', 'Authored blocks')),
+                 ('review.original.md', t('Исходный текст ревью', 'Original review text')),
+                 ('study.material.json', t('Восстановленное исследование', 'Recovered study')),
+                 ('review.material.json', t('Восстановленное ревью', 'Recovered review'))]
+        return ' · '.join(value for name, title in names if (value := reference(title, directory, name)))
+    out = ['# ' + t('Сводка исследования', 'Study summary'), '',
+           t('Статус запуска: ', 'Run status: ') + label(manifest['status'], language) + '.', '',
+           t('Пригодный результат: ', 'Usable result: ') + (t('есть', 'available') if useful else t('отсутствует', 'unavailable')) + '.', '',
+           t('Проверки политики не доказывают фактическую правильность отчёта. Качество содержательного ревью не измерено.',
+             'Policy checks do not establish factual correctness. Semantic review quality is not measured.'), '']
     if not useful:
         out += ['> ' + t('Диагностическая сводка: пригодное исследование отсутствует.',
                           'Diagnostic summary: no usable study is available.'), '']
     if manifest.get('critical_failure'):
-        out += ['> ' + t('Критическая ошибка запуска; учитывайте диагностику целостности, восстановления и очистки.',
+        out += ['> ' + t('Критическая ошибка запуска; проверьте диагностику целостности, восстановления и очистки.',
                           'Critical run failure; consult integrity, restoration, and cleanup diagnostics.'), '']
-    for b in entries:
-        out += ['## ' + cell(b.get('branch', manifest.get('source_directory', source.get('path', '')))), '',
-            t('Условия политики обработки и ревью выполнены.', 'Processing and review policy checks satisfied.') if accepted(b) else
-            t('Условия включённых этапов выполнены; отдельное ревью не проводилось.',
-              'Enabled-stage checks satisfied; no separate review was performed.') if workflow_satisfied(b, review_enabled=review_enabled) else
-            t('Обработка разрешена с предупреждениями о цитатах; строгая приёмка не пройдена.',
-              'Processing is allowed with citation warnings; strict acceptance has not passed.')
-            if processing_satisfied(b, review_enabled=review_enabled) else
-            t('Условия политики не выполнены; причины указаны в диагностике.',
-              'Policy checks not satisfied; see diagnostics for the reasons.'), '']
-        if b.get('source_commit'):
-            out += [t('Коммит: ', 'Commit: ') + cell(b['source_commit']), '']
-        if review_enabled and (not b.get('review') or not accepted(b)):
-            out += ['> ' + t('Проверка реестра не завершена с положительным результатом политики.',
-                              'Registry review has not completed with a positive policy result.'), '']
-        if b.get('revision_history'):
-            out += ['### ' + t('Версии документа', 'Document revisions'), '',
-                    t('Выбранная версия: ', 'Selected revision: ') + cell(b.get('selected_revision') or '—'), '',
-                    '| Revision | Study | Review | Complete review | Accepted | Workflow satisfied |',
-                    '| --- | --- | --- | --- | --- | --- |']
-            for revision in b['revision_history']:
-                out += ['| ' + ' | '.join(cell(revision.get(k)) for k in
-                          ('revision_id', 'study_status', 'review_status', 'review_complete', 'accepted', 'workflow_satisfied')) + ' |']
-            out += ['']
-        if b.get('coverage_plan') and not b.get('study'):
-            out += [render_coverage(b['coverage_plan']), '']
-        review = b.get('review')
-        if review:
-            out += [render_stage('review', review, language), '']
-        elif b.get('review_material', {}).get('review_observations'):
-            out += retained_review_observations(b['review_material'], b.get('study'), language)
-        for stage in ('study', 'review'):
-            if stage == 'review' and not review_enabled:
+    if not review_enabled:
+        out += ['> ' + t('Ревью отключено конфигурацией; отдельная проверка не выполнена.',
+                          'Review is disabled by configuration; no separate review was performed.'), '']
+    documents = [stage_document(state, stage) for entry in entries
+                 for state in [entry] + entry.get('revisions', []) for stage in ('study', 'review')]
+    if any(doc and (doc.get('strict_valid') is False or not has_program_checks(doc)) for doc in documents):
+        out += ['> ' + t('Есть восстановленные результаты; их проверки политики не завершены.',
+                          'Recovered results are present; their policy checks are not complete.'), '']
+    if any(doc and doc.get('program_checks', {}).get('citation_warnings') for doc in documents):
+        out += ['> ' + t('Есть предупреждения о цитатах. Проверьте ограничения перед использованием отчёта.',
+                          'Citation warnings are present. Read the limitations before using the report.'), '']
+    if review_enabled and any(not entry.get('review') or entry['review'].get('completion_status') != 'COMPLETE'
+                              for entry in entries):
+        out += ['> ' + t('Есть результаты без завершённого ревью.', 'Some results have no completed review.'), '']
+    for entry in entries:
+        directory = entry.get('directory', '.')
+        selected_id = entry.get('selected_revision')
+        selected = next((r for r in entry.get('revisions', []) if r['revision_id'] == selected_id), entry)
+        artifact_directory = (directory if entry.get('selection_publication_complete') and not manifest.get('critical_failure')
+                              else selected.get('directory', directory))
+        study = stage_document(entry, 'study')
+        review = stage_document(entry, 'review') or stage_document(selected, 'review')
+        review_directory = artifact_directory if entry.get('review') else selected.get('directory', directory)
+        out += ['## ' + cell(entry.get('branch', manifest.get('source_directory', source.get('path', '')))), '',
+                t('Выбранная ревизия: ', 'Selected revision: ') + cell(selected_id or t('не выбрана', 'none')) + '.', '']
+        identity = entry.get('source_commit') or entry.get('source_fingerprint')
+        if identity:
+            out += [t('Идентичность исходников: ', 'Source identity: ') + cell(identity), '']
+        out += [t('Исследование: ', 'Study: ') + label((study or {}).get('completion_status') or 'MISSING', language) + '.', '',
+                t('Ревью: ', 'Review: ') + (t('отключено', 'disabled') if not review_enabled else
+                    label((review or {}).get('completion_status') or 'MISSING', language)) + '.', '']
+        if review_enabled and (not review or review.get('completion_status') != 'COMPLETE' or review.get('strict_valid') is False):
+            out += ['> ' + t('Ревью не завершено; положительная приёмка отсутствует.',
+                              'Review is incomplete; no positive policy acceptance.'), '']
+        if manifest.get('critical_failure'):
+            out += [t('Приёмка запуска не пройдена из-за критической ошибки.',
+                      'Run acceptance failed due to a critical error.'), '']
+        elif accepted(entry):
+            out += [t('Проверки политики обработки и ревью пройдены.', 'Processing and review policy checks satisfied.'), '']
+        elif workflow_satisfied(entry, review_enabled=review_enabled):
+            out += [t('Проверки включённых этапов пройдены; отдельного ревью не было.',
+                      'Enabled-stage checks satisfied; no separate review was performed.'), '']
+        elif processing_satisfied(entry, review_enabled=review_enabled):
+            out += ['> ' + t('Обработка продолжена с предупреждениями о цитатах; строгая приёмка не пройдена.',
+                              'Processing continued with citation warnings; strict acceptance has not passed.'), '']
+        else:
+            out += [t('Условия политики не выполнены.', 'Policy checks not satisfied.'), '']
+        findings = ordered_findings(review or {})
+        if not findings and review:
+            findings = ordered_findings(review.get('review_observations', {}))
+        out += [t('Замечания по важности: ', 'Findings by severity: ') + '; '.join(
+            label(severity, language) + ': ' + str(sum(f['severity'] == severity for f in findings))
+            for severity in ('HIGH', 'MEDIUM', 'LOW')) + '.', '']
+        for finding in findings[:5]:
+            title = label(finding['severity'], language) + ': ' + cell(finding['impact'])
+            destination = reference(title, review_directory, 'ARCHITECTURE_REVIEW.md', anchor('finding', finding['id']))
+            out += ['- ' + (destination or title)]
+        full = reference(t('Полный список замечаний', 'Full findings'), review_directory, 'ARCHITECTURE_REVIEW.md')
+        out += ['', t('Остальные замечания: ', 'Remaining findings: ') + str(max(0, len(findings) - 5)) +
+                ('. ' + full if full else '.'), '']
+        # Include limitations from every retained attempt, without copying its narrative or registry.
+        seen = set()
+        for state in [entry] + entry.get('revisions', []):
+            for stage in ('study', 'review'):
+                doc = stage_document(state, stage)
+                if not doc:
+                    continue
+                revision_id = doc.get('revision_id') or state.get('revision_id') or selected_id
+                key = (stage, revision_id, doc.get('report_markdown'))
+                if key in seen:
+                    continue
+                seen.add(key)
+                warnings = doc.get('program_checks', {}).get('citation_warnings', [])
+                if doc.get('limitations') or warnings or doc.get('strict_valid') is False:
+                    out += ['**' + t('Ограничения ревизии ', 'Limitations for revision ') + cell(revision_id or '—') +
+                            ' — ' + (t('исследование', 'study') if stage == 'study' else t('ревью', 'review')) + ':**', '']
+                if not has_program_checks(doc) or doc.get('strict_valid') is False:
+                    out += ['> ' + t('Результат восстановлен после ошибки; проверки политики не завершены.',
+                                      'Result recovered after an error; policy checks are not complete.'), '']
+                    if doc.get('contract_failure'):
+                        out += ['- ' + cell(doc['contract_failure']['message'])]
+                if warnings:
+                    out += ['> ' + t('Предупреждения о цитатах: ', 'Citation warnings: ') + str(len(warnings)) +
+                            t('. Проверьте исправления и неподтверждённые цитаты в подробных материалах.',
+                              '. Check corrected and unresolved citations in the detailed material.'), '']
+                out += ['- ' + cell(issue) for issue in doc.get('limitations', [])]
+        links = materials(artifact_directory)
+        if review_directory != artifact_directory:
+            review_links = ' · '.join(value for name, title in (
+                ('ARCHITECTURE_REVIEW.md', t('Ревью выбранной ревизии', 'Selected revision review')),
+                ('review.annotated.md', t('Реестр ревью', 'Review registry')),
+                ('review.material.json', t('Восстановленное ревью', 'Recovered review')))
+                if (value := reference(title, review_directory, name)))
+            links += (' · ' if links and review_links else '') + review_links
+        if links:
+            out += ['', links, '']
+        for revision in entry.get('revisions', []):
+            if revision['revision_id'] == selected_id:
                 continue
-            doc = stage_document(b, stage)
-            if not doc:
-                out += [stage + ': ' + t('Результат отсутствует.', 'Result n/a.'), '']
-                continue
-            if not has_program_checks(doc) or doc.get('strict_valid') is False:
-                failure = doc.get('contract_failure')
-                if failure:
-                    out += ['> ' + cell(failure['message']) + ' ' +
-                            t('Текст сохранён; проверки политики не завершены. Самооценка агента: ',
-                              'Text retained; policy checks not completed. Agent self-assessment: ') +
-                            (doc.get('completion_status') or 'n/a') + '.', '']
-                if not failure or not failure.get('details', {}).get('code'):
-                    out += ['> ' + t('Восстановленный текст с нарушениями контракта; проверки политики не завершены. '
-                                      'Исходный текст не получает положительную приёмку.',
-                                      'Recovered text with contract violations; policy checks are not complete. '
-                                      'Original text has no positive acceptance.'), '']
-            if stage == 'study':
-                out += [render_stage(stage, doc, language), '']
-            for issue in doc.get('limitations', []):
-                out += ['- ' + cell(issue)]
-            if doc.get('validation_issues'):
-                for group in doc['validation_issues'].values():
-                    for issue in group.get('violations', []):
-                        out += ['- ' + cell(issue['path']) + ': ' + cell(issue.get('message', issue.get('violation')))]
-            assembled = stage == 'study' and ('materialization_provenance' in doc or
-                doc.get('narrative_origin') == 'PROGRAM_ASSEMBLED_AUTHOR_BLOCKS')
-            out += ['', '### ' + (t('Программная сборка авторских блоков: ', 'Program assembly of authored blocks: ')
-                if assembled else t('Исходный текст агента: ', 'Original agent text: ')) + stage, '',
-                    t('Ниже сохранены оценки и формулировки агента без исправлений; применяйте ограничения выше.',
-                      'Agent assessments and wording below are preserved unchanged; apply the limitations above.'), '',
-                    doc['report_markdown'], '']
-        for revision in b.get('revisions', []):
-            selected = revision['revision_id'] == b.get('selected_revision')
-            # Complete selected material was rendered above. Other revisions and
-            # incomplete reviews remain explicitly attributed to their own pair.
-            extra_study = not selected and stage_document(revision, 'study')
-            extra_review = stage_document(revision, 'review') if not selected or not b.get('review') else None
-            if not extra_study and not extra_review:
-                continue
-            out += ['### ' + t('Дополнительные материалы версии ', 'Additional material for revision ') +
-                    cell(revision['revision_id']), '']
-            if review_enabled and not (revision.get('review') and revision['review'].get('completion_status') == 'COMPLETE'
-                    and (revision.get('review_invocation') or {}).get('publication_complete')):
-                out += ['> ' + t('Полное строго валидное ревью этой версии отсутствует. Материал не принят.',
-                                  'This revision has no complete strictly valid review. Material is not accepted.'), '']
-            diff = (revision.get('study') or {}).get('registry_diff')
-            if diff:
-                out += [t('Изменения реестра: ', 'Registry changes: ') + '; '.join(
-                        cell(k) + ': ' + cell(', '.join(diff[k]) or '—')
-                        for k in ('added_ids', 'removed_ids', 'changed_ids', 'unchanged_ids')), '']
-            for stage, document in (('study', extra_study), ('review', extra_review)):
-                if document:
-                    out += ['#### ' + stage, '', render_stage(stage, document, language), '']
-                    if stage == 'review':
-                        out += retained_review_observations(document, revision.get('study'), language)
-                    failure = document.get('contract_failure')
-                    if failure:
-                        out += ['> ' + cell(failure['message']) + ' ' +
-                                t('Текст сохранён; проверки политики не завершены. Самооценка агента: ',
-                                  'Text retained; policy checks not completed. Agent self-assessment: ') +
-                                (document.get('completion_status') or 'n/a') + '.', '']
-                    out += ['- ' + cell(issue) for issue in document.get('limitations', [])]
-                    for group in document.get('validation_issues', {}).values():
-                        for issue in group.get('violations', []):
-                            out += ['- ' + cell(issue['path']) + ': ' + cell(issue.get('message', issue.get('violation')))]
-                    out += ['', document['report_markdown'], '']
-    out += ['## ' + t('Сравнение', 'Comparison'), '']
+            details = materials(revision.get('directory', directory + '/revisions/' + revision['revision_id']))
+            state = (revision.get('review') or {}).get('completion_status')
+            out += [t('Другая ревизия ', 'Other revision ') + cell(revision['revision_id']) + ': ' +
+                    label(state or 'MISSING', language) + ('. ' + details if details else '.'), '']
     comparison = manifest.get('comparison')
+    out += ['## ' + t('Сравнение', 'Comparison'), '']
+    comp_link = reference(t('Сравнение веток и основания различий', 'Branch comparison and supporting evidence'),
+                          'comparison', 'BRANCH_COMPARISON.md')
     if comparison:
-        out += [render_stage('compare', comparison, language), '',
-                t('Исходный текст агента или объяснение оркестратора:', 'Original agent text or orchestrator explanation:'),
-                '', comparison['report_markdown'], '']
+        out += [t('Состояние: ', 'State: ') + label(comparison['completion_status'], language) + '. ' + comp_link, '']
+        out += ['- ' + cell(x) for x in comparison['limitations']]
+        if comparison.get('program_checks', {}).get('citation_warnings'):
+            out += ['> ' + t('В сравнении есть предупреждения о цитатах.', 'Comparison has citation warnings.'), '']
     else:
         out += [t('Сравнение отсутствует; это не означает отсутствия различий. Для каталога и одной ветки оно не требуется.',
-                  'Comparison n/a; this does not imply no differences. Folder and single-branch runs do not require it.'), '']
-    out += ['## ' + t('Диагностика запуска', 'Run diagnostics'), '']
-    for d in manifest.get('diagnostics', []):
-        out += ['- ' + cell(d.get('stage', '')) + ': ' + cell(d.get('failure_kind') or d.get('code')) + ' — ' + cell(d.get('message', ''))]
+                  'Comparison unavailable; this does not imply no differences. Folder and single-branch runs do not require it.'), '']
+    out += ['## ' + t('Диагностика и история', 'Diagnostics and history'), '']
+    for diagnostic in manifest.get('diagnostics', []):
+        codes = dict.fromkeys(diagnostic[key] for key in ('failure_kind', 'code') if diagnostic.get(key))
+        out += ['- ' + cell(' / '.join(codes)) + ': ' + cell(diagnostic.get('message', ''))]
     if not manifest.get('diagnostics'):
-        out += [t('Ошибок выполнения не зарегистрировано.', 'No execution errors recorded.')]
+        out += [t('Ошибок выполнения не зарегистрировано.', 'No execution errors recorded.'), '']
+    details = reference(t('Полная диагностика, история ревизий и результаты проверок', 'Full diagnostics, revision history and check results'), '.', 'manifest.json')
+    if details:
+        out += [details, '']
     return '\n'.join(out).rstrip() + '\n', useful

@@ -469,9 +469,9 @@ class ModelInvoker:
                 artifacts.save_json(destination / 'invocation.json', meta)
                 self.session.reporter.emit('study_phase_completed', **self.session.stage_context(stage, context))
                 return data, meta
-            report_hash = self.publisher.publish_result(stage, data, destination)
+            report_hash = self.publisher.publish_result(stage, data, destination, context=context)
             artifact_hashes = {name: {'sha256': digest(blob), 'bytes': len(blob)}
-                               for name, blob in self.publisher.artifact_contents(stage, data).items()}
+                               for name, blob in self.publisher.artifact_contents(stage, data, context=context).items()}
             meta.update(status='SUCCEEDED', finished_at=now(), report_sha256=report_hash, publication_complete=True)
             meta['artifact_hashes'] = artifact_hashes
             meta['duration_seconds'] = round(self.session.reporter.clock() - attempt_started, 3)

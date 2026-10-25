@@ -117,7 +117,7 @@ class CoveragePlanTests(unittest.TestCase):
             entry['path'] = entry['path'].replace('src', 'Исходники | <core>', 1)
         markdown = render_coverage(self.plan())
         self.assertIn('Исходники &#124; &lt;core&gt;', markdown)
-        self.assertIn('| S-001 | NOT_CITED | UNVERIFIED |', markdown)
+        self.assertIn('| S-001 | Not cited | Unverified |', markdown)
         self.assertNotIn('| NOT_INSPECTED |', markdown)
         self.assertNotIn('plan_sha256', markdown)
 
