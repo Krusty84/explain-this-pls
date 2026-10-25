@@ -260,13 +260,16 @@ def stop(child):
 def bootstrap_instructions(values, args):
     if not isinstance(values, list):
         raise failure('Codex did not identify its bootstrap instruction sources.')
-    home = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex')
+    configured_home = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex')
+    home = configured_home.resolve()
     allowed = {home / 'AGENTS.md', home / 'AGENTS.override.md'}
     paths = []
     for value in values:
         if not isinstance(value, str):
             raise failure('Codex returned an invalid bootstrap instruction path.')
         path = Path(value)
+        if path.is_absolute() and path.parent == configured_home:
+            path = home / path.name
         if not path.is_absolute() or path not in allowed or any(part.is_symlink() for part in (path, *path.parents)):
             raise failure('Codex loaded project instructions outside the permitted home configuration.')
         if not stat.S_ISREG(path.stat(follow_symlinks=False).st_mode):

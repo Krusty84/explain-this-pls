@@ -532,7 +532,7 @@ class RecursiveCheckoutTests(RecursiveFixture, unittest.TestCase):
         self.assert_original(before)
 
 
-@unittest.skipUnless(os.geteuid() == 0, 'Actual UID 0 required; run in the isolated CI container. No mocked ownership.')
+@unittest.skipUnless(os.geteuid() == 0, 'Actual UID 0 required; CI uses sudo. No mocked ownership.')
 class RecursiveRootTests(RecursiveFixture, unittest.TestCase):
     def test_actual_root_needs_no_permission_flag(self):
         for check in (True, False):

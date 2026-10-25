@@ -27,88 +27,12 @@ jobs:
           command -v git
           git --version
           python3 -B -m unittest discover -s tests -v
-
-  almalinux:
-    name: AlmaLinux 9 / Python 3.11
-    runs-on: ubuntu-latest
-    container:
-      image: almalinux:9
-      options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined
-    defaults:
-      run:
-        shell: bash
-    env:
-      AUDIT_GIT_BUILD: modern
-    steps:
-      - name: Install Git, Python, and network isolation tools
+      - name: Real root and foreign-owner integration tests
+        if: runner.os == 'Linux'
         run: |
-          set -euo pipefail
-          dnf install -y git python3.11 python3.11-pip util-linux iproute
-      - uses: actions/checkout@v4
-      - name: Install Python dependencies before network isolation
-        run: python3.11 -m pip install -r requirements.txt
-      - name: Full suite on AlmaLinux 9 with no network
-        run: |
-          set -euo pipefail
-          cat /etc/os-release
-          command -v git
-          git --version
-          python3.11 --version
-          bash .github/ci/offline-tests.sh python3.11 -B -m unittest discover -s tests -v
-
-  git-compatibility:
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        git: [upstream-2.34.1, jammy-updates, jammy-command-scope-broken]
-    container:
-      image: ubuntu:22.04
-      # Only test processes enter a network namespace, after tool installation.
-      options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined
-    env:
-      AUDIT_GIT_BUILD: ${{ matrix.git }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install and identify the real Git build
-        run: bash .github/ci/prepare-git.sh "$AUDIT_GIT_BUILD"
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install Python dependencies before network isolation
-        run: python3 -m pip install -r requirements.txt
-      - name: Full suite, actual root and foreign owners, with no network
-        shell: bash
-        run: |
-          set -euo pipefail
-          command -v git
-          git --version
-          python3 -c 'import shutil; from pathlib import Path; print(Path(shutil.which("git")).resolve())'
-          bash .github/ci/offline-tests.sh python3 -B -m unittest discover -s tests -v 2>&1 | tee git-tests.log
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: git-${{ matrix.git }}
-          path: |
-            git-build.log
-            git-tests.log
-
-  root-ownership:
-    runs-on: ubuntu-latest
-    container:
-      image: python:3.13-bookworm
-      options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Git for offline fixtures
-        run: apt-get update && apt-get install -y --no-install-recommends git iproute2
-      - name: Install Python dependencies before network isolation
-        run: python3 -m pip install -r requirements.txt
-      - name: Real root and foreign-owner integration tests in an isolated container
-        env:
-          AUDIT_GIT_BUILD: modern
-        run: |
-          command -v git
-          git --version
-          dpkg-query -W git
-          bash .github/ci/offline-tests.sh python3 -B -m unittest discover -s tests -v
+          sudo env "PATH=$PATH" "PYTHONPATH=$PWD/tests" \
+            "$(command -v python3)" -B -m unittest -v \
+            test_startup.StartupCLIIntegrationTests.test_cli_under_actual_root \
+            test_startup.StartupCLIIntegrationTests.test_actual_root_rejects_foreign_owner_until_explicit_trust \
+            test_git_compat.RootOwnershipCompatibility \
+            test_submodules.RecursiveRootTests

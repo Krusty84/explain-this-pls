@@ -80,6 +80,7 @@ for line in sys.stdin:
         if scenario == 'roots': result['runtimeWorkspaceRoots'] = ['/untrusted/source']
         if scenario == 'sources': result['instructionSources'] = ['/untrusted/AGENTS.md']
         if scenario.startswith('bootstrap'): result['instructionSources'] = [str(Path(os.environ['CODEX_HOME']) / 'AGENTS.md')]
+        if scenario == 'bootstrap_canonical': result['instructionSources'] = [str(Path(os.environ['CODEX_HOME']).resolve() / 'AGENTS.md')]
         if scenario == 'model': result['model'] = 'unlisted-model'
         send({'id': identifier, 'result': result})
         if scenario == 'startup':
@@ -112,7 +113,7 @@ class MCPTransportTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.schema = self.root / 'schema.json'
         self.schema.write_text(json.dumps({'type': 'object', 'properties': {'result': {'type': 'string'}},
                                           'required': ['result'], 'additionalProperties': False}), encoding='utf-8')
@@ -216,6 +217,23 @@ class MCPTransportTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         thread = next(event for event in events if event['type'] == 'thread.started')
         self.assertEqual(thread['bootstrap_instruction_sources'], [str(self.home / 'AGENTS.md')])
+
+    def test_trusted_home_alias_accepts_configured_and_canonical_instruction_paths(self):
+        canonical_home = self.home
+        alias = self.root / 'home-parent-alias'
+        alias.symlink_to(self.root, target_is_directory=True)
+        self.home = alias / canonical_home.name
+        for scenario in ('bootstrap', 'bootstrap_canonical'):
+            with self.subTest(scenario=scenario):
+                result, events, _ = self.invoke(scenario)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                thread = next(event for event in events if event['type'] == 'thread.started')
+                self.assertEqual(thread['bootstrap_instruction_sources'], [str(canonical_home / 'AGENTS.md')])
+        self.schema.with_name('final.response.json').unlink()
+        self.log.unlink()
+        self.manifest.write_text(json.dumps({'source_root': str(self.root)}))
+        requests = self.assert_failure('bootstrap_source')
+        self.assertNotIn('turn/start', [request.get('method') for request in requests])
 
     def test_home_instruction_symlink_or_source_overlap_fails_before_model_turn(self):
         target = self.home / 'AGENTS.md'

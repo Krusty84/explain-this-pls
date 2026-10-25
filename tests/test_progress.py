@@ -791,7 +791,8 @@ sys.exit(main())
         self.assertEqual(child.returncode, 0, console)
         run = Path(json.loads(stdout)['manifest']).parent
         self.assertIn('[RUN] source folder / Analyzing project…  ⠋ 00:00', console)
-        self.assertIn('⠙', console)
+        frames = re.findall(r'\[RUN\] source folder / Analyzing project…  ([' + SPINNER + r']) \d\d:\d\d', console)
+        self.assertGreater(len(set(frames)), 1, console)
         self.assertNotIn('      Elapsed:', console)
         self.assertNotIn('private CLI activity', console)
         for name in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md'):

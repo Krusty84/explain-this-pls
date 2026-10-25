@@ -232,7 +232,7 @@ class MCPObserverTests(unittest.TestCase):
         self.assertEqual(replay(path, 'codex')['metrics'], self.observer.finish())
 
     def test_real_service_receipt_and_result_establish_text_delivery(self):
-        directory = Path(self.directory.name)
+        directory = Path(self.directory.name).resolve()
         root, attempt = directory / 'source', directory / 'attempt'
         root.mkdir()
         (root / 'unit.py').write_text(self.text, encoding='utf-8')

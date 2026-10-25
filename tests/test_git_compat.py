@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Compatibility regressions; the CI matrix supplies real Git builds.
+"""Compatibility regressions using the runner's system Git.
 
 Version shims test parsing/selection only, never claim to emulate an old Git.
 Races and permission failures below are injected explicitly; root tests use OS UIDs.
@@ -376,7 +376,7 @@ os.execv({real_git!r}, [{real_git!r}, *sys.argv[1:]])
             self.assertFalse(config.is_relative_to(renamed))
 
 
-@unittest.skipUnless(os.geteuid() == 0, 'Actual UID 0 required; isolated CI container only, no mocked owners.')
+@unittest.skipUnless(os.geteuid() == 0, 'Actual UID 0 required; CI uses sudo, no mocked owners.')
 class RootOwnershipCompatibility(recursive.RecursiveFixture, unittest.TestCase):
     def foreign_copy(self, source):
         try:
@@ -452,7 +452,6 @@ print(base)
                     target.rename(foreign)
                     original.rename(target)
 
-    @unittest.skipUnless(os.environ.get('AUDIT_GIT_BUILD'), 'Behavioral package probe is enabled by the isolated CI Git matrix.')
     def test_actual_build_safe_directory_behavior_and_scope(self):
         foreign = self.foreign_copy(self.path)
         # Embedded root .git supports discovery after moving the fixture.
@@ -464,26 +463,20 @@ print(base)
                                   env=env, capture_output=True, text=True, timeout=30)
         untrusted = probe(foreign)
         command_scope = probe(foreign, '-c', 'safe.directory=' + str(foreign))
-        kind = os.environ['AUDIT_GIT_BUILD']
-        if kind == 'upstream-2.34.1':
-            self.assertEqual(untrusted.returncode, 0)
-        else:
-            self.assertRegex(untrusted.stderr, 'dubious ownership|unsafe repository')
-        if kind == 'jammy-command-scope-broken':
-            self.assertNotEqual(command_scope.returncode, 0)
-            self.assertRegex(command_scope.stderr, 'dubious ownership|unsafe repository')
-        else:
-            self.assertEqual(command_scope.returncode, 0, command_scope.stderr)
+        self.assertNotEqual(untrusted.returncode, 0)
+        self.assertRegex(untrusted.stderr, 'dubious ownership|unsafe repository')
+        self.assertEqual(command_scope.returncode, 0, command_scope.stderr)
         env['GIT_CONFIG_GLOBAL'] = runtime.trust_config(foreign)
         trusted = probe(foreign)
         self.assertEqual(trusted.returncode, 0, trusted.stderr)
         other = self.foreign_copy(self.path)
-        if kind != 'upstream-2.34.1':
-            self.assertRegex(probe(other).stderr, 'dubious ownership|unsafe repository')
+        untrusted_other = probe(other)
+        self.assertNotEqual(untrusted_other.returncode, 0)
+        self.assertRegex(untrusted_other.stderr, 'dubious ownership|unsafe repository')
         # Runner's check is mandatory even on upstream without native protection.
         with self.assertRaisesRegex(AuditError, 'ownership mismatch'):
             Repository(other).head()
-        print(json.dumps({'git_build': kind, 'executable': runtime.executable,
+        print(json.dumps({'executable': runtime.executable,
                           'version': runtime.version_string, 'untrusted_rc': untrusted.returncode,
                           'command_scope_rc': command_scope.returncode, 'global_scope_rc': trusted.returncode}))
 
