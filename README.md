@@ -174,8 +174,8 @@ saved useful results, including failed or interrupted runs, become `PARTIAL`.
 
 | Field                    | Purpose                                                                                    |
 | ------------------------ | ------------------------------------------------------------------------------------------ |
-| `agent.backend`          | Coding agent: `codex`.                                                                   |
-| `agent.executable`       | CLI command or path; defaults to `codex`.                                                 |
+| `agent.backend`          | Coding agent: `codex`.                                                                     |
+| `agent.executable`       | CLI command or path; defaults to `codex`.                                                  |
 | `agent.model`            | Optional model name; omit it or use `null` for the CLI's configured model.                 |
 | `agent.reasoning_effort` | Optional non-empty string with the model's native effort value; `null` keeps CLI settings. |
 
@@ -351,16 +351,16 @@ script-friendly summary, or `python3 explain.py --help` to see all options.
 Each run saves results in `reports_dir/<source-name>/<run-id>/`, for example
 `../architecture-reports/legacy-erp/<run-id>/`. Start with these files:
 
-| Report                   | Contents                                                                  |
-| ------------------------ | ------------------------------------------------------------------------- |
-| `FINAL_REPORT.md`        | Start here: selected revision, review outcome, scenario boundaries, source scope/exclusions, unknowns and next checks, omission search, findings and links. |
-| `ARCHITECTURE.md`        | Five ordered sections, author blocks and diagrams; contents, source labels and return links. |
-| `ARCHITECTURE_REVIEW.md` | Findings first: claim, problem, impact, correction, evidence status and architecture block; then unchecked claims and review limits. |
-| `BRANCH_COMPARISON.md`   | Both statements, category, explanation, confirmation status and evidence for each compared branch and revision. |
-| `study.annotated.md`    | Full study claim and evidence registries, coverage and program diagnostics. |
-| `review.annotated.md`   | Full review claim and evidence registries, findings, omission search, prior-finding checks and citation warnings. |
-| `study.original.md`, `review.original.md` | Unchanged canonical study text and original reviewer text. |
-| `manifest.json`         | Full run diagnostics, revision history, publication records and checks. |
+| Report                                    | Contents                                                                                                                                                    |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FINAL_REPORT.md`                         | Start here: selected revision, review outcome, scenario boundaries, source scope/exclusions, unknowns and next checks, omission search, findings and links. |
+| `ARCHITECTURE.md`                         | Five ordered sections, author blocks and diagrams; contents, source labels and return links.                                                                |
+| `ARCHITECTURE_REVIEW.md`                  | Findings first: claim, problem, impact, correction, evidence status and architecture block; then unchecked claims and review limits.                        |
+| `BRANCH_COMPARISON.md`                    | Both statements, category, explanation, confirmation status and evidence for each compared branch and revision.                                             |
+| `study.annotated.md`                      | Full study claim and evidence registries, coverage and program diagnostics.                                                                                 |
+| `review.annotated.md`                     | Full review claim and evidence registries, findings, omission search, prior-finding checks and citation warnings.                                           |
+| `study.original.md`, `review.original.md` | Unchanged canonical study text and original reviewer text.                                                                                                  |
+| `manifest.json`                           | Full run diagnostics, revision history, publication records and checks.                                                                                     |
 
 `FINAL_REPORT.md` is directly in the run folder. In Git mode, `ARCHITECTURE.md`
 and `ARCHITECTURE_REVIEW.md` are under `branches/<branch-id>/`, and the comparison,
@@ -385,7 +385,7 @@ Program labels support Russian and English; author text is unchanged. PlantUML
 diagrams are included as source; use a PlantUML-capable viewer to display them.
 
 The scope separates **Investigated**, **Partially investigated**, **Unverified**
-and **Out of scope** (with translated labels when requested). These are agent
+and **Out of scope**. These are agent
 assessments. Each material gap needs a reason, potential impact and next check.
 The program shows the frozen inventory, citation diagnostics and available source
 text delivery observations separately. `NOT_CITED` does not mean `NOT_INSPECTED`.

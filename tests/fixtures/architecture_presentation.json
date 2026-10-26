@@ -52,6 +52,10 @@
           "claim_ids": [
             "C-003"
           ]
+        },
+        {
+          "markdown": "### Investigated\nThe fixture describes a synthetic entry point.\n\n### Partially investigated\nNone: this fixture has no incomplete execution chains.\n\n### Unverified\nRuntime behavior was not executed in this fixture.\n\n### Out of scope\nNone: this fixture has no user exclusions.\n",
+          "claim_ids": []
         }
       ]
     },

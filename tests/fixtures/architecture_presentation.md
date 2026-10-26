@@ -24,6 +24,20 @@ Runtime deployment is unknown.
 
 *Limitation: no source evidence for Runtime deployment is unknown. (Unknown).*
 
+<a id="report-block-b-001-004"></a>
+
+### Investigated
+The fixture describes a synthetic entry point.
+
+### Partially investigated
+None: this fixture has no incomplete execution chains.
+
+### Unverified
+Runtime behavior was not executed in this fixture.
+
+### Out of scope
+None: this fixture has no user exclusions.
+
 <a id="report-section-context"></a>
 
 ## 2. System context

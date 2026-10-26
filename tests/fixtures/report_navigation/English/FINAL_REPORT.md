@@ -32,6 +32,15 @@ Remaining findings: 0. [Full findings](ARCHITECTURE_REVIEW.md)
 
 > C-001: Has an entry point
 
+> ### Investigated
+> The fixture describes a synthetic entry point.
+> ### Partially investigated
+> None: this fixture has no incomplete execution chains.
+> ### Unverified
+> Runtime behavior was not executed in this fixture.
+> ### Out of scope
+> None: this fixture has no user exclusions.
+
 ### Omission search — agent reports
 
 | Area | State | Limitation |
@@ -40,6 +49,7 @@ Remaining findings: 0. [Full findings](ARCHITECTURE_REVIEW.md)
 | 3. System components | Inspected according to the agent |  |
 | 4. Startup and execution | Inspected according to the agent |  |
 | 5. Data and state | Inspected according to the agent |  |
+| 1. Study scope | Inspected according to the agent |  |
 
 ### Source filter — program records
 

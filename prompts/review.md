@@ -61,11 +61,19 @@ priority scenarios. Report INSPECTED, PARTIALLY_INSPECTED or NOT_INSPECTED for e
 area in omission_search; unfinished areas need concrete limitations. These are
 your reported activities, not measured completeness. New omissions are findings,
 not replacements for registry responses. Do not silently exclude an area.
+The separate scope area is mandatory, including on repeat review. INSPECTED
+records your reported activity, not proof of complete investigation.
 
 Check that scope explicitly separates Investigated (author-reported paths),
 Partially investigated (incomplete execution chains), Unverified (material
 behavior not established), and Out of scope (user exclusions or unselected
-investigation areas); labels can use output_language. Check each selected
+investigation areas). Each group must occur exactly once as a top-level H3
+Markdown heading with nonempty content. Russian labels are Исследовано,
+Частично исследовано, Не проверено, Вне области исследования. Headings in code
+fences, quotes, lists or ordinary text do not count. An explicit absence with a
+reason is valid; do not demand invented paths, problems or evidence to fill groups.
+Python checks structure, not the truth or completeness of these assessments.
+Check each selected
 scenario's trigger, components and execution path, branches and alternative entry
 points, source-supported links, unfinished paths and concrete next checks.
 For each material gap require its reason, potential impact on architectural

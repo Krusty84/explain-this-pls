@@ -7,12 +7,22 @@ import json
 import os
 # Keep the child-process fixture self-contained; production checks enforce keys.
 SECTION_KEYS = ('scope', 'context', 'components', 'startup_and_flows', 'data_and_state')
+SCOPE_MARKDOWN = '''### Investigated
+The fixture describes a synthetic entry point.
+### Partially investigated
+None: this fixture has no incomplete execution chains.
+### Unverified
+Runtime behavior was not executed in this fixture.
+### Out of scope
+None: this fixture has no user exclusions.
+'''
 
 
 def sections(markdown='C-001: Has an entry point\n'):
     result = [dict(key=key, title='Report: configured-model' if i == 0 else key,
                    blocks=[dict(markdown=markdown if i == 0 else 'Not applicable in this synthetic fixture.',
                                 claim_ids=['C-001'] if i == 0 else [])]) for i, key in enumerate(SECTION_KEYS)]
+    result[0]['blocks'].append(dict(markdown=SCOPE_MARKDOWN, claim_ids=[]))
     diagrams = {
         'components': 'component Application\ncomponent "Entry point" as Entry\nApplication --> Entry : starts',
         'data_and_state': 'rectangle "Entry point" as Entry\nrectangle Output\nEntry --> Output : produces',

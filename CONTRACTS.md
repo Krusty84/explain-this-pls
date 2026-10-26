@@ -750,6 +750,11 @@ omission area. The model echoes `review_target_id`, which the orchestrator resol
 to the internal `target` containing all four hashes (source, document, registry,
 plan). Repeating the opaque ID does not prove reading the document.
 
+Thematic omission areas retain `A-001` through `A-004` for context, components,
+startup_and_flows and data_and_state; `A-005` adds scope. Each area requires one
+omission_search response under the existing review policy. Missing or unfinished
+scope inspection prevents positive acceptance, as for the other mandatory areas.
+
 Canonical JSON uses Python `json.dumps(ensure_ascii=False, sort_keys=True,
 separators=(',', ':'), allow_nan=False)` encoded as UTF-8, without a BOM/newline.
 Array order is preserved, Unicode is not normalized. Registry hashing covers the
@@ -822,9 +827,9 @@ cannot enter recovery, review or format repair. No partial registry is presented
 as accepted, and empty-registry review is explicitly limited/ineligible.
 An existing manifest with missing or unsupported `contract_id` / `artifact_format`
 causes `UNSUPPORTED_ARTIFACT_FORMAT` before any artifact writes. Use a new run directory.
-Default execution uses study → selection → compare. With review enabled,
-execution uses study → review, optionally one revised study → full review,
-then selection → compare (comparison only for
+Default execution uses study → review, optionally one revised study → full review,
+then selection → compare. Explicitly disabling review uses study → selection →
+compare (comparison only for
 multiple Git branches). Codex uses final JSON with local validation; no
 orchestrator format-repair prompt is sent.
 
@@ -894,8 +899,15 @@ snapshot and filter produce the same scope regardless of model classification.
 Component boundaries and relevance judgments belong in `components`; investigated
 areas, missing checks and uncertainty belong in `scope`, the relevant retained
 section, and `limitations`.
-Prompts require four explicit scope groups: Investigated, Partially investigated,
-Unverified and Out of scope, with localized labels. These are agent assessments.
+Python requires each of four scope groups exactly once as a top-level H3 Markdown
+heading: Investigated, Partially investigated, Unverified and Out of scope.
+Russian labels are Исследовано, Частично исследовано, Не проверено and
+Вне области исследования. Each group needs content; an explicit absence
+with a reason is valid. Headings in code, quotes or ordinary text do not count.
+The same check applies before materialization, to saved text and Scope blocks,
+and at publication. Structural
+validity does not establish semantic truth or complete investigation. These groups
+remain agent assessments; no paths, defects or evidence need be invented to fill them.
 Selected scenarios describe their trigger, components/path, branches and alternative
 entries, source-supported links, unfinished paths and next checks. Each material
 gap includes reason, potential impact and a concrete next check. User exclusions
@@ -915,8 +927,10 @@ does not mean `NOT_INSPECTED`: this diagnostic does not record agent file reads.
 remain `UNVERIFIED` for inspection (`unverified_ids`), and
 `completeness_measured` is false. No missing classification or citation changes
 document acceptance. Review omission search still checks the frozen source areas,
-thematic scopes and user scenarios; mandatory review responses and substantive
-findings retain their review policy rules. `semantic_quality` stays `NOT_MEASURED`.
+thematic scopes (including the separate `scope` area) and user scenarios; mandatory
+review responses and substantive findings retain their review policy rules.
+`semantic_quality` stays `NOT_MEASURED`.
+`INSPECTED` records the reviewer's reported activity, not actual completeness.
 Source-tool observations can establish text delivery, not understanding.
 `INSPECTED_UNVERIFIED` is not semantic verification; source-based FACT is not runtime
 verification. Absence of a found counterexample does not establish absence of an

@@ -123,7 +123,7 @@ class CitationPresentationTests(unittest.TestCase):
         wire = response(dict(branch='main', source_commit='a' * 40))
         wire['evidence'].append(wire['evidence'][0] | dict(id='E-002', path='other.py'))
         wire['claims'].append(wire['claims'][0] | dict(id='C-002', evidence_ids=['study:E-002']))
-        wire['report_sections'][0]['blocks'] = [dict(markdown='Repeated.', claim_ids=claims)
+        wire['report_sections'][0]['blocks'][:1] = [dict(markdown='Repeated.', claim_ids=claims)
             for claims in (['C-001'], ['C-002'], ['C-001'])]
         rendered = render_architecture(presentation_data(wire))
         refs = [line for line in rendered.splitlines() if line.startswith('*Sources:')]
@@ -136,7 +136,7 @@ class CitationPresentationTests(unittest.TestCase):
         wire = response(dict(branch='main', source_commit='a' * 40))
         wire['claims'][0].update(epistemic_kind='HYPOTHESIS', evidence_ids=[])
         wire['claims'].append(wire['claims'][0] | dict(id='C-002', epistemic_kind='UNKNOWN'))
-        wire['report_sections'][0]['blocks'] = [dict(markdown='Introduction.', claim_ids=[]),
+        wire['report_sections'][0]['blocks'][:1] = [dict(markdown='Introduction.', claim_ids=[]),
             dict(markdown='Not verified.', claim_ids=['C-001', 'C-002'])]
         rendered = render_architecture(presentation_data(wire))
         self.assertIn('Introduction.\n\n<a id="report-block-b-001-002"></a>\n\nNot verified.\n\n*Limitation:', rendered)

@@ -45,7 +45,14 @@ data_and_state.
 Preserve four explicit scope groups: Investigated (paths you report tracing),
 Partially investigated (incomplete execution chains), Unverified (material
 behavior not established), and Out of scope (user exclusions or unselected
-investigation areas). Translate labels into output_language as needed. Keep each
+investigation areas). Include each group exactly once as a top-level H3 Markdown
+heading followed by nonempty content. Use the exact English labels above, or
+these Russian labels for a Russian report: Исследовано, Частично исследовано,
+Не проверено, Вне области исследования. Headings in code fences, quotes, lists
+or ordinary text do not count. If a group has no entries, state this explicitly
+and explain why. Do not invent paths, problems or evidence to fill groups.
+The replacement report must pass the same structural check; passing does not
+establish semantic truth or complete investigation. Keep each
 selected scenario's trigger, components and execution path, branches and
 alternative entry points, source-supported links, unfinished paths and concrete
 next checks. For each material gap state the reason, potential impact on

@@ -32,6 +32,15 @@
 
 > C-001: Has an entry point
 
+> ### Investigated
+> The fixture describes a synthetic entry point.
+> ### Partially investigated
+> None: this fixture has no incomplete execution chains.
+> ### Unverified
+> Runtime behavior was not executed in this fixture.
+> ### Out of scope
+> None: this fixture has no user exclusions.
+
 ### Поиск пропусков — оценки агента
 
 | Область | Состояние | Ограничение |
@@ -40,6 +49,7 @@
 | 3. Компоненты системы | Проверено агентом |  |
 | 4. Запуск и выполнение | Проверено агентом |  |
 | 5. Данные и состояние | Проверено агентом |  |
+| 1. Область исследования | Проверено агентом |  |
 
 ### Фильтр исходников — данные программы
 

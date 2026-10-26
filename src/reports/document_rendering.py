@@ -28,6 +28,12 @@ BLOCK = obj(id=string(), section_key=string(*SECTION_KEYS), section_index={'type
 PROVENANCE = obj(rule=string(RENDERING_RULE), normalized_sha256=string(),
                  document_sha256=string(), registry_sha256=string(), block_map_sha256=string())
 REQUIRED_DIAGRAMS = {'components': 'component_overview', 'data_and_state': 'data_flow'}
+SCOPE_GROUPS = {
+    'Investigated': 'Исследовано',
+    'Partially investigated': 'Частично исследовано',
+    'Unverified': 'Не проверено',
+    'Out of scope': 'Вне области исследования',
+}
 
 
 def materialized_schema(wire):
@@ -229,6 +235,39 @@ def validate_block_markdown(markdown, location):
     _validate_markdown_tokens(_markdown_tokens(markdown), location)
 
 
+def _validate_scope_groups(tokens, location):
+    """Check structure only, in Scope fragments or the first report section."""
+    sections = [i for i, token in enumerate(tokens)
+                if token.type == 'heading_open' and token.tag == 'h2' and token.level == 0]
+    if sections:
+        tokens = tokens[sections[0] + 3:sections[1] if len(sections) > 1 else len(tokens)]
+    aliases = {label.casefold(): group for group, russian in SCOPE_GROUPS.items()
+               for label in (group, russian)}
+    headings = [i for i, token in enumerate(tokens)
+                if token.type == 'heading_open' and token.tag == 'h3' and token.level == 0]
+    groups = {}
+    for index, start in enumerate(headings):
+        group = aliases.get(tokens[start + 1].content.strip().casefold())
+        if group is None:
+            continue
+        if group in groups:
+            raise contract_violation('DUPLICATE_SCOPE_GROUP', location, section_key='scope', group=group)
+        end = headings[index + 1] if index + 1 < len(headings) else len(tokens)
+        groups[group] = tokens[start + 3:end]
+    for group in SCOPE_GROUPS:
+        if group not in groups:
+            raise contract_violation('SCOPE_GROUP_MISSING', location, section_key='scope', group=group)
+        body = groups[group]
+        # Headings, comments and empty Markdown decoration are not group content.
+        content = any(token.content.strip() for i, token in enumerate(body)
+            if token.type in ('fence', 'code_block') or token.type == 'inline'
+            and (i == 0 or body[i - 1].type != 'heading_open')
+            and any(child.type in ('text', 'code_inline', 'image') and child.content.strip()
+                    for child in token.children or []))
+        if not content:
+            raise contract_violation('EMPTY_SCOPE_GROUP', location, section_key='scope', group=group)
+
+
 def validate_published_architecture(markdown, language, *, canonical=None):
     expected = section_headings(language)
     tokens = _markdown_tokens(markdown)
@@ -240,6 +279,7 @@ def validate_published_architecture(markdown, language, *, canonical=None):
                                  expected_count=len(expected), actual_count=len(headings))
     if tuple(headings) != expected:
         raise contract_violation('REPORT_HEADING_ORDER_MISMATCH', '$.ARCHITECTURE.md')
+    _validate_scope_groups(tokens, '$.ARCHITECTURE.md')
     diagrams = {key: [] for key in REQUIRED_DIAGRAMS}
     section_index = -1
     for token in tokens:
@@ -308,6 +348,9 @@ def validate_sections(sections, claims):
                                     section_key=section['key'], block_index=j))
             references(block['claim_ids'], ids, path + '.claim_ids')
             linked.update(block['claim_ids'])
+        if section['key'] == 'scope':
+            _validate_scope_groups(_markdown_tokens('\n\n'.join(block['markdown'] for block in section['blocks'])),
+                                   f'$.report_sections[{i}].blocks')
     for i, claim in enumerate(claims):
         if claim['id'] not in linked:
             raise contract_violation('UNBOUND_CLAIM', f'$.claims[{i}].id')
@@ -415,6 +458,9 @@ def validate_materialized(value):
         if provenance[key] != actual:
             raise contract_violation('MATERIALIZATION_HASH_MISMATCH', '$.materialization_provenance.' + key)
     inspection = inspect_materialized_diagrams(value, completion_status=value['completion_status'])
+    _validate_scope_groups(tokens, '$.report_markdown')
+    _validate_scope_groups(_markdown_tokens('\n\n'.join(block['locator']['quote']
+        for block in value['block_map'] if block['section_key'] == 'scope')), '$.block_map')
     for i, block in enumerate(value['block_map']):
         references(block['claim_ids'], ids, f'$.block_map[{i}].claim_ids')
     if value['completion_status'] != 'COMPLETE' and not any(item.strip() for item in value['limitations']):

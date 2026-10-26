@@ -45,8 +45,33 @@ if scenario == 'apps': config['apps'].setdefault('app-example', {'enabled': True
 if scenario == 'shell': config['features']['shell_tool'] = True
 if scenario == 'notify': config['notify'] = ['untrusted-command']
 if scenario == 'hooks': config['hooks'] = {'SessionStart': [{'command': 'untrusted'}]}
+if scenario.startswith('hooks_state'):
+    config['hooks'] = {event: [] for event in ('PreToolUse', 'PermissionRequest', 'PostToolUse',
+        'PreCompact', 'PostCompact', 'UserPromptSubmit', 'SubagentStop', 'Stop', 'Interrupt',
+        'SessionStart', 'SubagentStart', 'SessionEnd')}
+    state = config['hooks']['state'] = {
+        'opaque-enabled': {'trusted_hash': 'synthetic-hash', 'enabled': True},
+        'opaque-disabled': {'enabled': False},
+        'opaque-trust-only': {'trusted_hash': 'synthetic-hash'},
+        'opaque-plugin': {'trusted_content_hash': 'synthetic-content-hash'},
+        'opaque-default': {}}
+    if scenario == 'hooks_state_hash_type': state['opaque-enabled']['trusted_hash'] = False
+    if scenario == 'hooks_state_hash_null': state['opaque-enabled']['trusted_hash'] = None
+    if scenario == 'hooks_state_content_hash_type': state['opaque-plugin']['trusted_content_hash'] = False
+    if scenario == 'hooks_state_enabled_type': state['opaque-enabled']['enabled'] = 0
+    if scenario == 'hooks_state_enabled_null': state['opaque-enabled']['enabled'] = None
+    if scenario == 'hooks_state_unknown': state['opaque-enabled']['command'] = 'untrusted'
+    if scenario == 'hooks_state_unknown_empty': state['opaque-enabled']['unexpected'] = None
+    if scenario == 'hooks_state_command': config['hooks']['SessionStart'] = [{'command': 'untrusted'}]
+    if scenario == 'hooks_state_not_object': config['hooks']['state'] = []
+    if scenario == 'hooks_state_entry_not_object': state['opaque-enabled'] = []
+    if scenario == 'hooks_state_notify': config['notify'] = ['untrusted-command']
+    if scenario == 'hooks_state_feature': config['features']['hooks'] = True
 if scenario == 'instructions': config['model_instructions_file'] = '/untrusted/source'
 if scenario == 'server_env': servers['explain_this_pls']['env'] = {'LD_PRELOAD': '/untrusted/library'}
+if scenario in ('server_env_false', 'server_env_zero', 'server_env_empty'):
+    servers['explain_this_pls']['env'] = {'UNTRUSTED': {
+        'server_env_false': False, 'server_env_zero': 0, 'server_env_empty': ''}[scenario]}
 if scenario == 'server_cap': servers['explain_this_pls']['tools']['read_source']['output_token_limit'] = 1
 if scenario == 'server_approval': servers['explain_this_pls']['tools']['read_source']['approval_mode'] = 'prompt'
 if scenario == 'server_extra_approval': servers['explain_this_pls']['tools']['shell'] = {'approval_mode': 'approve'}
@@ -199,11 +224,41 @@ class MCPTransportTests(unittest.TestCase):
 
     def test_effective_unsafe_configuration_fails_before_thread_creation(self):
         for scenario in ('shell', 'notify', 'hooks', 'instructions', 'server_env', 'server_cap',
-                         'server_approval', 'server_extra_approval', 'provider'):
+                         'server_approval', 'server_extra_approval', 'provider',
+                         'server_env_false', 'server_env_zero', 'server_env_empty'):
             with self.subTest(scenario=scenario):
                 self.log.unlink(missing_ok=True)
                 requests = self.assert_failure(scenario)
                 self.assertNotIn('thread/start', [request.get('method') for request in requests])
+
+    def test_hook_trust_state_without_commands_is_not_an_executable_hook(self):
+        result, _, requests = self.invoke('hooks_state')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('thread/start', [request.get('method') for request in requests])
+
+    def test_hook_state_cannot_hide_commands_or_invalid_metadata(self):
+        for scenario in ('hooks_state_hash_type', 'hooks_state_hash_null', 'hooks_state_content_hash_type',
+                         'hooks_state_enabled_type', 'hooks_state_enabled_null',
+                         'hooks_state_unknown', 'hooks_state_unknown_empty',
+                         'hooks_state_command', 'hooks_state_not_object', 'hooks_state_entry_not_object',
+                         'hooks_state_notify', 'hooks_state_feature'):
+            with self.subTest(scenario=scenario):
+                self.schema.with_name('final.response.json').unlink(missing_ok=True)
+                self.log.unlink(missing_ok=True)
+                requests = self.assert_failure(scenario)
+                self.assertNotIn('thread/start', [request.get('method') for request in requests])
+
+    def test_transport_preserves_existing_cli_configuration(self):
+        path = self.home / 'config.toml'
+        original = b'# Keep this user configuration unchanged.\nnotify = ["synthetic-command"]\n[features]\nhooks = true\n'
+        path.write_bytes(original)
+        result, _, _ = self.invoke('hooks_state')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(path.read_bytes(), original)
+        self.schema.with_name('final.response.json').unlink()
+        self.log.unlink()
+        self.assert_failure('hooks_state_command')
+        self.assertEqual(path.read_bytes(), original)
 
     def test_thread_isolation_and_model_identity_are_checked_before_turn(self):
         for scenario in ('environments', 'roots', 'sources', 'model'):

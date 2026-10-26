@@ -16,7 +16,7 @@ from src.reports.architecture_format import SECTION_TITLES, resolve_language, se
 from src.analysis.evidence import canonical, lines, sha
 from src.analysis.ledger import review_context, verify_review_context, prepare_result
 from src.analysis.study_normalization import normalize_evidence
-from fixtures.ledger_response import response
+from fixtures.ledger_response import response, SCOPE_MARKDOWN
 from src.reports.final_report import recoverable_material
 
 
@@ -31,7 +31,8 @@ class RenderingTests(unittest.TestCase):
             '```python\n\tprint("😀")  \n\n```', 'repeat', 'repeat',
             'first\n\nlast\n\n', 'final without LF']
         self.wire['claims'].append(self.wire['claims'][0] | {'id': 'C-002'})
-        self.wire['report_sections'][0]['blocks'] = [dict(markdown=f, claim_ids=['C-001', 'C-002']) for f in fragments]
+        self.wire['report_sections'][0]['blocks'] = [dict(markdown=f, claim_ids=['C-001', 'C-002']) for f in fragments] + [
+            dict(markdown=SCOPE_MARKDOWN, claim_ids=[])]
         original = copy.deepcopy(self.wire)
         validate_result('study', self.wire, self.context)
         with patch('src.analysis.evidence.read_confined', side_effect=AssertionError('pure renderer')):
@@ -216,7 +217,7 @@ class RenderingTests(unittest.TestCase):
                 self.assertEqual(data, original)
 
     def test_link_counts_are_claims_not_occurrences(self):
-        self.wire['report_sections'][0]['blocks'] *= 3
+        self.wire['report_sections'][0]['blocks'][:1] *= 3
         with patch('src.analysis.ledger.resolve_evidence', return_value=[{
                 'id': 'study:E-001', 'status': 'RESOLVED', 'source_id': 'source-001', 'path': 'app.py'}]):
             saved = prepare_result('study', self.wire, self.context)
@@ -286,7 +287,7 @@ class MarkdownStructureTests(unittest.TestCase):
             for alias in aliases:
                 self.assertEqual(resolve_language(alias), expected)
                 markdown = '\n\n'.join('## ' + title + '\n\n' +
-                    ('```plantuml\n@startuml\nA --> B\n@enduml\n```' if i in (2, 4) else 'Text.')
+                    ('```plantuml\n@startuml\nA --> B\n@enduml\n```' if i in (2, 4) else SCOPE_MARKDOWN if i == 0 else 'Text.')
                     for i, title in enumerate(section_headings(alias)))
                 validate_published_architecture(markdown, alias)
         for invalid in ('German', 'de', '', None, 1):
@@ -296,7 +297,7 @@ class MarkdownStructureTests(unittest.TestCase):
     def test_published_heading_count_order_and_literal_exceptions(self):
         headings = section_headings('English')
         markdown = '\n\n'.join('## ' + title + '\n\n' +
-            ('```plantuml\n@startuml\nA --> B\n@enduml\n```' if i in (2, 4) else 'Text.')
+            ('```plantuml\n@startuml\nA --> B\n@enduml\n```' if i in (2, 4) else SCOPE_MARKDOWN if i == 0 else 'Text.')
             for i, title in enumerate(headings))
         validate_published_architecture(markdown + '\n\n```\n## Literal\n```\n', 'English')
         for changed, code in (

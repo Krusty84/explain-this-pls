@@ -73,7 +73,7 @@ class ModelContextTests(unittest.TestCase):
         wire['claims'] = [wire['claims'][0] | {'id': f'C-{n:03}', 'statement': f'Assertion {n}'}
                           for n in range(1, 21)]
         table = '| Key | Value |\n| --- | --- |\n' + ''.join(f'| {n} | unique row {n} |\n' for n in range(1, 21))
-        wire['report_sections'][0]['blocks'] = [{'markdown': table, 'claim_ids': [c['id'] for c in wire['claims']]}]
+        wire['report_sections'][0]['blocks'][0] = {'markdown': table, 'claim_ids': [c['id'] for c in wire['claims']]}
         context = review_context(materialize_study(wire), context)
         original = copy.deepcopy(context)
         projected = project_model_context('review', context)

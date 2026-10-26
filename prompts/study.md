@@ -33,8 +33,14 @@ your titles do not override them.
    Use four explicit groups: Investigated (paths the collector reports tracing),
    Partially investigated (incomplete execution chains), Unverified (material
    behavior not established), and Out of scope (user exclusions or unselected
-   investigation areas). Translate labels into output_language as needed. State
-   when a group has no reported entries; do not infer complete coverage.
+   investigation areas). Use each group exactly once as a top-level H3 Markdown
+   heading, followed by nonempty group content. Headings in code fences, quotes,
+   lists or ordinary text do not count. Use the exact English labels above, or
+   these Russian labels for a Russian report: Исследовано, Частично исследовано,
+   Не проверено, Вне области исследования. If a group has no reported entries,
+   state this explicitly and explain why. Do not invent paths, problems or evidence
+   to fill a group; do not infer complete coverage. Passing this structural check
+   does not establish semantic truth or completeness.
 2. context: purpose, system boundaries, processes and external integrations.
 3. components: responsibilities, code locations, interfaces, entry points and
    important dependencies.

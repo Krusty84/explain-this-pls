@@ -353,7 +353,7 @@ class RevisionPipelineTests(FolderFixture):
                             data['report_sections'][0]['blocks'].append(block)
                     else:
                         data['claims'] = [retained]
-                        data['report_sections'][0]['blocks'] = [block]
+                        data['report_sections'][0]['blocks'][0] = block
                         for section in data['report_sections'][1:]:
                             for authored_block in section['blocks']:
                                 if authored_block['claim_ids']:

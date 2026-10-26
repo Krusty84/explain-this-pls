@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from src.contracts.contracts import ContractError, validate_result, SCHEMAS, validate_schema, accepted
+from src.contracts.contracts import ContractError, validate_result, SCHEMAS, validate_schema, accepted, workflow_satisfied
 from src.analysis.evidence import resolve_evidence, SourceChanged, open_source_directory, valid_path
 from src.analysis.ledger import freeze_plan, prepare_result, review_context, CONTRACT_ID, ARTIFACT_FORMAT
 from src.reports.presentation import render_stage, label
@@ -250,6 +250,55 @@ class LedgerTests(unittest.TestCase):
             self.assertTrue(prepare_result('review', response, ctx)['program_checks']['policy_satisfied'])
             response['claims'][0]['outcome'] = 'SUPPORTED'
             with self.assertRaises(ContractError): validate_result('review', response, ctx)
+
+    def test_frozen_scope_area_preserves_existing_ids_and_semantic_limits(self):
+        _, ctx = self.prepared()
+        self.assertEqual(ctx['review_plan']['omission_areas'], [
+            {'id': 'A-001', 'scope': 'context'},
+            {'id': 'A-002', 'scope': 'components'},
+            {'id': 'A-003', 'scope': 'startup_and_flows'},
+            {'id': 'A-004', 'scope': 'data_and_state'},
+            {'id': 'A-005', 'scope': 'scope'},
+        ])
+        result = prepare_result('review', review(ctx), ctx)
+        self.assertTrue(result['program_checks']['policy_satisfied'])
+        self.assertFalse(result['program_checks']['omission_coverage']['completeness_measured'])
+        self.assertEqual(result['program_checks']['semantic_quality'], 'NOT_MEASURED')
+
+    def test_scope_omission_status_and_completion_control_review_acceptance(self):
+        saved, ctx = self.prepared()
+        metadata = dict(publication_complete=True, contract_id=CONTRACT_ID, artifact_format=ARTIFACT_FORMAT)
+        for completion in ('COMPLETE', 'PARTIAL'):
+            for status in ('MISSING', 'PARTIALLY_INSPECTED', 'NOT_INSPECTED', 'INSPECTED'):
+                with self.subTest(completion=completion, status=status):
+                    response = review(ctx)
+                    response['completion_status'] = completion
+                    if completion == 'PARTIAL':
+                        response['limitations'] = ['Review is unfinished.']
+                    scope = next(area for area in response['omission_search'] if area['area_id'] == 'A-005')
+                    if status == 'MISSING':
+                        response['omission_search'].remove(scope)
+                    else:
+                        scope.update(status=status, limitation='' if status == 'INSPECTED' else 'Scope check is unfinished.')
+                    validate_result('review', response, ctx)
+                    result = prepare_result('review', response, ctx)
+                    coverage = result['program_checks']['omission_coverage']
+                    self.assertEqual(coverage['missing_ids'], ['A-005'] if status == 'MISSING' else [])
+                    self.assertEqual(coverage['unfinished_ids'],
+                                     ['A-005'] if status in ('PARTIALLY_INSPECTED', 'NOT_INSPECTED') else [])
+                    self.assertFalse(coverage['completeness_measured'])
+                    self.assertEqual(result['completion_status'], completion)
+                    expected = completion == 'COMPLETE' and status == 'INSPECTED'
+                    self.assertEqual(result['program_checks']['policy_satisfied'], expected)
+                    self.assertEqual(result['verdict'], 'PASS' if expected else 'INCONCLUSIVE')
+                    item = dict(study=saved, review=result, study_invocation=dict(metadata),
+                                review_invocation=dict(metadata))
+                    self.assertEqual(accepted(item), expected)
+                    self.assertEqual(workflow_satisfied(item), expected)
+                    self.assertTrue(workflow_satisfied(item, review_enabled=False))
+        repeated = prepare_result('review', review(ctx), ctx)
+        self.assertTrue(repeated['program_checks']['policy_satisfied'])
+        self.assertEqual(repeated['review_plan'], saved['review_plan'])
 
     def test_empty_unchecked_and_omission_gaps_never_pass(self):
         saved, ctx = self.prepared()

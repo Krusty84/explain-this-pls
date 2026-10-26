@@ -43,6 +43,7 @@ No further unchecked or disputed registry claims reported.
 | 3. System components | Inspected according to the agent |  |
 | 4. Startup and execution | Inspected according to the agent |  |
 | 5. Data and state | Inspected according to the agent |  |
+| 1. Study scope | Inspected according to the agent |  |
 
 ## Finding sources
 

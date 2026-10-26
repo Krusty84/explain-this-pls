@@ -10,7 +10,7 @@ from src.analysis.evidence import canonical, sha, source_catalog, resolve_eviden
 from src.analysis.coverage_plan import study_coverage_plan, verify_coverage_plan, coverage_checks, advisory_diagnostics
 from src.analysis.source_decoding import normalize_source_decoding
 
-OMISSION_AREAS = ('context', 'components', 'startup_and_flows', 'data_and_state')
+OMISSION_AREAS = ('context', 'components', 'startup_and_flows', 'data_and_state', 'scope')
 
 
 def freeze_plan(document, context):

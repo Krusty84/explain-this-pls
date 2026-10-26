@@ -17,7 +17,7 @@ Agent reported a contradiction: 1
 
 | ID | Document location | Statement and scope | Author classification | Agent assessment | Sources | Limitations |
 | --- | --- | --- | --- | --- | --- | --- |
-| <a id="report-claim-c-001"></a><code>C-001</code> | [<code>study.original.md:3–3, study.original.md:13–19, study.original.md:29–35</code>](study.original.md)<br>[1. Study scope — block 1](ARCHITECTURE.md#report-block-b-001-001), [3. System components — block 2](ARCHITECTURE.md#report-block-b-003-002), [5. Data and state — block 2](ARCHITECTURE.md#report-block-b-005-002) | Existing statement 1. / Static source inspection. | Fact | Agent reported a contradiction | [<code>src/Заказы и счета.py:1–1</code>](#report-source-study-e-001) |   |
+| <a id="report-claim-c-001"></a><code>C-001</code> | [<code>study.original.md:3–3, study.original.md:22–28, study.original.md:38–44</code>](study.original.md)<br>[1. Study scope — block 1](ARCHITECTURE.md#report-block-b-001-001), [3. System components — block 2](ARCHITECTURE.md#report-block-b-003-002), [5. Data and state — block 2](ARCHITECTURE.md#report-block-b-005-002) | Existing statement 1. / Static source inspection. | Fact | Agent reported a contradiction | [<code>src/Заказы и счета.py:1–1</code>](#report-source-study-e-001) |   |
 
 ## Agent findings
 
@@ -43,6 +43,7 @@ Use the existing worker entry point.
 | 3. System components | Inspected according to the agent |  |
 | 4. Startup and execution | Inspected according to the agent |  |
 | 5. Data and state | Inspected according to the agent |  |
+| 1. Study scope | Inspected according to the agent |  |
 
 
 ## Full source registry

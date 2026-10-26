@@ -77,7 +77,7 @@ class ReportNavigationTests(unittest.TestCase):
             self.assertIn('HIGH: 1', report)
             assert_links(self, directory)
         self.assertEqual(reports[0], reports[1])
-        self.assertLess(len(reports[1].splitlines()), 70)
+        self.assertLess(len(reports[1].splitlines()), 80)
 
     def test_findings_are_sorted_and_keep_context_together(self):
         state, _ = revision()

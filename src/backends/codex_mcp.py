@@ -95,7 +95,17 @@ def check_config(config, args):
         raise failure('Codex did not disable every required native tool feature.')
     if features.get('skip_host_skill_discovery') is not True:
         raise failure('Codex cannot exclude host skill discovery.')
-    if config.get('notify') not in (None, []) or not empty_settings(config.get('hooks')):
+    hooks = config.get('hooks')
+    if isinstance(hooks, dict):
+        # Persisted trust decisions are metadata, not executable hook handlers.
+        state = hooks.get('state', {})
+        state_types = {'enabled': bool, 'trusted_hash': str, 'trusted_content_hash': str}
+        if not isinstance(state, dict) or any(not isinstance(entry, dict) or any(
+                key not in state_types or type(value) is not state_types[key]
+                for key, value in entry.items()) for entry in state.values()):
+            raise failure('Codex returned unsupported hook trust state.')
+        hooks = {key: value for key, value in hooks.items() if key != 'state'}
+    if config.get('notify') not in (None, []) or not empty_settings(hooks):
         raise failure('Codex retains notification commands or hooks.')
     for key in ('apps', 'plugins'):
         entries = config.get(key)
