@@ -2,12 +2,12 @@
 
 ## Optional review and processing success
 
-`execution.review_enabled` is a strict boolean and defaults to `false` in JSON
+`execution.review_enabled` is a strict boolean and defaults to `true` in JSON
 and JSONC configurations. It applies to every source and backend in the run.
 With review disabled, the source pipeline is study; comparison remains
 available for multiple selected Git branches. Review/revision agents and prompts
-are inactive, and `max_revision_rounds` has no effect. Set `review_enabled: true`
-explicitly to retain the reviewed workflow, including its bounded revision loop.
+are inactive, and `max_revision_rounds` has no effect. Explicit `review_enabled: false`
+selects that workflow. Omitting the setting runs review and its bounded revision loop.
 
 New manifests, source results and revisions record `review_enabled`. Disabled
 reviews have `review: null` and `review_skipped: "disabled_by_config"`; progress
@@ -23,8 +23,8 @@ requires successful applicable comparison and no blocking run errors.
 Both strict and compromise modes can finish COMPLETE / exit 0 without review.
 Recovery material and integrity failures do not gain acceptance. Auxiliary
 coverage diagnostics do not determine document publication or acceptance.
-Old saved results and library contexts without `review_enabled` retain the prior
-review-required interpretation; this differs intentionally from the new config default.
+Saved results and library contexts without `review_enabled` retain their
+review-required interpretation.
 
 Comparison contexts include review mode and computed workflow results. Disabled
 review alone does not make an input unresolved. Without review, differences use
@@ -36,7 +36,14 @@ is unchanged and that classification is forbidden in review-disabled runs.
 An empty difference list still requires complete eligible input studies on all
 requested branches. Success is not factual verification.
 
-The review and revision sections below describe the opt-in reviewed workflow.
+The review and revision sections below describe the default reviewed workflow.
+Review errors, incomplete responses and skipped review cannot set `accepted=true`.
+Published usable studies remain available after review failure. The final report,
+CLI and TUI distinguish accepted review, material findings, incomplete review and
+explicit disablement. Policy acceptance does not establish safe code modification.
+Completed review without pair acceptance is shown separately from unfinished
+review, including partial-study cases. CLI JSON exposes per-source `reviews`
+with source, selected revision, outcome and summary; this is presentation metadata.
 
 The orchestrator selects the required response schema for each stage and validates
 its structure locally.
@@ -887,18 +894,42 @@ snapshot and filter produce the same scope regardless of model classification.
 Component boundaries and relevance judgments belong in `components`; investigated
 areas, missing checks and uncertainty belong in `scope`, the relevant retained
 section, and `limitations`.
+Prompts require four explicit scope groups: Investigated, Partially investigated,
+Unverified and Out of scope, with localized labels. These are agent assessments.
+Selected scenarios describe their trigger, components/path, branches and alternative
+entries, source-supported links, unfinished paths and next checks. Each material
+gap includes reason, potential impact and a concrete next check. User exclusions
+and unselected investigation areas stay distinct; only source filters remove files.
+Effects, alternate writers, configuration conditions and failure paths need source
+evidence or HYPOTHESIS/UNKNOWN with missing checks. Absent behavior is "not established";
+the prompts do not require invented retries, transactions or guarantees. Revision
+retains uncertainty until new evidence resolves it. These requirements use the
+existing claims, sections and limitations; no schema fields are added.
 A structurally valid PARTIAL document is published with its complete registry and
 limitations. Its self-assessment still prevents a COMPLETE workflow result; it
 does not make the document contract invalid.
 
 `program_checks.coverage` is diagnostic. `cited_ids` identifies areas with a
 resolved source citation, and `not_cited_ids` identifies the rest. `NOT_CITED`
-does not mean `NOT_INSPECTED`: Python does not record agent file reads. All areas
+does not mean `NOT_INSPECTED`: this diagnostic does not record agent file reads. All areas
 remain `UNVERIFIED` for inspection (`unverified_ids`), and
 `completeness_measured` is false. No missing classification or citation changes
 document acceptance. Review omission search still checks the frozen source areas,
 thematic scopes and user scenarios; mandatory review responses and substantive
 findings retain their review policy rules. `semantic_quality` stays `NOT_MEASURED`.
+Source-tool observations can establish text delivery, not understanding.
+`INSPECTED_UNVERIFIED` is not semantic verification; source-based FACT is not runtime
+verification. Absence of a found counterexample does not establish absence of an
+alternative path. No citation count establishes full path coverage.
+
+`FINAL_REPORT.md` renders the selected revision's scope blocks, HYPOTHESIS/UNKNOWN
+claims and their uncertainty/checks, review omission search, frozen coverage plan
+and citation diagnostics. Source result metadata retains the pinned inventory's
+`source_filter` settings and exclusion records. The summary labels these as program
+records and keeps them distinct from author/reviewer assessments. Initial Study
+metadata retains collection `tool_observation` and `source_access` in
+`phase_invocations`; unavailable observations do not establish that no read occurred.
+Rendering does not alter claims, source locators, hashes or acceptance checks.
 
 `program_checks.coverage.metadata_verified_empty_paths` records regular files
 whose pinned size and content hash establish empty content. This invents no line
@@ -923,6 +954,9 @@ backend profile is introduced. Each stage has its own budget; initial collection
 and writing share the Study budget. Analysis has at most four stage runs per
 snapshot: study and, when enabled, review plus one revision and repeat review.
 These stage runs make at most five model calls because initial Study has two phases.
+The new review default changes normal use from two to three calls per snapshot,
+or five with revision and repeat review. Explicit `false` keeps two calls.
+Eligible branch comparison adds one call per run. Failures can stop calls early.
 
 The program compares registries for added, removed and changed claims. Coordinate
 changes alone are not semantic edits; unchanged assertions retain their IDs.

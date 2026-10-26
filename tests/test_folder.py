@@ -77,7 +77,7 @@ class FolderFixture(unittest.TestCase):
     def config(self):
         # Existing fixtures exercise the retained strict publication contract.
         self.value.setdefault('result_policy', 'strict')
-        # Existing scenarios exercise the opt-in reviewed workflow.
+        # Existing scenarios exercise the reviewed workflow.
         self.value.setdefault('execution', {}).setdefault('review_enabled', True)
         self.config_path.write_text(json.dumps(self.value))
         return load_config(self.config_path)
@@ -243,7 +243,7 @@ class ModeConfigTests(FolderFixture):
                 self.value['mode'] = 'folder'
                 self.value['folder_mode']['path'] = str(self.source)
                 with patch('src.runtime.config.shutil.which', return_value=sys.executable):
-                    self.assertEqual(set(self.config()['_agents']), {'study'})
+                    self.assertEqual(set(self.config()['_agents']), {'study', 'review'})
 
 
 class FolderInventoryTests(FolderFixture):
@@ -550,8 +550,8 @@ class FolderCLIIntegrationTests(FolderFixture):
             cmd.append('--check')
         return subprocess.run(cmd, cwd=self.base, env=self.env, capture_output=True, text=True, timeout=30)
 
-    def test_default_without_review_in_cli_json_for_codex(self):
-        self.value.pop('execution')
+    def test_explicitly_disabled_review_in_cli_json_for_codex(self):
+        self.value['execution'] = {'review_enabled': False}
         self.value['stage_agents']['review'] = {'executable': '/missing/review-cli'}
         self.value['prompts'].update(review='/missing/review-prompt', revise='/missing/revise-prompt')
         backend = 'codex'
@@ -569,6 +569,8 @@ class FolderCLIIntegrationTests(FolderFixture):
                 stages = [c['context']['stage'] for c in calls if 'context' in c]
                 self.assertEqual(stages, [] if check else ['study', 'study'])
                 if not check:
+                    self.assertEqual(output['reviews'][0]['outcome'], 'DISABLED')
+                    self.assertIn('disabled by configuration', output['reviews'][0]['summary'])
                     manifest = json.loads(Path(output['manifest']).read_text())
                     self.assertFalse(manifest['accepted'])
                     self.assertTrue(manifest['workflow_satisfied'])
@@ -591,12 +593,18 @@ class FolderCLIIntegrationTests(FolderFixture):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 output = json.loads(result.stdout)
                 self.assertEqual(output['status'], 'PREFLIGHT_OK' if check else 'COMPLETE')
+                if check:
+                    self.assertNotIn('reviews', output)
+                else:
+                    self.assertEqual(output['reviews'][0]['outcome'], 'ACCEPTED')
+                    self.assertEqual(output['reviews'][0]['revision_id'], '001')
+                    self.assertIn('completed and accepted', output['reviews'][0]['summary'])
                 run = Path(output['manifest']).parent
                 inventory = json.loads((run / 'source.inventory.json').read_text())
                 fingerprints.add(inventory['source_fingerprint'])
                 self.assertFalse(any('.git' in entry['path'].split('/') for entry in inventory['entries']))
                 calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-                self.assertEqual(sum('context' in call for call in calls), 0 if check else 2)
+                self.assertEqual(sum('context' in call for call in calls), 0 if check else 3)
         self.assertEqual(len(fingerprints), 1)
 
     def test_unsafe_selected_paths_fail_preflight_with_and_without_source_context(self):

@@ -62,6 +62,37 @@ area in omission_search; unfinished areas need concrete limitations. These are
 your reported activities, not measured completeness. New omissions are findings,
 not replacements for registry responses. Do not silently exclude an area.
 
+Check that scope explicitly separates Investigated (author-reported paths),
+Partially investigated (incomplete execution chains), Unverified (material
+behavior not established), and Out of scope (user exclusions or unselected
+investigation areas); labels can use output_language. Check each selected
+scenario's trigger, components and execution path, branches and alternative entry
+points, source-supported links, unfinished paths and concrete next checks.
+For each material gap require its reason, potential impact on architectural
+conclusions and a specific next check. Preserve justified unknowns; do not treat
+uncertainty itself as a defect or silently narrow the inventory.
+
+Independently search for omitted database/file/external effects, global/shared
+state, indirect calls, callbacks, events, jobs and alternative handlers/writers of
+the same state. Check feature flags, conditional registration, environment
+variables, launch arguments, configuration files, alternative implementations and
+dynamic dispatch. Verify failure paths: exceptions, error handling, timeout,
+retry/repeat execution, idempotency/duplicates, transaction boundaries, partial
+writes, rollback, cleanup, partial completion and suppressed errors followed by
+continued work. Challenge unsupported guarantees and active-configuration claims;
+a declaration does not establish the runtime configuration. Cite source for each
+conclusion or state the concrete missing check. Do not demand invented retries,
+transactions or effects; "not established" can be the correct conclusion.
+Prioritize significant business scenarios, critical state and priority_scenarios;
+do not add a fixed scenario count.
+
+Separate author/reviewer assessments from orchestrator observations. Source-tool
+delivery does not prove understanding. INSPECTED_UNVERIFIED does not establish
+semantic verification; FACT supported by source is not runtime verification.
+Citation counts cannot establish full path coverage or a completeness percentage.
+Lack of a found counterexample does not prove that no alternative path exists.
+Successful review does not establish that code changes are safe.
+
 ## PlantUML diagram review
 
 Check for a component overview in the component-map section and a data-flow overview

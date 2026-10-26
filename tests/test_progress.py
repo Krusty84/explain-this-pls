@@ -501,7 +501,7 @@ class CodexProgressIntegrationTests(unittest.TestCase):
         try:
             for stage, label, completed in (
                     ('study', 'Analyzing project…', 'Architecture report created.'),
-                    ('review', 'Reviewing report…', 'Review complete.')):
+                    ('review', 'Reviewing report…', 'Review response saved.')):
                 deadline = time.monotonic() + 12
                 while time.monotonic() < deadline:
                     if select.select([master], [], [], .1)[0]:
@@ -538,11 +538,11 @@ class CodexProgressIntegrationTests(unittest.TestCase):
         self.assertNotIn(b'\x1b', stdout)
         self.assertNotRegex(text, SGR)
         self.assertIn('[OK] master / Architecture report created. | Elapsed:', text)
-        self.assertIn('[OK] master / Review complete. No significant issues reported. | Elapsed:', text)
+        self.assertIn('[OK] master / Review response saved. See acceptance and findings. | Elapsed:', text)
         self.assertIn('Original checkout hierarchy restored.', text)
         self.assertNotIn('      Elapsed:', text)
         self.assertNotIn('\x1b[?25', text)
-        tail = text.split('[OK] master / Review complete.', 1)[1]
+        tail = text.split('[OK] master / Review response saved.', 1)[1]
         self.assertFalse(any(c in tail for c in SPINNER))
         self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'master')
         run = Path(result['manifest']).parent

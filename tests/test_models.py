@@ -49,6 +49,7 @@ class ModelFixture:
         self.addCleanup(environment.stop)
         self.path = self.base / 'project.jsonc'
         self.config = {'mode': 'folder', 'folder_mode': {'path': './source'}, 'reports_dir': './reports',
+                       'execution': {'review_enabled': False},
                        'agent': {'backend': 'codex', 'executable': './' + self.cli.name}}
         self.write_config()
 

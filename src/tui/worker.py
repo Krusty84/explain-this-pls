@@ -11,6 +11,7 @@ import threading
 
 from src.runtime.audit import run_audit
 from src.runtime.reporting import Reporter, existing_file
+from src.reports.review import review_summary
 
 
 class PipeReporter(Reporter):
@@ -45,7 +46,10 @@ class PipeReporter(Reporter):
                              ('Manifest', result.get('manifest')), ('Technical log', self.log_path)):
             if value and existing_file(Path(value)):
                 paths.append((label, str(value)))
-        self.send({'type': 'result', 'result': result, 'paths': paths,
+        reviews = [(entry.get('branch', ''), review_summary(entry,
+                    review_enabled=manifest.get('review_enabled', True)))
+                   for entry in manifest.get('branches') or [manifest]] if not options['check_only'] else []
+        self.send({'type': 'result', 'result': result, 'paths': paths, 'reviews': reviews,
                    'diagnostics': manifest.get('diagnostics', []), 'check_only': options['check_only']})
 
 

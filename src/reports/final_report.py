@@ -74,11 +74,80 @@ def comparison_possible(entries, baseline):
             and any(b['branch'] != baseline and usable_study(b) for b in entries))
 
 
+def investigation_boundaries(entry, study, review, language):
+    """Show retained agent statements beside program observations; infer no coverage."""
+    from src.reports.presentation import cell, render_coverage, russian
+    from src.reports.review import review_searches
+    ru = russian(language)
+    def t(r, e): return r if ru else e
+    out = ['### ' + t('Границы исследования — оценки агента', 'Investigation boundaries — agent reports'), '']
+    scope = [b for b in (study or {}).get('block_map', []) if b['section_key'] == 'scope']
+    if scope:
+        document = study['report_markdown'].split('\n')
+        for block in scope:
+            loc = block['locator']
+            out += ['> ' + cell(line) for line in document[loc['start_line'] - 1:loc['end_line']]]
+            out += ['']
+    else:
+        out += [t('Описание исследованных сценариев недоступно; полнота не установлена.',
+                  'Investigated scenario descriptions are unavailable; completeness is not established.'), '']
+    unknowns = [c for c in (study or {}).get('claims', []) if c['epistemic_kind'] in ('HYPOTHESIS', 'UNKNOWN')]
+    if unknowns:
+        out += ['**' + t('Гипотезы и неизвестное — оценки автора', 'Hypotheses and unknowns — author assessments') + '**', '',
+                '| ' + t('ID / тип | Утверждение / область | Неопределённость и следующая проверка',
+                          'ID / kind | Statement / scope | Uncertainty and next check') + ' |', '| --- | --- | --- |']
+        out += ['| ' + ' | '.join(cell(x) for x in (c['id'] + ' / ' + c['epistemic_kind'],
+                  c['statement'] + ' / ' + c['scope'], c['uncertainty'])) + ' |' for c in unknowns]
+        out += ['']
+    if review and 'review_plan' in review and 'omission_search' in review:
+        out += review_searches(review, language)
+    out += ['### ' + t('Фильтр исходников — данные программы', 'Source filter — program records'), '']
+    settings = entry.get('source_filter')
+    if settings is None:
+        out += [t('Данные фильтра недоступны; отсутствие исключений не установлено.',
+                  'Filter records are unavailable; absence of exclusions is not established.'), '']
+    else:
+        out += ['follow_gitignore: ' + str(settings['follow_gitignore']).lower(), '',
+                t('Исключения пользователя: ', 'User exclusions: ') +
+                (cell(', '.join(settings['exclude_paths'])) or t('не заданы', 'none configured')) + '.', '',
+                t('Git mode также применяет правила Git. Служебные .git и цели символических ссылок исключены.',
+                  'Git mode also applies Git rules. Administrative .git entries and symlink targets are excluded.'), '']
+        if settings.get('exclusions'):
+            out += ['| ' + t('Исключённый путь / корень | Основание', 'Excluded path / root | Origin') + ' |', '| --- | --- |']
+            out += ['| ' + cell(e['path']) + ' | ' + cell(e['origin']) + ' |' for e in settings['exclusions']]
+            out += ['']
+    plan = (study or {}).get('review_plan', {}).get('coverage_plan') or entry.get('coverage_plan')
+    coverage = render_coverage(plan, (study or {}).get('program_checks', {}).get('coverage'), language)
+    out += ['\n'.join('#' + line if line.startswith('## ') else line for line in coverage.split('\n')), '',
+            '### ' + t('Доставка исходного текста — наблюдения программы', 'Source text delivery — program observations'), '']
+    for stage in ('study', 'review'):
+        meta = entry.get(stage + '_invocation') or {}
+        observations = meta.get('phase_invocations', []) + [meta]
+        for observation in observations:
+            if not observation or observation.get('phase') == 'write':
+                continue
+            observed = observation.get('tool_observation', {})
+            delivered = bool(observed.get('delivery', {}).get('unique_lines') or
+                             observed.get('mcp', {}).get('text_utf8_bytes'))
+            out += ['- ' + stage + (' / ' + observation['phase'] if observation.get('phase') else '') + ': ' +
+                    (t('доставка текста наблюдалась; INSPECTED_UNVERIFIED.',
+                       'source text delivery observed; INSPECTED_UNVERIFIED.') if delivered else
+                     t('доставка текста не установлена по сохранённым наблюдениям; исследование UNVERIFIED.',
+                       'source text delivery is not established by retained observations; inspection UNVERIFIED.'))]
+    out += ['', t('NOT_CITED не означает NOT_INSPECTED. INSPECTED_UNVERIFIED не означает содержательную проверку. '
+                  'Доставка текста не доказывает понимания. FACT по исходникам не означает runtime verification. '
+                  'Отсутствие контрпримера не доказывает отсутствие альтернативного пути.',
+                  'NOT_CITED does not mean NOT_INSPECTED. INSPECTED_UNVERIFIED does not mean semantic verification. '
+                  'Text delivery does not prove understanding. A source-based FACT does not mean runtime verification. '
+                  'No counterexample does not prove that no alternative path exists.'), '']
+    return out
+
+
 def render_final_report(manifest, source, mode, language='Russian', *, available_files=None):
     from pathlib import Path
     from src.reports.navigation import anchor, link
     from src.reports.presentation import cell, label, russian
-    from src.reports.review import ordered_findings
+    from src.reports.review import ordered_findings, review_summary
     ru = russian(language)
     def t(r, e): return r if ru else e
     entries = report_entries(manifest, source, mode)
@@ -113,7 +182,9 @@ def render_final_report(manifest, source, mode, language='Russian', *, available
            t('Статус запуска: ', 'Run status: ') + label(manifest['status'], language) + '.', '',
            t('Пригодный результат: ', 'Usable result: ') + (t('есть', 'available') if useful else t('отсутствует', 'unavailable')) + '.', '',
            t('Проверки политики не доказывают фактическую правильность отчёта. Качество содержательного ревью не измерено.',
-             'Policy checks do not establish factual correctness. Semantic review quality is not measured.'), '']
+             'Policy checks do not establish factual correctness. Semantic review quality is not measured.'), '',
+           t('Успешное ревью не устанавливает безопасность изменения кода.',
+             'Successful review does not establish that code changes are safe.'), '']
     if not useful:
         out += ['> ' + t('Диагностическая сводка: пригодное исследование отсутствует.',
                           'Diagnostic summary: no usable study is available.'), '']
@@ -140,7 +211,7 @@ def render_final_report(manifest, source, mode, language='Russian', *, available
         selected = next((r for r in entry.get('revisions', []) if r['revision_id'] == selected_id), entry)
         artifact_directory = (directory if entry.get('selection_publication_complete') and not manifest.get('critical_failure')
                               else selected.get('directory', directory))
-        study = stage_document(entry, 'study')
+        study = stage_document(selected, 'study') or stage_document(entry, 'study')
         review = stage_document(entry, 'review') or stage_document(selected, 'review')
         review_directory = artifact_directory if entry.get('review') else selected.get('directory', directory)
         out += ['## ' + cell(entry.get('branch', manifest.get('source_directory', source.get('path', '')))), '',
@@ -151,9 +222,7 @@ def render_final_report(manifest, source, mode, language='Russian', *, available
         out += [t('Исследование: ', 'Study: ') + label((study or {}).get('completion_status') or 'MISSING', language) + '.', '',
                 t('Ревью: ', 'Review: ') + (t('отключено', 'disabled') if not review_enabled else
                     label((review or {}).get('completion_status') or 'MISSING', language)) + '.', '']
-        if review_enabled and (not review or review.get('completion_status') != 'COMPLETE' or review.get('strict_valid') is False):
-            out += ['> ' + t('Ревью не завершено; положительная приёмка отсутствует.',
-                              'Review is incomplete; no positive policy acceptance.'), '']
+        out += ['> ' + review_summary(entry, language, review_enabled=review_enabled), '']
         if manifest.get('critical_failure'):
             out += [t('Приёмка запуска не пройдена из-за критической ошибки.',
                       'Run acceptance failed due to a critical error.'), '']
@@ -180,6 +249,7 @@ def render_final_report(manifest, source, mode, language='Russian', *, available
         full = reference(t('Полный список замечаний', 'Full findings'), review_directory, 'ARCHITECTURE_REVIEW.md')
         out += ['', t('Остальные замечания: ', 'Remaining findings: ') + str(max(0, len(findings) - 5)) +
                 ('. ' + full if full else '.'), '']
+        out += investigation_boundaries(selected | {'source_filter': entry.get('source_filter')}, study, review, language)
         # Include limitations from every retained attempt, without copying its narrative or registry.
         seen = set()
         for state in [entry] + entry.get('revisions', []):

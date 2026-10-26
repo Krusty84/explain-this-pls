@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Alexey Sedoykin
 # SPDX-License-Identifier: MIT
 
-"""Opt-in review: real validation/publication with offline agent responses."""
+"""Default review and explicit opt-out with offline agent responses."""
 import copy
 import io
 import json
@@ -27,8 +27,12 @@ class OptionalReviewConfigTests(FolderFixture):
         self.config_path.write_text(json.dumps(self.value))
         return load_config(self.config_path)
 
-    def test_default_false_and_strict_boolean(self):
-        self.assertFalse(self.load()['execution']['review_enabled'])
+    def test_default_true_and_strict_boolean(self):
+        cfg = self.load()
+        self.assertTrue(cfg['execution']['review_enabled'])
+        self.assertIn('review', cfg['_agents'])
+        self.assertIn('review', cfg['_prompt_paths'])
+        self.assertIn('revise', cfg['_prompt_paths'])
         for enabled in (False, True):
             self.value['execution'] = {'review_enabled': enabled}
             cfg = self.load()
@@ -40,8 +44,17 @@ class OptionalReviewConfigTests(FolderFixture):
             with self.subTest(value=value), self.assertRaisesRegex(AuditError, 'review_enabled must be boolean'):
                 self.load()
 
+    def test_omitted_review_is_enabled_in_json_and_jsonc(self):
+        for suffix in ('.json', '.jsonc'):
+            path = self.base / ('default' + suffix)
+            text = json.dumps(self.value)
+            path.write_text('// Default review\n' + text if suffix == '.jsonc' else text)
+            with self.subTest(suffix=suffix):
+                self.assertTrue(load_config(path)['execution']['review_enabled'])
+
     def test_inactive_review_agent_and_prompts_are_not_resolved(self):
-        self.value.update(stage_agents={'review': {'backend': 'codex', 'executable': '/missing/cli'}},
+        self.value.update(execution={'review_enabled': False},
+                          stage_agents={'review': {'backend': 'codex', 'executable': '/missing/cli'}},
                           prompts={'review': '/missing/review', 'revise': '/missing/revise'})
         self.assertNotIn('review', self.load()['_agents'])
         self.value['execution'] = {'review_enabled': True}
@@ -55,14 +68,14 @@ class OptionalReviewConfigTests(FolderFixture):
         self.value['execution']['max_revision_rounds'] = 0
         self.assertNotIn('revise', self.load()['_prompt_paths'])
 
-    def test_all_examples_explicitly_disable_review(self):
+    def test_all_examples_explicitly_enable_review(self):
         paths = list(Path(__file__).resolve().parents[1].glob('config*.example.jsonc'))
         self.assertEqual(len(paths), 1)
         for path in paths:
             with self.subTest(path=path), patch('src.runtime.config.shutil.which', return_value=sys.executable):
                 cfg = load_config(path)
-                self.assertFalse(cfg['execution']['review_enabled'])
-                self.assertNotIn('review', cfg['_agents'])
+                self.assertTrue(cfg['execution']['review_enabled'])
+                self.assertIn('review', cfg['_agents'])
 
 
 class PipelineMixin:
@@ -96,10 +109,75 @@ class PipelineMixin:
         return self.stdout.getvalue()
 
 
+class DefaultReviewPipelineTests(PipelineMixin, FolderFixture):
+    def default_config(self):
+        self.value.update(result_policy='strict', output_language='English')
+        self.config_path.write_text(json.dumps(self.value))
+        return load_config(self.config_path)
+
+    def test_omitted_review_runs_and_accepts_only_matching_source_and_revision(self):
+        manifest, code = self.run_pipeline(self.default_config())
+        self.assertEqual((manifest['status'], code, manifest['accepted']), ('COMPLETE', 0, True))
+        self.assertEqual([c.get('phase', c['stage']) for c in self.calls], ['collect', 'write', 'review'])
+        self.assertEqual(manifest['metrics']['attempts'], 3)
+        study, review = manifest['study'], manifest['review']
+        self.assertEqual(review['revision_id'], study['revision_id'])
+        self.assertEqual(review['source_fingerprint'], study['source_fingerprint'])
+        self.assertEqual(review['target']['document_sha256'], study['review_plan']['document_sha256'])
+        for field in ('revision_id', 'source_fingerprint', 'source_directory'):
+            item = copy.deepcopy(manifest)
+            item['review'][field] = 'different'
+            with self.subTest(field=field):
+                self.assertFalse(accepted(item))
+                self.assertFalse(workflow_satisfied(item))
+        item = copy.deepcopy(manifest)
+        item['review']['target']['document_sha256'] = 'different'
+        self.assertFalse(accepted(item))
+
+    def test_default_review_material_findings_run_existing_revision_loop(self):
+        from test_revision_pipeline import initial_finding
+        manifest, code = self.run_pipeline(self.default_config(),
+            lambda context, data: initial_finding(context['stage'], context, data))
+        self.assertEqual((code, manifest['accepted'], manifest['selected_revision']), (0, True, '002'))
+        self.assertEqual([c.get('prompt_variant', c.get('phase', c['stage'])) for c in self.calls],
+                         ['collect', 'write', 'review', 'revise', 'review'])
+        self.assertEqual(manifest['metrics']['attempts'], 5)
+        self.assertEqual(manifest['study']['review_plan']['coverage_plan'], manifest['coverage_plan'])
+        self.assertEqual(manifest['review']['target']['document_sha256'],
+                         manifest['study']['review_plan']['document_sha256'])
+
+    def test_failed_incomplete_and_mismatched_default_reviews_keep_published_study(self):
+        for case in ('error', 'partial', 'missing_claim', 'wrong_target', 'wrong_source'):
+            def change(context, data):
+                if context['stage'] == 'review':
+                    if case == 'error':
+                        raise AuditError('Offline review failure.', code='CLI_FAILED',
+                                         failure_kind='BACKEND_ERROR', failure_layer='backend')
+                    if case == 'partial':
+                        data.update(completion_status='PARTIAL', limitations=['Review did not finish.'])
+                    elif case == 'missing_claim':
+                        data['claims'] = []
+                    elif case == 'wrong_target':
+                        data['review_target_id'] = 'different'
+                    elif case == 'wrong_source':
+                        data['source_directory'] = '/different'
+                return data
+            with self.subTest(case=case):
+                manifest, code = self.run_pipeline(self.default_config(), change)
+                self.assertNotEqual(code, 0)
+                self.assertFalse(manifest['accepted'])
+                self.assertFalse(manifest['workflow_satisfied'])
+                self.assertFalse(manifest['processing_completed'])
+                self.assertEqual(manifest['selected_revision'], '001')
+                self.assertIsNotNone(manifest['study'])
+                self.assertTrue(manifest['study_invocation']['publication_complete'])
+                self.assertTrue((self.run_dir / 'ARCHITECTURE.md').is_file())
+                self.assertEqual(len(manifest['revisions']), 1)
+
+
 class OptionalReviewPipelineTests(PipelineMixin, FolderFixture):
     def unreviewed_config(self, policy='strict'):
-        # Bypass the legacy fixture's opt-in; exercise the actual omitted default.
-        self.value.update(result_policy=policy, output_language='English')
+        self.value.update(result_policy=policy, output_language='English', execution={'review_enabled': False})
         self.config_path.write_text(json.dumps(self.value))
         return load_config(self.config_path)
 
@@ -192,6 +270,21 @@ class OptionalReviewGitTests(PipelineMixin, unittest.TestCase):
     setUp = git_tests.RepoFixture.setUp
     tearDown = git_tests.RepoFixture.tearDown
     git = git_tests.RepoFixture.git
+
+    def test_omitted_review_runs_on_each_pinned_git_branch(self):
+        cfg = git_tests.RepoFixture.config(self)
+        cfg.pop('execution')
+        cfg['git_mode']['branches'] = ['master', 'test01']
+        manifest, code = self.run_pipeline(cfg)
+        self.assertEqual((code, manifest['status']), (0, 'COMPLETE'))
+        self.assertEqual([c.get('phase', c['stage']) for c in self.calls],
+                         ['collect', 'write', 'review', 'collect', 'write', 'review', 'compare'])
+        for branch in manifest['branches']:
+            self.assertTrue(branch['review_enabled'])
+            self.assertTrue(branch['accepted'])
+            self.assertEqual(branch['study']['source_commit'], branch['review']['source_commit'])
+            self.assertEqual(branch['study']['revision_id'], branch['review']['revision_id'])
+        self.assertTrue(manifest['restoration']['restored'])
 
     def config(self, policy='strict', branches=None):
         cfg = git_tests.RepoFixture.config(self)

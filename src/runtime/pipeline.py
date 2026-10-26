@@ -135,6 +135,7 @@ class SourcePipeline:
             inventory, _ = self.session.source_inventory()
             guard(context)
             artifacts.save_json(directory / 'source.inventory.json', inventory)
+            item['source_filter'] = inventory['source_filter']
             context['_inventory'] = inventory
             context['inventory_summary'] = inventory_summary(inventory)
             plan = build_coverage_plan(inventory, context)

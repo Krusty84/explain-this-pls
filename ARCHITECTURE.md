@@ -7,14 +7,14 @@ It calls Codex and saves Markdown and JSON reports. Model access uses the instal
 
 `folder` mode analyzes a directory. `git` mode analyzes selected local branches.
 Stages and branches run sequentially. `study` is the main stage.
-`execution.review_enabled` enables `review` (default: `false`).
+`execution.review_enabled` enables `review` (default: `true`).
 Document revision uses `study` with the `revise` template.
 Multiple Git branches enable `compare`.
 With review disabled, revisions and review/revision prompts and review-agent
 settings are inactive. Reports explicitly state that no separate review ran.
-Existing configs without `review_enabled` now skip review. Comparison remains
-available as unverified differences requiring factual references from both
-selected studies.
+Configs without `review_enabled` run review and the bounded revision loop.
+Explicit `false` skips both. Comparison without review uses unverified differences
+requiring factual references from both selected studies.
 
 This file describes the orchestrator. Reports named `ARCHITECTURE.md` under
 `reports_dir` describe the analyzed system. See [README.md](README.md) for usage
@@ -201,10 +201,23 @@ Component boundaries, relevance and investigation gaps belong in the report;
 classification errors cannot reject a valid document or remove source files.
 Enabled review and revision use the resulting study.
 
+The existing prompts require each selected scenario's trigger, execution chain,
+branches, source-supported links, unfinished paths and next checks. The `scope`
+section separates Investigated, Partially investigated, Unverified and Out of scope;
+labels follow the output language. Material gaps state reason, potential impact
+and next check. Collection stores this information in claims and limitations;
+the writer uses frozen evidence. Revision retains gaps until evidence resolves them.
+Effects, alternative writers, configuration conditions and failure paths use
+source evidence or HYPOTHESIS/UNKNOWN. No runtime configuration or guarantee is
+inferred from a declaration. There is no new pipeline or schema.
+
 `coverage.plan.json` groups the filtered inventory by top-level directory and
 source root. Citation diagnostics appear in the consolidated report.
 `NOT_CITED` means no resolved
 citation, not `NOT_INSPECTED`; Python leaves file inspection `UNVERIFIED`.
+Observed text delivery remains separate from understanding and semantic checks.
+`INSPECTED_UNVERIFIED` and a source-based FACT do not establish runtime verification.
+No counterexample does not establish absence of alternative paths.
 
 ### Full Source Index
 
@@ -537,10 +550,22 @@ The detailed explanation appears in `FINAL_REPORT.md` and
 - Documentation defects distinguished from code differences.
 - Open questions and verification steps.
 
-`FINAL_REPORT.md` combines the run summary and limitations, selected document
-versions and revision material, citation diagnostics, full architecture/review
-text, branch comparison and its explanation, and run errors. It records why
-comparison is unavailable or unnecessary when applicable.
+`FINAL_REPORT.md` shows the selected scope blocks, HYPOTHESIS/UNKNOWN claims with
+their missing checks, omission search, pinned coverage plan and citation diagnostics.
+Source results retain the inventory's filter/exclusion records for this view.
+Collection invocation metadata retains its tool observations alongside the writer
+metadata; the report distinguishes observed delivery from unavailable observations.
+These program records do not confirm agent understanding or semantic conclusions.
+The summary also shows revision links, limitations, findings, comparison state and
+run errors. Review outcomes distinguish policy acceptance, material findings,
+incomplete review and explicit disablement in the report, CLI and TUI. Acceptance
+does not establish that code changes are safe. Completed review without overall
+policy acceptance has a separate outcome; it does not imply unfinished review.
+CLI JSON exposes the per-source outcomes and selected revisions in `reviews`.
+
+Normal model use per snapshot increases from two calls to three. A revision and
+repeat review raise the total to five. Explicit review disablement keeps two calls;
+eligible multi-branch comparison adds one call per run. Failures can stop calls early.
 
 ### Architecture Document Rendering
 

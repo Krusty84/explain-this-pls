@@ -257,7 +257,8 @@ class ModelInvoker:
             self.session.reporter.emit('study_phase_started', **self.session.stage_context(stage, context))
         if collection_meta:
             meta['phase_invocations'] = [{key: collection_meta[key] for key in
-                ('phase', 'invocation_id', 'artifact_directory', 'status', 'duration_seconds')}]
+                ('phase', 'invocation_id', 'artifact_directory', 'status', 'duration_seconds',
+                 'tool_observation', 'source_access') if key in collection_meta}]
             for key in ('citation_corrections', 'citation_correction_provenance'):
                 if key in collection_meta:
                     meta[key] = collection_meta[key]

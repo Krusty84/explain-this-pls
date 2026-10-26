@@ -5,7 +5,7 @@
 import json
 import re
 
-from src.contracts.contracts import contract_violation, is_recovered_material
+from src.contracts.contracts import accepted, contract_violation, is_recovered_material
 from src.analysis.evidence import canonical, sha
 from src.reports.navigation import anchor, link
 from src.reports.presentation import (cell, label, russian, _code, _source_path, _status,
@@ -57,6 +57,51 @@ def claim_places(claim_ids, study, language, path='ARCHITECTURE.md'):
 
 def ordered_findings(data):
     return sorted(data.get('findings', []), key=lambda f: ('HIGH', 'MEDIUM', 'LOW').index(f['severity']))
+
+
+def review_outcome(item, *, review_enabled=None):
+    from src.analysis.revisions import completed_pair
+    if review_enabled is None:
+        review_enabled = item.get('review_enabled', True)
+    if review_enabled is False:
+        return 'DISABLED'
+    if 'selected_revision' in item:
+        if item.get('revision_id', item['selected_revision']) != item['selected_revision']:
+            return 'INCOMPLETE'
+        item = dict(item, revision_id=item['selected_revision'])
+    if accepted(item):
+        return 'ACCEPTED'
+    review = item.get('review') or {}
+    if not completed_pair(item):
+        return 'INCOMPLETE'
+    if any(f.get('severity') in ('HIGH', 'MEDIUM') for f in review.get('findings', [])):
+        return 'ISSUES'
+    checks = review['program_checks']
+    if (checks['registry_coverage']['expected_ids']
+            and not checks['registry_coverage']['missing_ids']
+            and not checks['registry_coverage']['not_checked_ids']
+            and not checks['omission_coverage']['missing_ids']
+            and not checks['omission_coverage']['unfinished_ids']
+            and not checks['prior_finding_coverage']['missing']
+            and all(f['status'] != 'NOT_CHECKED' for f in review['prior_findings'])):
+        return 'NOT_ACCEPTED'
+    return 'INCOMPLETE'
+
+
+def review_summary(item, language='English', *, review_enabled=None):
+    messages = {
+        'DISABLED': ('Ревью отключено конфигурацией; отдельная проверка не выполнена.',
+                     'Review is disabled by configuration; no separate review was performed.'),
+        'ACCEPTED': ('Ревью завершено и принято по проверкам политики.',
+                     'Review completed and accepted under policy checks.'),
+        'ISSUES': ('Ревью обнаружило существенные замечания; приёмка не пройдена.',
+                   'Review reported material findings; acceptance has not passed.'),
+        'NOT_ACCEPTED': ('Ревью завершено; приёмка по проверкам политики не пройдена.',
+                         'Review completed; policy acceptance has not passed.'),
+        'INCOMPLETE': ('Ревью не завершено; положительная приёмка отсутствует.',
+                       'Review is incomplete; no positive policy acceptance.'),
+    }
+    return messages[review_outcome(item, review_enabled=review_enabled)][0 if russian(language) else 1]
 
 
 def finding_location(value):

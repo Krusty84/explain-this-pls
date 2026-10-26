@@ -12,6 +12,8 @@ from unittest.mock import patch
 
 from src.runtime.runner import Runner
 from src.runtime.reporting import Reporter
+from src.reports.review import review_outcome
+from src.tui.worker import PipeReporter
 from fixtures.ledger_response import response
 from fixtures.architecture_checks import assert_architecture
 from test_folder import FolderFixture
@@ -132,6 +134,20 @@ class RevisionPipelineTests(FolderFixture):
         self.assertEqual((code, manifest['status'], manifest['accepted']), (2, 'PARTIAL', False))
         self.assertEqual(self.stages(), ['collect', 'write', 'review'])
         self.assert_selected_aliases('001')
+        self.assertNotIn('revision_id', manifest)
+        self.assertEqual(review_outcome(manifest), 'ISSUES')
+        output = io.StringIO()
+        reporter = Reporter(stdout=output, stderr=io.StringIO(), progress=False)
+        self.addCleanup(reporter.close)
+        result = dict(status=manifest['status'], exit_code=code, manifest=None)
+        reporter.finish(result, manifest, check_only=False, config_path=self.config_path)
+        self.assertIn('Review reported material findings', output.getvalue())
+        connection = unittest.mock.Mock()
+        worker = PipeReporter(connection)
+        self.addCleanup(worker.close)
+        worker.finish(result, manifest, check_only=False, config_path=self.config_path)
+        payload = connection.send.call_args.args[0]
+        self.assertIn('Review reported material findings', payload['reviews'][0][1])
 
     def test_revision_preserves_study_effort_in_commands_and_saved_metadata(self):
         self.value['agent']['reasoning_effort'] = 'xhigh'

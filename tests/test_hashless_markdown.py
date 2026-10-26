@@ -62,13 +62,20 @@ class HashlessMarkdownTests(unittest.TestCase):
 
     def test_final_report_omits_unselected_narrative_and_preserves_authored_hash_semantics(self):
         original = copy.deepcopy((self.study, self.review))
+        wire = {key: copy.deepcopy(self.study[key]) for key in
+                ('task', 'branch', 'source_commit', 'completion_status', 'limitations', 'evidence')}
+        wire['claims'] = [{key: value for key, value in claim.items() if key != 'document_locators'}
+                          for claim in self.study['claims']]
+        wire['report_sections'] = sections('Unselected architecture text.\n')
+        other = prepare_result('study', wire, self.context | {'revision_id': '002'})
         manifest = dict(status='PARTIAL', branch='main', study=self.study, review=self.review,
-            selected_revision='001', revisions=[dict(revision_id='002', study=self.study, review=self.review)])
+            selected_revision='001', revisions=[dict(revision_id='002', study=other, review=None)])
         markdown, _ = render_final_report(dict(status='PARTIAL', branches=[manifest]),
                                           {'branches': ['main']}, 'git', 'English')
         self.assert_no_service_hashes(markdown)
         self.assertIn('Other revision 002', markdown)
-        self.assertNotIn(self.narrative, markdown)
+        self.assertIn(self.narrative, markdown)
+        self.assertNotIn('Unselected architecture text.', markdown)
         from src.reports.presentation import render_architecture
         self.assertIn(self.narrative, render_architecture(self.study))
         self.assertEqual((self.study, self.review), original)

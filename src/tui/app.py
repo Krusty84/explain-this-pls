@@ -25,6 +25,7 @@ from textual.widgets import Button, DataTable, DirectoryTree, Footer, Header, In
 from src.runtime.config import ROOT, load_config
 from src.contracts.contracts import ContractError
 from src.runtime.reporting import Reporter, diagnostic, duration, metric_value, safe_text
+from src.reports.review import review_summary
 from src.tui.settings import config_directory, config_files, read_settings, save_settings
 from src.tui.models import ModelChooser
 from src.tui.state import RunState
@@ -334,7 +335,9 @@ class ExplainApp(App[int]):
             description = ('Project Description: ' + s(config['project_description']) if config['project_description'] else
                            ('Project Description: Not set. Add project_description to the config.', 'red'))
             lines = [description, 'Source: ' + s(source.get('path', source.get('repository'))),
-                     'Config: ' + s(self.selected), 'Reports: ' + s(config['_reports_dir'])]
+                     'Config: ' + s(self.selected), 'Reports: ' + s(config['_reports_dir']),
+                     'Review: ' + ('Enabled; may revise and review again.' if config['execution']['review_enabled']
+                                   else 'Disabled; no separate review.')]
             analysis = config['last_analysis']
             if analysis:
                 finished = dt.datetime.fromisoformat(analysis['finished_at']).astimezone().isoformat(sep=' ', timespec='seconds')
@@ -514,13 +517,14 @@ class ExplainApp(App[int]):
         outcome = 'INTERRUPTED' if self.last_exit_code == 130 else result['status']
         self.query_one('#run-status', Static).update(self.literal(self.selected.name + ' · ' + outcome))
         metrics = result.get('metrics', {})
+        review = '\n'.join((source + ': ' if source else '') + message
+                           for source, message in payload.get('reviews', [])) or review_summary(result)
         values = [('Outcome', outcome), ('Meaning', result.get('status_meaning', 'See diagnostics.')),
                   ('Elapsed', duration(metrics['duration_seconds']) if metrics else 'n/a'),
                   ('Attempts', metrics.get('attempts', 'n/a')),
                   ('Tokens', metric_value(metrics.get('usage', {}), 'total_tokens')),
                   ('Cost', metric_value(metrics.get('usage', {}), 'cost_usd')),
-                  ('Review', 'Not performed (setup check).' if payload.get('check_only') else
-                   'Enabled; see review results.' if result.get('review_enabled') else 'Disabled; no separate review performed.'),
+                  ('Review', 'Not performed (setup check).' if payload.get('check_only') else review),
                   *payload.get('paths', [])]
         values += [('Diagnostic ' + str(i + 1), '\n'.join(self.diagnostic_lines(item)))
                    for i, item in enumerate(self.state.diagnostics)]

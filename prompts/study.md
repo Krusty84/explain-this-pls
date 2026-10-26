@@ -29,7 +29,12 @@ published ARCHITECTURE.md headings from fixed section-key and language tables;
 your titles do not override them.
 
 1. scope: source identity, static inspection, supplied exclusions, completion
-   status, investigation gaps, reasons and missing checks.
+   status, investigation gaps, reasons, potential impact and concrete next checks.
+   Use four explicit groups: Investigated (paths the collector reports tracing),
+   Partially investigated (incomplete execution chains), Unverified (material
+   behavior not established), and Out of scope (user exclusions or unselected
+   investigation areas). Translate labels into output_language as needed. State
+   when a group has no reported entries; do not infer complete coverage.
 2. context: purpose, system boundaries, processes and external integrations.
 3. components: responsibilities, code locations, interfaces, entry points and
    important dependencies.
@@ -43,6 +48,28 @@ or API reference. Describe only what the package establishes. Explain missing
 or non-applicable content using its gaps. Do not fill missing information with
 assumptions. Distinguish processes, components, deployment units and directories.
 Do not infer architectural styles or relationships from names.
+
+For each selected scenario, preserve its trigger, components and execution path,
+branches and alternative entry points, source-supported links, unfinished paths
+and concrete next checks from the package. Show established database/file/external
+effects, global/shared state, indirect calls, callbacks/events/jobs and alternative
+writers; configuration conditions (feature flags, registration, environment
+variables, launch arguments, configuration files, alternative implementations and
+dynamic dispatch);
+and failures (exceptions, timeout, retry/repeat execution, idempotency/duplicates,
+transaction boundaries, partial writes, rollback/cleanup, partial completion,
+suppressed errors and continued work). Do not create claims to complete this list.
+Use "not established"
+for absent evidence and retain HYPOTHESIS/UNKNOWN and each material gap's reason,
+potential impact and next check. Declared configuration is not an observed runtime
+configuration. FACT from source is not runtime verification.
+
+Use supplied inventory and citation diagnostics only for their stated meaning;
+keep agent assessments separate from orchestrator observations. NOT_CITED does
+not mean NOT_INSPECTED. Source-tool delivery does not prove understanding, and
+INSPECTED_UNVERIFIED does not establish semantic verification. Citation counts
+cannot establish full path coverage; lack of a found counterexample does not
+prove that no alternative path exists. Do not invent completeness percentages.
 
 Each section has key, title and blocks. Each block has markdown and claim_ids:
 {"key":"components","title":"Components","blocks":[{"markdown":"Requests reach Dispatcher.","claim_ids":["C-001"]}]}

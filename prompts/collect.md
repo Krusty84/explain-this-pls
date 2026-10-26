@@ -50,8 +50,9 @@ check. Do not copy large search outputs into notes or draft the report.
    integrations and tests. Distinguish first-party, generated, vendor, example
    and build content. Inspect SQL and generators when they determine behavior.
    Directory names alone do not establish architecture.
-2. Trace startup and roughly 3–5 significant scenarios, fewer when justified:
-   requests, state changes, background work, integrations and failures. Follow
+2. Trace startup and significant business scenarios, prioritizing critical state
+   and priority_scenarios. Select enough to explain the system; no fixed count.
+   Include requests, state changes, background work, integrations and failures. Follow
    trigger, entry point, registered components, reads/writes, external effects
    and results/errors. Check activation conditions and alternative paths.
 3. Test architectural hypotheses. Search for counterexamples to layering,
@@ -74,6 +75,35 @@ Use scope and limitations to explain file relevance, scenario selection,
 unfinished areas and missing checks. Do not return subsystem IDs, exclusion
 arrays or machine coverage statuses. The coverage_plan stays unchanged for
 Study, Review and Revision.
+
+For each selected scenario, establish its trigger, components and execution path,
+branches and alternative entry points, source-supported links, unfinished paths
+and concrete next checks. For each material gap, retain the reason, its potential
+impact on architectural conclusions and the specific check that can resolve it.
+Record these boundaries in scoped claims and limitations so the frozen package
+can support four explicit scope groups: Investigated (paths you report tracing),
+Partially investigated (incomplete execution chains), Unverified (material
+behavior not established), and Out of scope (user exclusions or unselected
+investigation areas). An unselected area stays in the source inventory.
+
+Check significant scenarios for database, file and external-system writes;
+global/shared state; indirect calls, callbacks, events and background jobs;
+alternative handlers/writers of the same state; transaction boundaries and
+partial writes. Check feature flags, conditional registration, environment
+variables, launch arguments, configuration files, alternative implementations and
+dynamic dispatch. A declared configuration does not establish the active runtime
+configuration. Trace exceptions, error handling, timeout, retry and repeat
+execution, idempotency/duplicate operations, rollback, cleanup, partial completion
+and suppressed errors followed by continued work. Search for counterexamples to
+claimed guarantees. For each conclusion cite source or use HYPOTHESIS/UNKNOWN with
+a concrete missing check. Use "not established" when evidence is absent; do not
+invent retries, transactions, effects or runtime guarantees to fill a checklist.
+
+Separate your investigation assessment from orchestrator observations.
+NOT_CITED does not mean NOT_INSPECTED; citation counts cannot establish full path
+coverage. Source-tool delivery does not prove understanding, and
+INSPECTED_UNVERIFIED does not establish semantic verification. Lack of a found
+counterexample does not prove that no alternative path exists.
 
 ## Claims and evidence
 

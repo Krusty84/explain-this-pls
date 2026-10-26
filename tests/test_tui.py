@@ -200,6 +200,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             preview = pilot.app.query_one('#config-preview', Static)
             self.assertIsInstance(preview.content, Group)
             self.assertIn('Reports: ' + str(self.base / 'reports' / 'source'), preview.content.renderables[-1].plain)
+            self.assertIn('Review: Enabled; may revise and review again.', preview.content.renderables[-1].plain)
             for width in (60, 100):
                 await pilot.resize_terminal(width, 24)
                 await pilot.pause()
@@ -207,6 +208,14 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([line for line in lines if line.startswith('─')],
                                  ['─' * preview.content_size.width])
                 self.assertTrue(all(line.strip() for line in lines))
+
+    async def test_explicit_review_disable_is_visible_in_config_preview(self):
+        value = jsonc(self.path.read_text())
+        value['execution'] = {'review_enabled': False}
+        self.path.write_text(json.dumps(value))
+        async with self.app(self.path).run_test() as pilot:
+            preview = pilot.app.query_one('#config-preview', Static)
+            self.assertIn('Review: Disabled; no separate review.', preview.content.renderables[-1].plain)
 
     async def test_reselection_reloads_external_changes_in_preview_row_and_buttons(self):
         value = jsonc(self.path.read_text())
@@ -245,8 +254,9 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(separator, Rule)
                 self.assertEqual(separator.characters, '─')
                 self.assertEqual(separator.style, 'dim')
-                self.assertEqual(files.plain.splitlines()[:3],
+                self.assertEqual(files.plain.splitlines()[:4],
                     ['Config: ' + str(self.path), 'Reports: ' + str(self.base / 'reports' / repository.name),
+                     'Review: Enabled; may revise and review again.',
                      'Results: COMPLETED'])
                 self.assertFalse(app.query_one('#run', Button).disabled)
                 self.assertFalse(app.query_one('#check', Button).disabled)
@@ -523,6 +533,30 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             for text in ('COMPLETE_WITH_WARNINGS', 'source-001 / app.py:1-2', 'C-001', 'QUOTE_MISMATCH'):
                 self.assertIn(text, summary)
 
+    async def test_review_summary_displays_worker_outcomes_and_missing_review_is_incomplete(self):
+        app = self.app(self.path, no_progress=True)
+        async with app.run_test(size=(100, 32)) as pilot:
+            app.state = RunState()
+            app.query_one('#picker').display = False
+            app.query_one('#dashboard').display = True
+            messages = ['Review completed and accepted under policy checks.',
+                        'Review reported material findings; acceptance has not passed.',
+                        'Review completed; policy acceptance has not passed.',
+                        'Review is incomplete; no positive policy acceptance.',
+                        'Review is disabled by configuration; no separate review was performed.']
+            for message in messages:
+                app.complete({'result': {'status': 'PARTIAL', 'exit_code': 2, 'review_enabled': True},
+                              'reviews': [('main', message)], 'diagnostics': []})
+                await pilot.pause()
+                summary = ' '.join(cell.plain for row in app.query_one('#summary', DataTable).rows
+                                   for cell in app.query_one('#summary', DataTable).get_row(row))
+                self.assertIn('main: ' + message, summary)
+            app.complete({'result': {'status': 'FAILED', 'exit_code': 1}, 'diagnostics': []})
+            await pilot.pause()
+            summary = ' '.join(cell.plain for row in app.query_one('#summary', DataTable).rows
+                               for cell in app.query_one('#summary', DataTable).get_row(row))
+            self.assertIn('Review is incomplete', summary)
+
     async def test_no_progress_keeps_elapsed_frozen_between_events_and_worker_crash_finishes(self):
         app = self.app(self.path, no_progress=True)
         async with app.run_test() as pilot:
@@ -661,6 +695,7 @@ class WorkerIntegrationTests(unittest.TestCase):
         self.assertEqual(messages[-1], {'type': 'exit', 'exit_code': 0})
         self.assertTrue(all(Path(path).is_file() for label, path in payload['paths']))
         self.assertGreater(len(payload['result']['metrics']['stages']), 1)
+        self.assertIn('completed and accepted', payload['reviews'][0][1])
 
     def test_cancel_before_ready_and_during_analysis_preserves_exit_130(self):
         for immediate in (True, False):

@@ -154,7 +154,14 @@ def run_audit(args, reporter) -> int:
                 if result['status'] == 'COMPLETE_WITH_WARNINGS' else
             'Processing may be incomplete or evidence may be insufficient; consult limitations and diagnostics.')
         result['review_quality'] = 'NOT_MEASURED'
-        result['review_enabled'] = manifest.get('review_enabled', (config or {}).get('execution', {}).get('review_enabled', False))
+        result['review_enabled'] = manifest.get('review_enabled', (config or {}).get('execution', {}).get('review_enabled', True))
+        if not args.check:
+            from src.reports.review import review_outcome, review_summary
+            result['reviews'] = [dict(source=entry.get('branch', entry.get('source_directory', '')),
+                revision_id=entry.get('selected_revision'),
+                outcome=review_outcome(entry, review_enabled=result['review_enabled']),
+                summary=review_summary(entry, review_enabled=result['review_enabled']))
+                for entry in manifest.get('branches') or [manifest]]
         result['workflow_satisfied'] = manifest.get('workflow_satisfied', False)
         result['processing_completed'] = manifest.get('processing_completed', False)
         if 'metrics' in manifest:

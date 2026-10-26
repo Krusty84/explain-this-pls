@@ -41,6 +41,35 @@ machine coverage statuses. Do not narrow source scope to resolve findings. Use U
 when inspection cannot be established. Missing citations do not mean NOT_INSPECTED.
 Preserve the section keys, in order: scope, context, components, startup_and_flows,
 data_and_state.
+
+Preserve four explicit scope groups: Investigated (paths you report tracing),
+Partially investigated (incomplete execution chains), Unverified (material
+behavior not established), and Out of scope (user exclusions or unselected
+investigation areas). Translate labels into output_language as needed. Keep each
+selected scenario's trigger, components and execution path, branches and
+alternative entry points, source-supported links, unfinished paths and concrete
+next checks. For each material gap state the reason, potential impact on
+architectural conclusions and the specific next check. Do not remove a gap unless
+new source evidence resolves it; unselected areas stay in the source inventory.
+
+Retain and check database/file/external effects, global/shared state, indirect
+calls, callbacks/events/jobs, alternative handlers/writers and transaction/partial
+write boundaries. Check feature flags, conditional registration, environment
+variables, launch arguments, configuration files, alternative implementations and
+dynamic dispatch. Check exceptions, error handling, timeout, retry/repeat
+execution, idempotency/duplicates, rollback, cleanup, partial completion and
+suppressed errors followed by continued work. Prioritize significant business
+scenarios, critical state and priority_scenarios without a fixed count. Cite source
+for conclusions or retain HYPOTHESIS/UNKNOWN with concrete missing checks; use
+"not established" for absent evidence. Do not invent retries, transactions,
+effects or guarantees. Declared configuration is not observed runtime
+configuration, and FACT from source is not runtime verification.
+
+Separate your assessments from orchestrator observations. NOT_CITED does not mean
+NOT_INSPECTED. Source-tool delivery does not prove understanding, and
+INSPECTED_UNVERIFIED does not establish semantic verification. Citation counts
+cannot establish full path coverage or completeness percentages. Lack of a found
+counterexample does not prove that no alternative path exists.
 Return unnumbered section titles for the canonical report; the orchestrator
 renders Markdown and locators. Python selects the published ARCHITECTURE.md
 headings from fixed section-key and language dictionaries; your title does not

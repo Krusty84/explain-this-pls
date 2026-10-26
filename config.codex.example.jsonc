@@ -101,8 +101,9 @@
     // Stop only after 50 confirmed repeated tool results spanning 120 seconds.
     // false keeps observation metrics and disables this stop.
     "read_loop_guard": true,
-    // Optional separate review. Omitted means false; set true for the reviewed workflow.
-    "review_enabled": false,
+    // Independent review is enabled by default. Set false to skip review and revision.
+    // Adds one model call; material findings can add revision and repeat review calls.
+    "review_enabled": true,
     // Used only with review enabled: one revision and full review after material findings.
     "max_revision_rounds": 1,
     "stage_timeout_seconds": 3600,

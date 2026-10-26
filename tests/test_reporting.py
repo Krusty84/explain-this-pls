@@ -3,6 +3,7 @@
 
 """Console, diagnostic, process activity and real offline CLI regressions."""
 import contextlib
+import copy
 import io
 import json
 import logging
@@ -20,16 +21,19 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from src.contracts.contracts import ContractError, jsonc
+from src.contracts.contracts import ARTIFACT_FORMAT, CONTRACT_ID, ContractError, jsonc
 from src.runtime.errors import AuditError, UnsafeRepository
 from src.runtime.runner import Runner
 from src.runtime.process import cli_env, process
 from src.runtime.config import load_config
 from src.cli import main
 from src.runtime.reporting import NullReporter, Reporter, duration, output_mode, safe_text
-from src.analysis.ledger import prepare_result
+from src.analysis.ledger import prepare_result, review_context
+from src.analysis.revisions import completed_pair
 from src.reports.presentation import render_architecture, render_stage
+from src.reports.review import review_outcome, review_summary
 from fixtures.ledger_response import response
+from fixtures.report_examples import revision
 import test_startup as startup
 import test_submodules as recursive
 
@@ -58,6 +62,85 @@ class ReporterTests(unittest.TestCase):
         clean = saved.copy()
         clean.pop('advisory')
         self.assertEqual(render_architecture(saved), render_architecture(clean))
+
+    def test_review_summary_uses_bound_acceptance_and_distinguishes_outcomes(self):
+        item, context = revision()
+        self.assertEqual(review_outcome(item), 'ISSUES')
+        self.assertIn('material findings', review_summary(item))
+        self.assertIn('существенные замечания', review_summary(item, 'Russian'))
+        source = dict(item, selected_revision=item['revision_id'])
+        source.pop('revision_id')
+        self.assertEqual(review_outcome(source), 'ISSUES')
+        self.assertEqual(review_outcome(source | {'selected_revision': '002'}), 'INCOMPLETE')
+        self.assertEqual(review_outcome(source | {'revision_id': '002'}), 'INCOMPLETE')
+        wire = response(context)
+        wire['evidence'] = []
+        for claim in wire['claims']:
+            claim['evidence_ids'] = ['study:E-001']
+        item['review'] = prepare_result('review', wire, context)
+        self.assertEqual(review_outcome(item), 'ACCEPTED')
+        self.assertEqual(review_outcome(dict(item, selected_revision='002')), 'INCOMPLETE')
+        cases = [(item, 'completed and accepted'),
+                 (item | {'review_enabled': False}, 'disabled by configuration'),
+                 (item | {'review': None}, 'incomplete')]
+        for field in ('revision_id', 'source_commit', 'target'):
+            changed = copy.deepcopy(item)
+            changed['review'][field] = 'changed'
+            self.assertEqual(review_outcome(changed), 'INCOMPLETE')
+            cases.append((changed, 'incomplete'))
+        partial = copy.deepcopy(item)
+        partial['review']['completion_status'] = 'PARTIAL'
+        cases.append((partial, 'incomplete'))
+        issue, _ = revision()
+        cases.append((issue, 'material findings'))
+        for field in ('revision_id', 'source_commit', 'target'):
+            changed = copy.deepcopy(issue)
+            changed['review'][field] = 'changed'
+            self.assertEqual(review_outcome(changed), 'INCOMPLETE')
+        for manifest, expected in cases:
+            with self.subTest(expected=expected):
+                output = io.StringIO()
+                reporter = Reporter(stdout=output, stderr=io.StringIO(), progress=False)
+                self.addCleanup(reporter.close)
+                reporter.finish({'status': 'PARTIAL', 'exit_code': 2, 'manifest': None}, manifest,
+                                check_only=False, config_path=Path('config.json'))
+                self.assertIn(expected, output.getvalue())
+
+    def test_completed_review_without_acceptance_is_distinct_from_missing_checks(self):
+        (self.base / 'app.py').write_text('print(1)\n')
+        context = dict(branch='main', source_commit='abc', repository=str(self.base), revision_id='001',
+                       result_policy='compromise')
+        metadata = dict(publication_complete=True, contract_id=CONTRACT_ID, artifact_format=ARTIFACT_FORMAT)
+        for case in ('partial_study', 'citation_warning', 'unverifiable', 'missing_claim', 'unchecked_claim',
+                     'missing_area', 'partial_area'):
+            with self.subTest(case=case):
+                study_wire = response(context)
+                if case == 'partial_study':
+                    study_wire.update(completion_status='PARTIAL', limitations=['An execution path is unresolved.'])
+                elif case == 'citation_warning':
+                    study_wire['evidence'][0]['quote'] = 'unmatched quote'
+                study = prepare_result('study', study_wire, context)
+                review_input = review_context(study, context)
+                wire = response(review_input)
+                if case == 'missing_claim':
+                    wire['claims'] = []
+                elif case in ('unchecked_claim', 'unverifiable'):
+                    wire['claims'][0].update(outcome='NOT_CHECKED' if case == 'unchecked_claim' else 'UNVERIFIABLE',
+                                             limitation='The runtime path is not established.')
+                elif case == 'missing_area':
+                    wire['omission_search'].pop()
+                elif case == 'partial_area':
+                    wire['omission_search'][0].update(status='PARTIALLY_INSPECTED', limitation='A path remains unresolved.')
+                review = prepare_result('review', wire, review_input)
+                item = dict(selected_revision='001', study=study, review=review,
+                            study_invocation=metadata, review_invocation=metadata)
+                self.assertTrue(completed_pair(item | {'revision_id': '001'}))
+                outcome = 'NOT_ACCEPTED' if case in ('partial_study', 'citation_warning', 'unverifiable') else 'INCOMPLETE'
+                self.assertEqual(review_outcome(item), outcome)
+                if outcome == 'NOT_ACCEPTED':
+                    self.assertIn('Review completed; policy acceptance has not passed.', review_summary(item))
+                    self.assertIn('Ревью завершено; приёмка по проверкам политики не пройдена.',
+                                  review_summary(item, 'Russian'))
 
     def test_output_selection_and_explicit_precedence(self):
         for tty in (False, True):
@@ -259,7 +342,7 @@ class ReporterTests(unittest.TestCase):
         r = self.reporter
         for stage, noun, completed in (
                 ('study', 'Project analysis', 'Architecture report created.'),
-                ('review', 'Report review', 'Review complete. No significant issues reported.'),
+                ('review', 'Report review', 'Review response saved. See acceptance and findings.'),
                 ('compare', 'Branch report comparison', 'Branch report comparison ready.')):
             for status, label, meaning in (
                     ('COMPLETE', 'OK', completed),
@@ -716,7 +799,7 @@ class ReportingCLIIntegrationTests(unittest.TestCase):
                     if not check:
                         if mode == 'folder':
                             for activity, complete in (('Analyzing project…', 'Architecture report created.'),
-                                                       ('Reviewing report…', 'Review complete. No significant issues reported.')):
+                                                       ('Reviewing report…', 'Review response saved. See acceptance and findings.')):
                                 self.assertIn(f'[RUN] {self.folder.name} / {activity}', result.stderr)
                                 self.assertIn(f'[OK] {self.folder.name} / {complete}', result.stderr)
                         else:

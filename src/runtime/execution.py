@@ -14,7 +14,7 @@ from src.runtime.errors import AuditError
 from src.runtime.artifacts import digest
 
 DEFAULT_EXECUTION = {'stage_timeout_seconds': 3600, 'idle_timeout_seconds': None,
-                     'review_enabled': False,
+                     'review_enabled': True,
                      'read_loop_guard': True,
                      'max_revision_rounds': 1,
                      'structured_output_repair_attempts': 0,

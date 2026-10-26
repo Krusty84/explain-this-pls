@@ -5,7 +5,7 @@
 Analyzes legacy code and explains how the damn thing actually works.
 
 explain-this-pls uses your coding agent to document an existing codebase, with an
-optional separate review of documented claims against the code. Review is disabled
+separate review of documented claims against the code. Review is enabled
 by default. Analyze a folder, study a Git branch, or compare several branches.
 Agents are instructed to read the code without running the project's builds or
 tests.
@@ -21,8 +21,9 @@ access and complete response contract.
 - **Architecture reports** explaining the system's main parts and workflows,
   with references to the source code.
 - **PlantUML diagrams** of components and data flows, embedded as source in the reports.
-- **Optional report review** identifying unsupported claims, contradictions and missing information.
-- **Source coverage diagnostics** showing cited areas without treating missing citations as unread files.
+- **Report review enabled by default** identifying unsupported claims, contradictions and missing information.
+- **Investigation boundaries** showing reported scenarios, partial paths, unknowns and source exclusions.
+- **Source coverage diagnostics** showing cited areas without treating missing citations as unread files or delivered text as understood code.
 - **Report revision**, when review is enabled, allowing one correction round and a new review while retaining earlier versions.
 - **Branch comparison** showing differences from a branch you choose as a baseline.
 - **Folder analysis** for source code that does not need to be in Git.
@@ -220,21 +221,24 @@ model selector preserves it.
 
 #### Optional settings
 
-**Review is opt-in.** Enable it to check the architecture report against the code:
+**Review is enabled by default**, including when the setting is omitted in an
+existing JSON/JSONC config. To skip separate review explicitly:
 
 ```json
 {
   "execution": {
-    "review_enabled": true,
-    "max_revision_rounds": 1
+    "review_enabled": false
   }
 }
 ```
 
-Without this setting, each folder or branch gets an architecture study. Multiple
-Git branches also get a comparison. Review can trigger one correction round and
-a repeat review, which can increase model usage. Earlier report versions remain
-available.
+Each folder or branch normally uses three model calls: collection, writing and
+review. HIGH/MEDIUM findings can trigger one revision and a full repeat review,
+for five calls. Explicit `false` uses two calls and no review/revision calls.
+Compared with the previous default, this adds one call per source, or three with
+revision. Set `execution.max_revision_rounds: 0` to keep review without revision.
+Multiple Git branches also use one comparison call when eligible. Failures can
+stop calls early. Earlier document revisions remain available.
 
 The [commented configuration](config.codex.example.jsonc) describes other options:
 
@@ -349,7 +353,7 @@ Each run saves results in `reports_dir/<source-name>/<run-id>/`, for example
 
 | Report                   | Contents                                                                  |
 | ------------------------ | ------------------------------------------------------------------------- |
-| `FINAL_REPORT.md`        | Start here: run status, selected revision, review state, severity counts, up to five findings per source, and links. |
+| `FINAL_REPORT.md`        | Start here: selected revision, review outcome, scenario boundaries, source scope/exclusions, unknowns and next checks, omission search, findings and links. |
 | `ARCHITECTURE.md`        | Five ordered sections, author blocks and diagrams; contents, source labels and return links. |
 | `ARCHITECTURE_REVIEW.md` | Findings first: claim, problem, impact, correction, evidence status and architecture block; then unchecked claims and review limits. |
 | `BRANCH_COMPARISON.md`   | Both statements, category, explanation, confirmation status and evidence for each compared branch and revision. |
@@ -380,6 +384,19 @@ missing evidence remains an explicit limitation.
 Program labels support Russian and English; author text is unchanged. PlantUML
 diagrams are included as source; use a PlantUML-capable viewer to display them.
 
+The scope separates **Investigated**, **Partially investigated**, **Unverified**
+and **Out of scope** (with translated labels when requested). These are agent
+assessments. Each material gap needs a reason, potential impact and next check.
+The program shows the frozen inventory, citation diagnostics and available source
+text delivery observations separately. `NOT_CITED` does not mean `NOT_INSPECTED`.
+Delivered text and `INSPECTED_UNVERIFIED` do not prove understanding or semantic
+verification. A source-based `FACT` does not establish runtime behavior.
+
+The prompts trace significant effects, alternative writers, configuration branches
+and failure paths. Missing runtime configuration stays `HYPOTHESIS`/`UNKNOWN`;
+declared settings do not establish active settings. No path-completeness or
+semantic-quality percentage is computed.
+
 ### Understand the outcome
 
 By default, useful partial results are kept even if a stage fails
@@ -395,7 +412,11 @@ version and retain earlier material.
 
 Read the limitations and findings before relying on the reports. Source references
 and automated review help assess the explanations, but do not prove correctness or
-exhaustive coverage.
+exhaustive coverage. Review outcomes distinguish accepted review, material findings,
+incomplete review and explicit disablement. A successful review does not establish
+that a code change is safe. A completed review can still lack policy acceptance,
+for example when the study is partial. CLI JSON includes these per-source outcomes
+in `reviews`, with the selected revision and a summary.
 
 For implementation, validation, storage and development tools, see
 [ARCHITECTURE.md](ARCHITECTURE.md). For response formats and evidence rules, see

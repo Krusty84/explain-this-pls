@@ -29,7 +29,7 @@ STATUS_COLORS = {'Complete': '\x1b[32m', 'Complete with warnings': '\x1b[33m', '
 STAGE_MESSAGES = {
     'study': ('Analyzing project…', 'Project analysis', 'Architecture report created.'),
     'revise': ('Revising architecture report…', 'Architecture revision', 'Revised architecture report created.'),
-    'review': ('Reviewing report…', 'Report review', 'Review complete. No significant issues reported.'),
+    'review': ('Reviewing report…', 'Report review', 'Review response saved. See acceptance and findings.'),
     'compare': ('Comparing branch reports…', 'Branch report comparison', 'Branch report comparison ready.'),
 }
 
@@ -688,8 +688,11 @@ class Reporter(NullReporter):
                    '[WARN] Analysis may be incomplete. See available results and limitations below.' if result['status'] == 'PARTIAL' else
                    '[FAIL] Analysis failed.')
         lines = [meaning, 'Elapsed: ' + duration(elapsed)]
-        if not check_only and manifest.get('review_enabled', True) is False:
-            lines += ['Review is disabled by configuration; the report has not undergone a separate review.']
+        if not check_only:
+            from src.reports.review import review_summary
+            for entry in manifest.get('branches') or [manifest]:
+                source = ('Branch ' + s(entry['branch']) + ': ') if entry.get('branch') else ''
+                lines += [source + review_summary(entry, review_enabled=manifest.get('review_enabled', True))]
         if metrics:
             if not metrics['attempts']:
                 lines += ['No model calls were made.']
