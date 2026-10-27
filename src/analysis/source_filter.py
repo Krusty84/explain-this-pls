@@ -4,25 +4,26 @@
 """Explicit source-root exclusions; pattern rules belong in .gitignore."""
 import re
 from pathspec import GitIgnoreSpec
+from src.messages import message as ui_message
 
 
 def normalize_source_filter(value):
     if type(value) is not dict or set(value) - {'follow_gitignore', 'exclude_paths'}:
-        raise ValueError('source_filter must contain only follow_gitignore and exclude_paths.')
+        raise ValueError(ui_message('diagnostic.source_filter.source_filter_must_contain_only_follow_gitignore_and'))
     follow = value.get('follow_gitignore', False)
     paths = value.get('exclude_paths', [])
     if type(follow) is not bool:
-        raise ValueError('source_filter.follow_gitignore must be a JSON boolean.')
+        raise ValueError(ui_message('diagnostic.source_filter.source_filter_follow_gitignore_must_be_a_json'))
     if type(paths) is not list:
-        raise ValueError('source_filter.exclude_paths must be an array of relative paths.')
+        raise ValueError(ui_message('diagnostic.source_filter.source_filter_exclude_paths_must_be_an_array'))
     seen = set()
     for path in paths:
         if (type(path) is not str or not path.strip() or len(path) > 4096 or
                 re.search(r'[\x00-\x1f\x7f\\:*?\[\]]', path) or
                 any(part in ('', '.', '..') for part in path.split('/'))):
-            raise ValueError('source_filter.exclude_paths requires safe root-relative paths without glob patterns.')
+            raise ValueError(ui_message('diagnostic.source_filter.source_filter_exclude_paths_requires_safe_root_relative'))
         if path in seen:
-            raise ValueError('Duplicate source_filter.exclude_paths entry.')
+            raise ValueError(ui_message('diagnostic.source_filter.duplicate_source_filter_exclude_paths_entry'))
         seen.add(path)
     return {'follow_gitignore': follow, 'exclude_paths': sorted(paths)}
 

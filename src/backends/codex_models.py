@@ -9,6 +9,7 @@ from pathlib import Path
 import signal
 import tempfile
 
+from src.messages import message as ui_message
 from src.contracts.contracts import ContractError, strict_json
 
 
@@ -32,7 +33,7 @@ async def _command(executable, arguments, directory):
 
 
 def _failure(stdout, stderr):
-    return (stderr.strip() or stdout.strip() or 'Codex returned no diagnostic.')[:1500]
+    return (stderr.strip() or stdout.strip() or ui_message('diagnostic.codex_models.no_diagnostic'))[:1500]
 
 
 async def catalog(executable, *, timeout=30):
@@ -41,25 +42,28 @@ async def catalog(executable, *, timeout=30):
             with tempfile.TemporaryDirectory(prefix='explain-models-') as directory:
                 code, stdout, stderr = await _command(executable, ['debug', 'models'], Path(directory).resolve())
     except TimeoutError:
-        raise ValueError(f'Codex model catalog exceeded its {timeout:g}-second time limit.') from None
+        raise ValueError(ui_message(
+            'diagnostic.codex_models.codex_model_catalog_exceeded_its_second_time_limit',
+            timeout=timeout,
+        )) from None
     if code:
-        raise ValueError('Cannot load the Codex model catalog: ' + _failure(stdout, stderr))
+        raise ValueError(ui_message('diagnostic.codex_models.cannot_load_the_codex_model_catalog', value=_failure(stdout, stderr)))
     try:
         value = strict_json(stdout)
     except ContractError:
-        raise ValueError('Codex returned an invalid model catalog JSON document.') from None
+        raise ValueError(ui_message('diagnostic.codex_models.codex_returned_an_invalid_model_catalog_json_document')) from None
     if not isinstance(value, dict) or not isinstance(value.get('models'), list):
-        raise ValueError('Codex model catalog must contain a models array.')
+        raise ValueError(ui_message('diagnostic.codex_models.codex_model_catalog_must_contain_a_models_array'))
     models, slugs = [], set()
     for item in value['models']:
         if not isinstance(item, dict) or not isinstance(item.get('slug'), str) or not item['slug'].strip():
-            raise ValueError('Codex model catalog contains an invalid model slug.')
+            raise ValueError(ui_message('diagnostic.codex_models.codex_model_catalog_contains_an_invalid_model_slug'))
         row = {key: item.get(key, default) for key, default in
                (('slug', None), ('display_name', item['slug']), ('visibility', 'unknown'), ('supported_in_api', None))}
         if (not isinstance(row['display_name'], str) or not isinstance(row['visibility'], str) or
                 row['supported_in_api'] is not None and type(row['supported_in_api']) is not bool or
                 row['slug'] in slugs):
-            raise ValueError('Codex model catalog contains invalid or duplicate model metadata.')
+            raise ValueError(ui_message('diagnostic.codex_models.codex_model_catalog_contains_invalid_or_duplicate_model'))
         slugs.add(row['slug'])
         models.append(row)
     return [model for model in models if model['visibility'] != 'hide']
@@ -73,13 +77,16 @@ async def check_model(executable, model, *, timeout=60):
                 directory = Path(directory).resolve()
                 code, stdout, stderr = await _command(executable, ['login', 'status'], directory)
                 if code or 'logged in using chatgpt' not in (stdout + '\n' + stderr).casefold():
-                    return dict(result, message='Sign in with ChatGPT using codex login, then check this model again.')
+                    return dict(result, message=ui_message('diagnostic.codex_models.sign_in_with_chatgpt_using_codex_login_then'))
                 code, stdout, stderr = await _command(executable, [
                     'exec', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check',
                     '--model', model, '--json', '--color', 'never', '-c', 'approval_policy="never"',
                     'Ответь только OK. Не используй инструменты.'], directory)
     except TimeoutError:
-        return dict(result, message=f'The model check exceeded its {timeout:g}-second time limit.')
+        return dict(result, message=ui_message(
+            'diagnostic.codex_models.the_model_check_exceeded_its_second_time_limit',
+            timeout=timeout,
+        ))
     except OSError as exc:
         return dict(result, message=str(exc))
     events, malformed = [], False
@@ -97,12 +104,16 @@ async def check_model(executable, model, *, timeout=60):
     errors = [event for event in events if event.get('type') in ('error', 'turn.failed')]
     if code or errors:
         if 'is not supported when using codex with a chatgpt account' in (stdout + '\n' + stderr).casefold():
-            return {'status': 'unavailable', 'message': 'This model is not supported with your Codex CLI and ChatGPT account.'}
-        return dict(result, message='The model check failed: ' + _failure(stdout, stderr))
+            return {'status': 'unavailable', 'message': ui_message(
+                'diagnostic.codex_models.this_model_is_not_supported_with_your_codex',
+            )}
+        return dict(result, message=ui_message('diagnostic.codex_models.the_model_check_failed', value=_failure(stdout, stderr)))
     replies = [event.get('item', {}).get('text') for event in events
                if event.get('type') == 'item.completed' and isinstance(event.get('item'), dict)
                and event['item'].get('type') == 'agent_message']
     if (not malformed and any(event.get('type') == 'turn.completed' for event in events)
             and any(isinstance(reply, str) and reply.strip() for reply in replies)):
-        return {'status': 'available', 'message': 'The model returned a completed response using ChatGPT.'}
-    return dict(result, message='Codex did not return a completed, nonempty model response.')
+        return {'status': 'available', 'message': ui_message(
+            'diagnostic.codex_models.the_model_returned_a_completed_response_using_chatgpt',
+        )}
+    return dict(result, message=ui_message('diagnostic.codex_models.codex_did_not_return_a_completed_nonempty_model'))

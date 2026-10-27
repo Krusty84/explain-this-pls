@@ -40,6 +40,10 @@ class InstallerTests(unittest.TestCase):
     def test_real_install_and_rerun_work_from_another_directory_offline(self):
         script = self.root / 'install-explain.py'
         shutil.copyfile(ROOT / 'install-explain.py', script)
+        package = self.root / 'src'
+        package.mkdir()
+        for name in ('__init__.py', 'messages.py'):
+            shutil.copyfile(ROOT / 'src' / name, package / name)
         env = os.environ | {'PIP_NO_INDEX': '1', 'PIP_DISABLE_PIP_VERSION_CHECK': '1',
                             'PIP_CONFIG_FILE': os.devnull}
         command = [sys.executable, '-B', str(script)]
@@ -100,6 +104,14 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(self.install(), 130)
         self.assertIn('Installation interrupted', self.stderr.getvalue())
         self.assertNotIn('Installation complete', self.stdout.getvalue())
+
+    def test_child_python_check_receives_its_message_as_an_argument(self):
+        with patch.object(installer.subprocess, 'run') as run:
+            self.assertEqual(self.install(), 0)
+        command = run.call_args_list[1].args[0]
+        self.assertIn('sys.exit(sys.argv[1])', command[2])
+        self.assertEqual(command[3],
+                         'The existing .venv needs Python 3.11+. Move it aside and rerun the installer.')
 
 
 if __name__ == '__main__':

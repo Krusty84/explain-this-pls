@@ -13,6 +13,7 @@ from pathlib import Path
 import stat
 import uuid
 
+from src.messages import message as ui_message
 from src.analysis.evidence import (PointerError, SourceChanged, _read_confined, canonical,
                                    lines, open_source_directory, sha, source_catalog, valid_path)
 from src.analysis.source_decoding import SourceDecodeError, decode_source, normalize_source_decoding
@@ -45,7 +46,7 @@ def prepare_manifest(context, index, packed_index, map_files, *, attempt_id, exp
                      relative.startswith(source['root'] + '/')), key=lambda source: len(source['root']))
         if (not valid_path(relative) or relative not in entries or relative in seen or
                 owner['id'] != file['source_id']):
-            raise ValueError('MCP index does not match the pinned inventory.')
+            raise ValueError(ui_message('diagnostic.service.mcp_index_does_not_match_the_pinned_inventory'))
         seen.add(relative)
         record = {key: copy.deepcopy(value) for key, value in file.items() if key != 'symbols'}
         record.update(relative=relative, sha256=entries[relative]['sha256'],
@@ -53,10 +54,10 @@ def prepare_manifest(context, index, packed_index, map_files, *, attempt_id, exp
         name = references[(file['source_id'], file['path'])]
         record['map'] = copy.deepcopy(map_files[name]) if name else None
         if bool(name) != bool(file['symbols']):
-            raise ValueError('MCP symbol map reference is missing.')
+            raise ValueError(ui_message('diagnostic.service.mcp_symbol_map_reference_is_missing'))
         files.append(record)
     if seen != set(entries):
-        raise ValueError('MCP index is incomplete.')
+        raise ValueError(ui_message('diagnostic.service.mcp_index_is_incomplete'))
     return dict(attempt_id=attempt_id, source_root=context.get('source_directory', context.get('repository')),
                 inventory=inventory, catalog=catalog, source_decoding=normalize_source_decoding(context.get('source_decoding')),
                 expected_metadata=expected_metadata, files=files,
@@ -67,7 +68,7 @@ class SourceService:
     def __init__(self, manifest_path, expected_sha256, *, max_response_bytes=MAX_RESPONSE_BYTES):
         self.manifest_path = Path(manifest_path)
         if not self.manifest_path.is_absolute() or '..' in self.manifest_path.parts:
-            raise ValueError('MCP manifest path must be absolute.')
+            raise ValueError(ui_message('diagnostic.service.mcp_manifest_path_must_be_absolute'))
         self.manifest_sha256 = expected_sha256
         self.max_response_bytes = max_response_bytes
         self.receipts_path = self.manifest_path.parent / 'served.jsonl'
@@ -77,9 +78,9 @@ class SourceService:
         self.root = self.manifest['source_root']
         source_root, attempt_root = Path(self.root), self.manifest_path.parent.parent
         if not source_root.is_absolute() or '..' in source_root.parts:
-            raise ValueError('MCP source root must be absolute.')
+            raise ValueError(ui_message('diagnostic.service.mcp_source_root_must_be_absolute'))
         if source_root == attempt_root or source_root in attempt_root.parents or attempt_root in source_root.parents:
-            raise ValueError('MCP private attempt and source directory must be disjoint.')
+            raise ValueError(ui_message('diagnostic.service.mcp_private_attempt_and_source_directory_must_be'))
         self.catalog = {source['id']: source for source in self.manifest['catalog']}
         self.metadata = self.manifest['expected_metadata']
         if self.metadata is not None:
@@ -87,7 +88,7 @@ class SourceService:
         self.decoding = normalize_source_decoding(self.manifest['source_decoding'])
         inventory = self.manifest['inventory']
         if sha(canonical([inventory, self.manifest['catalog'], self.decoding])) != self.manifest['snapshot_sha256']:
-            raise ValueError('MCP source snapshot identity is invalid.')
+            raise ValueError(ui_message('diagnostic.service.mcp_source_snapshot_identity_is_invalid'))
         entries = {entry['path']: entry for entry in inventory['entries'] if entry['type'] == 'file'}
         self.files, self.symbols = {}, []
         for file in self.manifest['files']:
@@ -99,42 +100,42 @@ class SourceService:
             if (not valid_path(relative) or relative != expected_relative or
                     max(owners, key=lambda source: len(source['root']))['id'] != file['source_id'] or
                     relative not in entries or file['sha256'] != entries[relative]['sha256']):
-                raise ValueError('MCP file identity does not match the inventory.')
+                raise ValueError(ui_message('diagnostic.service.mcp_file_identity_does_not_match_the_inventory'))
             key = file['source_id'], file['path']
             if key in self.files:
-                raise ValueError('Duplicate MCP source file.')
+                raise ValueError(ui_message('diagnostic.service.duplicate_mcp_source_file'))
             self.files[key] = file
             symbols = []
             if file['map'] is not None:
                 descriptor = file['map']
                 map_path = Path(descriptor['path'])
                 if self.manifest_path.parent.parent not in map_path.parents:
-                    raise ValueError('MCP symbol map is outside the private attempt.')
+                    raise ValueError(ui_message('diagnostic.service.mcp_symbol_map_is_outside_the_private_attempt'))
                 saved = self._artifact(map_path, descriptor['sha256'], descriptor['bytes'])
                 if (saved['source_id'], saved['path']) != key:
-                    raise ValueError('MCP symbol map belongs to a different source file.')
+                    raise ValueError(ui_message('diagnostic.service.mcp_symbol_map_belongs_to_a_different_source'))
                 for row in saved['symbols']:
                     symbol = dict(zip(saved['symbol_columns'], row, strict=True))
                     for column, table in saved['symbol_value_tables'].items():
                         symbol[column] = table[symbol[column]]
                     symbols.append(symbol)
             if len(symbols) != file['symbol_count'] or sha(canonical(symbols)) != file['symbols_sha256']:
-                raise ValueError('MCP symbol map differs from the prepared declarations.')
+                raise ValueError(ui_message('diagnostic.service.mcp_symbol_map_differs_from_the_prepared_declarations'))
             self.symbols.extend(dict(source_id=key[0], path=key[1], **symbol, map_status=file['map_status'])
                                 for symbol in symbols)
         if {file['relative'] for file in self.files.values()} != set(entries):
-            raise ValueError('MCP files do not match the pinned inventory.')
+            raise ValueError(ui_message('diagnostic.service.mcp_files_do_not_match_the_pinned_inventory'))
         self.symbols.sort(key=lambda symbol: (symbol['source_id'], symbol['path'], symbol['start_line'],
                                              symbol['end_line'], symbol['name'], symbol['kind'], symbol['parent'] or ''))
 
     def _artifact(self, path, expected_sha256, size=None):
         if not path.is_absolute() or '..' in path.parts:
-            raise ValueError('MCP artifact path must be absolute.')
+            raise ValueError(ui_message('diagnostic.service.mcp_artifact_path_must_be_absolute'))
         blob, identity = _read_confined(str(path.parent), path.name, size)
         if any(stat.S_IMODE(component[2]) & 0o077 for component in identity[-2:]):
-            raise ValueError('MCP artifact and parent directory must be private.')
+            raise ValueError(ui_message('diagnostic.service.mcp_artifact_and_parent_directory_must_be_private'))
         if sha(blob) != expected_sha256 or size is not None and len(blob) != size:
-            raise ValueError('MCP private artifact integrity check failed.')
+            raise ValueError(ui_message('diagnostic.service.mcp_private_artifact_integrity_check_failed'))
         self.artifacts.append((str(path.parent), path.name, identity))
         return json.loads(blob)
 
@@ -154,7 +155,7 @@ class SourceService:
             with os.fdopen(fd, 'ab') as stream:
                 info = os.fstat(stream.fileno())
                 if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) & 0o077:
-                    raise ValueError('MCP receipt file must be private and must not be linked.')
+                    raise ValueError(ui_message('diagnostic.service.mcp_receipt_file_must_be_private_and_must'))
                 stream.write(canonical(record) + b'\n')
         finally:
             os.close(parent)
@@ -171,20 +172,28 @@ class SourceService:
             else:
                 raise PointerError('UNKNOWN_TOOL')
         except SourceChanged:
-            result = {'error': {'code': 'SOURCE_CHANGED', 'message': 'Pinned source or private artifact changed.'}}
+            result = {'error': {'code': 'SOURCE_CHANGED', 'message': ui_message(
+                'diagnostic.service.pinned_source_or_private_artifact_changed',
+            )}}
         except SourceDecodeError as exc:
-            result = {'error': {'code': str(exc), 'message': 'Source decoding failed.', 'encoding': exc.encoding}}
+            result = {'error': {'code': str(exc), 'message': ui_message(
+                'diagnostic.service.source_decoding_failed',
+            ), 'encoding': exc.encoding}}
         except PointerError as exc:
-            result = {'error': {'code': str(exc), 'message': 'Source tool request cannot be served.'}}
+            result = {'error': {'code': str(exc), 'message': ui_message('diagnostic.service.source_tool_request_cannot_be_served')}}
         except (TypeError, ValueError):
-            result = {'error': {'code': 'INVALID_ARGUMENT', 'message': 'Invalid source tool arguments.'}}
+            result = {'error': {'code': 'INVALID_ARGUMENT', 'message': ui_message(
+                'diagnostic.service.invalid_source_tool_arguments',
+            )}}
         except OSError as exc:
             code = ('UNSAFE_PATH' if exc.errno in (errno.ELOOP, errno.ENOTDIR) else
                     'NOT_FOUND' if exc.errno == errno.ENOENT else 'READ_ERROR')
-            result = {'error': {'code': code, 'message': 'Source read failed.'}}
+            result = {'error': {'code': code, 'message': ui_message('diagnostic.service.source_read_failed')}}
         result['_meta'] = meta
         if len(canonical(result)) > self.max_response_bytes:
-            result = {'error': {'code': 'RESPONSE_TOO_LARGE', 'message': 'One result exceeds the response limit.'}, '_meta': meta}
+            result = {'error': {'code': 'RESPONSE_TOO_LARGE', 'message': ui_message(
+                'diagnostic.service.one_result_exceeds_the_response_limit',
+            )}, '_meta': meta}
         self._receipt(dict(state='SERVED', inspection='INSPECTED_UNVERIFIED',
                       attempt_id=self.attempt_id, request_id=meta['request_id'], tool=name,
                       arguments=arguments, result_sha256=sha(canonical(result)),
@@ -251,7 +260,7 @@ class SourceService:
             raise PointerError('NOT_IN_INVENTORY')
         blob, _ = _read_confined(self.root, file['relative'], pinned=self.metadata)
         if sha(blob) != file['sha256']:
-            raise SourceChanged('Original source bytes differ from the pinned hash.')
+            raise SourceChanged(ui_message('diagnostic.service.original_source_bytes_differ_from_the_pinned_hash'))
         text, encoding = decode_source(blob, file['relative'], self.decoding)
         if '\x00' in text:
             raise PointerError('BINARY_CONTENT')

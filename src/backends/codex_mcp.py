@@ -18,6 +18,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.dont_write_bytecode = True
 
+from src.messages import message as ui_message
 from src.backends.codex import MCP_SERVER_NAME, _mcp_overrides
 from src.backends.codex_catalog import sanitize_catalog
 from src.analysis.evidence import read_confined
@@ -82,19 +83,19 @@ def app_command(args, disabled_servers=(), disabled_plugins=(), disabled_apps=()
                               ('plugins', disabled_plugins, '@'), ('apps', disabled_apps, '@')):
         for name in names:
             if not name or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' + extra for char in name):
-                raise failure('Codex cannot safely override an inherited ' + key + ' name.')
+                raise failure(ui_message('diagnostic.codex_mcp.codex_cannot_safely_override_an_inherited_name', value=key))
             command += ['-c', key + '.' + name + '.enabled=false']
     return command
 
 
 def check_config(config, args):
     if not isinstance(config, dict):
-        raise failure('Codex did not return its effective configuration.')
+        raise failure(ui_message('diagnostic.codex_mcp.codex_did_not_return_its_effective_configuration'))
     features = config.get('features', {})
     if not isinstance(features, dict) or any(features.get(key) is not False for key in DISABLED_FEATURES):
-        raise failure('Codex did not disable every required native tool feature.')
+        raise failure(ui_message('diagnostic.codex_mcp.codex_did_not_disable_every_required_native_tool'))
     if features.get('skip_host_skill_discovery') is not True:
-        raise failure('Codex cannot exclude host skill discovery.')
+        raise failure(ui_message('diagnostic.codex_mcp.codex_cannot_exclude_host_skill_discovery'))
     hooks = config.get('hooks')
     if isinstance(hooks, dict):
         # Persisted trust decisions are metadata, not executable hook handlers.
@@ -103,33 +104,33 @@ def check_config(config, args):
         if not isinstance(state, dict) or any(not isinstance(entry, dict) or any(
                 key not in state_types or type(value) is not state_types[key]
                 for key, value in entry.items()) for entry in state.values()):
-            raise failure('Codex returned unsupported hook trust state.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_returned_unsupported_hook_trust_state'))
         hooks = {key: value for key, value in hooks.items() if key != 'state'}
     if config.get('notify') not in (None, []) or not empty_settings(hooks):
-        raise failure('Codex retains notification commands or hooks.')
+        raise failure(ui_message('diagnostic.codex_mcp.codex_retains_notification_commands_or_hooks'))
     for key in ('apps', 'plugins'):
         entries = config.get(key)
         if entries is not None and (not isinstance(entries, dict) or any(
                 entry is not None and (not isinstance(entry, dict) or entry.get('enabled') is not False)
                 for entry in entries.values())):
-            raise failure('Codex retains enabled app or plugin configuration.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_retains_enabled_app_or_plugin_configuration'))
     if not isinstance(config.get('agents'), dict) or config['agents'].get('enabled') is not False:
-        raise failure('Codex retains native agent delegation.')
+        raise failure(ui_message('diagnostic.codex_mcp.codex_retains_native_agent_delegation'))
     if config.get('web_search') != 'disabled' or config.get('project_doc_max_bytes') != 0:
-        raise failure('Codex retains web search or project instruction discovery.')
+        raise failure(ui_message('diagnostic.codex_mcp.codex_retains_web_search_or_project_instruction_discovery'))
     skills = config.get('skills', {})
     if (not isinstance(skills, dict) or not isinstance(skills.get('bundled'), dict)
             or skills['bundled'].get('enabled') is not False or skills.get('include_instructions') is not False):
-        raise failure('Codex retains automatic skill instructions.')
+        raise failure(ui_message('diagnostic.codex_mcp.codex_retains_automatic_skill_instructions'))
     if any(config.get(key) for key in ('model_instructions_file', 'experimental_instructions_file',
                                       'experimental_compact_prompt_file', 'compact_prompt',
                                       'developer_instructions', 'instructions')):
-        raise failure('Codex retains external instructions outside the MCP prompt.')
+        raise failure(ui_message('diagnostic.codex_mcp.codex_retains_external_instructions_outside_the_mcp_prompt'))
     if config.get('model_provider') != ('explain_probe' if args.probe else 'openai'):
-        raise failure('Codex did not select the required model provider.')
+        raise failure(ui_message('diagnostic.codex_mcp.codex_did_not_select_the_required_model_provider'))
     providers = config.get('model_providers', {})
     if not isinstance(providers, dict) or set(providers) != ({'explain_probe'} if args.probe else set()):
-        raise failure('Codex retains inherited model provider configuration.')
+        raise failure(ui_message('diagnostic.codex_mcp.codex_retains_inherited_model_provider_configuration'))
     if args.probe:
         provider = providers['explain_probe']
         if (provider.get('base_url') != 'file:///unavailable' or provider.get('requires_openai_auth') is not False
@@ -137,13 +138,13 @@ def check_config(config, args):
                 or any(provider.get(key) for key in ('auth', 'env_key', 'experimental_bearer_token',
                                                      'gateway_oauth', 'aws', 'model_catalog_url',
                                                      'http_headers', 'env_http_headers', 'query_params'))):
-            raise failure('Codex retained authentication or network settings for the offline probe.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_retained_authentication_or_network_settings_for_the'))
     servers = config.get('mcp_servers', {})
     expected = {MCP_SERVER_NAME} if args.manifest else set()
     if (not isinstance(servers, dict)
             or {name for name, server in servers.items()
                 if not isinstance(server, dict) or server.get('enabled') is not False} != expected):
-        raise failure('Codex retains an unexpected MCP server.')
+        raise failure(ui_message('diagnostic.codex_mcp.codex_retains_an_unexpected_mcp_server'))
     if args.manifest:
         server = servers[MCP_SERVER_NAME]
         overrides = _mcp_overrides(args.manifest, args.sha256)
@@ -155,7 +156,7 @@ def check_config(config, args):
                 or server.get('cwd') != str(args.manifest.parent)
                 or server.get('startup_timeout_sec') != 30 or server.get('tool_timeout_sec') != 30
                 or server.get('enabled_tools') != ['search_symbols', 'read_source']):
-            raise failure('Codex changed the required private source MCP configuration.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_changed_the_required_private_source_mcp_configuration'))
         allowed = {'command', 'args', 'cwd', 'env', 'env_vars', 'environment_id', 'enabled', 'required',
                    'startup_timeout_sec', 'tool_timeout_sec', 'enabled_tools', 'tools'}
         if (any(key not in allowed and value is not None for key, value in server.items())
@@ -163,7 +164,7 @@ def check_config(config, args):
                 or server.get('environment_id') not in (None, 'local')
                 or server.get('tools') != {name: {'output_token_limit': 1000000, 'approval_mode': 'approve'}
                                            for name in ('read_source', 'search_symbols')}):
-            raise failure('Codex retained unsafe source MCP environment, transport, or output settings.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_retained_unsafe_source_mcp_environment_transport_or'))
 
 
 class Connection:
@@ -179,19 +180,21 @@ class Connection:
     def receive(self):
         raw = self.child.stdout.readline()
         if not raw:
-            raise failure('Codex app-server closed its stdio connection.',
+            raise failure(ui_message('diagnostic.codex_mcp.codex_app_server_closed_its_stdio_connection'),
                           'MCP_STARTUP' if self.args.manifest and not self.done else 'MCP_COMPATIBILITY')
         try:
             value = strict_json(raw.decode('utf-8'))
         except (ContractError, UnicodeDecodeError) as error:
-            raise failure('Codex app-server returned invalid protocol JSON.') from error
+            raise failure(ui_message('diagnostic.codex_mcp.codex_app_server_returned_invalid_protocol_json')) from error
         if not isinstance(value, dict):
-            raise failure('Codex app-server returned an invalid protocol message.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_app_server_returned_an_invalid_protocol_message'))
         if 'method' in value:
             if 'id' in value:
                 self.send({'jsonrpc': '2.0', 'id': value['id'],
-                           'error': {'code': -32601, 'message': 'Interactive server requests are disabled.'}})
-                raise failure('Codex requested an interactive operation outside the MCP source tools.')
+                           'error': {'code': -32601, 'message': ui_message(
+                               'diagnostic.codex_mcp.interactive_server_requests_are_disabled',
+                           )}})
+                raise failure(ui_message('diagnostic.codex_mcp.codex_requested_an_interactive_operation_outside_the_mcp'))
             self.notification(value['method'], value.get('params', {}))
         return value
 
@@ -206,19 +209,22 @@ class Connection:
                 message = error.get('message', '') if isinstance(error, dict) else ''
                 if (method == 'thread/start' and self.args.manifest and isinstance(message, str)
                         and 'required mcp' in message.casefold() and MCP_SERVER_NAME in message.casefold()):
-                    raise failure('Required MCP server explain_this_pls failed to start.', 'MCP_STARTUP')
+                    raise failure(ui_message('diagnostic.codex_mcp.required_mcp_server_explain_this_pls_failed_to'), 'MCP_STARTUP')
                 if value.get('error') is not None or not isinstance(value.get('result'), dict):
-                    raise failure('Codex rejected the required app-server operation: ' + method + '.')
+                    raise failure(ui_message(
+                        'diagnostic.codex_mcp.codex_rejected_the_required_app_server_operation',
+                        method=method,
+                    ))
                 return value['result']
 
     def notification(self, method, params):
         if not isinstance(params, dict):
-            raise failure('Codex app-server returned invalid notification parameters.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_app_server_returned_invalid_notification_parameters'))
         if method == 'mcpServer/startupStatus/updated':
             if params.get('name') != MCP_SERVER_NAME or not self.args.manifest:
-                raise failure('Codex started an unexpected MCP server.')
+                raise failure(ui_message('diagnostic.codex_mcp.codex_started_an_unexpected_mcp_server'))
             if params.get('status') == 'failed':
-                raise failure('Required MCP server explain_this_pls failed to start.', 'MCP_STARTUP')
+                raise failure(ui_message('diagnostic.codex_mcp.required_mcp_server_explain_this_pls_failed_to'), 'MCP_STARTUP')
         elif method in ('item/started', 'item/completed'):
             self.item(method, params.get('item', {}))
         elif method == 'turn/started':
@@ -232,16 +238,19 @@ class Connection:
             self.turn_status = params.get('turn', {}).get('status')
             self.done = True
         elif method == 'error' and not params.get('willRetry'):
-            print('Codex app-server: ' + str(params.get('error', {}).get('message', 'Turn failed.')), file=sys.stderr)
+            print(ui_message(
+                'diagnostic.codex_mcp.server_error',
+                error=str(params.get('error', {}).get('message', ui_message('diagnostic.codex_mcp.turn_failed'))),
+            ), file=sys.stderr)
 
     def item(self, method, item):
         if not isinstance(item, dict):
-            raise failure('Codex returned an invalid turn item.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_returned_an_invalid_turn_item'))
         kind = item.get('type')
         if kind == 'mcpToolCall':
             if (not self.args.manifest or item.get('server') != MCP_SERVER_NAME
                     or item.get('tool') not in ('search_symbols', 'read_source')):
-                raise failure('Codex called a tool outside the private source MCP server.')
+                raise failure(ui_message('diagnostic.codex_mcp.codex_called_a_tool_outside_the_private_source'))
             normalized = {key: item.get(key) for key in ('id', 'server', 'tool', 'arguments', 'result', 'error', 'status')}
             normalized['type'] = 'mcp_tool_call'
         elif kind == 'agentMessage':
@@ -251,7 +260,7 @@ class Connection:
         elif kind in ('userMessage', 'reasoning', 'plan', 'contextCompaction'):
             return
         else:
-            raise failure('Codex exposed an unexpected native turn item: ' + str(kind) + '.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_exposed_an_unexpected_native_turn_item', kind=str(kind)))
         emit({'type': method.replace('/', '.'), 'item': normalized})
 
 
@@ -269,29 +278,29 @@ def stop(child):
 
 def bootstrap_instructions(values, args):
     if not isinstance(values, list):
-        raise failure('Codex did not identify its bootstrap instruction sources.')
+        raise failure(ui_message('diagnostic.codex_mcp.codex_did_not_identify_its_bootstrap_instruction_sources'))
     configured_home = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex')
     home = configured_home.resolve()
     allowed = {home / 'AGENTS.md', home / 'AGENTS.override.md'}
     paths = []
     for value in values:
         if not isinstance(value, str):
-            raise failure('Codex returned an invalid bootstrap instruction path.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_returned_an_invalid_bootstrap_instruction_path'))
         path = Path(value)
         if path.is_absolute() and path.parent == configured_home:
             path = home / path.name
         if not path.is_absolute() or path not in allowed or any(part.is_symlink() for part in (path, *path.parents)):
-            raise failure('Codex loaded project instructions outside the permitted home configuration.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_loaded_project_instructions_outside_the_permitted_home'))
         if not stat.S_ISREG(path.stat(follow_symlinks=False).st_mode):
-            raise failure('Codex bootstrap instructions are not regular home configuration files.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_bootstrap_instructions_are_not_regular_home_configuration'))
         paths.append(str(path))
     if paths and args.manifest:
         content = read_confined(args.manifest.parent, args.manifest.name)
         if hashlib.sha256(content).hexdigest() != args.sha256:
-            raise failure('The private MCP manifest changed before thread creation.', 'MCP_STARTUP')
+            raise failure(ui_message('diagnostic.codex_mcp.the_private_mcp_manifest_changed_before_thread_creation'), 'MCP_STARTUP')
         source_root = Path(strict_json(content.decode('utf-8'))['source_root'])
         if any(path == source_root or source_root in path.parents for path in map(Path, paths)):
-            raise failure('Codex home instructions overlap the pinned source directory.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_home_instructions_overlap_the_pinned_source_directory'))
     return paths
 
 
@@ -299,7 +308,7 @@ def run(args, prompt):
     schema = strict_json(args.schema.read_text(encoding='utf-8'))
     catalog = strict_json(args.catalog.read_text(encoding='utf-8'))
     if sanitize_catalog(catalog) != catalog:
-        raise failure('MCP requires the pinned catalog with native model tools disabled.')
+        raise failure(ui_message('diagnostic.codex_mcp.mcp_requires_the_pinned_catalog_with_native_model'))
     child = None
     try:
         disabled_servers, disabled_plugins, disabled_apps = [], [], []
@@ -313,7 +322,7 @@ def run(args, prompt):
             config = connection.request('config/read', {'includeLayers': False, 'cwd': str(Path.cwd())}).get('config')
             servers = config.get('mcp_servers') if isinstance(config, dict) else None
             if not isinstance(servers, dict):
-                raise failure('Codex did not return its effective MCP server configuration.')
+                raise failure(ui_message('diagnostic.codex_mcp.codex_did_not_return_its_effective_mcp_server'))
             foreign = sorted(name for name, server in servers.items()
                              if (name != MCP_SERVER_NAME or not args.manifest)
                              and (not isinstance(server, dict) or server.get('enabled') is not False))
@@ -321,13 +330,13 @@ def run(args, prompt):
             for key in ('plugins', 'apps'):
                 entries = config.get(key) or {}
                 if not isinstance(entries, dict):
-                    raise failure('Codex returned invalid inherited ' + key + ' settings.')
+                    raise failure(ui_message('diagnostic.codex_mcp.codex_returned_invalid_inherited_settings', value=key))
                 extras.append(sorted(name for name, entry in entries.items()
                                      if entry is not None and (not isinstance(entry, dict) or entry.get('enabled') is not False)))
             if not foreign and not any(extras):
                 break
             if attempt:
-                raise failure('Codex cannot disable inherited tools before thread creation.')
+                raise failure(ui_message('diagnostic.codex_mcp.codex_cannot_disable_inherited_tools_before_thread_creation'))
             disabled_servers, (disabled_plugins, disabled_apps) = foreign, extras
             stop(child)
             child = None
@@ -341,10 +350,10 @@ def run(args, prompt):
         if (thread.get('environments') != [] or result.get('runtimeWorkspaceRoots') != []
                 or thread.get('ephemeral') is not True
                 or result.get('approvalPolicy') != 'never'):
-            raise failure('Codex did not create an isolated thread without a source environment.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_did_not_create_an_isolated_thread_without'))
         bootstrap = bootstrap_instructions(result.get('instructionSources'), args)
         if result.get('model') not in {model['slug'] for model in catalog['models']}:
-            raise failure('Codex selected a model outside the pinned catalog.')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_selected_a_model_outside_the_pinned_catalog'))
         emit({'type': 'thread.started', 'thread_id': thread['id'], 'bootstrap_instruction_sources': bootstrap})
         turn = {'threadId': thread['id'], 'environments': [],
                 'input': [{'type': 'text', 'text': prompt}], 'outputSchema': schema}
@@ -354,9 +363,9 @@ def run(args, prompt):
         while not connection.done:
             connection.receive()
         if connection.turn_status != 'completed':
-            raise failure('Codex did not complete the MCP analysis turn.', 'CLI_FAILED')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_did_not_complete_the_mcp_analysis_turn'), 'CLI_FAILED')
         if not isinstance(connection.last_message, str) or not connection.last_message.strip():
-            raise failure('Codex completed without a final response.', 'CLI_FAILED')
+            raise failure(ui_message('diagnostic.codex_mcp.codex_completed_without_a_final_response'), 'CLI_FAILED')
         final_path = args.output_last_message or args.schema.with_name('final.response.json')
         descriptor, temporary = tempfile.mkstemp(prefix='.final-response-', dir=final_path.parent)
         try:
@@ -389,11 +398,11 @@ def main():
                 or (args.manifest is not None and not args.manifest.is_absolute())
                 or (args.output_last_message is not None and not args.output_last_message.is_absolute())
                 or bool(args.manifest) != bool(args.sha256)):
-            raise failure('MCP transport requires absolute private artifact paths and a manifest hash.')
+            raise failure(ui_message('diagnostic.codex_mcp.mcp_transport_requires_absolute_private_artifact_paths_and'))
         run(args, sys.stdin.read())
     except (AuditError, OSError, ContractError, UnicodeError) as error:
         code = error.code if isinstance(error, AuditError) else 'MCP_COMPATIBILITY'
-        message = str(error) if isinstance(error, AuditError) else 'Codex MCP transport could not read its private artifacts or start.'
+        message = str(error) if isinstance(error, AuditError) else ui_message('diagnostic.codex_mcp.transport_failed')
         print(code + ': ' + message, file=sys.stderr, flush=True)
         emit({'type': 'error', 'code': code, 'message': message, 'native_fallback': False})
         emit({'type': 'turn.failed', 'error': {'message': message}})

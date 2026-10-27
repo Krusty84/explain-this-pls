@@ -5,6 +5,7 @@
 import copy
 import json
 from pathlib import Path
+from src.messages import message as ui_message
 
 CONTEXT_FORMAT = 'compact-context'
 
@@ -108,7 +109,7 @@ def _source_index(index):
 def on_demand_source_index(index, maps_root):
     """Return a complete file index and independent symbol maps without source I/O."""
     if not Path(maps_root).is_absolute():
-        raise ValueError('maps_root must be an absolute path.')
+        raise ValueError(ui_message('diagnostic.model_context.maps_root_must_be_an_absolute_path'))
     packed = copy.deepcopy(index)
     _source_index(packed)
     files = []

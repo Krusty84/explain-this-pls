@@ -15,6 +15,7 @@ import os
 import signal
 import sys
 from pathlib import Path
+from src.messages import message as ui_message
 from src.contracts.contracts import ContractError
 from src.runtime.reporting import Reporter, output_mode
 from src.backends import codex_models
@@ -27,7 +28,7 @@ def run_models(args, reporter) -> int:
     old_handler = signal.getsignal(signal.SIGTERM)
 
     def interrupted(signum, frame):
-        raise KeyboardInterrupt(f'Received signal {signum}')
+        raise KeyboardInterrupt(ui_message('cli.received_signal', signum=signum))
 
     try:
         signal.signal(signal.SIGTERM, interrupted)
@@ -38,7 +39,7 @@ def run_models(args, reporter) -> int:
                 group = groups.setdefault(agent['executable'], {'executable': agent['executable'], 'stages': []})
                 group['stages'].append(stage)
         if not groups:
-            raise AuditError('The configuration has no active Codex agents.')
+            raise AuditError(ui_message('cli.the_configuration_has_no_active_codex_agents'))
 
         async def fetch():
             return [dict(group, models=await codex_models.catalog(group['executable']))
@@ -48,63 +49,71 @@ def run_models(args, reporter) -> int:
         if reporter.mode == 'json':
             reporter.stdout.write(json.dumps({'catalogs': catalogs}, ensure_ascii=False, indent=2) + '\n')
         else:
-            lines = ['Codex model catalogs. Account access has not been checked.']
+            lines = [ui_message('cli.codex_model_catalogs_account_access_has_not_been')]
             for group in catalogs:
-                lines += ['', reporter.display(group['executable']) + ' | Stages: ' + ', '.join(group['stages'])]
-                rows = [['Model', 'Name', 'Visibility', 'Supported in API']]
+                lines += ['', ui_message(
+                    'cli.stages',
+                    executable=reporter.display(group['executable']),
+                    value=', '.join(group['stages']),
+                )]
+                rows = [[ui_message('cli.model'), ui_message('cli.name'), ui_message('cli.visibility'), ui_message('cli.supported_in_api')]]
                 rows += [[reporter.display(model[key]) for key in ('slug', 'display_name', 'visibility')]
-                         + ['unknown' if model['supported_in_api'] is None else str(model['supported_in_api']).lower()]
+                         + [ui_message(
+                             'cli.unknown',
+                         ) if model['supported_in_api'] is None else str(model['supported_in_api']).lower()]
                          for model in group['models']]
                 widths = [max(len(row[index]) for row in rows) for index in range(4)]
                 lines += ['  '.join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip() for row in rows]
                 if not group['models']:
-                    lines.append('No models returned.')
+                    lines.append(ui_message('cli.no_models_returned'))
             reporter.stdout.write('\n'.join(lines) + '\n')
         return 0
     except KeyboardInterrupt:
-        reporter.stderr.write('Model catalog request interrupted.\n')
+        reporter.stderr.write(ui_message('cli.model_catalog_request_interrupted'))
         return 130
     except (OSError, ValueError, RuntimeError, ContractError) as exc:
-        reporter.stderr.write('Cannot list Codex models: ' + reporter.display(exc) + '\n')
+        reporter.stderr.write(ui_message('cli.cannot_list_codex_models', exc=reporter.display(exc)))
         return 1
     finally:
         signal.signal(signal.SIGTERM, old_handler)
         reporter.close()
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, epilog=
-        'In command-line mode, stdout contains one result. --help and argument syntax errors '
-        'use standard argparse output without a run or manifest. Console messages are in English; '
-        'output_language only controls generated reports. Labels and statuses are colored automatically '
-        'when their output stream is a terminal, unless NO_COLOR is nonempty or TERM=dumb. '
-        'JSON is never colored. Disable color with NO_COLOR=1.')
-    parser.add_argument('--config', type=Path, help='Path to a JSON or JSONC configuration; required outside the TUI.')
-    parser.add_argument('--tui', action='store_true', help='Open the interactive config picker and run dashboard (also the default without arguments).')
-    parser.add_argument('--check', action='store_true', help='Check configuration, source state, and CLI capabilities; no branch switch or model calls.')
-    parser.add_argument('--models', action='store_true', help='List Codex model catalogs for the configured active agents; no access probes or audit.')
-    parser.add_argument('--trust-repository', action='store_true', help='Trust only the configured Git checkout and verified submodules despite an ownership mismatch (Git >= 2.34.1).')
+    parser = argparse.ArgumentParser(description=ui_message('cli.description'), epilog=
+        ui_message('cli.in_command_line_mode_stdout_contains_one_result'))
+    parser.add_argument('--config', type=Path, help=ui_message('cli.path_to_a_json_or_jsonc_configuration_required'))
+    parser.add_argument('--tui', action='store_true', help=ui_message('cli.open_the_interactive_config_picker_and_dashboard_also'))
+    parser.add_argument('--check', action='store_true', help=ui_message(
+        'cli.check_configuration_source_state_and_cli_capabilities_no',
+    ))
+    parser.add_argument('--models', action='store_true', help=ui_message('cli.list_codex_model_catalogs_for_the_configured_active'))
+    parser.add_argument('--trust-repository', action='store_true', help=ui_message(
+        'cli.trust_only_the_configured_git_checkout_and_verified',
+    ))
     parser.add_argument('--output', choices=('auto', 'text', 'json'), default='auto',
-                        help='Result format on stdout: text is human-readable; auto selects text for a TTY, JSON otherwise (default: auto). Diagnostics use stderr.')
-    parser.add_argument('--verbose', action='store_true', help='Add technical event details to stderr; never print prompts, credentials or raw model output.')
-    parser.add_argument('--no-progress', action='store_true', help='Disable the spinner and periodic waiting messages; keep stage boundaries, warnings and errors.')
+                        help=ui_message('cli.result_format_on_stdout_text_is_human_readable'))
+    parser.add_argument('--verbose', action='store_true', help=ui_message('cli.add_technical_event_details_to_stderr_never_print'))
+    parser.add_argument('--no-progress', action='store_true', help=ui_message(
+        'cli.disable_the_spinner_and_periodic_waiting_messages_keep',
+    ))
     argv = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(argv)
     if args.models and (args.check or args.tui):
-        parser.error('--models cannot be combined with --check or --tui.')
+        parser.error(ui_message('cli.models_cannot_be_combined_with_check_or_tui'))
     if not argv or args.tui:
         if args.output != 'auto':
-            parser.error('--tui cannot be combined with --output text or --output json.')
+            parser.error(ui_message('cli.tui_cannot_be_combined_with_output_text_or'))
         if not sys.stdin.isatty() or not sys.stdout.isatty() or os.environ.get('TERM') == 'dumb':
-            parser.error('The TUI needs an interactive terminal. Use --config FILE for command-line output.')
+            parser.error(ui_message('cli.the_tui_needs_an_interactive_terminal_use_config'))
         try:
             from src.tui.app import launch
         except ModuleNotFoundError as exc:
             if exc.name not in ('textual', 'rich'):
                 raise
-            parser.error('Install the required TUI dependency with: python3 -m pip install -r ' + str(ROOT / 'requirements.txt'))
+            parser.error(ui_message('cli.install_the_required_tui_dependency_with_python_m', value=str(ROOT / 'requirements.txt')))
         return launch(args)
     if args.config is None:
-        parser.error('--config is required unless using --tui.')
+        parser.error(ui_message('cli.config_is_required_unless_using_tui'))
     reporter = Reporter(mode=output_mode(args.output, sys.stdout), verbose=args.verbose, progress=not args.no_progress)
     if args.models:
         return run_models(args, reporter)

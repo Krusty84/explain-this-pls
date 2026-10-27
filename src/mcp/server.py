@@ -15,6 +15,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.dont_write_bytecode = True
 
+from src.messages import message as ui_message
 from src.mcp.service import SERVER_NAME, SourceService
 
 
@@ -64,7 +65,7 @@ def main():
     parser.add_argument('--sha256', required=True)
     args = parser.parse_args()
     if importlib.metadata.version('mcp') != '1.26.0':
-        raise RuntimeError('MCP SDK 1.26.0 is required.')
+        raise RuntimeError(ui_message('diagnostic.server.mcp_sdk_is_required'))
     service = SourceService(args.manifest, args.sha256)
     import anyio
     anyio.run(run, service)

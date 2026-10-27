@@ -5,6 +5,7 @@
 from __future__ import annotations
 import tempfile
 from pathlib import Path
+from src.messages import message as ui_message
 from src.runtime.execution import Budget
 from src.backends import codex
 from src.backends.codex_catalog import load_catalog
@@ -29,7 +30,7 @@ def check_cli(session) -> dict:
         key = agent['backend'] + ':' + agent['executable']
         if key in result:
             if agent.get('expected_version') and agent['expected_version'] != result[key]['version']:
-                raise AuditError('Conflicting expected_version for the same executable.')
+                raise AuditError(ui_message('diagnostic.preflight.conflicting_expected_version_for_the_same_executable'))
             if not mcp_mode or profile_key(agent) in session.mcp_capabilities:
                 continue
         backend = agent['backend']
@@ -45,9 +46,13 @@ def check_cli(session) -> dict:
                 r = process_runtime.process(cmd, state, env, reporter=session.reporter,
                             context={'stage': 'preflight', 'backend': backend}, budget=Budget(30))
                 if r['returncode']:
-                    raise AuditError(f'{backend} failed its CLI check: exit code {r["returncode"]}.',
+                    raise AuditError(ui_message(
+                        'diagnostic.preflight.failed_its_cli_check_exit_code',
+                        backend=backend,
+                        returncode=r["returncode"],
+                    ),
                                      code='CLI_CHECK_FAILED',
-                                     hint='Check the configured executable and its --version / --help locally.')
+                                     hint=ui_message('diagnostic.preflight.check_the_configured_executable_and_its_version_help'))
                 # Startup warnings are not part of the version identity.
                 output = r['stdout']
                 if cmd[-1] == '--help':
@@ -57,19 +62,22 @@ def check_cli(session) -> dict:
                 texts.append(output.decode(errors='replace'))
             required = adapter.required_flags(session.mode, writer_only=key in writers, mcp_mode=mcp_mode)
             if any(flag not in texts[1] for flag in required):
-                raise AuditError(f'{backend} lacks required CLI options: {required}',
+                raise AuditError(ui_message('diagnostic.preflight.lacks_required_cli_options', backend=backend, required=required),
                                  code='MCP_COMPATIBILITY' if mcp_mode else 'BACKEND_INCOMPATIBLE',
                                  failure_kind='MCP_COMPATIBILITY' if mcp_mode else 'BACKEND_INCOMPATIBLE',
                                  failure_layer='compatibility')
             version = texts[0].strip()
             if agent.get('expected_version') and agent['expected_version'] != version:
-                raise AuditError(f'{backend} version differs from expected_version.', code='CLI_VERSION_MISMATCH')
+                raise AuditError(ui_message(
+                    'diagnostic.preflight.version_differs_from_expected_version',
+                    backend=backend,
+                ), code='CLI_VERSION_MISMATCH')
             if mcp_mode:
                 r = process_runtime.process([agent['executable'], 'features', 'list'], state, env,
                             reporter=session.reporter, context={'stage': 'preflight', 'backend': backend},
                             budget=Budget(30))
                 if r['returncode']:
-                    raise AuditError('Codex cannot report independent MCP and native tool capabilities.',
+                    raise AuditError(ui_message('diagnostic.preflight.codex_cannot_report_independent_mcp_and_native_tool'),
                                      code='MCP_COMPATIBILITY', failure_kind='MCP_COMPATIBILITY',
                                      failure_layer='compatibility')
                 adapter.check_mcp_compatibility(version, r['stdout'].decode(errors='replace'))
@@ -87,7 +95,7 @@ def check_cli(session) -> dict:
                                       process_fn=process_runtime.process, reporter=session.reporter,
                                       budget=Budget(60))
                 if proof['model'] not in {model['slug'] for model in catalog['models']}:
-                    raise AuditError('Codex selected a model outside its pinned catalog.',
+                    raise AuditError(ui_message('diagnostic.preflight.codex_selected_a_model_outside_its_pinned_catalog'),
                                      code='MCP_COMPATIBILITY', failure_layer='compatibility')
                 session.mcp_capabilities[profile_key(agent)] = {'catalog': catalog, 'proof': proof}
             result[key] = {'version': version, 'required_flags': required}
@@ -110,5 +118,5 @@ def command(session, stage: str, state: Path, agent: dict, schema_path: Path, en
                                      mcp_mode=getattr(session, 'cfg', {}).get('source_access', {}).get('mode') == 'mcp',
                                      mcp_manifest=mcp_manifest, mcp_manifest_sha256=mcp_manifest_sha256,
                                      mcp_catalog=mcp_catalog)
-    raise AuditError('No CLI adapter for this backend.',
+    raise AuditError(ui_message('diagnostic.preflight.no_cli_adapter_for_this_backend'),
                      code='BACKEND_INCOMPATIBLE')

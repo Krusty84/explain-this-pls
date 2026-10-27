@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 
+from src.messages import message as ui_message
 from src.analysis.evidence import canonical, sha
 from src.analysis.source_filter import excluded_root
 
@@ -27,13 +28,13 @@ def ignore_path(node):
     command = node.prefix + ['config', '--global', '--includes', '--path', '-z', '--get', 'core.excludesFile']
     result = subprocess.run(command, env=env, capture_output=True, timeout=30)
     if result.returncode not in (0, 1):
-        raise ValueError('Cannot read user Git ignore configuration.')
+        raise ValueError(ui_message('diagnostic.git_sources.cannot_read_user_git_ignore_configuration'))
     # Local configuration has precedence over global configuration.
     local_env = node.env | {k: env[k] for k in ('HOME', 'XDG_CONFIG_HOME') if k in env}
     local = subprocess.run(node.prefix + ['config', '--path', '-z', '--get', 'core.excludesFile'],
                            env=local_env, capture_output=True, timeout=30)
     if local.returncode not in (0, 1):
-        raise ValueError('Cannot read repository ignore configuration.')
+        raise ValueError(ui_message('diagnostic.git_sources.cannot_read_repository_ignore_configuration'))
     value = (local.stdout if local.returncode == 0 else result.stdout).removesuffix(b'\0')
     if value:
         path = Path(os.fsdecode(value)).expanduser()

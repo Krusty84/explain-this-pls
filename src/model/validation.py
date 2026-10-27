@@ -5,6 +5,7 @@
 from __future__ import annotations
 import contextlib
 from dataclasses import asdict
+from src.messages import message as ui_message
 from src.contracts.contracts import ContractError, validate_result, schema_diagnostics, result_diagnostics, validate_schema, document_contract
 from src.runtime.reporting import diagnostic
 from src.analysis.study_normalization import normalize_evidence, normalization_provenance
@@ -55,7 +56,9 @@ class ResultValidator:
                         normalization_input, corrections = repair_citations(
                             stage, expanded, context, expected_files, expected_metadata=expected_metadata)
                     except SourceChanged as exc:
-                        raise UnsafeRepository('Source changed during citation correction.', code='SOURCE_CHANGED',
+                        raise UnsafeRepository(ui_message(
+                            'diagnostic.validation.source_changed_during_citation_correction',
+                        ), code='SOURCE_CHANGED',
                             failure_kind='SOURCE_CHANGED', failure_layer='integrity') from exc
                     if corrections.get('diagnostics'):
                         self.attempts.save_attempt_value(attempt, 'quote-diagnostics.json', corrections['diagnostics'], meta)
@@ -98,7 +101,7 @@ class ResultValidator:
             try:
                 candidate = materialize_study(candidate)
             except ContractError as exc:
-                raise AuditError('Program document assembly failed its invariant checks.',
+                raise AuditError(ui_message('diagnostic.validation.program_document_assembly_failed_its_invariant_checks'),
                                  code='MATERIALIZATION_ERROR', failure_layer='materialization') from exc
             self.attempts.save_attempt_value(attempt, 'materialized.json', candidate, meta)
             self.attempts.save_attempt_value(attempt, 'provenance.json', {

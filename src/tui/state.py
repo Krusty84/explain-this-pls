@@ -4,8 +4,9 @@
 """Presentation state for the audit's existing structured events."""
 import time
 
+from src.messages import STAGE_MESSAGES, message as ui_message
 from src.runtime.metrics import RunMetrics
-from src.runtime.reporting import STAGE_MESSAGES, citation_warning_message
+from src.runtime.reporting import citation_warning_message
 
 
 class RunState:
@@ -14,7 +15,7 @@ class RunState:
         self.rows = {}
         self.diagnostics = []
         self.preparation = self.row({'branch': '', 'stage': 'preparation'})
-        self.preparation.update(status='RUNNING', result='Preparing analysis…')
+        self.preparation.update(status='RUNNING', result=ui_message('tui.preparing_analysis'))
 
     def row(self, context):
         key = RunMetrics.key(context)
@@ -29,14 +30,17 @@ class RunState:
     def end_preparation(self, status='COMPLETE'):
         if self.preparation['status'] == 'RUNNING':
             self.preparation.update(status=status, duration_seconds=self.elapsed(self.preparation),
-                                    result='Local setup prepared.' if status == 'COMPLETE' else 'Preparation stopped.')
+                                    result=ui_message('tui.local_setup_prepared') if status == 'COMPLETE' else ui_message('tui.preparation_stopped'))
 
     def apply(self, name, context):
         if name == 'run_started':
             self.preparation['source_name'] = context.get('source', '')
         elif name in ('preflight_started', 'preflight_completed', 'snapshot_started', 'snapshot_completed'):
             if self.preparation['status'] == 'RUNNING':
-                self.preparation['result'] = ('Preparing ' + str(context.get('check') or context.get('snapshot') or 'sources') + '…')
+                self.preparation['result'] = (ui_message(
+                    'tui.preparing.apply',
+                    value=str(context.get('check') or context.get('snapshot') or ui_message('tui.sources')),
+                ))
         elif name in ('stage_started', 'stage_completed', 'stage_skipped', 'stage_recovered'):
             self.end_preparation()
             row = self.row(context)
@@ -50,18 +54,24 @@ class RunState:
                 row['duration_seconds'] = context.get('elapsed_seconds', self.elapsed(row))
                 row['result'] = (STAGE_MESSAGES.get(context['stage'], STAGE_MESSAGES['study'])[2]
                                  if row['status'] == 'COMPLETE' else
-                                 'Completed with citation warnings. See affected claims.' if row['status'] == 'COMPLETE_WITH_WARNINGS' else
-                                 'See limitations and diagnostics.')
+                                 ui_message(
+                                     'tui.completed_with_citation_warnings_see_affected_claims',
+                                 ) if row['status'] == 'COMPLETE_WITH_WARNINGS' else
+                                 ui_message('tui.see_limitations_and_diagnostics'))
             elif name == 'stage_skipped':
                 row.update(status='SKIPPED', duration_seconds=0,
-                           result='Review disabled by configuration.' if context.get('reason') == 'disabled_by_config'
-                           else 'No architecture report available.')
+                           result=ui_message(
+                               'tui.review_disabled_by_configuration',
+                           ) if context.get('reason') == 'disabled_by_config'
+                           else ui_message('tui.no_architecture_report_available'))
             else:
-                row['result'] = 'Report text recovered; some checks did not pass.'
+                row['result'] = ui_message('tui.report_text_recovered_some_checks_did_not_pass')
         elif name == 'study_phase_started':
             row = self.row(context)
-            row.update(phase=context['phase'], result='Collecting claims and source evidence.' if context['phase'] == 'collect'
-                       else 'Writing the architecture report from the frozen evidence package.')
+            row.update(phase=context['phase'], result=ui_message(
+                'tui.collecting_claims_and_source_evidence',
+            ) if context['phase'] == 'collect'
+                       else ui_message('tui.writing_the_architecture_report'))
         elif name == 'citation_warning':
             warning = dict(context, message=citation_warning_message(context))
             row = self.row(context) if context.get('stage') else self.preparation
@@ -73,15 +83,15 @@ class RunState:
             row['diagnostics'].append(context)
             if context.get('stage') or row['status'] == 'RUNNING':
                 row.update(status='INTERRUPTED' if context.get('code') == 'INTERRUPTED' else 'FAILED',
-                           duration_seconds=self.elapsed(row), result=context.get('message', 'Analysis failed.'))
+                           duration_seconds=self.elapsed(row), result=context.get('message', ui_message('tui.analysis_failed')))
                 if context.get('metrics'):
                     row['metrics'] = context['metrics']
                     row['duration_seconds'] = context['metrics']['duration_seconds']
         elif name == 'last_analysis_warning':
             self.diagnostics.append(context)
         elif name in ('root_warning', 'description_missing'):
-            self.diagnostics.append({'message': 'Running with administrator privileges.' if name == 'root_warning'
-                                     else 'Project description is missing.'})
+            self.diagnostics.append({'message': ui_message('tui.running_with_administrator_privileges') if name == 'root_warning'
+                                     else ui_message('tui.project_description_is_missing')})
 
     def finish(self, payload):
         result = payload['result']
@@ -95,7 +105,7 @@ class RunState:
         for row in self.rows.values():
             if row['status'] == 'RUNNING':
                 row.update(status='INTERRUPTED' if interrupted else 'FAILED', duration_seconds=self.elapsed(row),
-                           result='The run stopped before this step completed.')
+                           result=ui_message('tui.the_stopped_before_this_step_completed'))
         for diagnostic in payload.get('diagnostics', []):
             if diagnostic not in self.diagnostics:
                 self.diagnostics.append(diagnostic)

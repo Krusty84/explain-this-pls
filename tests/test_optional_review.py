@@ -218,7 +218,7 @@ class OptionalReviewPipelineTests(PipelineMixin, FolderFixture):
                 legacy.pop('review_enabled')
                 self.assertFalse(workflow_satisfied(legacy))
                 old_report, _ = render_final_report(legacy, self.value['folder_mode'], 'folder', 'English')
-                self.assertIn('Review is incomplete; no positive policy acceptance.', old_report)
+                self.assertIn('Review is incomplete, no positive policy acceptance.', old_report)
                 summary = self.finish_summary(manifest, code)
                 self.assertIn('Analysis complete.', summary)
                 self.assertIn('Review is disabled by configuration', summary)

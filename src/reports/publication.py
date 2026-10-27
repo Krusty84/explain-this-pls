@@ -5,6 +5,7 @@
 from __future__ import annotations
 import json
 from pathlib import Path
+from src.messages import message as ui_message
 from src.contracts.contracts import ContractError, validate_schema
 from src.analysis.ledger import review_context
 from src.reports.document_rendering import validate_materialized, validate_published_architecture
@@ -46,7 +47,9 @@ class ReportPublisher:
             if read_confined(self.session.run_dir, relative, len(expected)) != expected:
                 raise ValueError('changed')
         except (OSError, ValueError, SourceChanged) as exc:
-            raise AuditError('Frozen coverage plan changed.', code='COVERAGE_PLAN_CHANGED', failure_layer='integrity') from exc
+            raise AuditError(ui_message(
+                'diagnostic.coverage_plan.frozen_coverage_plan_changed',
+            ), code='COVERAGE_PLAN_CHANGED', failure_layer='integrity') from exc
 
     def assert_revision_files(self, item):
         states = list(item.get('revisions', []))
@@ -73,7 +76,9 @@ class ReportPublisher:
                             raise ValueError('changed')
                     except (OSError, ValueError, SourceChanged) as exc:
                         self.session.critical_failure = True
-                        raise AuditError('Published revision artifact changed.', code='REVIEW_TARGET_CHANGED',
+                        raise AuditError(ui_message(
+                            'diagnostic.publication.published_revision_artifact_changed',
+                        ), code='REVIEW_TARGET_CHANGED',
                                          failure_layer='integrity') from exc
 
     def publish_result(self, stage, data, destination, *, context=None):
@@ -82,7 +87,9 @@ class ReportPublisher:
                 validate_materialized(data)
             validate_schema(data, (SAVED_FOLDER_SCHEMAS if self.session.mode == 'folder' else SAVED_SCHEMAS)[stage])
         except ContractError as exc:
-            raise AuditError('Computed artifact failed local validation.', code='ARTIFACT_CONTRACT_ERROR',
+            raise AuditError(ui_message(
+                'diagnostic.publication.computed_artifact_failed_local_validation',
+            ), code='ARTIFACT_CONTRACT_ERROR',
                              failure_layer='publication') from exc
         contents = self.artifact_contents(stage, data, context=context)
         # Published revision files are immutable, including JSON and annotations.
@@ -94,7 +101,7 @@ class ReportPublisher:
                     if actual != content:
                         raise ValueError('changed')
                 except (OSError, ValueError, SourceChanged) as exc:
-                    raise AuditError('Frozen stage artifacts cannot be replaced; select a new run directory.',
+                    raise AuditError(ui_message('diagnostic.publication.frozen_stage_artifacts_cannot_be_replaced_select_a'),
                                      code='REVIEW_TARGET_CHANGED', failure_layer='publication') from exc
         for name, content in contents.items():
             path = destination.parent / name
@@ -143,7 +150,7 @@ class ReportPublisher:
                 if actual != content:
                     raise ValueError('changed')
             except (OSError, ValueError, SourceChanged) as exc:
-                raise AuditError('Published document, registry or review plan changed.',
+                raise AuditError(ui_message('diagnostic.publication.published_document_registry_or_review_plan_changed'),
                                  code='REVIEW_TARGET_CHANGED', failure_layer='integrity') from exc
 
     def freeze_review(self, doc, context, directory):
@@ -160,7 +167,9 @@ class ReportPublisher:
                         if read_confined(self.session.run_dir, str(path.relative_to(self.session.run_dir)), len(expected)) != expected:
                             raise ValueError('changed')
                     except (OSError, ValueError, SourceChanged) as exc:
-                        raise AuditError('Recovered material cannot replace an existing frozen registry or plan.',
+                        raise AuditError(ui_message(
+                            'diagnostic.publication.recovered_material_cannot_replace_an_existing_frozen_registry',
+                        ),
                                          code='REVIEW_TARGET_CHANGED', failure_layer='publication') from exc
             for name, value in pending.items():
                 if not (directory / name).exists():
@@ -185,6 +194,6 @@ class ReportPublisher:
                 blob = read_confined(self.session.run_dir, str(path.relative_to(self.session.run_dir)),
                                      expected['bytes'] if expected else path.stat().st_size)
                 if expected and (len(blob) != expected['bytes'] or digest(blob) != expected['sha256']):
-                    raise AuditError('Selected revision artifact changed during publication.',
+                    raise AuditError(ui_message('diagnostic.publication.selected_revision_artifact_changed_during_publication'),
                                      code='REVIEW_TARGET_CHANGED', failure_layer='integrity')
                 artifacts.atomic(directory / name, blob)

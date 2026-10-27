@@ -5,6 +5,7 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
+from src.messages import message as ui_message
 from src.contracts.contracts import ContractError, accepted, workflow_satisfied, processing_satisfied, CONTRACT_ID, ARTIFACT_FORMAT
 from src.model.structured_output import required_unresolved
 from src.reports.final_report import usable_study, report_entries, comparison_possible, render_final_report
@@ -47,8 +48,8 @@ class Runner:
                     self.session.record_error(self.session.manifest, exc, phase='cleanup')
         manifest['result_policy'] = 'compromise' if self.session.compromise else 'strict'
         manifest.update(contract_id=CONTRACT_ID, artifact_format=ARTIFACT_FORMAT,
-            acceptance_meaning='accepted=true means study and review policy checks satisfied; factual correctness is not established.',
-            review_quality='NOT_MEASURED', source_check_meaning='MATCHED_AT_BOUNDARIES means pinned source metadata matched at performed checks only.')
+            acceptance_meaning=ui_message('diagnostic.runner.acceptance_meaning'),
+            review_quality='NOT_MEASURED', source_check_meaning=ui_message('diagnostic.runner.source_check_meaning'))
         manifest['critical_failure'] = self.session.critical_failure
         if not check_only:
             entries = report_entries(manifest, self.session.source, self.session.mode)
@@ -107,7 +108,7 @@ class Runner:
             'git': self.session.repo.runtime.manifest(), 'baseline_branch': self.session.source['baseline_branch'],
             'status': 'RUNNING', 'isolation': 'in-place-checkout; cli-native-permissions',
             'platform': sys.platform, 'branches': [], 'errors': [], 'switch_journal': [],
-            'source_preservation': 'Only the orchestrator switches checkouts; agents have read-only source access.',
+            'source_preservation': ui_message('diagnostic.runner.source_preservation'),
             'publication_complete': False}
         self.session.manifest = manifest
         def persist():
@@ -225,13 +226,16 @@ class Runner:
                         code = 130 if code == 130 or restoration.get('interrupted') else 1
                         for path, state in restoration['nodes'].items():
                             if not state['restored']:
-                                error = UnsafeRepository('Original checkout restoration failed: ' + state['error'],
+                                error = UnsafeRepository(ui_message(
+                                    'diagnostic.runner.original_checkout_restoration_failed',
+                                    error=state['error'],
+                                ),
                                     code='RESTORATION_FAILED', failure_layer='integrity', node_path=path)
                                 manifest['errors'].append(str(error))
                                 self.session.record_error(manifest, error, phase='restoration')
                     self.session.reporter.emit('restoration_completed', restored=restoration['restored'])
                     for message in restoration['journal_errors']:
-                        error = AuditError('Could not save restoration journal: ' + message,
+                        error = AuditError(ui_message('diagnostic.runner.could_not_save_restoration_journal', message=message),
                                            code='RESTORATION_JOURNAL_FAILED', failure_layer='publication')
                         manifest['errors'].append(str(error))
                         manifest['status'] = 'FAILED'
@@ -246,8 +250,7 @@ class Runner:
             'review_enabled': self.session.execution['review_enabled'],
             'started_at': now(), 'source_directory': str(self.session.source_path), 'status': 'RUNNING',
             'isolation': 'cli-native-permissions', 'platform': sys.platform,
-            'integrity': 'One initial content fingerprint; metadata checked at stage boundaries. '
-                         'Not a backup or continuous immutability guarantee.',
+            'integrity': ui_message('diagnostic.runner.folder_integrity'),
             'study': None, 'review': None, 'accepted': False, 'errors': []}
         manifest['publication_complete'] = False
         self.session.manifest = manifest

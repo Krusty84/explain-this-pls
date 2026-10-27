@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import json
 from dataclasses import asdict
+from src.messages import message as ui_message
 from src.contracts.contracts import ContractError, accepted, workflow_satisfied, processing_satisfied, strict_json, validate_result
 from src.runtime.reporting import diagnostic
 from src.model.structured_output import blocked_comparison
@@ -30,12 +31,14 @@ class SourcePipeline:
             detail = meta['error'] | self.session.stage_context(stage, context) | {'phase': 'stage'}
             self.session.manifest.setdefault('diagnostics', []).append(detail)
             self.session.reporter.emit('stage_recovered', level=30, **self.session.stage_context(stage, context),
-                               message=material['contract_failure']['message'] +
-                               ' Text retained; policy checks not completed. Agent self-assessment: ' +
-                               (material['completion_status'] or 'n/a') + '.')
+                               message=ui_message(
+                                   'diagnostic.pipeline.text_retained_policy_checks_not_completed_agent_self',
+                                   message=material['contract_failure']['message'],
+                                   value=material['completion_status'] or ui_message('tui.n_a'),
+                               ))
         item[stage + '_usable'] = usable_study(item) if stage == 'study' else bool(stage_document(item, stage))
         if material is not None and not self.session.cfg['continue_on_error']:
-            raise ContractError('Stopped after retaining unvalidated material (continue_on_error=false).')
+            raise ContractError(ui_message('diagnostic.pipeline.stopped_after_retaining_unvalidated_material_continue_on_error'))
 
     def select_source_revision(self, item, directory, *, publish):
         self.publisher.assert_revision_files(item)
@@ -176,11 +179,13 @@ class SourcePipeline:
                         artifacts.save_json(revision_dir / 'study.logs' / 'invocation.json', meta)
                     run_stage('review', revision, review_input, revision_dir)
                 else:
-                    revision['review_skipped'] = 'No usable strictly valid revised study.' if previous else 'No usable architecture document.'
+                    revision['review_skipped'] = ui_message(
+                        'diagnostic.pipeline.revised_study_unavailable',
+                    ) if previous else ui_message('diagnostic.pipeline.study_unavailable')
                     self.session.metrics.finish_stage(self.session.stage_context('review', current), 'SKIPPED')
                     self.session.reporter.emit('stage_skipped', **self.session.stage_context('review', current))
                     if self.session.repo and not usable_study(revision):
-                        item['errors'].append('Review skipped: no usable architecture document.')
+                        item['errors'].append(ui_message('diagnostic.pipeline.review_skipped_no_usable_architecture_document'))
                 revision['accepted'] = accepted(revision)
                 revision['workflow_satisfied'] = workflow_satisfied(revision)
                 persist()

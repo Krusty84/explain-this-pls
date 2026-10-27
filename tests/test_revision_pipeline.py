@@ -337,7 +337,7 @@ class RevisionPipelineTests(FolderFixture):
         self.assertFalse((self.run_dir / 'review.json').exists())
         self.assertIsNotNone(manifest['revisions'][0]['review'])
         self.assertFalse(manifest['revision_history'][0]['review_complete'])
-        self.assertIn('Review is incomplete; no positive policy acceptance.', Path(manifest['final_report']).read_text())
+        self.assertIn('Review is incomplete, no positive policy acceptance.', Path(manifest['final_report']).read_text())
 
     def test_deleted_claim_remains_visible_to_reviewer_and_requires_explicit_resolution(self):
         for resolved in (True, False):

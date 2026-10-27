@@ -11,6 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULES = (
+    'src.messages',
     'src.runtime.errors', 'src.runtime.artifacts', 'src.runtime.process',
     'src.runtime.execution', 'src.runtime.config', 'src.runtime.config_edit', 'src.analysis.repository',
     'src.analysis.folder', 'src.backends.preflight', 'src.runtime.session',

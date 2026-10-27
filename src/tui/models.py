@@ -9,6 +9,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Select, Static
 
+from src.messages import message as ui_message
 from src.runtime.config import STAGES, load_config, resolve_agent
 from src.backends import codex_models
 from src.contracts.contracts import ContractError
@@ -22,7 +23,7 @@ def model_targets(config, path):
     for stage in STAGES:
         override = config['stage_agents'].get(stage, {})
         if type(override) is not dict:
-            raise ValueError(f'stage_agents.{stage} must be a JSON object.')
+            raise ValueError(ui_message('tui.stage_agents_must_be_a_json_object', stage=stage))
         agent = config['agent'] | override
         if agent.get('backend') == 'codex':
             targets['stage_agents.' + stage + '.model'] = resolve_agent(agent, path)
@@ -30,7 +31,7 @@ def model_targets(config, path):
 
 
 class ModelChooser(ModalScreen):
-    BINDINGS = [('escape', 'close', 'Cancel')]
+    BINDINGS = [('escape', 'close', ui_message('tui.cancel'))]
     DEFAULT_CSS = """
     ModelChooser { align: center middle; }
     #model-dialog { width: 95%; height: 90%; max-width: 120; border: round $accent; background: $surface; padding: 0 1; }
@@ -46,7 +47,7 @@ class ModelChooser(ModalScreen):
         self.path, self.original = path.resolve(), original
         self.targets = model_targets(config, self.path)
         if not self.targets:
-            raise ValueError('The configuration has no Codex model fields.')
+            raise ValueError(ui_message('tui.the_configuration_has_no_codex_model_fields'))
         self.target = next(iter(self.targets))
         self.models, self.verifications = [], {}
         self.selected = None
@@ -58,23 +59,23 @@ class ModelChooser(ModalScreen):
 
     def compose(self):
         with Vertical(id='model-dialog'):
-            yield Static(self.literal('Config: ' + str(self.path)), id='model-file')
-            yield Static('Use for', id='model-scope')
-            yield Select([('global' if field == 'agent.model' else field.split('.')[1], field)
+            yield Static(self.literal(ui_message('tui.config', path=str(self.path))), id='model-file')
+            yield Static(ui_message('tui.use_for'), id='model-scope')
+            yield Select([(ui_message('tui.global') if field == 'agent.model' else field.split('.')[1], field)
                           for field in self.targets], value=self.target,
                          allow_blank=False, id='model-target')
             yield Static('', id='model-current')
             yield DataTable(id='model-table', cursor_type='row', zebra_stripes=True)
             yield Static('', id='model-status')
             with Horizontal(id='model-actions'):
-                yield Button('Check ChatGPT Access', id='model-check', disabled=True)
-                yield Button('Use', id='model-apply', variant='primary', disabled=True)
-                yield Button('Refresh', id='model-refresh')
-                yield Button('Cancel', id='model-close')
+                yield Button(ui_message('tui.check_chatgpt_access'), id='model-check', disabled=True)
+                yield Button(ui_message('tui.use'), id='model-apply', variant='primary', disabled=True)
+                yield Button(ui_message('tui.refresh'), id='model-refresh')
+                yield Button(ui_message('tui.cancel'), id='model-close')
 
     def on_mount(self):
         self.query_one('#model-table', DataTable).add_columns(
-            'Model', 'Name', 'Visibility', 'Access via API', 'Access via ChatGPT')
+            ui_message('cli.model'), ui_message('cli.name'), ui_message('cli.visibility'), ui_message('tui.access_via_api'), ui_message('tui.access_via_chatgpt'))
         self.load_catalog()
 
     def update_buttons(self):
@@ -106,8 +107,12 @@ class ModelChooser(ModalScreen):
         self.query_one('#model-table', DataTable).clear()
         agent = self.targets[self.target]
         self.query_one('#model-current', Static).update(self.literal(
-            'Current: ' + (agent.get('model') or 'CLI default') + ' | Executable: ' + agent['executable']))
-        self.query_one('#model-status', Static).update('Loading Codex model catalog…')
+            ui_message(
+                'tui.current_executable',
+                value=agent.get('model') or ui_message('tui.cli_default'),
+                executable=agent['executable'],
+            )))
+        self.query_one('#model-status', Static).update(ui_message('tui.loading_codex_model_catalog'))
         self.begin(self.fetch_catalog)
 
     async def fetch_catalog(self, generation):
@@ -124,23 +129,23 @@ class ModelChooser(ModalScreen):
         self.models, self.busy = models, False
         table = self.query_one('#model-table', DataTable)
         for model in models:
-            api = 'unknown' if model['supported_in_api'] is None else str(model['supported_in_api']).lower()
+            api = ui_message('cli.unknown') if model['supported_in_api'] is None else str(model['supported_in_api']).lower()
             table.add_row(*(self.literal(model[key]) for key in ('slug', 'display_name', 'visibility')),
-                          api, 'Not checked', key=model['slug'])
+                          api, ui_message('tui.not_checked'), key=model['slug'])
         if models:
             index = next((i for i, model in enumerate(models) if model['slug'] == agent.get('model')), 0)
             table.move_cursor(row=index)
             self.select_model(models[index]['slug'])
             table.focus()
         else:
-            self.query_one('#model-status', Static).update('No models returned.')
+            self.query_one('#model-status', Static).update(ui_message('cli.no_models_returned'))
             self.update_buttons()
 
     def select_model(self, slug):
         self.selected = slug
         result = self.verifications.get(slug)
         self.query_one('#model-status', Static).update(self.literal(
-            result['message'] if result else 'Not checked. Check ChatGPT Access sends a request and uses your Codex allowance.'))
+            result['message'] if result else ui_message('tui.not_checked_check_chatgpt_access_sends_a_request')))
         self.update_buttons()
 
     def on_data_table_row_highlighted(self, event):
@@ -161,7 +166,7 @@ class ModelChooser(ModalScreen):
         self.verifications[slug] = result
         table = self.query_one('#model-table', DataTable)
         table.update_cell(slug, list(table.columns)[-1], {
-            'available': 'Available', 'unavailable': 'Unavailable', 'unverified': 'Not verified'}[result['status']])
+            'available': ui_message('tui.available'), 'unavailable': ui_message('tui.unavailable'), 'unverified': ui_message('tui.not_verified')}[result['status']])
         self.select_model(slug)
 
     def refresh_models(self):
@@ -173,14 +178,14 @@ class ModelChooser(ModalScreen):
             original = self.path.read_bytes()
             targets = model_targets(load_config(self.path), self.path)
             if not targets:
-                raise ValueError('The configuration has no Codex model fields.')
+                raise ValueError(ui_message('tui.the_configuration_has_no_codex_model_fields'))
         except (OSError, ValueError, RuntimeError, ContractError) as exc:
             self.show_error(exc)
             return
         self.original, self.targets = original, targets
         self.target = self.target if self.target in targets else next(iter(targets))
         select = self.query_one('#model-target', Select)
-        select.set_options([('global' if field == 'agent.model' else field.split('.')[1], field)
+        select.set_options([(ui_message('tui.global') if field == 'agent.model' else field.split('.')[1], field)
                             for field in targets])
         select.value = self.target
         self.load_catalog()
@@ -195,7 +200,7 @@ class ModelChooser(ModalScreen):
             self.verifications.pop(self.selected, None)
             table = self.query_one('#model-table', DataTable)
             table.update_cell(self.selected, list(table.columns)[-1], 'Checking…')
-            self.query_one('#model-status', Static).update('Checking model access with ChatGPT…')
+            self.query_one('#model-status', Static).update(ui_message('tui.checking_model_access_with_chatgpt'))
             self.begin(self.verify_model)
         elif event.button.id == 'model-apply' and not self.busy:
             if self.verifications.get(self.selected, {}).get('status') != 'available':

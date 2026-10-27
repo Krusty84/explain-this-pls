@@ -8,6 +8,7 @@ import json
 import os
 import stat
 from pathlib import Path
+from src.messages import message as ui_message
 from src.analysis.evidence import open_source_directory, stamp, valid_path
 from src.analysis.source_filter import normalize_source_filter, excluded_root, gitignore_spec, gitignore_match
 from src.analysis.source_metrics import PhysicalLines
@@ -30,7 +31,7 @@ class Folder:
         rules, exclusions = {}, []
 
         def changed(name):
-            raise AuditError('Source folder changed during the run; files will not be restored.',
+            raise AuditError(ui_message('diagnostic.folder.source_folder_changed_during_the_files_will_not'),
                              code='SOURCE_CHANGED', failure_layer='integrity', node_path=name)
 
         def record(info, name):
@@ -43,7 +44,7 @@ class Folder:
             if stamp(before) != stamp(after):
                 if expected is not None:
                     changed(name)
-                raise AuditError(f'Source changed while fingerprinting: {name}')
+                raise AuditError(ui_message('diagnostic.folder.source_changed_while_fingerprinting', name=name))
 
         def load_rules(fd, relative, scopes):
             child = '.gitignore' if relative == '.' else relative + '/.gitignore'
@@ -108,7 +109,7 @@ class Folder:
                 if not valid_path(child):
                     if expected is not None:
                         changed(child)
-                    raise AuditError('Unsafe path in source folder.', code='UNSAFE_SOURCE_PATH',
+                    raise AuditError(ui_message('diagnostic.folder.unsafe_path_in_source_folder'), code='UNSAFE_SOURCE_PATH',
                                      failure_layer='integrity', node_path=child)
                 record(info, child)
                 entry = {'path': child, 'mode': format(stat.S_IMODE(info.st_mode), '04o')}
@@ -147,7 +148,7 @@ class Folder:
                     finally:
                         os.close(child_fd)
                 else:
-                    raise AuditError(f'Unsupported special file in source folder: {child}')
+                    raise AuditError(ui_message('diagnostic.folder.unsupported_special_file_in_source_folder', child=child))
                 unchanged(info, os.stat(name, dir_fd=fd, follow_symlinks=False), child)
             rule_path = '.gitignore' if relative == '.' else relative + '/.gitignore'
             if rule_path in rules and stamp(os.stat('.gitignore', dir_fd=fd, follow_symlinks=False)) != metadata[rule_path]:
@@ -165,7 +166,7 @@ class Folder:
         except OSError as exc:
             if expected is not None:
                 changed(str(self.path))
-            raise AuditError(f'Cannot read source folder {self.path}: {exc}') from exc
+            raise AuditError(ui_message('diagnostic.folder.cannot_read_source_folder', path=self.path, exc=exc)) from exc
         if expected is not None and metadata.keys() != expected.keys():
             changed(next(iter(metadata.keys() ^ expected.keys())))
         if files is not None:
@@ -192,12 +193,16 @@ class Folder:
 
     def assert_snapshot(self, fingerprint: str) -> None:
         if self.inventory is None:
-            raise AuditError('Source folder has no pinned snapshot.', failure_layer='integrity')
+            raise AuditError(ui_message('diagnostic.folder.source_folder_has_no_pinned_snapshot'), failure_layer='integrity')
         if self.inventory['source_fingerprint'] != fingerprint:
-            raise AuditError('Source folder changed from the pinned snapshot.', failure_layer='integrity')
+            raise AuditError(ui_message(
+                'diagnostic.folder.source_folder_changed_from_the_pinned_snapshot',
+            ), failure_layer='integrity')
         if self.source_filter != {key: self.inventory['source_filter'][key] for key in self.source_filter}:
-            raise AuditError('Source filter changed during the run.', code='SOURCE_CHANGED', failure_layer='integrity')
+            raise AuditError(ui_message(
+                'diagnostic.folder.source_filter_changed_during_the',
+            ), code='SOURCE_CHANGED', failure_layer='integrity')
         entries, _, rules, _ = self._scan(files=self.files, expected=self.metadata)
         if entries != self.inventory['entries'] or rules.keys() != self.ignore_rules.keys():
-            raise AuditError('Source folder changed during the run; files will not be restored.',
+            raise AuditError(ui_message('diagnostic.folder.source_folder_changed_during_the_files_will_not'),
                              code='SOURCE_CHANGED', failure_layer='integrity')

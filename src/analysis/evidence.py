@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import stat
+from src.messages import message as ui_message
 from src.analysis.source_decoding import normalize_source_decoding, decode_source, SourceDecodeError
 
 
@@ -110,11 +111,13 @@ def _read_confined(root, relative, limit=None, *, expected=None, pinned=None, re
             if pinned is not None and (current_path == source_root or source_root in current_path.parents):
                 source_pin = pinned.get(str(current_path.relative_to(source_root)))
                 if source_pin is None or stamp(before)[:len(source_pin)] != source_pin:
-                    raise SourceChanged('Source path differs from the pinned snapshot metadata.')
+                    raise SourceChanged(ui_message('diagnostic.evidence.source_path_differs_from_the_pinned_snapshot_metadata'))
             full_stamp = is_file or (source_pin is not None and len(source_pin) == 6)
             component_identity = stamp(before) if full_stamp else stamp(before)[:3]
             if expected is not None and component_identity != expected[index]:
-                raise SourceChanged('Previously read source path changed during evidence resolution.')
+                raise SourceChanged(ui_message(
+                    'diagnostic.evidence.previously_read_source_path_changed_during_evidence_resolution',
+                ))
             identity.append(component_identity)
             if not (stat.S_ISREG(before.st_mode) if is_file else stat.S_ISDIR(before.st_mode)):
                 raise PointerError('UNSAFE_PATH')
@@ -125,11 +128,11 @@ def _read_confined(root, relative, limit=None, *, expected=None, pinned=None, re
             fds.append(child)
             opened = os.fstat(child)
             if component_identity != (stamp(opened) if full_stamp else stamp(opened)[:3]):
-                raise SourceChanged('Source component changed during evidence resolution.')
+                raise SourceChanged(ui_message('diagnostic.evidence.source_component_changed_during_evidence_resolution'))
             chain.append((fd, name, child, before, full_stamp))
             fd = child
         if stamp(before) != stamp(os.fstat(fd)):
-            raise SourceChanged('Source changed before evidence read.')
+            raise SourceChanged(ui_message('diagnostic.evidence.source_changed_before_evidence_read'))
         if read and limit is not None and before.st_size > limit:
             raise PointerError('LIMIT_EXCEEDED')
         data = bytearray()
@@ -137,22 +140,24 @@ def _read_confined(root, relative, limit=None, *, expected=None, pinned=None, re
             while chunk := os.read(fd, min(65536, before.st_size + 1 - len(data))):
                 data.extend(chunk)
                 if len(data) > before.st_size:
-                    raise SourceChanged('Source grew beyond its initial file size.')
+                    raise SourceChanged(ui_message('diagnostic.evidence.source_grew_beyond_its_initial_file_size'))
         for parent, name, child, before, full_stamp in chain:
             # Directory pins check identity; file pins also check size and timestamps.
             # Unpinned ancestors can change due to unrelated /tmp peers.
             try:
                 current = os.stat(name, dir_fd=parent, follow_symlinks=False)
             except OSError:
-                raise SourceChanged('Source component disappeared during evidence resolution.') from None
+                raise SourceChanged(ui_message(
+                    'diagnostic.evidence.source_component_disappeared_during_evidence_resolution',
+                )) from None
             for after in (os.fstat(child), current):
                 if (stamp(before) if full_stamp else stamp(before)[:3]) != (stamp(after) if full_stamp else stamp(after)[:3]):
-                    raise SourceChanged('Source changed during evidence resolution.')
+                    raise SourceChanged(ui_message('diagnostic.evidence.source_changed_during_evidence_resolution'))
         return bytes(data), tuple(identity)
     except (OSError, PointerError) as exc:
         if (expected is not None or pinned is not None) and not (
                 isinstance(exc, PointerError) and str(exc) == 'LIMIT_EXCEEDED'):
-            raise SourceChanged('Previously read source path became n/a or unsafe.') from None
+            raise SourceChanged(ui_message('diagnostic.evidence.previously_read_source_path_became_n_a_or')) from None
         raise
     finally:
         for fd in reversed(fds):
@@ -174,7 +179,7 @@ def _resolve_with_sources(stage, pointers, context, expected_files=None, *, expe
     decoding = normalize_source_decoding(context.get('source_decoding'))
     results, cache, read_paths, file_hashes = [], {}, {}, {}
     if expected_metadata is not None and expected_files is None:
-        raise ValueError('Pinned evidence requires source-file hashes.')
+        raise ValueError(ui_message('diagnostic.evidence.pinned_evidence_requires_source_file_hashes'))
     for pointer in pointers:
         result = {k: pointer.get(k) for k in ('source_id', 'path', 'start_line', 'end_line')}
         result.update(id=stage + ':' + str(pointer.get('id', '')), source_identity=None,
@@ -215,7 +220,7 @@ def _resolve_with_sources(stage, pointers, context, expected_files=None, *, expe
                     file_hashes[relative] = (expected_files[relative] if expected_metadata is not None else sha(blob))
                 result['file_sha256'] = file_hashes[relative]
                 if expected_files is not None and result['file_sha256'] != expected_files.get(relative):
-                    raise SourceChanged('Evidence bytes differ from the pinned source inventory.')
+                    raise SourceChanged(ui_message('diagnostic.evidence.evidence_bytes_differ_from_the_pinned_source_inventory'))
                 try:
                     text, result['encoding'] = decode_source(blob, relative, decoding)
                 except SourceDecodeError as exc:
@@ -224,7 +229,7 @@ def _resolve_with_sources(stage, pointers, context, expected_files=None, *, expe
                 source_lines = lines(text)
                 cache[relative] = source_lines, result['file_sha256'], result['encoding']
             if expected_files is not None and result['file_sha256'] != expected_files.get(relative):
-                raise SourceChanged('Evidence bytes differ from the pinned source inventory.')
+                raise SourceChanged(ui_message('diagnostic.evidence.evidence_bytes_differ_from_the_pinned_source_inventory'))
             if end > len(source_lines):
                 raise PointerError('OUT_OF_RANGE')
             fragment = ''.join(source_lines[start - 1:end])

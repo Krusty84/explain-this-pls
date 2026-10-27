@@ -9,6 +9,7 @@ import json
 from pathlib import Path, PurePosixPath
 import tempfile
 
+from src.messages import message as ui_message
 from src.contracts.contracts import ContractError, strict_json
 from src.runtime.errors import AuditError
 
@@ -25,19 +26,21 @@ def _incompatible(message, **details):
 
 def _tools(value, namespace=''):
     if not isinstance(value, list):
-        raise _incompatible('Codex returned an unsupported tool schema list.')
+        raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_returned_an_unsupported_tool_schema_list'))
     result = []
     for tool in value:
         if not isinstance(tool, dict) or not isinstance(tool.get('type'), str):
-            raise _incompatible('Codex returned an unsupported tool schema.')
+            raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_returned_an_unsupported_tool_schema'))
         name = tool.get('name')
         if tool['type'] == 'namespace':
             if not isinstance(name, str) or not name:
-                raise _incompatible('Codex returned an unnamed tool namespace.')
+                raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_returned_an_unnamed_tool_namespace'))
             result.extend(_tools(tool.get('tools'), namespace + name + '.'))
             continue
         if tool['type'] not in ('function', 'custom') or not isinstance(name, str) or not name:
-            raise _incompatible('Codex exposes an unsupported native tool.', tool_type=tool['type'])
+            raise _incompatible(ui_message(
+                'diagnostic.codex_capabilities.codex_exposes_an_unsupported_native_tool',
+            ), tool_type=tool['type'])
         qualified = namespace + name
         # Codex uses both flat MCP names and namespace schemas for the same tool.
         if qualified.startswith('functions.'):
@@ -55,36 +58,38 @@ def _read_trace_file(root, path):
         for part in relative.parts:
             current = current / part
             if current.is_symlink():
-                raise _incompatible('Codex trace contains a symbolic link.')
+                raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_trace_contains_a_symbolic_link'))
         return strict_json(path.read_text(encoding='utf-8'))
     except AuditError:
         raise
     except Exception as error:
-        raise _incompatible('Cannot read the Codex capability trace.') from error
+        raise _incompatible(ui_message('diagnostic.codex_capabilities.cannot_read_the_codex_capability_trace')) from error
 
 
 def _requests(root):
     root = Path(root)
     if root.is_symlink() or not root.is_dir():
-        raise _incompatible('Codex did not produce a private capability trace.')
+        raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_did_not_produce_a_private_capability_trace'))
     logs = sorted(root.glob('*/trace.jsonl'))
     if (root / 'trace.jsonl').is_file():
         logs.append(root / 'trace.jsonl')
     for log in logs:
         if log.is_symlink() or log.parent.is_symlink():
-            raise _incompatible('Codex trace contains a symbolic link.')
+            raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_trace_contains_a_symbolic_link'))
         try:
             lines = log.read_text(encoding='utf-8').splitlines()
         except OSError as error:
-            raise _incompatible('Cannot read the Codex capability trace.') from error
+            raise _incompatible(ui_message('diagnostic.codex_capabilities.cannot_read_the_codex_capability_trace')) from error
         for line in lines:
             try:
                 event = strict_json(line)
                 payload = event['payload']
             except Exception as error:
-                raise _incompatible('Codex returned an invalid capability trace.') from error
+                raise _incompatible(ui_message(
+                    'diagnostic.codex_capabilities.codex_returned_an_invalid_capability_trace',
+                )) from error
             if not isinstance(payload, dict):
-                raise _incompatible('Codex returned an invalid capability trace event.')
+                raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_returned_an_invalid_capability_trace_event'))
             if payload.get('type') == 'inference_completed':
                 yield log, payload, None
                 continue
@@ -95,12 +100,12 @@ def _requests(root):
             if (not isinstance(path, str) or not path or '\\' in path
                     or ':' in path or PurePosixPath(path).is_absolute()
                     or any(part in ('', '.', '..') for part in path.split('/'))):
-                raise _incompatible('Codex returned an unsafe request trace path.')
+                raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_returned_an_unsafe_request_trace_path'))
             request = _read_trace_file(root, log.parent.joinpath(*path.split('/')))
             if not isinstance(request, dict) or not isinstance(request.get('model'), str) or not request['model']:
-                raise _incompatible('Codex did not identify the effective request model.')
+                raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_did_not_identify_the_effective_request_model'))
             if not isinstance(request.get('input'), list) or any(not isinstance(item, dict) for item in request['input']):
-                raise _incompatible('Codex returned an unsupported request input list.')
+                raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_returned_an_unsupported_request_input_list'))
             yield log, payload, request
 
 
@@ -112,29 +117,31 @@ def verify_trace(root: Path, expected_tools, *, expected_model=None) -> dict:
     for log, event, request in _requests(root):
         call_id = event.get('inference_call_id')
         if not isinstance(call_id, str) or not call_id:
-            raise _incompatible('Codex omitted the inference identity needed to verify its tool schemas.')
+            raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_omitted_the_inference_identity_needed_to_verify'))
         call_key = (log, call_id)
         if request is None:
             response_id = event.get('response_id')
             if (call_key not in pending or not isinstance(response_id, str) or not response_id
                     or (log, response_id) in responses):
-                raise _incompatible('Codex returned an unlinked or ambiguous completed inference response.')
+                raise _incompatible(ui_message(
+                    'diagnostic.codex_capabilities.codex_returned_an_unlinked_or_ambiguous_completed_inference',
+                ))
             responses[(log, response_id)] = pending.pop(call_key)
             continue
         if call_key in seen:
-            raise _incompatible('Codex reused an inference identity in its request trace.')
+            raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_reused_an_inference_identity_in_its_request'))
         seen.add(call_key)
         if expected_model is not None and request['model'] != expected_model:
-            raise _incompatible('Codex changed the model selected for the MCP capability check.',
+            raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_changed_the_model_selected_for_the_mcp'),
                                 expected_model=expected_model, model=request['model'])
         previous = request.get('previous_response_id')
         prior = None
         if previous is not None:
             if not isinstance(previous, str) or (log, previous) not in responses:
-                raise _incompatible('Codex omitted tool schemas without a verified prior response.')
+                raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_omitted_tool_schemas_without_a_verified_prior'))
             prior = responses[(log, previous)]
             if prior['model'] != request['model']:
-                raise _incompatible('Codex changed the model within a linked inference response chain.')
+                raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_changed_the_model_within_a_linked_inference'))
         declared = 'tools' in request
         tools = _tools(request.get('tools', []))
         for item in request['input']:
@@ -142,14 +149,14 @@ def verify_trace(root: Path, expected_tools, *, expected_model=None) -> dict:
                 declared = True
                 tools.extend(_tools(item.get('tools')))
         if not declared and prior is None:
-            raise _incompatible('Codex omitted tool schemas without a verified prior response.')
+            raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_omitted_tool_schemas_without_a_verified_prior'))
         effective = {name: set(values) for name, values in prior['schemas'].items()} if prior is not None else {}
         for name, schema in tools:
             encoded = json.dumps(schema, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
             effective.setdefault(name, set()).add(encoded)
         names = set(effective)
         if names != expected:
-            raise _incompatible('Codex exposes a different tool set than the MCP access policy permits.',
+            raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_exposes_a_different_tool_set_than_the'),
                                 unexpected_tools=sorted(names - expected), missing_tools=sorted(expected - names),
                                 model=request['model'])
         models.add(request['model'])
@@ -158,7 +165,7 @@ def verify_trace(root: Path, expected_tools, *, expected_model=None) -> dict:
         pending[call_key] = {'model': request['model'], 'schemas': effective}
         requests += 1
     if not requests or len(models) != 1:
-        raise _incompatible('Codex did not produce a complete request tool set for one model.')
+        raise _incompatible(ui_message('diagnostic.codex_capabilities.codex_did_not_produce_a_complete_request_tool'))
     toolset = [{'name': name, 'schemas': sorted(values)} for name, values in sorted(schemas.items())]
     encoded = json.dumps(toolset, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
     return {'model': models.pop(), 'tools': sorted(expected),
@@ -223,7 +230,9 @@ def verify_mcp_text_delivery(root: Path, stdout: bytes) -> dict:
             if not isinstance(payload.get('text'), str) or not isinstance(payload.get('_meta'), dict):
                 raise ValueError()
         except (ContractError, ValueError):
-            raise AuditError('Codex did not expose the complete source result text.', code='MCP_DELIVERY',
+            raise AuditError(ui_message(
+                'diagnostic.codex_capabilities.codex_did_not_expose_the_complete_source_result',
+            ), code='MCP_DELIVERY',
                              failure_kind='MCP_DELIVERY', failure_layer='backend',
                              details={'native_fallback': False}) from None
         results[(item.get('id'), text)] = payload
@@ -238,7 +247,7 @@ def verify_mcp_text_delivery(root: Path, stdout: bytes) -> dict:
                 if _contains_result(item.get('output'), key[1], payload):
                     del remaining[key]
     if remaining:
-        raise AuditError('Codex source results were absent or truncated in the model request.',
+        raise AuditError(ui_message('diagnostic.codex_capabilities.codex_source_results_were_absent_or_truncated_in'),
                          code='MCP_DELIVERY', failure_kind='MCP_DELIVERY', failure_layer='backend',
                          details={'read_results': len(results), 'missing_read_results': len(remaining),
                                   'native_fallback': False})
@@ -259,7 +268,7 @@ def probe_command(cmd, state: Path, env, *, expected_tools, process_fn, reporter
     try:
         result = process_fn(command, state, probe_env, b'MCP capability probe.', reporter=reporter, budget=budget)
     except OSError as error:
-        raise _incompatible('Cannot launch the Codex capability probe.') from error
+        raise _incompatible(ui_message('diagnostic.codex_capabilities.cannot_launch_the_codex_capability_probe')) from error
     stdout, stderr = result.get('stdout', b''), result.get('stderr', b'')
     bootstrap_sources = set()
     for line in stdout.decode('utf-8', errors='replace').splitlines():
@@ -272,7 +281,9 @@ def probe_command(cmd, state: Path, env, *, expected_tools, process_fn, reporter
         if event.get('type') == 'thread.started':
             sources = event.get('bootstrap_instruction_sources', [])
             if not isinstance(sources, list) or any(not isinstance(source, str) for source in sources):
-                raise _incompatible('Codex returned invalid bootstrap instruction source metadata.')
+                raise _incompatible(ui_message(
+                    'diagnostic.codex_capabilities.codex_returned_invalid_bootstrap_instruction_source_metadata',
+                ))
             bootstrap_sources.update(sources)
         if event.get('type') not in ('error', 'turn.failed'):
             continue
@@ -283,7 +294,9 @@ def probe_command(cmd, state: Path, env, *, expected_tools, process_fn, reporter
         details = diagnostic.get('details')
         details = dict(details) if isinstance(details, dict) else {}
         details['native_fallback'] = False
-        raise AuditError(diagnostic.get('message', 'The Codex MCP capability probe failed.'),
+        raise AuditError(diagnostic.get('message', ui_message(
+            'diagnostic.codex_capabilities.the_codex_mcp_capability_probe_failed',
+        )),
                          code=code, failure_kind=diagnostic.get('failure_kind', code),
                          failure_layer=diagnostic.get('failure_layer',
                                                       'compatibility' if code == 'MCP_COMPATIBILITY' else 'backend'),

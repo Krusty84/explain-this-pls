@@ -4,13 +4,14 @@
 """Inventory defines source scope; citations never establish inspection."""
 from __future__ import annotations
 
+from src.messages import message as ui_message
 from src.contracts.contracts import ARTIFACT_FORMAT, CONTRACT_ID, ContractError
 from src.analysis.evidence import canonical, sha, source_catalog, valid_path
 
 
 def checked_path(path):
     if path != '.' and not valid_path(path):
-        raise ContractError('Coverage plan contains an unsafe inventory path.')
+        raise ContractError(ui_message('diagnostic.coverage_plan.coverage_plan_contains_an_unsafe_inventory_path'))
     return path
 
 
@@ -40,7 +41,7 @@ def inventory_summary(inventory):
             'directories': [groups[p] for p in sorted(groups)]}
 
 
-AREA_PURPOSE = 'Source inventory entries in this directory group; inspection is unverified.'
+AREA_PURPOSE = ui_message('diagnostic.coverage_plan.source_inventory_entries_in_this_directory_group_inspection')
 
 
 def build_coverage_plan(inventory, context):
@@ -55,7 +56,7 @@ def build_coverage_plan(inventory, context):
             groups[group_path(path)].append(path)
             if entry['type'] == 'file':
                 files.add(path)
-    areas = [dict(id=f'S-{index:03d}', name='Source root' if path == '.' else path,
+    areas = [dict(id=f'S-{index:03d}', name=ui_message('diagnostic.coverage_plan.source_root') if path == '.' else path,
                   purpose=AREA_PURPOSE, paths=[path], entry_paths=sorted(members),
                   file_paths=sorted(files.intersection(members)), required=bool(members))
              for index, (path, members) in enumerate(sorted(groups.items()), 1)]
@@ -73,10 +74,10 @@ def verify_coverage_plan(plan):
     if (plan['contract_id'] != CONTRACT_ID or plan['artifact_format'] != ARTIFACT_FORMAT
             or plan['origin'] != 'SOURCE_INVENTORY'
             or plan['plan_sha256'] != sha(canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))):
-        raise ContractError('Frozen coverage plan changed.')
+        raise ContractError(ui_message('diagnostic.coverage_plan.frozen_coverage_plan_changed'))
     paths = [area['paths'][0] for area in plan['areas'] if len(area['paths']) == 1]
     if len(paths) != len(plan['areas']) or paths != sorted(set(paths)) or '.' not in paths:
-        raise ContractError('Coverage plan directory groups changed.')
+        raise ContractError(ui_message('diagnostic.coverage_plan.coverage_plan_directory_groups_changed'))
     members, files = set(), set()
     for index, area in enumerate(plan['areas'], 1):
         path = checked_path(area['paths'][0])
@@ -88,15 +89,15 @@ def verify_coverage_plan(plan):
                 or selected != sorted(set(selected)) or selected_files != sorted(set(selected_files))
                 or not set(selected_files) <= set(selected) or members.intersection(selected)
                 or area['required'] != bool(selected)):
-            raise ContractError('Coverage plan inventory groups changed.')
+            raise ContractError(ui_message('diagnostic.coverage_plan.coverage_plan_inventory_groups_changed'))
         for member in selected:
             checked_path(member)
             if member == '.' or group_path(member) != path:
-                raise ContractError('Coverage plan membership is inconsistent.')
+                raise ContractError(ui_message('diagnostic.coverage_plan.coverage_plan_membership_is_inconsistent'))
         members.update(selected)
         files.update(selected_files)
     if plan['counts']['files'] != len(files) or plan['counts']['symlinks'] != len(members - files):
-        raise ContractError('Coverage plan unique-file counts changed.')
+        raise ContractError(ui_message('diagnostic.coverage_plan.coverage_plan_unique_file_counts_changed'))
     return plan
 
 
@@ -106,13 +107,13 @@ def study_coverage_plan(data, context):
     if frozen is not None:
         verify_coverage_plan(frozen)
         if frozen['sources'] != source_catalog(context):
-            raise ContractError('Coverage plan identifies another source snapshot.')
+            raise ContractError(ui_message('diagnostic.coverage_plan.coverage_plan_identifies_another_source_snapshot'))
     inventory = context.get('_inventory')
     if inventory is None:
         return frozen
     plan = build_coverage_plan(inventory, context)
     if frozen is not None and plan != frozen:
-        raise ContractError('Coverage and pinned source inventories differ.')
+        raise ContractError(ui_message('diagnostic.coverage_plan.coverage_and_pinned_source_inventories_differ'))
     return plan
 
 
@@ -148,28 +149,34 @@ def advisory_diagnostics(observations, context):
         diagnostics.append({'path': path, 'code': code, 'message': message})
 
     if type(observations) is not dict:
-        warn('$.advisory', 'INVALID_ADVISORY_DATA', 'Auxiliary observations must be an object.')
+        warn('$.advisory', 'INVALID_ADVISORY_DATA', ui_message('diagnostic.coverage_plan.auxiliary_observations_must_be_an_object'))
         return diagnostics
     for key in ('advisory', 'relevance_notes'):
         if key in observations:
             warn('$.' + key, 'UNVERIFIED_ADVISORY_DATA',
-                 'Free-form observations are retained without verifying classification or paths.')
+                 ui_message('diagnostic.coverage_plan.free_form_observations_are_retained_without_verifying_classification'))
     for key, schema in (('subsystems', SUBSYSTEMS), ('exclusions', EXCLUSIONS), ('coverage', COVERAGE)):
         if key in observations:
             defects = schema_diagnostics(observations[key], schema, '$.' + key)
             for defect in defects['violations']:
                 warn(defect['path'], 'INVALID_ADVISORY_DATA',
-                     'Auxiliary observation does not match its legacy schema.')
+                     ui_message('diagnostic.coverage_plan.auxiliary_observation_does_not_match_its_legacy_schema'))
     inventory = context.get('_inventory')
     known = {entry['path'] for entry in inventory['entries']} if inventory is not None else None
 
     def check_path(path, location):
         if path != '.' and not valid_path(path):
-            warn(location, 'UNSAFE_COVERAGE_PATH', 'Auxiliary path has invalid source-path syntax.')
+            warn(location, 'UNSAFE_COVERAGE_PATH', ui_message(
+                'diagnostic.coverage_plan.auxiliary_path_has_invalid_source_path_syntax',
+            ))
         elif known is None:
-            warn(location, 'UNVERIFIED_COVERAGE_PATH', 'No pinned inventory is available to verify this path.')
+            warn(location, 'UNVERIFIED_COVERAGE_PATH', ui_message(
+                'diagnostic.coverage_plan.no_pinned_inventory_is_available_to_verify_this',
+            ))
         elif path not in known:
-            warn(location, 'UNKNOWN_COVERAGE_PATH', 'Auxiliary path is absent from the source inventory.')
+            warn(location, 'UNKNOWN_COVERAGE_PATH', ui_message(
+                'diagnostic.coverage_plan.auxiliary_path_is_absent_from_the_source_inventory',
+            ))
 
     subsystems = observations.get('subsystems')
     if type(subsystems) is list:
@@ -185,7 +192,7 @@ def advisory_diagnostics(observations, context):
         for index, exclusion in enumerate(exclusions):
             location = f'$.exclusions[{index}]'
             warn(location, 'MODEL_EXCLUSION_IGNORED',
-                 'Model exclusion cannot change the source inventory; only the user source filter can exclude sources.')
+                 ui_message('diagnostic.coverage_plan.model_exclusion_cannot_change_the_source_inventory_only'))
             if type(exclusion) is dict and type(exclusion.get('path')) is str:
                 check_path(exclusion['path'], location + '.path')
     return diagnostics

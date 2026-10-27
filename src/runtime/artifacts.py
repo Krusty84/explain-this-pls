@@ -12,6 +12,7 @@ import re
 import uuid
 from pathlib import Path
 from typing import Any
+from src.messages import message as ui_message
 from src.runtime.errors import AuditError
 
 def now() -> str:
@@ -40,7 +41,7 @@ def neutral_temporary_base(source: Path) -> Path:
         candidate = candidate.resolve()
         if candidate.is_dir() and not inside(candidate, source.resolve()):
             return candidate
-    raise AuditError('No temporary directory outside the source tree is available.')
+    raise AuditError(ui_message('diagnostic.artifacts.no_temporary_directory_outside_the_source_tree_is'))
 
 def atomic(path: Path, data: str | bytes) -> None:
     private_directory(path.parent)

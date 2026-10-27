@@ -138,8 +138,8 @@ class ReporterTests(unittest.TestCase):
                 outcome = 'NOT_ACCEPTED' if case in ('partial_study', 'citation_warning', 'unverifiable') else 'INCOMPLETE'
                 self.assertEqual(review_outcome(item), outcome)
                 if outcome == 'NOT_ACCEPTED':
-                    self.assertIn('Review completed; policy acceptance has not passed.', review_summary(item))
-                    self.assertIn('Ревью завершено; приёмка по проверкам политики не пройдена.',
+                    self.assertIn('Review completed, policy acceptance has not passed.', review_summary(item))
+                    self.assertIn('Ревью завершено, приёмка по проверкам политики не пройдена.',
                                   review_summary(item, 'Russian'))
 
     def test_output_selection_and_explicit_precedence(self):

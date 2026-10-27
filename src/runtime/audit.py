@@ -9,6 +9,7 @@ import signal
 import sys
 import uuid
 from pathlib import Path
+from src.messages import message as ui_message
 from src.contracts.contracts import ContractError
 from src.runtime.reporting import existing_file
 from src.runtime.metrics import RunMetrics
@@ -33,7 +34,7 @@ def run_audit(args, reporter) -> int:
     old_handler = signal.getsignal(signal.SIGTERM)
 
     def interrupted(signum, frame):
-        raise KeyboardInterrupt(f'Received signal {signum}')
+        raise KeyboardInterrupt(ui_message('cli.received_signal', signum=signum))
 
     def header():
         nonlocal header_shown
@@ -50,14 +51,14 @@ def run_audit(args, reporter) -> int:
     try:
         signal.signal(signal.SIGTERM, interrupted)
         if sys.platform not in ('darwin', 'linux') or sys.version_info < (3, 11):
-            raise AuditError('This implementation requires macOS or Linux and Python 3.11+.')
+            raise AuditError(ui_message('diagnostic.audit.this_implementation_requires_macos_or_linux_and_python'))
         try:
             config_path = args.config.resolve()
             original = config_path.read_bytes()
             config = load_config(config_path, text=original.decode('utf-8'))
         except ContractError as exc:
-            raise AuditError('The configuration is not valid JSON/JSONC.', code='CONFIGURATION_ERROR',
-                             hint='Check the configuration syntax and run --check again.') from exc
+            raise AuditError(ui_message('diagnostic.audit.the_configuration_is_not_valid_json_jsonc'), code='CONFIGURATION_ERROR',
+                             hint=ui_message('diagnostic.audit.check_the_configuration_syntax_and_check_again')) from exc
         reports = Path(config['_reports_dir'])
         run_id = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:10]
         run_dir = reports / run_id
@@ -138,7 +139,10 @@ def run_audit(args, reporter) -> int:
                 save_last_analysis(config_path, analysis, original)
             except (OSError, ValueError, ContractError) as exc:
                 reporter.emit('last_analysis_warning', code='LAST_ANALYSIS_NOT_SAVED',
-                              message='Could not save last_analysis in the configuration: ' + str(exc))
+                              message=ui_message(
+                                  'diagnostic.audit.could_not_save_last_analysis_in_the_configuration',
+                                  exc=str(exc),
+                              ))
         signal.signal(signal.SIGTERM, old_handler)
         os.umask(old_umask)
         manifest_path = run_dir / 'manifest.json' if run_dir else None
@@ -147,12 +151,15 @@ def run_audit(args, reporter) -> int:
                   'final_report': manifest.get('final_report'),
                   'has_usable_material': manifest.get('has_usable_material', False),
                   'exit_code': code}
-        result['status_meaning'] = ('Local launch prerequisites checked. Source analysis was not performed; '
-            'model availability and provider authorization were not tested.' if result['status'] == 'PREFLIGHT_OK' else
-            'Enabled-stage policy checks satisfied; factual correctness is not established.' if result['status'] == 'COMPLETE' else
-            'Document processing completed with citation warnings; unresolved citations require human review.'
+        result['status_meaning'] = (ui_message(
+            'diagnostic.audit.local_launch_prerequisites_checked_source_analysis_was_not',
+        ) if result['status'] == 'PREFLIGHT_OK' else
+            ui_message(
+                'diagnostic.audit.enabled_stage_policy_checks_satisfied_factual_correctness_is',
+            ) if result['status'] == 'COMPLETE' else
+            ui_message('diagnostic.audit.document_processing_completed_with_citation_warnings_unresolved_citations')
                 if result['status'] == 'COMPLETE_WITH_WARNINGS' else
-            'Processing may be incomplete or evidence may be insufficient; consult limitations and diagnostics.')
+            ui_message('diagnostic.audit.processing_may_be_incomplete_or_evidence_may_be'))
         result['review_quality'] = 'NOT_MEASURED'
         result['review_enabled'] = manifest.get('review_enabled', (config or {}).get('execution', {}).get('review_enabled', True))
         if not args.check:

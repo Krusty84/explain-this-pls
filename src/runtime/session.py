@@ -4,6 +4,7 @@
 """One shared set of configuration, source guards, events and run metrics."""
 from __future__ import annotations
 from pathlib import Path
+from src.messages import message as ui_message
 from src.contracts.contracts import MODEL_FOLDER_SCHEMAS, MODEL_SCHEMAS, ContractError, strict_json, CONTRACT_ID, ARTIFACT_FORMAT
 from src.runtime.reporting import NullReporter, existing_file
 from src.runtime.execution import execution_settings
@@ -30,14 +31,14 @@ class RunSession:
             previous = strict_json(existing_manifest.read_text(encoding='utf-8'))
             if (previous.get('contract_id') != CONTRACT_ID or
                     previous.get('artifact_format') != ARTIFACT_FORMAT):
-                raise AuditError('Unsupported artifact format; select a new run directory.',
+                raise AuditError(ui_message('diagnostic.session.unsupported_artifact_format_select_a_new_directory'),
                                  code='UNSUPPORTED_ARTIFACT_FORMAT', failure_layer='publication')
         self.compromise = config.get('result_policy', 'compromise') == 'compromise'
         self.critical_failure = False
         self.execution = execution_settings(config.get('execution'))
         self.mode = config['mode']
         if trust_repository and self.mode != 'git':
-            raise AuditError('--trust-repository requires git mode; it cannot be used in folder mode.')
+            raise AuditError(ui_message('diagnostic.session.trust_repository_requires_git_mode_it_cannot_be'))
         self.source = config[self.mode + '_mode']
         self.source_path = Path(self.source['path' if self.mode == 'folder' else 'repository'])
         self.folder = Folder(self.source_path, source_filter=config.get('source_filter')) if self.mode == 'folder' else None
@@ -91,7 +92,7 @@ class RunSession:
             manifest.setdefault('diagnostics', []).append(detail | {'phase': phase} | context)
 
     def stage_context(self, stage, context):
-        return {'branch': context.get('branch', 'all branches' if stage == 'compare' else 'folder'),
+        return {'branch': context.get('branch', ui_message('diagnostic.session.all_branches') if stage == 'compare' else 'folder'),
                 **({'source_name': self.source_path.name or str(self.source_path)} if self.mode == 'folder' else {}),
                 'commit': context.get('source_commit'),
                 'stage': context.get('prompt_variant', stage) if stage == 'study' else stage,
@@ -134,7 +135,7 @@ class RunSession:
                                     if entry.get('model_actual')))
         if models:
             meta['models_reported'] = models
-            meta['model_actual_source'] = 'backend usage metadata; may include multiple models'
+            meta['model_actual_source'] = ui_message('diagnostic.session.backend_usage_metadata_may_include_multiple_models')
             stage_models = list(dict.fromkeys(entry['model_actual'] for entry in meta['metrics']['by_model']
                 if entry.get('model_actual')))
             if len(stage_models) == 1:

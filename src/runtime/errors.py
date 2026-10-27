@@ -3,6 +3,7 @@
 
 """Audit failures shared by source checks and orchestration."""
 from __future__ import annotations
+from src.messages import message as ui_message
 from src.runtime.reporting import Diagnostic
 
 class AuditError(RuntimeError):
@@ -29,11 +30,11 @@ class AuditError(RuntimeError):
     def __str__(self):
         details = []
         if self.snapshot is not None:
-            details.append(f'Snapshot {self.snapshot!r}')
+            details.append(ui_message('diagnostic.errors.snapshot', snapshot=self.snapshot))
         if self.node_path is not None:
-            details.append(f'path {self.node_path!r}')
+            details.append(ui_message('diagnostic.errors.path', node_path=self.node_path))
         if self.required_commit is not None:
-            details.append(f'required SHA {self.required_commit}')
+            details.append(ui_message('diagnostic.errors.required_sha', required_commit=self.required_commit))
         return (', '.join(details) + ': ' if details else '') + self.message
 
 class UnsafeRepository(AuditError):

@@ -9,6 +9,7 @@ import tempfile
 import uuid
 from dataclasses import asdict
 from pathlib import Path
+from src.messages import message as ui_message
 from src.contracts.contracts import ContractError, strict_json, result_diagnostics, CONTRACT_ID, ARTIFACT_FORMAT
 from src.runtime.reporting import diagnostic
 from src.runtime.execution import Budget
@@ -35,7 +36,7 @@ from src.runtime import artifacts, process as process_runtime
 def mcp_profile(session, agent):
     profile = getattr(session, 'mcp_capabilities', {}).get(profile_key(agent))
     if profile is None:
-        raise AuditError('The configured Codex agent has no verified MCP capability profile.',
+        raise AuditError(ui_message('diagnostic.invocation.the_configured_codex_agent_has_no_verified_mcp'),
                          code='MCP_COMPATIBILITY', failure_layer='compatibility',
                          details={'native_fallback': False})
     return profile
@@ -66,11 +67,13 @@ class ModelInvoker:
                 self.session.assert_source()
             inventory, evidence_metadata = self.session.source_inventory()
             if context.get('_inventory') and inventory['source_fingerprint'] != context['_inventory']['source_fingerprint']:
-                raise UnsafeRepository('Source changed from the inventory used for the coverage plan.', failure_layer='integrity')
+                raise UnsafeRepository(ui_message(
+                    'diagnostic.invocation.source_changed_from_the_inventory_used_for_the',
+                ), failure_layer='integrity')
             if stage == 'study' and not context.get('coverage_plan'):
                 context['inventory_summary'] = inventory_summary(inventory)
             if self.session.folder and inventory['source_fingerprint'] != context['source_fingerprint']:
-                raise UnsafeRepository('Source folder changed from the pinned snapshot before invocation.')
+                raise UnsafeRepository(ui_message('diagnostic.invocation.source_folder_changed_from_the_pinned_snapshot_before'))
             if self.session.repo:
                 self.session.assert_source()
             evidence_pins = {e['path']: e['sha256'] for e in inventory['entries'] if e['type'] == 'file'}
@@ -81,7 +84,9 @@ class ModelInvoker:
             prepared_context, preparation = self.session.source_context.prepare(
                 stage, context, evidence_pins, expected_metadata=evidence_metadata)
         except SourceChanged as exc:
-            raise UnsafeRepository('Source changed during context preparation.', code='SOURCE_CHANGED',
+            raise UnsafeRepository(ui_message(
+                'diagnostic.invocation.source_changed_during_context_preparation',
+            ), code='SOURCE_CHANGED',
                                    failure_kind='SOURCE_CHANGED', failure_layer='integrity') from exc
         context.pop('source_context', None)
         if prepared_context is not None:
@@ -197,7 +202,7 @@ class ModelInvoker:
             self.attempts.save_attempt_value(attempt, 'model-catalog.json', profile['catalog'], meta)
         if mcp_mode and not reports_only:
             if source_maps_directory is None:
-                raise AuditError('MCP source access requires the prepared on-demand source index.',
+                raise AuditError(ui_message('diagnostic.invocation.mcp_source_access_requires_the_prepared_on_demand'),
                                  code='MCP_PREPARATION_FAILED', failure_layer='integrity')
             from src.mcp.service import prepare_manifest
             map_files = {name: dict(path=str(source_maps_directory / name),
@@ -245,7 +250,7 @@ class ModelInvoker:
         meta.update(contract_id=CONTRACT_ID, artifact_format=ARTIFACT_FORMAT,
                     context_format=CONTEXT_FORMAT,
                     revision_id=context.get('revision_id'), prompt_variant=context.get('prompt_variant', stage),
-                    model_actual_source='unknown: backend has not reported model identity',
+                    model_actual_source=ui_message('diagnostic.invocation.model_unknown'),
                     review_quality='NOT_MEASURED', publication_complete=False)
         meta.update(source_tools_enabled=not reports_only)
         if mcp_mode:
@@ -342,12 +347,16 @@ class ModelInvoker:
                             mcp_error = codex.mcp_failure(r['stdout'], r['stderr'])
                             if mcp_error is not None:
                                 raise mcp_error
-                        raise AuditError(f'{agent["backend"]} exited with {r["returncode"]}; inspect private attempt logs.',
+                        raise AuditError(ui_message(
+                            'diagnostic.invocation.exited_with_inspect_private_attempt_logs',
+                            backend=agent["backend"],
+                            returncode=r["returncode"],
+                        ),
                             code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='backend')
                     if mcp_mode:
                         actual = verify_trace(trace_root, expected_tools, expected_model=profile['proof']['model'])
                         if actual['toolset_sha256'] != proof['toolset_sha256']:
-                            raise AuditError('Codex changed its verified MCP tool schemas during the model run.',
+                            raise AuditError(ui_message('diagnostic.invocation.codex_changed_its_verified_mcp_tool_schemas_during'),
                                              code='MCP_COMPATIBILITY', failure_layer='compatibility',
                                              details={'native_fallback': False})
                         delivery = verify_mcp_text_delivery(trace_root, r['stdout'])
@@ -360,9 +369,9 @@ class ModelInvoker:
                                     'sha256': digest(blob), 'bytes': len(blob)}
                         meta['source_access']['inference_requests'] = actual['inference_requests']
                         meta['model_actual'] = actual['model']
-                        meta['model_actual_source'] = 'verified Codex inference request trace'
+                        meta['model_actual_source'] = ui_message('diagnostic.invocation.verified_trace')
                     if phase == 'write' and observer.snapshot()['calls']:
-                        raise AuditError('The report author used a tool outside its evidence-only scope.',
+                        raise AuditError(ui_message('diagnostic.invocation.the_report_author_used_a_tool_outside_its'),
                                          code='WRITER_TOOL_CALL', failure_layer='execution')
                     output = codex.read_response(schema_path)
                     data, provider_meta = CLI_ADAPTERS[agent['backend']].parse_output(output)
@@ -373,7 +382,7 @@ class ModelInvoker:
                         meta['models_reported'] = list(model_usage)
                         if len(model_usage) == 1:
                             meta['model_actual'] = next(iter(model_usage))
-                        meta['model_actual_source'] = 'backend modelUsage; may include multiple models'
+                        meta['model_actual_source'] = ui_message('diagnostic.invocation.model_usage_source')
                     artifacts.save_json(attempt / 'extracted.json', data)
                     self.attempts.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
                     data = self.validator.validate_attempt(stage, data, context, attempt, meta, binding,
@@ -390,18 +399,20 @@ class ModelInvoker:
                             if any(type(row) is not dict or row.get('attempt_id') != invocation_id or row.get('state') != 'SERVED'
                                    or type(row.get('request_id')) is not str or type(row.get('result_sha256')) is not str
                                    for row in served):
-                                raise AuditError('MCP receipts do not belong to this attempt.',
+                                raise AuditError(ui_message('diagnostic.invocation.mcp_receipts_do_not_belong_to_this_attempt'),
                                                  code='MCP_RECEIPT_CHANGED', failure_layer='integrity')
                             attempt_hashes[str(receipts.relative_to(destination.parent))] = {
                                 'sha256': digest(blob), 'bytes': len(blob)}
                         if not observer.mcp_receipts <= {(row['request_id'], row['result_sha256']) for row in served}:
-                            raise AuditError('Observed MCP receipts disappeared or changed.',
+                            raise AuditError(ui_message('diagnostic.invocation.observed_mcp_receipts_disappeared_or_changed'),
                                              code='MCP_RECEIPT_CHANGED', failure_layer='integrity')
                         meta['source_access']['served_calls'] = len(served)
                         if (any(row.get('result_summary', {}).get('error', {}).get('code') == 'SOURCE_CHANGED'
                                 for row in served) or
                                 meta['tool_observation'].get('mcp', {}).get('errors', {}).get('SOURCE_CHANGED')):
-                            raise UnsafeRepository('MCP detected a changed pinned source or private artifact.',
+                            raise UnsafeRepository(ui_message(
+                                'diagnostic.invocation.mcp_detected_a_changed_pinned_source_or_private',
+                            ),
                                 code='SOURCE_CHANGED', failure_kind='SOURCE_CHANGED', failure_layer='integrity')
                     self.attempts.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
                     self.publisher.assert_coverage_file(context)
@@ -434,7 +445,9 @@ class ModelInvoker:
             except SourceChanged as exc:
                 meta['source_integrity_verified'] = False
                 meta['source_check_status'] = 'CHANGED_DURING_EVIDENCE_RESOLUTION'
-                raise UnsafeRepository('Source changed during evidence resolution.', code='SOURCE_CHANGED',
+                raise UnsafeRepository(ui_message(
+                    'diagnostic.evidence.source_changed_during_evidence_resolution',
+                ), code='SOURCE_CHANGED',
                                        failure_kind='SOURCE_CHANGED', failure_layer='integrity') from exc
             if self.session.folder:
                 self.session.folder.assert_snapshot(context['source_fingerprint'])
@@ -457,7 +470,7 @@ class ModelInvoker:
                             raise ValueError('changed')
                     except (OSError, ValueError, SourceChanged) as exc:
                         self.session.critical_failure = True
-                        raise AuditError('Frozen evidence package cannot be replaced.',
+                        raise AuditError(ui_message('diagnostic.invocation.frozen_evidence_package_cannot_be_replaced'),
                                          code='MODEL_BINDING_CHANGED', failure_layer='integrity') from exc
                 else:
                     artifacts.atomic(package_path, content)

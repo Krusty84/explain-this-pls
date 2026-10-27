@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from src.messages import message as ui_message
 from src.runtime.reporting import NullReporter
 from src.runtime.execution import Budget
 from src.runtime.errors import AuditError
@@ -134,7 +135,7 @@ def _process(command, cwd, env, input_data, reporter, context,
             with contextlib.suppress(Exception):
                 stream.close()
         if cleanup_error is not None and not failed:
-            raise AuditError('Could not finish cleanup of the owned CLI process group.',
+            raise AuditError(ui_message('diagnostic.process.could_not_finish_cleanup_of_the_owned_cli'),
                              code='CLI_FAILED', failure_kind='BACKEND_ERROR', failure_layer='cleanup') from cleanup_error
         if cleanup_error is not None and failure is not None:
             failure.cleanup_failed = True
@@ -143,6 +144,6 @@ def _process(command, cwd, env, input_data, reporter, context,
 
 def check_read_loop(observer):
     if observer.triggered:
-        raise AuditError('Repeated tool results produced no new observable material.',
+        raise AuditError(ui_message('diagnostic.process.repeated_tool_results_produced_no_new_observable_material'),
                          code='NO_PROGRESS', failure_kind='NO_PROGRESS', failure_layer='execution',
                          details=observer.diagnostic)

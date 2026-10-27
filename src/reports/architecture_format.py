@@ -3,6 +3,7 @@
 
 """Fixed headings for the published architecture document."""
 
+from src.messages import message as ui_message
 SECTION_TITLES = {
     'Russian': (
         'Область исследования', 'Контекст системы', 'Компоненты системы',
@@ -21,7 +22,7 @@ def resolve_language(language):
         return 'Russian'
     if key in ('en', 'english', 'английский'):
         return 'English'
-    raise ValueError('output_language requires Russian or English architecture headings')
+    raise ValueError(ui_message('diagnostic.architecture_format.output_language_requires_russian_or_english_architecture_headings'))
 
 
 def section_headings(language):

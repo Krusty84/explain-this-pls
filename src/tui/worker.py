@@ -9,6 +9,7 @@ import signal
 import sys
 import threading
 
+from src.messages import message as ui_message
 from src.runtime.audit import run_audit
 from src.runtime.reporting import Reporter, existing_file
 from src.reports.review import review_summary
@@ -28,7 +29,7 @@ class PipeReporter(Reporter):
         except (BrokenPipeError, EOFError, OSError):
             self.disconnected = True
             # Let the normal audit cleanup run if its UI disappears.
-            raise KeyboardInterrupt('The interactive interface disconnected.')
+            raise KeyboardInterrupt(ui_message('tui.the_interactive_interface_disconnected'))
 
     def send_event(self, event):
         self.send({'type': 'event', 'event': event.event, 'context': event.context})
@@ -42,8 +43,8 @@ class PipeReporter(Reporter):
             return
         super().finish(result, manifest, **options)
         paths = []
-        for label, value in (('Final report', result.get('final_report')),
-                             ('Manifest', result.get('manifest')), ('Technical log', self.log_path)):
+        for label, value in ((ui_message('tui.final_report'), result.get('final_report')),
+                             (ui_message('tui.manifest'), result.get('manifest')), (ui_message('tui.technical_log'), self.log_path)):
             if value and existing_file(Path(value)):
                 paths.append((label, str(value)))
         reviews = [(entry.get('branch', ''), review_summary(entry,
@@ -56,7 +57,7 @@ class PipeReporter(Reporter):
 def audit_worker(args, connection):
     reporter = PipeReporter(connection, verbose=args.verbose)
     def interrupted(signum, frame):
-        raise KeyboardInterrupt('Analysis interrupted.')
+        raise KeyboardInterrupt(ui_message('tui.analysis_interrupted'))
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     code = 1
@@ -68,8 +69,8 @@ def audit_worker(args, connection):
         code = 130 if isinstance(exc, KeyboardInterrupt) else 1
         reporter.send({'type': 'result', 'result': {'status': 'FAILED', 'exit_code': code},
                        'paths': [], 'check_only': args.check,
-                       'diagnostics': [{'message': 'Analysis interrupted before starting.' if code == 130
-                                        else 'The audit worker stopped unexpectedly.'}]})
+                       'diagnostics': [{'message': ui_message('tui.analysis_interrupted_before_starting') if code == 130
+                                        else ui_message('tui.the_audit_worker_stopped_unexpectedly')}]})
     finally:
         reporter.close()
         connection.close()

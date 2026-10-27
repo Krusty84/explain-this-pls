@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 import time
 
+from src.messages import message as ui_message
 from src.analysis.evidence import lines, source_catalog, valid_path
 
 REPEAT_CALLS = 50
@@ -68,9 +69,9 @@ class ToolObserver:
         self.finished = False
         self.terminal = False
         if backend == 'codex':
-            self.limitations.add('Codex shell source coordinates and model request events are unavailable.')
+            self.limitations.add(ui_message('diagnostic.tool_observer.codex_shell_source_coordinates_and_model_request_events'))
         else:
-            self.limitations.add('Unsupported backend event format.')
+            self.limitations.add(ui_message('diagnostic.tool_observer.unsupported_backend_event_format'))
         try:
             self.sources = source_catalog(self.context)
         except KeyError:
@@ -112,7 +113,7 @@ class ToolObserver:
                 for offset, line in enumerate(lines(fragment['text'])):
                     self._delivery((sid, path, start + offset, line.removesuffix('\n')), prompt=True)
             except (KeyError, TypeError):
-                self.limitations.add('Invalid prepared fragment delivery metadata.')
+                self.limitations.add(ui_message('diagnostic.tool_observer.invalid_prepared_fragment_delivery_metadata'))
 
     def _delivery(self, row, *, prompt=False):
         sid, path, number, text = row
@@ -135,7 +136,7 @@ class ToolObserver:
         try:
             self.buffer += self.decoder.decode(block) if isinstance(block, bytes) else block
         except UnicodeDecodeError:
-            self._invalid('Invalid UTF-8 in tool event stream.')
+            self._invalid(ui_message('diagnostic.tool_observer.invalid_utf_in_tool_event_stream'))
             self.decoder.reset()
             self.buffer = ''
             return
@@ -152,7 +153,7 @@ class ToolObserver:
                 raise ValueError()
             self.event(event)
         except (ValueError, TypeError):
-            self._invalid('Malformed or unsupported JSON event.')
+            self._invalid(ui_message('diagnostic.tool_observer.malformed_or_unsupported_json_event'))
 
     def finish(self):
         if self.finished:
@@ -161,15 +162,15 @@ class ToolObserver:
             try:
                 self.buffer += self.decoder.decode(b'', final=True)
             except UnicodeDecodeError:
-                self._invalid('Incomplete UTF-8 in tool event stream.')
+                self._invalid(ui_message('diagnostic.tool_observer.incomplete_utf_in_tool_event_stream'))
             if self.buffer.strip():
                 self._line(self.buffer)
         self.buffer = ''
         self.finished = True
         if self.pending:
-            self.limitations.add('Tool calls without completed results.')
+            self.limitations.add(ui_message('diagnostic.tool_observer.tool_calls_without_completed_results'))
         if not self.terminal and not self.triggered:
-            self.limitations.add('No terminal backend event observed.')
+            self.limitations.add(ui_message('diagnostic.tool_observer.no_terminal_backend_event_observed'))
         return self.snapshot()
 
     def event(self, event):
@@ -197,7 +198,7 @@ class ToolObserver:
         tool = item.get('type')
         if tool == 'command_execution':
             status = ('success' if type(item.get('exit_code')) is int and item['exit_code'] == 0 else
-                      'error' if type(item.get('exit_code')) is int else 'unknown')
+                      'error' if type(item.get('exit_code')) is int else ui_message('cli.unknown'))
             output = item.get('aggregated_output')
             complete = (isinstance(output, str) and item.get('status') == 'completed'
                         and isinstance(item.get('command'), str) and not item.get('truncated', False))
@@ -211,8 +212,10 @@ class ToolObserver:
                                   item.get('arguments'), 'error' if item.get('error') else 'success',
                                   item.get('result'), item.get('result') is not None, self.session_id)]
         if tool not in ('agent_message', 'reasoning', 'plan', 'todo_list'):
-            return [CompletedTool(item.get('id'), str(tool or 'unknown'), None, 'unknown', item, False,
-                                  self.session_id, limitations=['Unsupported completed Codex item type.'])]
+            return [CompletedTool(item.get('id'), str(tool or ui_message('cli.unknown')), None, ui_message('cli.unknown'), item, False,
+                                  self.session_id, limitations=[ui_message(
+                                      'diagnostic.tool_observer.unsupported_completed_codex_item_type',
+                                  )])]
         return []
 
     def _source_mcp(self, item):
@@ -227,28 +230,28 @@ class ToolObserver:
         try:
             if item.get('error') or (call.status == 'error' and result is None):
                 observation['error'] = 'TOOL_CALL_FAILED'
-                raise ValueError('Source MCP call failed before a verified result was observed.')
+                raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_call_failed_before_a_verified_result'))
             if (not isinstance(item.get('id'), str) or not item['id'] or
                     not isinstance(arguments, dict) or not isinstance(result, dict) or
                     item.get('status') not in ('completed', 'failed') or item.get('truncated')):
-                raise ValueError('Source MCP result is incomplete or has an unknown envelope.')
+                raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_result_is_incomplete_or_has_an'))
             content = result.get('content')
             if (not isinstance(content, list) or len(content) != 1 or
                     not isinstance(content[0], dict) or content[0].get('type') != 'text' or
                     not isinstance(content[0].get('text'), str)):
-                raise ValueError('Source MCP result text was not observed.')
+                raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_result_text_was_not_observed'))
             payload = json.loads(content[0]['text'])
             if not isinstance(payload, dict):
-                raise ValueError('Source MCP result text is not a JSON object.')
+                raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_result_text_is_not_a_json'))
             for key in ('structuredContent', 'structured_content'):
                 if result.get(key) is not None and result[key] != payload:
-                    raise ValueError('Source MCP text differs from its structured result.')
+                    raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_text_differs_from_its_structured_result'))
             meta = payload.get('_meta', {})
             if (not isinstance(meta, dict) or not isinstance(meta.get('request_id'), str) or
                     not meta['request_id'] or meta.get('manifest_sha256') != self.mcp_access.get('manifest_sha256') or
                     meta.get('attempt_id') != self.mcp_access.get('attempt_id') or
                     meta.get('state') != 'SERVED' or meta.get('inspection') != 'INSPECTED_UNVERIFIED'):
-                raise ValueError('Source MCP result identity does not match this attempt.')
+                raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_result_identity_does_not_match_this'))
             receipt_found = False
             for raw in Path(self.mcp_access['receipts_path']).read_text(encoding='utf-8').splitlines():
                 try:
@@ -263,14 +266,14 @@ class ToolObserver:
                     receipt_found = True
                     break
             if not receipt_found:
-                raise ValueError('Source MCP result has no matching private SERVED receipt.')
+                raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_result_has_no_matching_private_served'))
             observation.update(request_id=meta['request_id'], manifest_sha256=meta['manifest_sha256'])
             if isinstance(payload.get('error'), dict):
                 observation['error'] = str(payload['error'].get('code', 'TOOL_ERROR'))
                 observation['delivery_state'] = 'DELIVERED_OBSERVED'
                 call.status, call.complete = 'error', True
             elif result.get('isError') or result.get('is_error'):
-                raise ValueError('Source MCP result has an unexplained protocol error.')
+                raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_result_has_an_unexplained_protocol_error'))
             elif tool == 'read_source':
                 self._source_mcp_lines(call, payload)
                 observation['delivery_state'] = 'DELIVERED_OBSERVED'
@@ -282,7 +285,7 @@ class ToolObserver:
             call.source_lines = []
             call.complete = False
             call.limitations.append(str(exc) if isinstance(exc, ValueError) else
-                                    'Source MCP result or its private receipt could not be verified.')
+                                    ui_message('diagnostic.tool_observer.source_mcp_result_or_its_private_receipt_could'))
         return call
 
     def _source_mcp_lines(self, call, payload):
@@ -290,7 +293,7 @@ class ToolObserver:
         sid, path = arguments.get('source_id'), arguments.get('path')
         source = next((source for source in self.sources if source['id'] == sid), None)
         if source is None or not valid_path(path):
-            raise ValueError('Source MCP returned an unknown source locator.')
+            raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_returned_an_unknown_source_locator'))
         relative = path if source['root'] == '.' else source['root'] + '/' + path
         owners = [source for source in self.sources if source['root'] == '.' or relative.startswith(source['root'] + '/')]
         inventory = {entry['path']: entry.get('sha256') for entry in self.context.get('_inventory', {}).get('entries', [])
@@ -298,7 +301,7 @@ class ToolObserver:
         if (max(owners, key=lambda source: len(source['root']))['id'] != sid or
                 relative not in inventory or not inventory[relative] or payload.get('sha256') != inventory[relative] or
                 payload.get('source_id') != sid or payload.get('path') != path):
-            raise ValueError('Source MCP result differs from the pinned inventory.')
+            raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_result_differs_from_the_pinned_inventory'))
         start, end = payload.get('start_line'), payload.get('end_line')
         requested_start, requested_end = arguments.get('start_line'), arguments.get('end_line')
         total, text = payload.get('total_lines'), payload.get('text')
@@ -307,7 +310,7 @@ class ToolObserver:
                 requested_start < 1 or requested_end < requested_start or total < 0 or
                 not isinstance(text, str) or '\r\n' in text or type(complete) is not bool or type(more) is not bool or
                 not isinstance(payload.get('encoding'), str)):
-            raise ValueError('Source MCP returned invalid source coordinates or text metadata.')
+            raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_returned_invalid_source_coordinates_or_text'))
         rows = lines(text)
         empty = total == 0 and start == 1 and end == 0 and not rows
         if (start != requested_start or (not empty and (end < start or end > min(total, requested_end))) or
@@ -315,7 +318,7 @@ class ToolObserver:
                 (more and (type(following) is not int or following != end + 1)) or
                 (not more and following is not None) or
                 (complete and not empty and end != requested_end)):
-            raise ValueError('Source MCP source text does not match its returned line range.')
+            raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_source_text_does_not_match_its'))
         call.source_lines = [(sid, path, start + offset, line.removesuffix('\n'))
                              for offset, line in enumerate(rows)]
         call.complete = complete
@@ -346,14 +349,14 @@ class ToolObserver:
             self.pending.pop((call.session_id, call.call_id), None)
         else:
             call.complete = False
-            call.limitations.append('Native tool call identity unavailable.')
+            call.limitations.append(ui_message('diagnostic.tool_observer.native_tool_call_identity_unavailable'))
         if self.last_completed is not None and now < self.last_completed:
             call.complete = False
-            call.limitations.append('Nonmonotonic event observation time.')
+            call.limitations.append(ui_message('diagnostic.tool_observer.nonmonotonic_event_observation_time'))
         self.last_completed = now
         self.counts['calls'] += 1
         self.by_kind[call.tool] += 1
-        status = call.status if call.status in ('success', 'error') else 'unknown'
+        status = call.status if call.status in ('success', 'error') else ui_message('cli.unknown')
         self.counts[status] += 1
         self.limitations.update(call.limitations)
         self.counts['complete_results' if call.complete else 'incomplete_results'] += 1
@@ -428,7 +431,9 @@ class ToolObserver:
                 self.would_stop = {'kind': 'NO_PROGRESS', 'call': self.counts['calls'],
                                    'observed_at_seconds': round(now, 6), 'consecutive_confirmed_repeats': self.streak,
                                    'repeat_streak_duration_seconds': round(duration, 6),
-                                   'reason': 'Repeated completed tool results without new observable material.',
+                                   'reason': ui_message(
+                                       'diagnostic.tool_observer.repeated_completed_tool_results_without_new_observable_material',
+                                   ),
                                    'recent_calls': list(self.recent)}
             if self.enabled:
                 self.triggered, self.diagnostic = True, self.would_stop
@@ -446,19 +451,23 @@ class ToolObserver:
 
     def snapshot(self):
         line_coverage = ('unavailable' if not self.counts['reads_with_coordinates'] else
-                         'partial' if self.counts['reads_without_coordinates'] else 'complete')
+                         ui_message('run.partial') if self.counts['reads_without_coordinates'] else 'complete')
         complete = self.terminal and not self.pending and not self.limitations and not self.counts['incomplete_results']
         request_available = self.backend != 'codex' and bool(self.requests)
         delivery_available = self.counts['prompt_lines'] or self.counts['reads_with_coordinates']
         result = {'backend': self.backend, 'calls': self.counts['calls'],
                   'calls_by_tool': dict(sorted(self.by_kind.items())),
                   'successful_results': self.counts['success'], 'error_results': self.counts['error'],
-                  'unknown_results': self.counts['unknown'], 'incomplete_results': self.counts['incomplete_results'],
+                  'unknown_results': self.counts[ui_message(
+                      'cli.unknown',
+                  )], 'incomplete_results': self.counts['incomplete_results'],
                   'duplicate_events': self.counts['duplicate_events'], 'invalid_events': self.counts['invalid_events'],
                   'unique_lines': self.counts['tool_unique_lines'] if line_coverage != 'unavailable' else None,
                   'repeated_lines': self.counts['tool_repeated_lines'] if line_coverage != 'unavailable' else None,
                   'line_coverage': line_coverage,
-                  'line_coverage_reason': 'Only explicit source coordinates from verified completed tool results are counted.',
+                  'line_coverage_reason': ui_message(
+                      'diagnostic.tool_observer.only_explicit_source_coordinates_from_verified_completed_tool',
+                  ),
                   'mixed_reads': self.counts['mixed_reads'] if line_coverage != 'unavailable' else None,
                   'conflicting_lines': self.counts['conflicting_lines'] if line_coverage != 'unavailable' else None,
                   'fully_repeated_reads': self.counts['fully_repeated_reads'] if line_coverage != 'unavailable' else None,
@@ -467,21 +476,25 @@ class ToolObserver:
                   'max_repeat_streak': self.max_streak, 'max_repeat_duration_seconds': round(self.max_duration, 6),
                   'last_new_material_seconds': self.last_new,
                   'model_requests': len(self.requests) if request_available else None,
-                  'model_requests_coverage': 'partial' if request_available else 'unavailable',
-                  'model_requests_reason': 'Codex model request events are unavailable.',
+                  'model_requests_coverage': ui_message('run.partial') if request_available else 'unavailable',
+                  'model_requests_reason': ui_message('diagnostic.tool_observer.codex_model_request_events_are_unavailable'),
                   'delivery': {'unique_lines': self.counts['delivery_unique_lines'] if delivery_available else None,
                                'repeated_lines': self.counts['delivery_repeated_lines'] if delivery_available else None,
                                'conflicting_lines': self.counts['delivery_conflicting_lines'] if delivery_available else None,
                                'prompt_lines': self.counts['prompt_lines'],
-                               'coverage': 'partial' if delivery_available and line_coverage == 'unavailable' else line_coverage},
+                               'coverage': ui_message(
+                                   'run.partial',
+                               ) if delivery_available and line_coverage == 'unavailable' else line_coverage},
                   'guard': {'enabled': self.enabled, 'triggered': self.triggered,
                             'state': 'NO_PROGRESS' if self.triggered else 'observing' if self.enabled else 'disabled',
                             'diagnostic': self.diagnostic, 'would_stop': self.would_stop},
-                  'observation': {'coverage': 'complete' if complete else 'partial' if self.counts['calls'] else 'unavailable',
+                  'observation': {'coverage': 'complete' if complete else ui_message(
+                      'run.partial',
+                  ) if self.counts['calls'] else 'unavailable',
                                   'limitations': sorted(self.limitations)}}
         result['metric_coverage'] = {
             'tool_calls': {'status': result['observation']['coverage'],
-                           'reason': 'Counts contain only observed completed native calls.'},
+                           'reason': ui_message('diagnostic.tool_observer.counts_contain_only_observed_completed_native_calls')},
             'source_lines': {'status': line_coverage, 'reason': result['line_coverage_reason']},
             'model_requests': {'status': result['model_requests_coverage'], 'reason': result['model_requests_reason']},
         }
@@ -492,5 +505,7 @@ class ToolObserver:
             result['mcp'].update(errors=dict(sorted(self.mcp_errors.items())),
                                  delivery_state='DELIVERED_OBSERVED' if self.mcp_counts['delivered_observed'] else 'UNVERIFIED',
                                  inspection_state='INSPECTED_UNVERIFIED',
-                                 served_state='SERVED', served_observation='Private server receipts; not model inspection.')
+                                 served_state='SERVED', served_observation=ui_message(
+                                     'diagnostic.tool_observer.private_server_receipts_not_model_inspection',
+                                 ))
         return result

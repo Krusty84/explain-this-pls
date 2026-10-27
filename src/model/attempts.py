@@ -4,6 +4,7 @@
 """Pinned private attempt values and model binding files."""
 from __future__ import annotations
 import json
+from src.messages import message as ui_message
 from src.contracts.contracts import ContractError, strict_json
 from src.analysis.evidence import SourceChanged, read_confined
 from src.runtime.errors import AuditError
@@ -33,7 +34,7 @@ class AttemptStore:
                 raise ValueError('changed')
         except (OSError, ValueError, SourceChanged) as exc:
             self.session.critical_failure = True
-            raise AuditError('Private attempt artifact changed.', code='MODEL_BINDING_CHANGED',
+            raise AuditError(ui_message('diagnostic.attempts.private_attempt_artifact_changed'), code='MODEL_BINDING_CHANGED',
                              failure_layer='integrity') from exc
         return strict_json(content.decode('utf-8'))
 
@@ -55,5 +56,7 @@ class AttemptStore:
                     raise ValueError('changed')
         except (ContractError, OSError, ValueError, SourceChanged) as exc:
             self.session.critical_failure = True
-            raise AuditError('Model binding changed during invocation.', code='MODEL_BINDING_CHANGED',
+            raise AuditError(ui_message(
+                'diagnostic.attempts.model_binding_changed_during_invocation',
+            ), code='MODEL_BINDING_CHANGED',
                              failure_layer='integrity') from exc

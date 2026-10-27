@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 
+from src.messages import message as ui_message
 from src.contracts.contracts import ContractError, response_error, strict_json
 from src.runtime.metrics import codex_usage
 from src.runtime.errors import AuditError
@@ -33,7 +34,7 @@ def check_mcp_compatibility(version: str, features: str) -> None:
                           for line in features.splitlines())
     if shell_supported:
         return
-    raise AuditError('Codex has no independent shell_tool control.',
+    raise AuditError(ui_message('diagnostic.codex.codex_has_no_independent_shell_tool_control'),
                      code='MCP_COMPATIBILITY', failure_kind='MCP_COMPATIBILITY',
                      failure_layer='compatibility',
                      details={'cli_version': version, 'shell_tool_supported': shell_supported,
@@ -69,7 +70,7 @@ def mcp_failure(stdout: bytes, stderr: bytes) -> AuditError | None:
             continue
         if event.get('type') == 'error' and event.get('code') in ('MCP_STARTUP', 'MCP_COMPATIBILITY'):
             code = event['code']
-            return AuditError(event.get('message', 'Codex MCP transport failed.'),
+            return AuditError(event.get('message', ui_message('diagnostic.codex.codex_mcp_transport_failed')),
                               code=code, failure_kind=code,
                               failure_layer='compatibility' if code == 'MCP_COMPATIBILITY' else 'backend',
                               details={'native_fallback': False})
@@ -82,7 +83,7 @@ def mcp_failure(stdout: bytes, stderr: bytes) -> AuditError | None:
         normalized = message.casefold()
         if (MCP_SERVER_NAME in normalized and any(marker in normalized for marker in
                 ('required mcp', 'mcp startup', 'failed to start', 'failed to initialize', 'mcp client for'))):
-            return AuditError('The required source MCP server failed to start; inspect private attempt logs.',
+            return AuditError(ui_message('diagnostic.codex.the_required_source_mcp_server_failed_to_start'),
                               code='MCP_STARTUP', failure_kind='MCP_STARTUP', failure_layer='backend',
                               details={'server': MCP_SERVER_NAME, 'native_fallback': False})
     return None
@@ -96,19 +97,19 @@ def build_command(agent: dict, stage: str, mode: str, schema: dict,
     mcp_mode = mcp_mode or mcp_manifest is not None
     if mcp_manifest is not None:
         if compare or writer_only:
-            raise AuditError('MCP is unavailable to the report writer and comparison stages.',
+            raise AuditError(ui_message('diagnostic.codex.mcp_is_unavailable_to_the_report_writer_and'),
                              code='MCP_COMPATIBILITY', failure_layer='compatibility')
         if (not mcp_manifest.is_absolute() or not isinstance(mcp_manifest_sha256, str)
                 or len(mcp_manifest_sha256) != 64
                 or any(char not in '0123456789abcdef' for char in mcp_manifest_sha256)):
-            raise AuditError('MCP requires an absolute private manifest path and its SHA-256.',
+            raise AuditError(ui_message('diagnostic.codex.mcp_requires_an_absolute_private_manifest_path_and'),
                              code='MCP_STARTUP', failure_layer='integrity')
     elif mcp_mode and not (compare or writer_only):
-        raise AuditError('The source-reading stage has no private MCP manifest.',
+        raise AuditError(ui_message('diagnostic.codex.the_source_reading_stage_has_no_private_mcp'),
                          code='MCP_STARTUP', failure_layer='execution')
     if mcp_mode:
         if mcp_catalog is None or not mcp_catalog.is_absolute():
-            raise AuditError('MCP requires a pinned Codex model catalog.',
+            raise AuditError(ui_message('diagnostic.codex.mcp_requires_a_pinned_codex_model_catalog'),
                              code='MCP_COMPATIBILITY', failure_layer='compatibility')
         adapter = Path(__file__).with_name('codex_mcp.py').resolve()
         cmd = [sys.executable, '-I', '-B', str(adapter), '--executable', agent['executable'],
@@ -145,7 +146,9 @@ def read_response(schema_path: Path) -> str:
     try:
         return schema_path.with_name('final.response.json').read_text(encoding='utf-8')
     except FileNotFoundError:
-        raise response_error('INCOMPLETE_OUTPUT', 'result', 'Codex did not write a final response.') from None
+        raise response_error('INCOMPLETE_OUTPUT', 'result', ui_message(
+            'diagnostic.codex.codex_did_not_write_a_final_response',
+        )) from None
 
 
 def collect_metrics(output: str, requested=None) -> dict:

@@ -5,6 +5,7 @@
 import json
 import re
 
+from src.messages import message as ui_message
 from src.contracts.contracts import accepted, contract_violation, is_recovered_material
 from src.analysis.evidence import canonical, sha
 from src.reports.navigation import anchor, link
@@ -90,16 +91,16 @@ def review_outcome(item, *, review_enabled=None):
 
 def review_summary(item, language='English', *, review_enabled=None):
     messages = {
-        'DISABLED': ('Ревью отключено конфигурацией; отдельная проверка не выполнена.',
-                     'Review is disabled by configuration; no separate review was performed.'),
-        'ACCEPTED': ('Ревью завершено и принято по проверкам политики.',
-                     'Review completed and accepted under policy checks.'),
-        'ISSUES': ('Ревью обнаружило существенные замечания; приёмка не пройдена.',
-                   'Review reported material findings; acceptance has not passed.'),
-        'NOT_ACCEPTED': ('Ревью завершено; приёмка по проверкам политики не пройдена.',
-                         'Review completed; policy acceptance has not passed.'),
-        'INCOMPLETE': ('Ревью не завершено; положительная приёмка отсутствует.',
-                       'Review is incomplete; no positive policy acceptance.'),
+        'DISABLED': (ui_message('review.summary.disabled.ru'),
+                     ui_message('review.summary.disabled.en')),
+        'ACCEPTED': (ui_message('review.summary.accepted.ru'),
+                     ui_message('review.summary.accepted.en')),
+        'ISSUES': (ui_message('review.summary.issues.ru'),
+                   ui_message('review.summary.issues.en')),
+        'NOT_ACCEPTED': (ui_message('review.summary.not_accepted.ru'),
+                         ui_message('review.summary.not_accepted.en')),
+        'INCOMPLETE': (ui_message('review.summary.incomplete.ru'),
+                       ui_message('review.summary.incomplete.en')),
     }
     return messages[review_outcome(item, review_enabled=review_enabled)][0 if russian(language) else 1]
 
@@ -136,8 +137,8 @@ def render_review(data, language='English', study=None):
     coverage = checks['registry_coverage']
     out = ['# ' + t('Ревью архитектуры', 'Architecture review'), '', label(data['verdict'], language), '',
            t('Состояние ревью: ', 'Review state: ') + label(data['completion_status'], language) + '.', '',
-           t('Проверки политики пройдены; фактическая правильность не установлена.',
-             'Policy checks satisfied; factual correctness is not established.') if checks['policy_satisfied'] else
+           t('Проверки политики пройдены, фактическая правильность не установлена.',
+             'Policy checks satisfied, factual correctness is not established.') if checks['policy_satisfied'] else
            t('Приёмка не пройдена. Ревью содержит проблемы или не завершено.',
              'Policy checks not satisfied. Review has issues or is incomplete.'), '',
            t('Качество содержательного ревью не измерено. Разрешение локатора не подтверждает вывод.',
@@ -146,8 +147,8 @@ def render_review(data, language='English', study=None):
            f"{coverage['assessed_count']}/{coverage['expected_count']}.", '']
     out += ['- ' + cell(x) for x in data['limitations']]
     if checks.get('citation_warnings'):
-        out += ['', '> ' + link(t('Есть предупреждения о цитатах; проверьте ограничения.',
-                                   'Citation warnings require attention; see limitations.'),
+        out += ['', '> ' + link(t('Есть предупреждения о цитатах, проверьте ограничения.',
+                                   'Citation warnings require attention, see limitations.'),
                                fragment=anchor('section', 'citation-warnings')), '']
     out += ['', '## ' + t('Замечания', 'Findings'), '']
     if not data['findings']:
@@ -219,7 +220,7 @@ def review_searches(data, language):
     from src.contracts.contracts import SECTION_KEYS
     titles = dict(zip(SECTION_KEYS, section_headings(language)))
     searches = {a['area_id']: a for a in data['omission_search']}
-    out = ['### ' + t('Поиск пропусков — оценки агента', 'Omission search — agent reports'), '',
+    out = ['### ' + t('Поиск пропусков - оценки агента', 'Omission search — agent reports'), '',
            '| ' + t('Область | Состояние | Ограничение', 'Area | State | Limitation') + ' |', '| --- | --- | --- |']
     for area in data['review_plan']['omission_areas']:
         reply = searches.get(area['id'], {})

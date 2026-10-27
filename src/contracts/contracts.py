@@ -8,6 +8,7 @@ import json
 import math
 import re
 from typing import Any
+from src.messages import message as ui_message
 
 class ContractError(ValueError):
     def __init__(self, message, *, failure_kind='SEMANTIC_ERROR', failure_layer='semantic',
@@ -16,7 +17,7 @@ class ContractError(ValueError):
         self.failure_kind = failure_kind
         self.failure_layer = failure_layer
         self.details = details or {}
-        self.safe_message = message if safe else 'The agent response failed contract validation.'
+        self.safe_message = message if safe else ui_message('diagnostic.contracts.the_agent_response_failed_contract_validation')
 
 
 def response_error(kind, layer, message, **details):
@@ -26,10 +27,11 @@ def response_error(kind, layer, message, **details):
 
 def contract_violation(code, path, *, kind='SEMANTIC_ERROR', layer='semantic', **details):
     """Callers supply closed codes and schema-owned paths, never response text/IDs."""
-    suffix = (f"; expected {details['expected_type']}, got {details['actual_type']}"
-              if code == 'CLAIMS_TYPE_MISMATCH' else '')
-    return response_error(kind, layer, f'Response contract rejected: {code} at {path}{suffix}.',
-                          code=code, path=path, **details)
+    text = (ui_message('diagnostic.contracts.rejected_type', code=code, path=path,
+                       expected_type=details['expected_type'], actual_type=details['actual_type'])
+            if code == 'CLAIMS_TYPE_MISMATCH' else
+            ui_message('diagnostic.contracts.response_contract_rejected_at', code=code, path=path))
+    return response_error(kind, layer, text, code=code, path=path, **details)
 
 
 def json_type(value):
@@ -44,7 +46,7 @@ def json_error_details(exc):
                 'Unterminated string starting at', 'Invalid \\escape',
                 'Invalid \\uXXXX escape', 'Invalid control character at',
                 'Unterminated block comment'}
-    return {'json_error': exc.msg if exc.msg in messages else 'Invalid JSON syntax',
+    return {'json_error': exc.msg if exc.msg in messages else ui_message('diagnostic.contracts.invalid_json'),
             'line': exc.lineno, 'column': exc.colno, 'position': exc.pos}
 
 def string(*values: str) -> dict:
@@ -180,11 +182,15 @@ def strict_json(text: str) -> Any:
         result = {}
         for key, value in items:
             if key in result:
-                raise response_error('INVALID_JSON', 'result', 'Duplicate JSON key.', json_error='duplicate_key')
+                raise response_error('INVALID_JSON', 'result', ui_message(
+                    'diagnostic.contracts.duplicate_json_key',
+                ), json_error='duplicate_key')
             result[key] = value
         return result
     def reject(value):
-        raise response_error('INVALID_JSON', 'result', 'Non-finite JSON value.', json_error='non_finite')
+        raise response_error('INVALID_JSON', 'result', ui_message(
+            'diagnostic.contracts.non_finite_json_value',
+        ), json_error='non_finite')
     def finite_float(value):
         number = float(value)
         if not math.isfinite(number):
@@ -194,12 +200,19 @@ def strict_json(text: str) -> Any:
         return json.loads(text, object_pairs_hook=pairs, parse_constant=reject, parse_float=finite_float)
     except json.JSONDecodeError as exc:
         raise response_error('INVALID_JSON', 'result',
-                             f'Invalid JSON syntax: line {exc.lineno} column {exc.colno} (char {exc.pos}).',
+                             ui_message(
+                                 'diagnostic.contracts.invalid_json_syntax_line_column_char',
+                                 lineno=exc.lineno,
+                                 colno=exc.colno,
+                                 pos=exc.pos,
+                             ),
                              **json_error_details(exc)) from exc
     except (UnicodeError, RecursionError, ValueError) as exc:
         if isinstance(exc, ContractError):
             raise
-        raise response_error('INVALID_JSON', 'result', 'Invalid JSON encoding or numeric/nesting limit.') from exc
+        raise response_error('INVALID_JSON', 'result', ui_message(
+            'diagnostic.contracts.invalid_json_encoding_or_numeric_nesting_limit',
+        )) from exc
 
 def jsonc_text(text: str) -> str:
     """Replace comments/trailing commas with spaces, preserving error positions."""
@@ -228,9 +241,14 @@ def jsonc_text(text: str) -> str:
             else:
                 end = text.find('*/', i + 2)
                 if end == -1:
-                    error = json.JSONDecodeError('Unterminated block comment', text, start)
+                    error = json.JSONDecodeError(ui_message('diagnostic.contracts.unterminated_block_comment'), text, start)
                     raise response_error('INVALID_JSON', 'configuration',
-                                         f'Invalid JSONC comment: line {error.lineno} column {error.colno} (char {error.pos}).',
+                                         ui_message(
+                                             'diagnostic.contracts.invalid_jsonc_comment_line_column_char',
+                                             lineno=error.lineno,
+                                             colno=error.colno,
+                                             pos=error.pos,
+                                         ),
                                          **json_error_details(error)) from error
                 i = end + 2
             for pos in range(start, i):
@@ -315,7 +333,11 @@ def validate_schema(value: Any, schema: dict, where: str = '$') -> None:
         if first['path'] == '$.task' and first['violation'] == 'enum':
             raise contract_violation('TASK_IDENTITY_MISMATCH', '$.task', kind='SCHEMA_ERROR', layer='schema', **details)
         raise response_error('SCHEMA_ERROR', 'schema',
-            f"Structured result has {details['total_violations']} schema violation(s); first at {first['path']}.",
+            ui_message(
+                'diagnostic.contracts.structured_result_has_schema_violation_s_first_at',
+                total_violations=details['total_violations'],
+                path=first['path'],
+            ),
             **first, **details)
 
 
@@ -425,7 +447,7 @@ def comparison_factual_sides(diff, context, *, allow_quote_mismatch=False):
 
 def nonblank(value, key=''):
     if type(value) is str and not value.strip() and key not in ('quote', 'limitation', 'uncertainty'):
-        raise ContractError('Required strings must not be empty or whitespace')
+        raise ContractError(ui_message('diagnostic.contracts.required_strings_must_not_be_empty_or_whitespace'))
     if type(value) is dict:
         for name, child in value.items():
             nonblank(child, name)
@@ -474,7 +496,7 @@ def validate_result(stage, value, context, mode='git'):
     validate_wire_identity(stage, value, context, mode)
     nonblank(value)
     if value['completion_status'] != 'COMPLETE' and not value['limitations']:
-        raise ContractError('PARTIAL/BLOCKED requires explicit limitations')
+        raise ContractError(ui_message('diagnostic.contracts.partial_blocked_requires_explicit_limitations'))
     if stage == 'study' and context.get('phase') == 'write':
         return
     if stage in ('study', 'review'):
@@ -493,7 +515,7 @@ def validate_result(stage, value, context, mode='git'):
         for i, claim in enumerate(value['claims']):
             references(claim['evidence_ids'], evidence_ids, f'$.claims[{i}].evidence_ids', namespaces={'study'})
             if claim['epistemic_kind'] != 'FACT' and not claim['uncertainty'].strip():
-                raise ContractError('Hypothesis/unknown requires a concrete missing check or limitation')
+                raise ContractError(ui_message('diagnostic.contracts.hypothesis_unknown_requires_a_concrete_missing_check_or'))
         if context.get('phase') != 'collect':
             inspect_required_diagrams(value['report_sections'], value['claims'],
                                       completion_status=value['completion_status'])
@@ -512,21 +534,21 @@ def validate_result(stage, value, context, mode='git'):
             references(finding['claim_ids'], registry.keys(), f'$.findings[{i}].claim_ids')
             references(finding['evidence_ids'], evidence_ids, f'$.findings[{i}].evidence_ids', namespaces={'study', 'review'})
             if not finding['evidence_ids']:
-                raise ContractError('Finding requires source evidence')
+                raise ContractError(ui_message('diagnostic.contracts.finding_requires_source_evidence'))
         for i, claim in enumerate(value['claims']):
             references(claim['evidence_ids'], evidence_ids, f'$.claims[{i}].evidence_ids', namespaces={'study', 'review'})
             fact = registry[claim['id']]['epistemic_kind'] == 'FACT'
             permitted = {'SUPPORTED', 'CONTRADICTED', 'UNVERIFIABLE', 'NOT_CHECKED'} if fact else {
                 'CAVEAT_ACCEPTABLE', 'CAVEAT_INADEQUATE', 'NOT_CHECKED'}
             if claim['outcome'] not in permitted:
-                raise ContractError('Outcome is incompatible with the frozen epistemic kind')
+                raise ContractError(ui_message('diagnostic.contracts.outcome_is_incompatible_with_the_frozen_epistemic_kind'))
             if claim['outcome'] in ('SUPPORTED', 'CONTRADICTED') and not claim['evidence_ids']:
-                raise ContractError('Supported/contradicted assessments require source evidence')
+                raise ContractError(ui_message('diagnostic.contracts.supported_contradicted_assessments_require_source_evidence'))
             if claim['outcome'] in ('UNVERIFIABLE', 'NOT_CHECKED', 'CAVEAT_INADEQUATE') and not claim['limitation'].strip():
-                raise ContractError('Unassessed or insufficient assessment requires a limitation')
+                raise ContractError(ui_message('diagnostic.contracts.unassessed_or_insufficient_assessment_requires_a_limitation'))
             if claim['outcome'] in ('CONTRADICTED', 'UNVERIFIABLE', 'CAVEAT_INADEQUATE') and not any(
                     claim['id'] in f['claim_ids'] and f['severity'] in ('HIGH', 'MEDIUM') for f in value['findings']):
-                raise ContractError('Material issue requires a linked material finding')
+                raise ContractError(ui_message('diagnostic.contracts.material_issue_requires_a_linked_material_finding'))
         areas = {a['id'] for a in context['review_plan']['omission_areas']}
         returned = set()
         for i, area in enumerate(value['omission_search']):
@@ -537,7 +559,7 @@ def validate_result(stage, value, context, mode='git'):
             returned.add(area['area_id'])
             references(area['finding_ids'], fids, f'$.omission_search[{i}].finding_ids')
             if area['status'] != 'INSPECTED' and not area['limitation'].strip():
-                raise ContractError('Unfinished omission search requires a limitation')
+                raise ContractError(ui_message('diagnostic.contracts.unfinished_omission_search_requires_a_limitation'))
         obligations = {(f['revision_id'], f['finding_id']) for f in context.get('prior_findings', [])}
         replied = set()
         for i, finding in enumerate(value['prior_findings']):
@@ -548,9 +570,9 @@ def validate_result(stage, value, context, mode='git'):
     else:
         expected = [b for b in context['requested_branches'] if b != context['baseline_branch']]
         if value['baseline_branch'] != context['baseline_branch'] or value['baseline_commit'] != context['baseline_commit']:
-            raise response_error('IDENTITY_MISMATCH', 'identity', 'Comparison baseline mismatch.')
+            raise response_error('IDENTITY_MISMATCH', 'identity', ui_message('diagnostic.contracts.comparison_baseline_mismatch'))
         if sorted(value['compared_branches']) != sorted(expected):
-            raise ContractError('Comparison must cover each non-baseline branch exactly once')
+            raise ContractError(ui_message('diagnostic.contracts.comparison_must_cover_each_non_baseline_branch_exactly'))
         references(value['unresolved_branches'], set(context['requested_branches']), '$.unresolved_branches')
         entries = {b['branch']: b for b in context['branches']}
         review_enabled = context.get('review_enabled', True)
@@ -560,18 +582,18 @@ def validate_result(stage, value, context, mode='git'):
         strict_missing = {b for b in context['requested_branches']
                           if not workflow_satisfied(entries.get(b, {}), review_enabled=review_enabled)}
         if not missing <= set(value['unresolved_branches']):
-            raise ContractError('Comparison conceals inputs failing enabled-stage checks')
+            raise ContractError(ui_message('diagnostic.contracts.comparison_conceals_inputs_failing_enabled_stage_checks'))
         if value['completion_status'] == 'COMPLETE' and value['unresolved_branches']:
-            raise ContractError('COMPLETE comparison contains unresolved inputs')
+            raise ContractError(ui_message('diagnostic.contracts.complete_comparison_contains_unresolved_inputs'))
         unique_ids(value['differences'], r'D-[0-9]{3,}', '$.differences')
         for diff in value['differences']:
             if diff['branch'] not in expected:
-                raise ContractError('Unknown difference branch')
+                raise ContractError(ui_message('diagnostic.contracts.unknown_difference_branch'))
             sides = set()
             fact_sides = set()
             for ref in diff['evidence_refs']:
                 if ref['branch'] not in (context['baseline_branch'], diff['branch']):
-                    raise ContractError('Evidence references the wrong comparison side')
+                    raise ContractError(ui_message('diagnostic.contracts.evidence_references_the_wrong_comparison_side'))
                 entry = entries.get(ref['branch'], {})
                 doc = entry.get('study') or {}
                 plan = doc.get('review_plan', {})
@@ -581,7 +603,7 @@ def validate_result(stage, value, context, mode='git'):
                         or ref['document_sha256'] != plan.get('document_sha256') or
                         ref['registry_sha256'] != plan.get('registry_sha256') or
                         ref['claim_id'] not in {c['id'] for c in material.get('claims', [])}):
-                    raise ContractError('Comparison reference does not resolve in the supplied report')
+                    raise ContractError(ui_message('diagnostic.contracts.comparison_reference_does_not_resolve_in_the_supplied'))
                 sides.add(ref['branch'])
                 registered = {c['id']: c for c in doc.get('claims', [])}
                 assessed = {c['id']: c for c in (entry.get('review') or {}).get('claims', [])}
@@ -591,7 +613,9 @@ def validate_result(stage, value, context, mode='git'):
             if diff['classification'] == 'CONFIRMED_DIFFERENCE':
                 if (not review_enabled or sides != {context['baseline_branch'], diff['branch']}
                         or sides & strict_missing or fact_sides != sides):
-                    raise ContractError('Strong contrast requires supported factual references and accepted inputs on both sides')
+                    raise ContractError(ui_message(
+                        'diagnostic.contracts.strong_contrast_requires_supported_factual_references_and_accepted',
+                    ))
 
 
 def result_diagnostics(stage, value, context, mode='git'):
@@ -619,18 +643,24 @@ def result_diagnostics(stage, value, context, mode='git'):
             path = f'$.claims[{i}]'
             if c['id'] in seen or not re.fullmatch(r'C-[0-9]{3,}', c['id']):
                 code = 'DUPLICATE_RECORD_ID' if c['id'] in seen else 'INVALID_RECORD_ID'
-                issues.append({'path': path + '.id', 'code': code, 'message': 'Invalid or duplicate claim ID.'})
+                issues.append({'path': path + '.id', 'code': code, 'message': ui_message(
+                    'diagnostic.contracts.invalid_or_duplicate_claim_id',
+                )})
             seen.add(c['id'])
             if c['id'] not in registry:
-                issues.append({'path': path + '.id', 'code': 'UNKNOWN_CLAIM_ID', 'message': 'Claim is absent from the frozen registry.'})
+                issues.append({'path': path + '.id', 'code': 'UNKNOWN_CLAIM_ID', 'message': ui_message(
+                    'diagnostic.contracts.claim_is_absent_from_the_frozen_registry',
+                )})
             if c['outcome'] in ('CONTRADICTED', 'UNVERIFIABLE', 'CAVEAT_INADEQUATE') and not any(
                     c['id'] in f['claim_ids'] and f['severity'] in ('HIGH', 'MEDIUM') for _, f in records['findings']):
                 issues.append({'path': path, 'code': 'MISSING_MATERIAL_FINDING',
-                               'message': 'Material issue lacks a linked HIGH/MEDIUM finding.'})
+                               'message': ui_message('diagnostic.contracts.material_issue_lacks_a_linked_high_medium_finding')})
         for i, f in records['findings']:
             if not set(f['claim_ids']) <= registry:
                 issues.append({'path': f'$.findings[{i}].claim_ids', 'code': 'UNKNOWN_CLAIM',
-                               'message': 'Finding references a claim outside the frozen registry.'})
+                               'message': ui_message(
+                                   'diagnostic.contracts.finding_references_a_claim_outside_the_frozen_registry',
+                               )})
     # Exact schema diagnostics cover every independent malformed record. Semantic
     # failures use a closed message, never source/response text.
     return {'schema_diagnostics': structural, 'semantic_diagnostics': {

@@ -5,15 +5,16 @@
 import json
 from pathlib import Path
 
+from src.messages import message as ui_message
 from src.runtime.artifacts import atomic
 
 
 def config_directory(value):
     if not str(value).strip():
-        raise ValueError('Enter a config folder path.')
+        raise ValueError(ui_message('tui.enter_a_config_folder_path'))
     path = Path(value).expanduser().resolve()
     if not path.is_dir():
-        raise ValueError('Choose an existing directory.')
+        raise ValueError(ui_message('tui.choose_an_existing_directory'))
     # Check readability now, including when a saved directory loses permissions.
     list(path.iterdir())
     return path
@@ -22,9 +23,9 @@ def config_directory(value):
 def read_settings(path):
     value = json.loads(path.read_text(encoding='utf-8'))
     if not isinstance(value, dict) or not isinstance(value.get('config_dir'), str) or not value['config_dir'].strip():
-        raise ValueError('explain.config must contain a config_dir path.')
+        raise ValueError(ui_message('tui.explain_config_must_contain_a_config_dir_path'))
     if not Path(value['config_dir']).is_absolute():
-        raise ValueError('The saved config_dir must be an absolute path.')
+        raise ValueError(ui_message('tui.the_saved_config_dir_must_be_an_absolute'))
     return config_directory(value['config_dir'])
 
 

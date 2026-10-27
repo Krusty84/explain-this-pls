@@ -8,47 +8,49 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+from src.messages import message as ui_message
 
 ROOT = Path(__file__).resolve().parent
 
 
 def main(argv=None) -> int:
-    argparse.ArgumentParser(description=__doc__).parse_args(argv)
+    argparse.ArgumentParser(description=ui_message('installer.description')).parse_args(argv)
     if sys.platform not in ('darwin', 'linux') or sys.version_info < (3, 11):
-        print('Installation requires macOS or Linux and Python 3.11+.', file=sys.stderr)
+        print(ui_message('installer.installation_requires_macos_or_linux_and_python'), file=sys.stderr)
         return 1
     requirements = ROOT / 'requirements.txt'
     if not requirements.is_file():
-        print(f'Requirements file is missing: {requirements}', file=sys.stderr)
+        print(ui_message('installer.requirements_file_is_missing', requirements=requirements), file=sys.stderr)
         return 1
     environment = ROOT / '.venv'
     python = environment / 'bin' / 'python'
     try:
         if environment.exists():
             if not (environment / 'pyvenv.cfg').is_file() or not python.is_file():
-                print(f'Cannot reuse {environment}: it is not a complete virtual environment. '
-                      'Move it aside and run the installer again.', file=sys.stderr)
+                print(ui_message('installer.cannot_reuse_it_is_not_a_complete_virtual', environment=environment), file=sys.stderr)
                 return 1
-            print(f'Reusing {environment}', flush=True)
+            print(ui_message('installer.reusing', environment=environment), flush=True)
         else:
-            print(f'Creating {environment}', flush=True)
+            print(ui_message('installer.creating', environment=environment), flush=True)
             subprocess.run([sys.executable, '-m', 'venv', str(environment)], check=True)
         subprocess.run([str(python), '-c',
             'import sys\n'
             'if sys.version_info < (3, 11):\n'
-            '    sys.exit("The existing .venv needs Python 3.11+. Move it aside and rerun the installer.")'],
+            '    sys.exit(sys.argv[1])', ui_message('installer.python_required')],
             check=True)
-        print(f'Installing requirements from {requirements}', flush=True)
+        print(ui_message('installer.installing_requirements_from', requirements=requirements), flush=True)
         subprocess.run([str(python), '-m', 'pip', 'install', '--require-virtualenv', '-r', str(requirements)],
                        cwd=ROOT, check=True)
     except (OSError, subprocess.CalledProcessError) as exc:
-        print(f'Installation failed: {exc}', file=sys.stderr)
+        print(ui_message('installer.installation_failed', exc=exc), file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print('\nInstallation interrupted. Run the installer again to retry.', file=sys.stderr)
+        print(ui_message('installer.installation_interrupted_the_installer_again_to_retry'), file=sys.stderr)
         return 130
-    print('\nInstallation complete. Start explain-this-pls with:\n' +
-          shlex.join([str(python), str(ROOT / 'explain.py')]))
+    print(ui_message(
+        'installer.installation_complete_start_explain_this_pls_with',
+        value=shlex.join([str(python), str(ROOT / 'explain.py')]),
+    ))
     return 0
 
 

@@ -20,6 +20,7 @@ import re
 import sys
 import time
 
+from src.messages import message as ui_message
 from src.analysis.evidence import (PointerError, SourceChanged, _read_confined,
                                    canonical, sha, source_catalog, valid_path)
 from src.analysis.source_decoding import decode_source, normalize_source_decoding, SourceDecodeError, BOMS
@@ -38,13 +39,13 @@ def source_context_settings(value=None):
     if value is None:
         value = {}
     if type(value) is not dict or set(value) - {'enabled', 'mode'}:
-        raise ValueError('source_context accepts enabled and mode only.')
+        raise ValueError(ui_message('diagnostic.source_context.source_context_accepts_enabled_and_mode_only'))
     enabled = value.get('enabled', True)
     if type(enabled) is not bool:
-        raise ValueError('source_context.enabled must be a JSON boolean.')
+        raise ValueError(ui_message('diagnostic.source_context.source_context_enabled_must_be_a_json_boolean'))
     mode = value.get('mode', 'on-demand')
     if mode not in ('full', 'on-demand'):
-        raise ValueError('source_context.mode must be full or on-demand.')
+        raise ValueError(ui_message('diagnostic.source_context.source_context_mode_must_be_full_or_on'))
     return {'enabled': enabled, 'mode': mode}
 
 
@@ -290,7 +291,7 @@ class SourceContextBuilder:
         try:
             blob, identity = _read_confined(root, relative, pinned=metadata)
             if metadata is None and sha(blob) != expected_files[relative]:
-                raise SourceChanged('Prepared source bytes differ from the pinned source inventory.')
+                raise SourceChanged(ui_message('diagnostic.source_context.prepared_source_bytes_differ_from_the_pinned_source'))
             record['identity'] = identity
             text, record['encoding'] = decode_source(blob, relative, decoding)
             if '\x00' in text:
@@ -320,18 +321,20 @@ class SourceContextBuilder:
             return None, manifest
         inventory = context.get('_inventory')
         if inventory is None:
-            raise ValueError('Source context requires the pinned inventory.')
+            raise ValueError(ui_message('diagnostic.source_context.source_context_requires_the_pinned_inventory'))
         entries = {e['path']: e for e in inventory['entries'] if e['type'] == 'file'}
         expected_files = expected_files if expected_files is not None else {p: e['sha256'] for p, e in entries.items()}
         if any(path not in expected_files or entries[path]['sha256'] != expected_files[path] for path in entries):
-            raise SourceChanged('Source context inventory differs from the pinned file hashes.')
+            raise SourceChanged(ui_message('diagnostic.source_context.source_context_inventory_differs_from_the_pinned_file'))
         catalog = source_catalog(context)
         snapshot = canonical([s['identity'] for s in catalog])
         decoding = normalize_source_decoding(context.get('source_decoding'))
         records = []
         for relative, entry in entries.items():
             if not valid_path(relative):
-                raise AuditError('Unsafe file in pinned source context inventory.', code='UNSAFE_SOURCE_PATH',
+                raise AuditError(ui_message(
+                    'diagnostic.source_context.unsafe_file_in_pinned_source_context_inventory',
+                ), code='UNSAFE_SOURCE_PATH',
                                  failure_layer='integrity', node_path=relative)
             source = max((s for s in catalog if s['root'] == '.' or relative.startswith(s['root'] + '/')),
                          key=lambda s: len(s['root']))

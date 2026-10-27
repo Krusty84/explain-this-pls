@@ -4,6 +4,7 @@
 """Explicit source decoding for evidence; never guess or replace bad bytes."""
 import codecs
 import re
+from src.messages import message as ui_message
 
 ENCODINGS = {'utf-8', 'utf-16', 'utf-16-le', 'utf-16-be', 'utf-32',
              'utf-32-le', 'utf-32-be', 'cp1251', 'cp1252', 'cp866', 'iso8859-1'}
@@ -23,25 +24,25 @@ def normalize_source_decoding(value=None):
     if value is None:
         return {'rules': []}
     if type(value) is not dict or set(value) - {'rules'} or type(value.get('rules', [])) is not list:
-        raise ValueError('source_decoding must contain only a rules array.')
+        raise ValueError(ui_message('diagnostic.source_decoding.source_decoding_must_contain_only_a_rules_array'))
     rules, paths = [], set()
     for rule in value.get('rules', []):
         if type(rule) is not dict or set(rule) != {'path', 'encoding'}:
-            raise ValueError('Each source_decoding rule requires path and encoding only.')
+            raise ValueError(ui_message('diagnostic.source_decoding.each_source_decoding_rule_requires_path_and_encoding'))
         path = rule['path']
         if (type(path) is not str or not path.strip() or len(path) > 4096 or
                 re.search(r'[\x00-\x1f\x7f\\:]', path) or
                 (path != '.' and any(part in ('', '.', '..') for part in path.split('/')))):
-            raise ValueError('source_decoding rule paths must be safe root-relative paths or ".".')
+            raise ValueError(ui_message('diagnostic.source_decoding.source_decoding_rule_paths_must_be_safe_root'))
         if path in paths:
-            raise ValueError('Duplicate source_decoding rule path.')
+            raise ValueError(ui_message('diagnostic.source_decoding.duplicate_source_decoding_rule_path'))
         encoding = rule['encoding']
         try:
             encoding = codecs.lookup(encoding).name if type(encoding) is str else None
         except LookupError:
             encoding = None
         if encoding not in ENCODINGS:
-            raise ValueError('Unsupported source_decoding encoding.')
+            raise ValueError(ui_message('diagnostic.source_decoding.unsupported_source_decoding_encoding'))
         rules.append({'path': path, 'encoding': 'latin-1' if encoding == 'iso8859-1' else encoding})
         paths.add(path)
     return {'rules': sorted(rules, key=lambda rule: rule['path'])}

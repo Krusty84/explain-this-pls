@@ -20,18 +20,13 @@ import time
 import traceback
 import unicodedata
 from typing import Any
+from src.messages import STAGE_MESSAGES, message as ui_message
 from src.contracts.contracts import ContractError, json_error_details
 
 LABEL_COLORS = {'[WARN]': '\x1b[33m', '[RUN]': '\x1b[36m', '[OK]': '\x1b[32m',
                 '[FAIL]': '\x1b[31m', '[SKIP]': '\x1b[90m'}
-STATUS_COLORS = {'Complete': '\x1b[32m', 'Complete with warnings': '\x1b[33m', 'Failed': '\x1b[31m',
-                 'May be incomplete': '\x1b[33m', 'Not started': '\x1b[90m'}
-STAGE_MESSAGES = {
-    'study': ('Analyzing project…', 'Project analysis', 'Architecture report created.'),
-    'revise': ('Revising architecture report…', 'Architecture revision', 'Revised architecture report created.'),
-    'review': ('Reviewing report…', 'Report review', 'Review response saved. See acceptance and findings.'),
-    'compare': ('Comparing branch reports…', 'Branch report comparison', 'Branch report comparison ready.'),
-}
+STATUS_COLORS = {ui_message('run.complete'): '\x1b[32m', ui_message('run.complete_with_warnings'): '\x1b[33m', ui_message('run.failed'): '\x1b[31m',
+                 ui_message('run.may_be_incomplete'): '\x1b[33m', ui_message('run.not_started'): '\x1b[90m'}
 
 SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 FRAME_INTERVAL = 0.125
@@ -87,30 +82,29 @@ def diagnostic(exc: BaseException) -> Diagnostic:
     if hasattr(exc, 'diagnostic'):
         data = exc.diagnostic()
         if data.code == 'SUBMODULE_NOT_INITIALIZED' and data.hint is None:
-            data = replace(data, hint='Prepare this submodule and run --check again.\n'
-                                     'Initialization may download data and change its checkout.')
+            data = replace(data, hint=ui_message('run.prepare_this_submodule_and_check_again_initialization_may'))
         if data.node_path is None and getattr(exc, 'node', None) is not None:
             return Diagnostic(**(asdict(data) | {'node_path': exc.node}))
         return data
     if isinstance(exc, KeyboardInterrupt):
-        return Diagnostic('INTERRUPTED', 'The run was interrupted.')
+        return Diagnostic('INTERRUPTED', ui_message('run.the_was_interrupted'))
     if isinstance(exc, subprocess.TimeoutExpired):
-        return Diagnostic('COMMAND_TIMEOUT', 'Local command exceeded its time limit.',
+        return Diagnostic('COMMAND_TIMEOUT', ui_message('run.local_command_exceeded_its_time_limit'),
                           failure_kind='STAGE_TIMEOUT', failure_layer='execution')
     if isinstance(exc, json.JSONDecodeError):
-        return Diagnostic('INVALID_RESPONSE', 'Invalid JSON syntax.', failure_kind='INVALID_JSON',
+        return Diagnostic('INVALID_RESPONSE', ui_message('run.invalid_json_syntax'), failure_kind='INVALID_JSON',
                           failure_layer='result', details=json_error_details(exc))
     if isinstance(exc, ContractError):
         # Contract exceptions can embed arbitrary values returned by a model.
         return Diagnostic('BACKEND_INCOMPATIBLE' if exc.failure_kind == 'BACKEND_INCOMPATIBLE' else 'INVALID_RESPONSE', exc.safe_message,
-                          hint='Inspect the private attempt artifacts listed in invocation.json.',
+                          hint=ui_message('run.inspect_the_private_attempt_artifacts_listed_in_invocation'),
                           failure_kind=exc.failure_kind, failure_layer=exc.failure_layer, details=exc.details)
     if isinstance(exc, UnicodeError):
-        return Diagnostic('INVALID_ENCODING', 'Input or CLI output could not be decoded.')
+        return Diagnostic('INVALID_ENCODING', ui_message('run.input_or_cli_output_could_not_be_decoded'))
     if isinstance(exc, OSError):
-        return Diagnostic('IO_ERROR', str(exc), hint='Check the path, available disk space and access permissions.')
-    return Diagnostic('INTERNAL_ERROR', 'An unexpected internal error stopped the run.',
-                      hint='Inspect the technical log and report this error with its run ID.')
+        return Diagnostic('IO_ERROR', str(exc), hint=ui_message('run.check_the_path_available_disk_space_and_access'))
+    return Diagnostic('INTERNAL_ERROR', ui_message('run.an_unexpected_internal_error_stopped_the'),
+                      hint=ui_message('run.inspect_the_technical_log_and_report_this_error'))
 
 
 def duration(seconds: float) -> str:
@@ -123,13 +117,13 @@ def duration(seconds: float) -> str:
 def metric_value(measured, key):
     value = measured.get(key)
     if value is None:
-        return 'n/a'
+        return ui_message('tui.n_a')
     text = f'${value:.2f}' if key == 'cost_usd' else f'{value:,}'
     notes = []
     if measured.get('coverage', {}).get(key) == 'partial':
-        notes.append('partial')
+        notes.append(ui_message('run.partial'))
     if key == 'total_tokens' and measured.get('total_tokens_estimated'):
-        notes.append('estimated')
+        notes.append(ui_message('run.estimated'))
     return text + (' (' + ', '.join(notes) + ')' if notes else '')
 
 
@@ -152,13 +146,15 @@ def safe_text(value: Any) -> str:
 def citation_warning_message(warning):
     """Locator metadata only; source text must never enter warning output."""
     source = (str(warning['evidence_branch']) + ' / ' if warning.get('evidence_branch') else '') + str(warning.get('source_id', ''))
-    message = (f"Citation {warning.get('evidence_id', '')}: {source} / {warning.get('path', '')}:"
-               f"{warning.get('start_line', '?')}-{warning.get('end_line', '?')}; "
-               f"{warning.get('reason', '')}; {warning.get('action', '')}; affected claims: " +
-               ', '.join(str(value) for value in warning.get('claim_ids', [])))
+    values = dict(evidence_id=warning.get('evidence_id', ''), source=source, path=warning.get('path', ''),
+                  start_line=warning.get('start_line', '?'), end_line=warning.get('end_line', '?'),
+                  reason=warning.get('reason', ''), action=warning.get('action', ''),
+                  claims=', '.join(str(value) for value in warning.get('claim_ids', [])))
     if 'original_start_line' in warning and 'original_end_line' in warning:
-        message += f"; original lines: {warning['original_start_line']}-{warning['original_end_line']}"
-    return message + '. Check citation support for these claims.'
+        return ui_message('run.citation_warning_with_original', **values,
+                          original_start_line=warning['original_start_line'],
+                          original_end_line=warning['original_end_line'])
+    return ui_message('run.citation_warning', **values)
 
 
 def existing_file(path: Path | None) -> bool:
@@ -296,7 +292,7 @@ class Reporter(NullReporter):
 
     def progress_message(self, context):
         if 'check_only' in context:
-            return 'Checking local setup…' if context['check_only'] else 'Preparing analysis…'
+            return ui_message('run.checking_local_setup') if context['check_only'] else ui_message('tui.preparing_analysis')
         return STAGE_MESSAGES.get(context.get('stage'), STAGE_MESSAGES['study'])[0]
 
     def metric_models(self, metrics):
@@ -309,10 +305,10 @@ class Reporter(NullReporter):
                 label = entry['backend'] + ': ' + model
             else:
                 requested = entry.get('model_requested')
-                label = entry['backend'] + ': ' + (requested + ' (requested)' if requested else 'model n/a')
+                label = entry['backend'] + ': ' + (requested + ' (requested)' if requested else ui_message('run.model_n_a'))
             if label not in labels:
                 labels.append(label)
-        return self.display('; '.join(labels) or 'No model calls')
+        return self.display('; '.join(labels) or ui_message('run.no_model_calls'))
 
     def metric_lines(self, metrics, *, compact=False):
         if metrics is None:
@@ -320,14 +316,31 @@ class Reporter(NullReporter):
         measured = metrics['usage']
         value = lambda key: metric_value(measured, key)
         if compact:
-            return ['      Tokens: ' + value('total_tokens') + ' | Agent-estimated cost: ' + value('cost_usd') +
-                    ' | Attempts: ' + str(metrics['attempts']) + ' | ' + self.metric_models(metrics)]
-        return ['      Tokens: ' + value('total_tokens') + ' | Input: ' + value('input_tokens') +
-                ' | Output: ' + value('output_tokens'),
-                '      Cache read/write: ' + value('cache_read_tokens') + ' / ' + value('cache_write_tokens') +
-                ' | Reasoning: ' + value('reasoning_tokens'),
-                '      Agent-estimated cost: ' + value('cost_usd') + ' | Attempts: ' + str(metrics['attempts']) +
-                ' | ' + self.metric_models(metrics)]
+            return [ui_message(
+                'run.tokens_agent_estimated_cost_attempts',
+                value=value('total_tokens'),
+                other_value=value('cost_usd'),
+                attempts=str(metrics['attempts']),
+                other_other_value=self.metric_models(metrics),
+            )]
+        return [ui_message(
+            'run.tokens_input_output',
+            value=value('total_tokens'),
+            other_value=value('input_tokens'),
+            other_other_value=value('output_tokens'),
+        ),
+                ui_message(
+                    'run.cache_read_write_reasoning',
+                    value=value('cache_read_tokens'),
+                    other_value=value('cache_write_tokens'),
+                    other_other_value=value('reasoning_tokens'),
+                ),
+                ui_message(
+                    'run.agent_estimated_cost_attempts',
+                    value=value('cost_usd'),
+                    attempts=str(metrics['attempts']),
+                    other_value=self.metric_models(metrics),
+                )]
 
     def _write(self, stream, text):
         """All console writes, including frames, hold _lock and flush explicitly."""
@@ -489,7 +502,7 @@ class Reporter(NullReporter):
             self.handler = None
         if not self.log_failed:
             self.log_failed = True
-            self.write(self.stderr, '[WARN] Error details could not be saved. Analysis will continue.')
+            self.write(self.stderr, ui_message('run.error_details_could_not_be_saved_analysis_will'))
 
     def log(self, event):
         with self._lock:
@@ -531,8 +544,11 @@ class Reporter(NullReporter):
             self.write(self.stderr, '\n'.join(lines))
         if self.verbose and event not in ('process_waiting', 'error'):
             details = item.context | {'run_id': item.run_id} if event == 'run_started' else item.context
-            self.write(self.stderr, '[RUN] Detail: ' + self.display(event) + ' ' +
-                       self.display(json.dumps(details, ensure_ascii=False)))
+            self.write(self.stderr, ui_message(
+                'run.detail',
+                event=self.display(event),
+                value=self.display(json.dumps(details, ensure_ascii=False)),
+            ))
         if event in ('run_started', 'stage_started') and self._progress:
             self._draw_progress(self._progress)
             if not self._progress.stop.is_set():
@@ -565,17 +581,17 @@ class Reporter(NullReporter):
         c, name = item.context, item.event
         s = self.display
         if name == 'stage_recovered':
-            return ['[WARN] ' + self.stage_message(c, 'Report text saved, but it did not pass all checks.')]
-        active, title, complete = STAGE_MESSAGES.get(c.get('stage'), ('Analyzing project…', 'Analysis', 'Analysis complete.'))
+            return ['[WARN] ' + self.stage_message(c, ui_message('run.report_text_saved_but_it_did_not_pass'))]
+        active, title, complete = STAGE_MESSAGES.get(c.get('stage'), (ui_message('run.analyzing_project'), 'Analysis', ui_message('run.analysis_complete')))
         if name == 'run_started':
-            lines = ['Source: ' + s(c['source'])] if c.get('source') else []
+            lines = [ui_message('run.source', source=s(c['source']))] if c.get('source') else []
             if not self._progress or self._progress_line(self._progress) is None:
-                lines.insert(0, '[RUN] ' + ('Checking local setup.' if c['check_only'] else 'Preparing analysis.'))
+                lines.insert(0, '[RUN] ' + (ui_message('run.checking_local_setup.render') if c['check_only'] else ui_message('run.preparing_analysis')))
             return lines
         if name == 'root_warning':
-            return ['[WARN] Running with administrator privileges.']
+            return [ui_message('run.running_with_administrator_privileges')]
         if name == 'description_missing':
-            return ['[WARN] Project description is missing. Set project_description to describe the system purpose and history.']
+            return [ui_message('run.project_description_is_missing_set_project_description_to')]
         if name == 'citation_warning':
             return ['[WARN] ' + self.stage_message(c, citation_warning_message(c))]
         if name == 'last_analysis_warning':
@@ -585,84 +601,99 @@ class Reporter(NullReporter):
                 return []
             return ['[RUN] ' + self.stage_message(c, active)]
         if name == 'study_phase_started':
-            message = 'Collecting claims and source evidence.' if c['phase'] == 'collect' else 'Writing the architecture report from the frozen evidence package.'
+            message = ui_message('tui.collecting_claims_and_source_evidence') if c['phase'] == 'collect' else ui_message('run.writing_the_architecture_report_from_the_frozen_evidence')
             return ['[RUN] ' + self.stage_message(c, message)]
         if name == 'process_waiting':
             if not self.progress or (self._progress and self._progress_line(self._progress) is not None):
                 return []
             last = ''
             if self.verbose and 'last_output_seconds' in c:
-                last = ' | ' + ('No CLI output received yet' if c['last_output_seconds'] is None else
-                                'Last CLI output: ' + duration(c['last_output_seconds']) + ' ago')
-            return ['[RUN] ' + self.stage_message(c, self.progress_message(c)), '      Elapsed: ' + duration(c['elapsed_seconds']) +
-                    last]
+                last = ' | ' + (ui_message('run.no_cli_output_received_yet') if c['last_output_seconds'] is None else
+                                ui_message('run.last_cli_output_ago', value=duration(c['last_output_seconds'])))
+            return ['[RUN] ' + self.stage_message(c, self.progress_message(c)), ui_message(
+                'run.elapsed',
+                value=duration(c['elapsed_seconds']),
+                last=last,
+            )]
         if name == 'stage_completed':
             status = c['status']
             label = '[OK] ' if status == 'COMPLETE' else '[FAIL] ' if status == 'FAILED' else '[WARN] '
             meaning = (complete if status == 'COMPLETE' else
-                       title + ' complete with citation warnings. See affected claims.' if status == 'COMPLETE_WITH_WARNINGS' else
-                       title + (' failed. See details below.' if status == 'FAILED' else ' may be incomplete. See details below.'))
-            return [label + self.stage_message(c, meaning) +
-                    ' | Elapsed: ' + duration(c['elapsed_seconds']),
-                    *(['      Report: ' + s(c['report_path'])] if c.get('report_path') else []),
+                       ui_message(
+                           'run.complete_with_citation_warnings_see_affected_claims',
+                           title=title,
+                       ) if status == 'COMPLETE_WITH_WARNINGS' else
+                       ui_message('run.stage_failed' if status == 'FAILED' else 'run.stage_incomplete', title=title))
+            return [ui_message(
+                'run.elapsed.render',
+                label=label,
+                value=self.stage_message(c, meaning),
+                other_value=duration(c['elapsed_seconds']),
+            ),
+                    *([ui_message('run.report', report_path=s(c['report_path']))] if c.get('report_path') else []),
                     *self.metric_lines(c.get('metrics'), compact=True)]
         if name == 'stage_skipped':
-            title = 'Review' if c.get('stage') == 'review' else title
+            title = ui_message('tui.review.complete') if c.get('stage') == 'review' else title
             if c.get('reason') == 'disabled_by_config':
-                return ['[SKIP] ' + self.stage_message(c, 'Review disabled by configuration; no separate review performed.')]
-            return ['[SKIP] ' + self.stage_message(c, title + ' skipped: no architecture report available.')]
+                return ['[SKIP] ' + self.stage_message(c, ui_message(
+                    'run.review_disabled_by_configuration_no_separate_review_performed',
+                ))]
+            return ['[SKIP] ' + self.stage_message(c, ui_message('run.skipped_no_architecture_report_available', title=title))]
         if name == 'stop_requested':
-            return ['[WARN] Stopping analysis…']
+            return [ui_message('run.stopping_analysis')]
         if name == 'restoration_started':
-            return ['[RUN] Restoring the original checkout hierarchy.']
+            return [ui_message('run.restoring_the_original_checkout_hierarchy')]
         if name == 'restoration_completed':
-            return ['[OK] Original checkout hierarchy restored.' if c.get('restored') else
-                    '[FAIL] Original checkout hierarchy was not fully restored. See diagnostics.']
+            return [ui_message('run.original_checkout_hierarchy_restored') if c.get('restored') else
+                    ui_message('run.original_checkout_hierarchy_was_not_fully_restored_see')]
         if name == 'error':
-            label = {'preflight': 'Could not prepare analysis.',
-                      'restoration': 'Could not restore the original checkout.',
-                      'cleanup': 'Could not remove temporary analysis data.',
-                     'stage': self.stage_message(c, title + ' failed.')}.get(c['phase'], 'Analysis failed.')
+            label = {'preflight': ui_message('run.could_not_prepare_analysis'),
+                      'restoration': ui_message('run.could_not_restore_the_original_checkout'),
+                      'cleanup': ui_message('run.could_not_remove_temporary_analysis_data'),
+                     'stage': self.stage_message(c, ui_message(
+                         'run.stage_error',
+                         title=title,
+                     ))}.get(c['phase'], ui_message('tui.analysis_failed'))
             interrupted = c['code'] == 'INTERRUPTED'
             messages = {
-                'INVALID_RESPONSE': 'The response could not be used.',
-                'MATERIALIZATION_ERROR': 'The architecture report could not be created.',
-                'ARTIFACT_CONTRACT_ERROR': 'The report could not be saved because it failed validation.',
+                'INVALID_RESPONSE': ui_message('run.the_response_could_not_be_used'),
+                'MATERIALIZATION_ERROR': ui_message('run.the_architecture_report_could_not_be_created'),
+                'ARTIFACT_CONTRACT_ERROR': ui_message('run.the_report_could_not_be_saved_because_it'),
             }
             message = c['message'] if self.verbose else messages.get(c['code'], c['message'])
             if not self.verbose:
                 if c.get('failure_layer') == 'cleanup':
-                    message = 'The agent could not be stopped or cleaned up completely.'
+                    message = ui_message('run.the_agent_could_not_be_stopped_or_cleaned')
                 elif c.get('failure_kind') == 'STAGE_TIMEOUT':
-                    message = 'The operation exceeded its time limit.'
+                    message = ui_message('run.the_operation_exceeded_its_time_limit')
                 elif c.get('failure_kind') == 'IDLE_TIMEOUT':
-                    message = 'No activity was detected within the time limit.'
-            lines = ['[WARN] Analysis interrupted.' if interrupted else '[FAIL] ' + label]
+                    message = ui_message('run.no_activity_was_detected_within_the_time_limit')
+            lines = [ui_message('run.analysis_interrupted') if interrupted else '[FAIL] ' + label]
             if self.verbose:
-                lines += ['Code: ' + s(c['code'])]
+                lines += [ui_message('run.code', code=s(c['code']))]
             if not interrupted or self.verbose:
-                lines += ['', 'Reason:', '  ' + s(message)]
-            fields = [('node_path', 'Path' if c.get('node_path') == '.' else 'Submodule')]
+                lines += ['', ui_message('run.reason'), '  ' + s(message)]
+            fields = [('node_path', ui_message('run.path') if c.get('node_path') == '.' else ui_message('run.submodule'))]
             if self.verbose:
-                fields = [('snapshot', 'Snapshot'), *fields, ('required_commit', 'Required commit')]
+                fields = [('snapshot', ui_message('run.snapshot')), *fields, ('required_commit', ui_message('run.required_commit'))]
             for key, title in fields:
                 if c.get(key):
                     lines += ['', title + ':', *('  ' + s(line) for line in c[key].split('\n'))]
             hint = c.get('hint')
             if not self.verbose and c['code'] in messages:
-                hint = 'Use --verbose for details.'
+                hint = ui_message('run.use_verbose_for_details')
             elif not self.verbose and c['code'] == 'INTERNAL_ERROR':
-                hint = 'Use --verbose for details and report this error.'
+                hint = ui_message('run.use_verbose_for_details_and_report_this_error')
             if hint:
-                lines += ['', 'Next step:', *('  ' + s(line) for line in hint.split('\n'))]
+                lines += ['', ui_message('run.next_step'), *('  ' + s(line) for line in hint.split('\n'))]
             if c.get('analysis_started') is False:
-                lines += ['', 'Analysis has not started.']
+                lines += ['', ui_message('run.analysis_has_not_started')]
                 if self.verbose and c.get('switches_performed') is False:
-                    lines[-1] += ' No checkout switches were performed.'
+                    lines[-1] += ui_message('run.no_checkout_switches_were_performed')
             if self.verbose and c.get('details'):
-                lines += ['', 'Diagnostic details:', '  ' + s(json.dumps(c['details'], ensure_ascii=False))]
+                lines += ['', ui_message('run.diagnostic_details'), '  ' + s(json.dumps(c['details'], ensure_ascii=False))]
             if existing_file(self.log_path):
-                lines += ['', 'Error details:', '  ' + s(self.log_path)]
+                lines += ['', ui_message('run.error_details'), '  ' + s(self.log_path)]
             lines += self.metric_lines(c.get('metrics'), compact=True)
             return lines
         return []
@@ -681,23 +712,25 @@ class Reporter(NullReporter):
             return
         s = self.display
         status = lambda value: self.status(value, self.stdout)
-        meaning = ('[WARN] Analysis interrupted.' if result['exit_code'] == 130 else
-                   '[OK] Local setup checked. Analysis has not started.' if result['status'] == 'PREFLIGHT_OK' else
-                   '[OK] Analysis complete. Reports may still contain errors.' if result['status'] == 'COMPLETE' else
-                   '[WARN] Analysis complete with citation warnings. Check affected claims and the recorded acceptance result.' if result['status'] == 'COMPLETE_WITH_WARNINGS' else
-                   '[WARN] Analysis may be incomplete. See available results and limitations below.' if result['status'] == 'PARTIAL' else
-                   '[FAIL] Analysis failed.')
-        lines = [meaning, 'Elapsed: ' + duration(elapsed)]
+        meaning = (ui_message('run.analysis_interrupted') if result['exit_code'] == 130 else
+                   ui_message('run.local_setup_checked_analysis_has_not_started') if result['status'] == 'PREFLIGHT_OK' else
+                   ui_message('run.analysis_complete_reports_may_still_contain_errors') if result['status'] == 'COMPLETE' else
+                   ui_message(
+                       'run.analysis_complete_with_citation_warnings_check_affected_claims',
+                   ) if result['status'] == 'COMPLETE_WITH_WARNINGS' else
+                   ui_message('run.analysis_may_be_incomplete_see_available_results_and') if result['status'] == 'PARTIAL' else
+                   ui_message('run.analysis_failed'))
+        lines = [meaning, ui_message('run.elapsed.finish', value=duration(elapsed))]
         if not check_only:
             from src.reports.review import review_summary
             for entry in manifest.get('branches') or [manifest]:
-                source = ('Branch ' + s(entry['branch']) + ': ') if entry.get('branch') else ''
+                source = (ui_message('run.branch', branch=s(entry['branch']))) if entry.get('branch') else ''
                 lines += [source + review_summary(entry, review_enabled=manifest.get('review_enabled', True))]
         if metrics:
             if not metrics['attempts']:
-                lines += ['No model calls were made.']
+                lines += [ui_message('run.no_model_calls_were_made')]
             else:
-                lines += ['', 'Stage | Status | Elapsed | Attempts | Tokens | Agent-estimated cost | Agent / model']
+                lines += ['', ui_message('run.stage_status_elapsed_attempts_tokens_agent_estimated_cost')]
                 for row in metrics['stages']:
                     title = self.stage_source(row)
                     title = (title + ' / ' if title else '') + row['stage']
@@ -706,42 +739,48 @@ class Reporter(NullReporter):
                     lines += [s(title) + ' | ' + s(row['status']) + ' | ' + duration(row['duration_seconds']) +
                               ' | ' + str(row['attempts']) + ' | ' + metric_value(row['usage'], 'total_tokens') +
                               ' | ' + metric_value(row['usage'], 'cost_usd') + ' | ' + self.metric_models(row)]
-                lines += ['', 'Total usage:', *self.metric_lines(metrics)]
+                lines += ['', ui_message('run.total_usage'), *self.metric_lines(metrics)]
         if result['status'] == 'PREFLIGHT_OK':
             command = ['python3', 'explain.py', '--config', str(config_path)]
             if trust:
                 command.append('--trust-repository')
-            lines += ['', 'AI service access and model availability were not checked.', '',
-                      'Start analysis:', '  ' + s(shlex.join(command))]
+            lines += ['', ui_message('run.ai_service_access_and_model_availability_were_not'), '',
+                      ui_message('run.start_analysis'), '  ' + s(shlex.join(command))]
         elif not check_only:
             for branch in manifest.get('branches', []):
                 partial_material = manifest.get('result_policy') == 'compromise' and branch.get('study_usable')
                 warned = any((branch.get(stage) or {}).get('program_checks', {}).get('citation_warnings')
                              for stage in ('study', 'review'))
-                lines += ['Branch ' + s(branch['branch']) + ': ' +
-                          status('Complete with warnings' if warned and branch.get('processing_completed') else
-                                 'Complete' if branch.get('workflow_satisfied', branch.get('accepted')) else 'May be incomplete' if partial_material
-                                 else 'Failed' if branch['errors'] else 'May be incomplete')]
+                lines += [ui_message(
+                    'run.branch.finish', branch=s(branch['branch']),
+                    value=status(
+                        ui_message('run.complete_with_warnings') if warned and branch.get('processing_completed') else
+                        ui_message('run.complete') if branch.get('workflow_satisfied', branch.get('accepted')) else
+                        ui_message('run.may_be_incomplete') if partial_material else
+                        ui_message('run.failed') if branch['errors'] else ui_message('run.may_be_incomplete')))]
             analyzed = {branch['branch'] for branch in manifest.get('branches', [])}
             for branch in manifest.get('pins', {}):
                 if branch not in analyzed:
-                    lines += ['Branch ' + s(branch) + ': ' + status('Not started')]
-        paths = [('Manifest', Path(result['manifest']))] if self.verbose and result['manifest'] else []
+                    lines += [ui_message('run.branch.finish', branch=s(branch), value=status(ui_message('run.not_started')))]
+        paths = [(ui_message('tui.manifest'), Path(result['manifest']))] if self.verbose and result['manifest'] else []
         if self.verbose and self.log_path:
-            paths.append(('Technical log', self.log_path))
+            paths.append((ui_message('tui.technical_log'), self.log_path))
         if run_dir and not check_only:
             if manifest.get('final_report'):
-                paths.append(('Final report' if manifest.get('has_usable_material') else 'Error summary',
+                paths.append((ui_message('tui.final_report') if manifest.get('has_usable_material') else ui_message('run.error_summary'),
                               Path(manifest['final_report'])))
             for branch in manifest.get('branches', []):
                 for name in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md'):
                     stage = 'study' if name == 'ARCHITECTURE.md' else 'review'
                     if branch.get(stage + '_invocation', {}).get('publication_complete'):
-                        paths.append(('Report (' + s(branch['branch']) + ')', run_dir / branch['directory'] / name))
+                        paths.append((ui_message(
+                            'run.report.finish',
+                            branch=s(branch['branch']),
+                        ), run_dir / branch['directory'] / name))
             for relative in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md', 'comparison/BRANCH_COMPARISON.md'):
                 stage = {'ARCHITECTURE.md': 'study', 'ARCHITECTURE_REVIEW.md': 'review'}.get(relative, 'comparison')
                 if manifest.get(stage + '_invocation', {}).get('publication_complete'):
-                    paths.append(('Report', run_dir / relative))
+                    paths.append((ui_message('run.report.finish.label'), run_dir / relative))
         for title, path in paths:
             if existing_file(path):
                 lines += ['', title + ':', '  ' + s(path)]

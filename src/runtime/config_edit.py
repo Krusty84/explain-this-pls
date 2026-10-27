@@ -5,6 +5,7 @@
 import json
 import re
 
+from src.messages import message as ui_message
 from src.runtime.artifacts import atomic
 from src.contracts.contracts import jsonc, jsonc_text, strict_json
 
@@ -21,7 +22,7 @@ def replace_value(text, field, value):
 
     def edit(start, parts):
         if clean[start] != '{':
-            raise ValueError('The selected configuration section must be an object.')
+            raise ValueError(ui_message('diagnostic.config_edit.the_selected_configuration_section_must_be_an_object'))
         index, members = skip(start + 1), []
         while clean[index] != '}':
             key_start = index
@@ -86,8 +87,8 @@ def save_last_analysis(path, value, original):
 def save_text(path, updated, original):
     path = path.resolve()
     if path.read_bytes() != original:
-        raise ValueError('The configuration changed. Use Refresh before saving.')
+        raise ValueError(ui_message('diagnostic.config_edit.the_configuration_changed_use_refresh_before_saving'))
     (jsonc if path.suffix.lower() == '.jsonc' else strict_json)(updated)
     if path.read_bytes() != original:
-        raise ValueError('The configuration changed. Use Refresh before saving.')
+        raise ValueError(ui_message('diagnostic.config_edit.the_configuration_changed_use_refresh_before_saving'))
     atomic(path, updated)

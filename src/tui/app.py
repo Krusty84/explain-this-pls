@@ -22,6 +22,7 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, DirectoryTree, Footer, Header, Input, Static, TabbedContent, TabPane
 
+from src.messages import message as ui_message
 from src.runtime.config import ROOT, load_config
 from src.contracts.contracts import ContractError
 from src.runtime.reporting import Reporter, diagnostic, duration, metric_value, safe_text
@@ -42,7 +43,7 @@ class FolderTree(DirectoryTree):
 
 
 class FolderChooser(ModalScreen):
-    BINDINGS = [('escape', 'dismiss(None)', 'Cancel')]
+    BINDINGS = [('escape', 'dismiss(None)', ui_message('tui.cancel'))]
     DEFAULT_CSS = """
     FolderChooser { align: center middle; }
     #folder-dialog { width: 90%; height: 90%; border: round $accent; background: $surface; padding: 1; }
@@ -52,20 +53,20 @@ class FolderChooser(ModalScreen):
     #folder-actions Button { min-width: 10; margin-right: 1; }
     """
 
-    def __init__(self, settings_path, directory, message='Choose the folder containing your JSON/JSONC configs.'):
+    def __init__(self, settings_path, directory, message=ui_message('tui.choose_the_folder_containing_your_json_jsonc_configs')):
         super().__init__()
         self.settings_path, self.directory, self.message = settings_path, directory, message
 
     def compose(self) -> ComposeResult:
         with Vertical(id='folder-dialog'):
             yield Static(Text(self.message), id='folder-message')
-            yield Input(str(self.directory), placeholder='Config folder path', id='folder-path')
+            yield Input(str(self.directory), placeholder=ui_message('tui.config_folder_path'), id='folder-path')
             yield FolderTree(self.directory, id='folder-tree')
             with Horizontal(id='folder-actions'):
-                yield Button('Up', id='folder-up')
-                yield Button('Go', id='folder-go')
-                yield Button('Use folder', variant='primary', id='folder-save')
-                yield Button('Cancel', id='folder-cancel')
+                yield Button(ui_message('tui.up'), id='folder-up')
+                yield Button(ui_message('tui.go'), id='folder-go')
+                yield Button(ui_message('tui.use_folder'), variant='primary', id='folder-save')
+                yield Button(ui_message('tui.cancel'), id='folder-cancel')
 
     def on_directory_tree_directory_selected(self, event):
         self.query_one('#folder-path', Input).value = str(event.path)
@@ -79,7 +80,7 @@ class FolderChooser(ModalScreen):
             self.directory = config_directory(path.parent if parent else path)
             self.query_one('#folder-path', Input).value = str(self.directory)
             self.query_one('#folder-tree', DirectoryTree).path = self.directory
-            self.query_one('#folder-message', Static).update('Select a folder, then choose Use folder.')
+            self.query_one('#folder-message', Static).update(ui_message('tui.select_a_folder_then_choose_use_folder'))
         except (OSError, ValueError) as exc:
             self.show_error(exc)
 
@@ -110,8 +111,8 @@ class WorkerMessage(Message):
 class ExplainApp(App[int]):
     TITLE = 'explain-this-pls'
     ENABLE_COMMAND_PALETTE = False
-    BINDINGS = [Binding('ctrl+c', 'cancel', 'Cancel', priority=True),
-                Binding('q,ctrl+q', 'quit', 'Quit')]
+    BINDINGS = [Binding('ctrl+c', 'cancel', ui_message('tui.cancel'), priority=True),
+                Binding('q,ctrl+q', 'quit', ui_message('tui.quit'))]
     CSS = """
     #picker, #dashboard { height: 1fr; padding: 0 1; }
     #dashboard { display: none; }
@@ -206,38 +207,38 @@ class ExplainApp(App[int]):
             yield Static('', id='config-location')
             yield DataTable(id='configs', cursor_type='row', zebra_stripes=True)
             with VerticalScroll(id='preview-scroll'):
-                yield Static('Select a configuration.', id='config-preview')
+                yield Static(ui_message('tui.select_a_configuration'), id='config-preview')
             with Horizontal(classes='actions'):
-                yield Button('Run', id='run', variant='primary', disabled=True)
-                yield Button('Check config', id='check', disabled=True)
-                yield Button('Models', id='models', disabled=True)
-                yield Button('Refresh', id='refresh')
-                yield Button('Config folder', id='change-folder')
-                yield Button('Quit', id='quit-picker')
+                yield Button(ui_message('tui.run'), id='run', variant='primary', disabled=True)
+                yield Button(ui_message('tui.check_config'), id='check', disabled=True)
+                yield Button(ui_message('tui.models'), id='models', disabled=True)
+                yield Button(ui_message('tui.refresh'), id='refresh')
+                yield Button(ui_message('tui.config_folder'), id='change-folder')
+                yield Button(ui_message('tui.quit'), id='quit-picker')
         with Vertical(id='dashboard'):
-            yield Static('Preparing analysis…', id='run-status')
+            yield Static(ui_message('tui.preparing_analysis'), id='run-status')
             with TabbedContent(id='run-tabs'):
                 with TabPane('Steps', id='steps-tab'):
                     yield DataTable(id='stages', cursor_type='row', zebra_stripes=True, fixed_columns=2)
                     with VerticalScroll(id='detail-scroll'):
                         yield Static('', id='step-details')
-                with TabPane('Final result', id='summary-tab'):
+                with TabPane(ui_message('tui.final_result'), id='summary-tab'):
                     yield DataTable(id='summary', cursor_type='row')
             with Horizontal(classes='actions'):
-                yield Button('Cancel', id='cancel-run', variant='warning')
-                yield Button('Configs', id='back', disabled=True)
-                yield Button('Quit', id='quit-run')
+                yield Button(ui_message('tui.cancel'), id='cancel-run', variant='warning')
+                yield Button(ui_message('tui.configs'), id='back', disabled=True)
+                yield Button(ui_message('tui.quit'), id='quit-run')
         yield Footer()
 
     def on_mount(self):
         self._set_pointer_shape("default")
         self.query_one('#run', Button).display = not self.args.check
-        self.query_one('#configs', DataTable).add_columns('Config', 'Mode', 'Source', 'Model', 'Effort', 'Results')
+        self.query_one('#configs', DataTable).add_columns(ui_message('tui.config.on_mount'), ui_message('tui.mode'), ui_message('tui.source'), ui_message('cli.model'), ui_message('tui.effort'), ui_message('tui.results'))
         table = self.query_one('#stages', DataTable)
-        for name, width in (('Source', 20), ('Step/revision', 18), ('Status', 12), ('Elapsed', 8),
-                            ('Attempts', 8), ('Tokens', 22), ('Cost', 22), ('Result', 55)):
+        for name, width in ((ui_message('tui.source'), 20), (ui_message('tui.step_revision'), 18), (ui_message('tui.status'), 12), (ui_message('tui.elapsed'), 8),
+                            (ui_message('tui.attempts'), 8), (ui_message('tui.tokens'), 22), (ui_message('tui.cost'), 22), (ui_message('tui.result'), 55)):
             table.add_column(name, width=width)
-        self.query_one('#summary', DataTable).add_columns('Item', 'Result')
+        self.query_one('#summary', DataTable).add_columns(ui_message('tui.item'), ui_message('tui.result'))
         self.query_one('#run-tabs', TabbedContent).disable_tab('summary-tab')
         if not self.args.no_progress:
             self.set_interval(1, self.tick)
@@ -249,13 +250,15 @@ class ExplainApp(App[int]):
             except FileNotFoundError:
                 self.choose_folder()
             except (OSError, ValueError) as exc:
-                self.choose_folder('Cannot use saved settings: ' + self.presenter.display(exc))
+                self.choose_folder(ui_message('tui.cannot_use_saved_settings', exc=self.presenter.display(exc)))
             else:
                 self.refresh_configs()
 
     def choose_folder(self, message=None):
         self.push_screen(FolderChooser(self.settings_path, self.directory or Path.cwd(),
-                                      message or 'Choose the folder containing your JSON/JSONC configs.'), self.folder_chosen)
+                                      message or ui_message(
+                                          'tui.choose_the_folder_containing_your_json_jsonc_configs',
+                                      )), self.folder_chosen)
 
     def folder_chosen(self, directory):
         if directory is None:
@@ -271,16 +274,16 @@ class ExplainApp(App[int]):
             mode = config['mode']
             source = config[mode + '_mode']['path' if mode == 'folder' else 'repository']
             agent = config['_agents']['study']
-            model = agent.get('model') or 'CLI default'
+            model = agent.get('model') or ui_message('tui.cli_default')
             effort = agent.get('reasoning_effort')
-            effort = effort or 'CLI default'
+            effort = effort or ui_message('tui.cli_default')
             analysis = config['last_analysis']
             results = '—'
             if analysis:
-                results = analysis['status'] if Path(analysis['results_dir']).is_dir() else 'Missing'
+                results = analysis['status'] if Path(analysis['results_dir']).is_dir() else ui_message('tui.missing')
             error = ''
         except (OSError, ValueError, RuntimeError, ContractError) as exc:
-            config, mode, source = None, 'Invalid', self.presenter.display(diagnostic(exc).message)
+            config, mode, source = None, ui_message('tui.invalid'), self.presenter.display(diagnostic(exc).message)
             model, effort, results = '—', '—', '—'
             error = source
         self.configs[str(path)] = (path, config, error)
@@ -293,10 +296,16 @@ class ExplainApp(App[int]):
         try:
             paths = [self.explicit_config] if self.explicit_config else config_files(self.directory)
         except OSError as exc:
-            self.choose_folder('Cannot read the config folder: ' + self.presenter.display(exc))
+            self.choose_folder(ui_message('tui.cannot_read_the_config_folder', exc=self.presenter.display(exc)))
             return
         self.query_one('#config-location', Static).update(self.literal(
-            'Config: ' + str(self.explicit_config) if self.explicit_config else 'Config folder: ' + str(self.directory)))
+            ui_message(
+                'tui.config.refresh_configs',
+                explicit_config=str(self.explicit_config),
+            ) if self.explicit_config else ui_message(
+                'tui.config_folder.refresh_configs',
+                directory=str(self.directory),
+            )))
         for path in paths:
             table.add_row(*self.load_config_row(path), key=str(path))
         selected = str(self.selected) if str(self.selected) in self.configs else next(iter(self.configs), None)
@@ -306,7 +315,7 @@ class ExplainApp(App[int]):
         else:
             self.selected = None
             self.query_one('#config-preview', Static).update(
-                'No configs found. Copy an example config into this folder, edit its paths, then Refresh.')
+                ui_message('tui.no_configs_found_copy_an_example_config_into'))
             self.enable_start(False)
         table.focus()
 
@@ -329,21 +338,34 @@ class ExplainApp(App[int]):
                 for agent in config['stage_agents'].values()))
         s = self.presenter.display
         if config is None:
-            lines = ['Config: ' + s(self.selected), 'Cannot start: ' + error]
+            lines = [ui_message('tui.config.select_config', selected=s(self.selected)), ui_message('tui.cannot_start', error=error)]
         else:
             source = config[config['mode'] + '_mode']
-            description = ('Project Description: ' + s(config['project_description']) if config['project_description'] else
-                           ('Project Description: Not set. Add project_description to the config.', 'red'))
-            lines = [description, 'Source: ' + s(source.get('path', source.get('repository'))),
-                     'Config: ' + s(self.selected), 'Reports: ' + s(config['_reports_dir']),
-                     'Review: ' + ('Enabled; may revise and review again.' if config['execution']['review_enabled']
-                                   else 'Disabled; no separate review.')]
+            description = (ui_message('tui.project_description', project_description=s(config['project_description']))
+                           if config['project_description'] else
+                           (ui_message('tui.project_description_not_set_add_project_description_to'), 'red'))
+            lines = [description,
+                     ui_message('tui.source.select_config', path=s(source.get('path', source.get('repository')))),
+                     ui_message('tui.config.select_config', selected=s(self.selected)),
+                     ui_message('tui.reports', reports_dir=s(config['_reports_dir'])),
+                     ui_message('tui.review', value=(
+                         ui_message('tui.enabled_may_revise_and_review_again') if config['execution']['review_enabled'] else
+                         ui_message('tui.disabled_no_separate_review')))]
             analysis = config['last_analysis']
             if analysis:
                 finished = dt.datetime.fromisoformat(analysis['finished_at']).astimezone().isoformat(sep=' ', timespec='seconds')
-                lines += ['Results: ' + s(analysis['status']) +
-                          (' (Missing)' if not Path(analysis['results_dir']).is_dir() else ''),
-                          'Finished: ' + finished, 'Results directory: ' + s(analysis['results_dir'])]
+                lines += [ui_message(
+                    'tui.results.select_config',
+                    status=s(analysis['status']),
+                    value=ui_message('tui.results_missing') if not Path(analysis['results_dir']).is_dir() else '',
+                ),
+                          ui_message(
+                              'tui.finished',
+                              finished=finished,
+                          ), ui_message(
+                              'tui.results_directory',
+                              results_dir=s(analysis['results_dir']),
+                          )]
         lines = [Text.assemble(line) for line in lines]
         content = (Group(Text('\n').join(lines[:2]), Rule(characters='─', style='dim'),
                          Text('\n').join(lines[2:]), fit=False)
@@ -412,7 +434,7 @@ class ExplainApp(App[int]):
         self.query_one('#dashboard').display = True
         self.query_one('#back', Button).disabled = True
         self.query_one('#cancel-run', Button).disabled = False
-        self.query_one('#run-status', Static).update(self.literal('Preparing ' + self.selected.name + '…'))
+        self.query_one('#run-status', Static).update(self.literal(ui_message('tui.preparing', name=self.selected.name)))
         self.render_stages()
         self.query_one('#stages', DataTable).focus()
         self.audit = AuditProcess(args)
@@ -420,7 +442,10 @@ class ExplainApp(App[int]):
             self.audit.start()
         except (OSError, ValueError) as exc:
             self.complete({'type': 'result', 'result': {'status': 'FAILED', 'exit_code': 1},
-                           'diagnostics': [{'message': 'Could not start analysis: ' + self.presenter.display(exc)}]})
+                           'diagnostics': [{'message': ui_message(
+                               'tui.could_not_start_analysis',
+                               exc=self.presenter.display(exc),
+                           )}]})
             self.audit = None
             return
         self.running = True
@@ -441,7 +466,7 @@ class ExplainApp(App[int]):
                     self.selected.name + ' · ' + str(context.get('source_name') or context.get('branch') or '') +
                     ' · ' + context['stage']))
             elif name == 'stop_requested':
-                self.query_one('#run-status', Static).update('Stopping analysis; waiting for cleanup…')
+                self.query_one('#run-status', Static).update(ui_message('tui.stopping_analysis_waiting_for_cleanup'))
             self.render_stages()
         elif payload['type'] == 'result':
             self.pending_result = payload
@@ -452,7 +477,7 @@ class ExplainApp(App[int]):
             result = self.pending_result
             if result is None or payload['exit_code'] != result['result']['exit_code']:
                 result = {'result': {'status': 'FAILED', 'exit_code': 1},
-                          'diagnostics': [{'message': 'The audit worker exited unexpectedly; inspect any saved run files.'}]}
+                          'diagnostics': [{'message': ui_message('tui.the_audit_worker_exited_unexpectedly_inspect_any_saved')}]}
             self.complete(result)
 
     def tick(self):
@@ -465,7 +490,7 @@ class ExplainApp(App[int]):
         for index, row in enumerate(self.state.rows.values()):
             metrics = row['metrics']
             usage = metrics.get('usage', {})
-            values = [row.get('source_name') or row.get('branch') or 'Run',
+            values = [row.get('source_name') or row.get('branch') or ui_message('tui.run'),
                       row['stage'] + (' #' + row['revision_id'] if row.get('revision_id') else ''),
                       row['status'], duration(self.state.elapsed(row)), metrics.get('attempts', '—'),
                       metric_value(usage, 'total_tokens'), metric_value(usage, 'cost_usd'), row['result']]
@@ -484,7 +509,7 @@ class ExplainApp(App[int]):
         fields = ('message', 'hint')
         if self.args.verbose:
             fields += ('code', 'node_path', 'failure_kind', 'failure_layer', 'details')
-        return [key.replace('_', ' ').title() + ': ' + self.presenter.display(
+        return [ui_message('tui.diagnostic.' + key) + ': ' + self.presenter.display(
             json.dumps(item[key], ensure_ascii=False) if isinstance(item[key], dict) else item[key])
                 for key in fields if item.get(key)]
 
@@ -497,11 +522,19 @@ class ExplainApp(App[int]):
             return
         row, s = rows[index], self.presenter.display
         metrics = row['metrics']
-        lines = ['Source: ' + s(row.get('source_name') or row.get('branch') or 'Run'),
-                 'Step: ' + s(row['stage'] + (' #' + row['revision_id'] if row.get('revision_id') else '')),
-                 'Result: ' + s(row['result']),
-                 'Agent / model: ' + (self.presenter.metric_models(metrics) if metrics else s(row.get('backend') or 'Not reported yet')),
-                 'Report: ' + s(row.get('report_path') or 'No report available')]
+        lines = [ui_message(
+            'tui.source.show_step_details',
+            value=s(row.get('source_name') or row.get('branch') or ui_message('tui.run')),
+        ),
+                 ui_message('tui.step', value=s(row['stage'] + (' #' + row['revision_id'] if row.get('revision_id') else ''))),
+                 ui_message('tui.result.show_step_details', result=s(row['result'])),
+                 ui_message(
+                     'tui.agent_model',
+                     value=self.presenter.metric_models(metrics) if metrics else s(row.get('backend') or ui_message(
+                         'tui.not_reported_yet',
+                     )),
+                 ),
+                 ui_message('tui.report', value=s(row.get('report_path') or ui_message('tui.no_report_available')))]
         if metrics:
             lines += self.presenter.metric_lines(metrics)
         for item in row['diagnostics']:
@@ -519,14 +552,14 @@ class ExplainApp(App[int]):
         metrics = result.get('metrics', {})
         review = '\n'.join((source + ': ' if source else '') + message
                            for source, message in payload.get('reviews', [])) or review_summary(result)
-        values = [('Outcome', outcome), ('Meaning', result.get('status_meaning', 'See diagnostics.')),
-                  ('Elapsed', duration(metrics['duration_seconds']) if metrics else 'n/a'),
-                  ('Attempts', metrics.get('attempts', 'n/a')),
-                  ('Tokens', metric_value(metrics.get('usage', {}), 'total_tokens')),
-                  ('Cost', metric_value(metrics.get('usage', {}), 'cost_usd')),
-                  ('Review', 'Not performed (setup check).' if payload.get('check_only') else review),
+        values = [(ui_message('tui.outcome'), outcome), (ui_message('tui.meaning'), result.get('status_meaning', ui_message('tui.see_diagnostics'))),
+                  (ui_message('tui.elapsed'), duration(metrics['duration_seconds']) if metrics else ui_message('tui.n_a')),
+                  (ui_message('tui.attempts'), metrics.get('attempts', ui_message('tui.n_a'))),
+                  (ui_message('tui.tokens'), metric_value(metrics.get('usage', {}), 'total_tokens')),
+                  (ui_message('tui.cost'), metric_value(metrics.get('usage', {}), 'cost_usd')),
+                  (ui_message('tui.review.complete'), ui_message('tui.not_performed_setup_check') if payload.get('check_only') else review),
                   *payload.get('paths', [])]
-        values += [('Diagnostic ' + str(i + 1), '\n'.join(self.diagnostic_lines(item)))
+        values += [(ui_message('tui.diagnostic', value=str(i + 1)), '\n'.join(self.diagnostic_lines(item)))
                    for i, item in enumerate(self.state.diagnostics)]
         table = self.query_one('#summary', DataTable)
         table.clear()
@@ -557,7 +590,7 @@ class ExplainApp(App[int]):
             return
         self.audit.cancel()
         self.query_one('#cancel-run', Button).disabled = True
-        self.query_one('#run-status', Static).update('Stopping analysis; waiting for cleanup…')
+        self.query_one('#run-status', Static).update(ui_message('tui.stopping_analysis_waiting_for_cleanup'))
 
     def action_quit(self):
         if self.running:

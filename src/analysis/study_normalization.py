@@ -7,6 +7,7 @@ from __future__ import annotations
 import copy
 import re
 
+from src.messages import message as ui_message
 from src.contracts.contracts import contract_violation, validate_wire_identity
 from src.analysis.evidence import canonical, sha
 
@@ -16,7 +17,7 @@ HASH_FORMAT = 'canonical-json-utf8'
 
 def normalize_evidence(stage, value, context, mode='git'):
     if stage not in ('study', 'review'):
-        raise ValueError('Evidence normalization requires study or review')
+        raise ValueError(ui_message('diagnostic.study_normalization.evidence_normalization_requires_study_or_review'))
     validate_wire_identity(stage, value, context, mode)
     namespace = stage
     study_ids = {e['id'] for e in context['architecture_document'].get('evidence', [])} if stage == 'review' else set()

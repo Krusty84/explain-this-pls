@@ -18,7 +18,7 @@ Study: Complete.
 
 Review: Complete.
 
-> Review reported material findings; acceptance has not passed.
+> Review reported material findings, acceptance has not passed.
 
 Policy checks not satisfied.
 

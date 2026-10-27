@@ -5,6 +5,7 @@
 from __future__ import annotations
 import copy
 from collections import Counter
+from src.messages import message as ui_message
 from src.contracts.contracts import CONTRACT_ID, ARTIFACT_FORMAT, ContractError, contract_violation, has_ledger_structure, has_program_checks, is_recovered_material, review_verdict, workflow_satisfied, processing_satisfied, comparison_factual_sides
 from src.analysis.evidence import canonical, sha, source_catalog, resolve_evidence
 from src.analysis.coverage_plan import study_coverage_plan, verify_coverage_plan, coverage_checks, advisory_diagnostics
@@ -40,7 +41,7 @@ def freeze_plan(document, context):
         diff = registry_diff(previous['study'], document)
         diff.update(previous_revision_id=previous['revision_id'], revision_id=context.get('revision_id', '001'))
     if context.get('prior_findings', []) != prior:
-        raise ContractError('Previous material findings changed or were omitted from the review context.')
+        raise ContractError(ui_message('diagnostic.ledger.previous_material_findings_changed_or_were_omitted_from'))
     sources = source_catalog(context)
     plan = {'sources': sources, 'source_sha256': sha(canonical(sources)),
         'document_sha256': sha(document['report_markdown'].encode('utf-8')),
@@ -61,7 +62,7 @@ def review_context(document, context):
     plan = freeze_plan(document, context)
     existing = document.get('review_plan')
     if existing is not None and existing != plan:
-        raise ContractError('Frozen document/registry/plan identity changed')
+        raise ContractError(ui_message('diagnostic.ledger.frozen_document_registry_plan_identity_changed'))
     if plan['coverage_plan'] is not None:
         context = context | {'coverage_plan': copy.deepcopy(plan['coverage_plan'])}
     return context | {'architecture_document': copy.deepcopy(document),
@@ -78,9 +79,9 @@ def verify_review_context(context):
                 context['document_sha256'] != expected['document_sha256'] or
                 context['document_strictly_valid'] != has_program_checks(context['architecture_document']) or
                 sha(canonical(context['claim_registry'])) != expected['registry_sha256']):
-            raise ContractError('Frozen review context changed')
+            raise ContractError(ui_message('diagnostic.ledger.frozen_review_context_changed'))
     except KeyError:
-        raise ContractError('Required frozen review plan is missing') from None
+        raise ContractError(ui_message('diagnostic.ledger.required_frozen_review_plan_is_missing')) from None
 
 
 def citation_warnings(stage, data, resolutions, corrections):
@@ -164,7 +165,7 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
     checks = {'execution': 'COMPLETED', 'contract': 'VALID', 'source': 'MATCHED_AT_BOUNDARIES',
         'evidence': [], 'policy_satisfied': False, 'semantic_quality': 'NOT_MEASURED',
         'completion_self_assessment': data['completion_status'],
-        'meaning': 'Policy checks concern processing and agent assessments; factual correctness is not established.'}
+        'meaning': ui_message('diagnostic.ledger.policy_checks_concern_processing_and_agent_assessments_factual')}
     result['program_checks'] = checks
     if stage == 'compare':
         review_enabled = context.get('review_enabled', True)
@@ -174,8 +175,7 @@ def prepare_result(stage, data, context, expected_files=None, *, expected_metada
             differences_ok = all(d['classification'] == 'REPORTED_UNVERIFIED' and
                 comparison_factual_sides(d, context) == {context['baseline_branch'], d['branch']}
                 for d in data['differences'])
-            checks['meaning'] = ('Configured processing checks only; review was disabled. '
-                                 'Differences are author-reported and unverified.')
+            checks['meaning'] = (ui_message('diagnostic.ledger.configured_processing_checks_only_review_was_disabled_differences'))
         checks.update(evidence_scope='SUPPLIED_REPORTS_ONLY', source='NOT_INSPECTED_IN_COMPARISON',
                       policy_satisfied=data['completion_status'] == 'COMPLETE' and not data['unresolved_branches']
                       and differences_ok and all(workflow_satisfied(entries.get(b, {}), review_enabled=review_enabled)
