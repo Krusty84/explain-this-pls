@@ -17,7 +17,7 @@
 
 | ID | Место в документе | Утверждение и область | Классификация автора | Оценка агента | Источники | Ограничения |
 | --- | --- | --- | --- | --- | --- | --- |
-| <a id="report-claim-c-001"></a><code>C-001</code> | [<code>study.original.md:3–3, study.original.md:22–28, study.original.md:38–44</code>](study.original.md)<br>[1. Область исследования — блок 1](ARCHITECTURE.md#report-block-b-001-001), [3. Компоненты системы — блок 2](ARCHITECTURE.md#report-block-b-003-002), [5. Данные и состояние — блок 2](ARCHITECTURE.md#report-block-b-005-002) | Existing statement 1. / Static source inspection. | Факт | Ревьюер указал противоречие | [<code>src/Заказы и счета.py:1–1</code>](#report-source-study-e-001) |   |
+| <a id="report-claim-c-001"></a><code>C-001</code> | [<code>study.original.md:3–3, study.original.md:22–28, study.original.md:38–44</code>](study.original.md)<br>[1. Область исследования — блок 1](ARCHITECTURE.md#report-block-b-001-001), [3. Компоненты системы — блок 2](ARCHITECTURE.md#report-block-b-003-002), [5. Данные и состояние — блок 2](ARCHITECTURE.md#report-block-b-005-002) | Existing statement 1. / Static source inspection. | Факт | Ревьюер указал противоречие | [<code>src/Заказы и счета.py:1–1</code>](vscode://file/example/%D0%98%D1%81%D1%85%D0%BE%D0%B4%D0%BD%D1%8B%D0%B9%20%D0%BA%D0%BE%D0%B4/src/%D0%97%D0%B0%D0%BA%D0%B0%D0%B7%D1%8B%20%D0%B8%20%D1%81%D1%87%D0%B5%D1%82%D0%B0.py:1:1) [<code>study:E-001</code>](#report-source-study-e-001) |   |
 
 ## Замечания агента
 
@@ -33,7 +33,7 @@ Use the existing worker entry point.
 
 [<code>C-001</code>](#report-claim-c-001)
 
-[<code>src/Заказы и счета.py:1–1</code>](#report-source-study-e-001)
+[<code>src/Заказы и счета.py:1–1</code>](vscode://file/example/%D0%98%D1%81%D1%85%D0%BE%D0%B4%D0%BD%D1%8B%D0%B9%20%D0%BA%D0%BE%D0%B4/src/%D0%97%D0%B0%D0%BA%D0%B0%D0%B7%D1%8B%20%D0%B8%20%D1%81%D1%87%D0%B5%D1%82%D0%B0.py:1:1) [<code>study:E-001</code>](#report-source-study-e-001)
 
 ### Поиск пропусков - оценки агента
 
@@ -52,4 +52,4 @@ Use the existing worker entry point.
 
 | ID | Файл:строки | Проверка | Кодировка | Идентичность источника | Места использования |
 | --- | --- | --- | --- | --- | --- |
-| <a id="report-source-study-e-001"></a><code>study:E-001</code> | <code>src/Заказы и счета.py:1–1</code> | Проверено; локатор разрешён; цитата не задана | <code>utf-8</code> | <code>{&quot;directory&quot;: &quot;/example/Исходный код&quot;, &quot;fingerprint&quot;: &quot;ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff&quot;, &quot;mode&quot;: &quot;folder&quot;}</code> | [Existing statement 1.](#report-claim-c-001), [The documented entry point is wrong.](#report-finding-f-001) |
+| <a id="report-source-study-e-001"></a><code>study:E-001</code> | [<code>src/Заказы и счета.py:1–1</code>](vscode://file/example/%D0%98%D1%81%D1%85%D0%BE%D0%B4%D0%BD%D1%8B%D0%B9%20%D0%BA%D0%BE%D0%B4/src/%D0%97%D0%B0%D0%BA%D0%B0%D0%B7%D1%8B%20%D0%B8%20%D1%81%D1%87%D0%B5%D1%82%D0%B0.py:1:1) | Проверено; локатор разрешён; цитата не задана | <code>utf-8</code> | <code>{&quot;directory&quot;: &quot;/example/Исходный код&quot;, &quot;fingerprint&quot;: &quot;ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff&quot;, &quot;mode&quot;: &quot;folder&quot;}</code> | [Existing statement 1.](#report-claim-c-001), [The documented entry point is wrong.](#report-finding-f-001) |

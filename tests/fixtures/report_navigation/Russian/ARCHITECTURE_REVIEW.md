@@ -27,7 +27,7 @@
 
 **Предлагаемое исправление:** Use the existing worker entry point.
 
-**Основание:** [<code>src/Заказы и счета.py:1–1</code>](#report-source-study-e-001) — Проверено; локатор разрешён; цитата не задана
+**Основание:** [<code>src/Заказы и счета.py:1–1</code>](vscode://file/example/%D0%98%D1%81%D1%85%D0%BE%D0%B4%D0%BD%D1%8B%D0%B9%20%D0%BA%D0%BE%D0%B4/src/%D0%97%D0%B0%D0%BA%D0%B0%D0%B7%D1%8B%20%D0%B8%20%D1%81%D1%87%D0%B5%D1%82%D0%B0.py:1:1) [<code>study:E-001</code>](#report-source-study-e-001) — Проверено; локатор разрешён; цитата не задана
 
 **Место в отчёте:** [1. Область исследования — блок 1](ARCHITECTURE.md#report-block-b-001-001), [3. Компоненты системы — блок 2](ARCHITECTURE.md#report-block-b-003-002), [5. Данные и состояние — блок 2](ARCHITECTURE.md#report-block-b-005-002)
 
@@ -49,7 +49,7 @@
 
 <a id="report-source-study-e-001"></a>
 
-### <code>src/Заказы и счета.py:1–1</code>
+### [<code>src/Заказы и счета.py:1–1</code>](vscode://file/example/%D0%98%D1%81%D1%85%D0%BE%D0%B4%D0%BD%D1%8B%D0%B9%20%D0%BA%D0%BE%D0%B4/src/%D0%97%D0%B0%D0%BA%D0%B0%D0%B7%D1%8B%20%D0%B8%20%D1%81%D1%87%D0%B5%D1%82%D0%B0.py:1:1)
 
 <code>study:E-001</code> — Проверено; локатор разрешён; цитата не задана
 

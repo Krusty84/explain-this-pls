@@ -553,7 +553,7 @@ class ConfiguredCLIIntegrationTests(unittest.TestCase):
                                         if mapping['id']==review_context['review_target_id'])
                             self.assertEqual(target['document_sha256'],branch['study']['review_plan']['document_sha256'])
                             assert_architecture(self, branch_dir, branch['study'], branch['study_invocation'],
-                                                cfg.get('output_language', 'Russian'))
+                                                cfg.get('output_language', 'Russian'), source_root=self.repo_path)
                             self.assertEqual(json.loads((branch_dir/'study.json').read_text()),branch['study'])
                             meta=json.loads((branch_dir/'revisions/001/study.logs/invocation.json').read_text())
                             self.assertEqual(meta['stage'],'study')

@@ -9,7 +9,7 @@ from src.messages import message as ui_message
 from src.contracts.contracts import accepted, contract_violation, is_recovered_material
 from src.analysis.evidence import canonical, sha
 from src.reports.navigation import anchor, link
-from src.reports.presentation import (cell, label, russian, _code, _source_path, _status,
+from src.reports.presentation import (cell, label, russian, _code, _status, source_location, source_reference,
                                       block_link, validate_report, render_citation_warnings)
 
 
@@ -42,11 +42,6 @@ def evidence_context(data, study=None):
             resolution = resolutions[identifier]
             records[identifier] = (entry, resolution, sources)
     return records
-
-
-def source_title(record):
-    entry, resolution, sources = record
-    return _code(f"{_source_path(entry, resolution, sources)}:{entry['start_line']}–{entry['end_line']}")
 
 
 def claim_places(claim_ids, study, language, path='ARCHITECTURE.md'):
@@ -111,7 +106,7 @@ def finding_location(value):
     return cell(value)
 
 
-def render_review(data, language='English', study=None):
+def render_review(data, language='English', study=None, *, source_root=None, editor='vscode'):
     validate_report('review', data)
     study = bound_study(data, study)
     records = evidence_context(data, study)
@@ -129,7 +124,7 @@ def render_review(data, language='English', study=None):
                 result.append(t('Контекст источника недоступен: ', 'Source context unavailable: ') + _code(ref))
                 continue
             used.setdefault(ref, {})[usage] = title
-            result.append(link(source_title(record), fragment=anchor('source', ref)) + ' — ' +
+            result.append(source_reference(ref, record, source_root=source_root, editor=editor) + ' — ' +
                           cell(_status(record[0], record[1], language)))
         return '; '.join(result) or t('Основания не указаны.', 'No evidence supplied.')
 
@@ -202,7 +197,8 @@ def render_review(data, language='English', study=None):
             entry, resolution, sources = records[ref]
             source = sources.get(entry['source_id'])
             identity = json.dumps(source['identity'], ensure_ascii=False, sort_keys=True) if source else t('Источник отсутствует', 'Source missing')
-            out += [f'<a id="{anchor("source", ref)}"></a>', '', '### ' + source_title(records[ref]), '',
+            out += [f'<a id="{anchor("source", ref)}"></a>', '',
+                    '### ' + source_location(records[ref], source_root=source_root, editor=editor), '',
                     _code(ref) + ' — ' + cell(_status(entry, resolution, language)), '',
                     t('Идентичность источника: ', 'Source identity: ') + _code(identity), '',
                     t('Вернуться: ', 'Return to: ') + ', '.join(link(title, fragment=usage) for usage, title in uses.items()), '']

@@ -3,13 +3,13 @@
 
 """Compare existing statements and evidence without inferring new conclusions."""
 from src.contracts.contracts import contract_violation
-from src.reports.navigation import anchor, link
-from src.reports.presentation import cell, label, russian, render_citation_warnings, validate_report
-from src.reports.review import evidence_context, source_title, claim_places
+from src.reports.navigation import link
+from src.reports.presentation import cell, label, russian, render_citation_warnings, source_reference, validate_report
+from src.reports.review import evidence_context, claim_places
 from src.runtime.artifacts import slug
 
 
-def render_comparison(data, language='English', context=None):
+def render_comparison(data, language='English', context=None, *, source_root=None, editor='vscode'):
     validate_report('compare', data)
     ru = russian(language)
     def t(r, e): return r if ru else e
@@ -70,7 +70,8 @@ def render_comparison(data, language='English', context=None):
                         continue
                     target = root + ('ARCHITECTURE.md' if identifier.startswith('study:') else 'review.annotated.md')
                     document = study if identifier.startswith('study:') else None
-                    out += ['- ' + link(source_title(record), target, anchor('source', identifier, document)) + ' — ' +
+                    out += ['- ' + source_reference(identifier, record, path=target, document=document,
+                                                    source_root=source_root, editor=editor) + ' — ' +
                             label(record[1]['status'], language)]
                 if not refs_for_claim:
                     out += ['- ' + t('Ограничение: у утверждения нет источников.', 'Limitation: this claim has no source evidence.')]

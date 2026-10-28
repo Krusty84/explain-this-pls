@@ -9,7 +9,7 @@ from src.contracts.contracts import SECTION_KEYS, contract_violation, is_recover
 from src.reports.architecture_format import section_headings
 from src.reports.document_rendering import validate_materialized, inspect_materialized_diagrams
 from src.contracts.saved_contracts import SAVED_SCHEMAS, SAVED_FOLDER_SCHEMAS
-from src.reports.navigation import anchor, block_marker, link
+from src.reports.navigation import anchor, block_marker, editor_link, link
 
 LABELS = {
     'SUPPORTED': 'Supported according to the reviewing agent',
@@ -136,6 +136,19 @@ def _source_path(evidence, resolution, sources):
     return evidence['path'] if root == '.' else root + '/' + evidence['path']
 
 
+def source_location(record, *, source_root=None, editor='vscode'):
+    entry, resolution, sources = record
+    path = _source_path(entry, resolution, sources)
+    title = _code(f"{path}:{entry['start_line']}–{entry['end_line']}")
+    return editor_link(title, path, entry['start_line'], entry['end_line'], resolution['status'],
+                       source_root=source_root, editor=editor)
+
+
+def source_reference(identifier, record, *, source_root=None, editor='vscode', path='', document=None):
+    location = source_location(record, source_root=source_root, editor=editor)
+    return location + ' ' + link(_code(identifier), path, anchor('source', identifier, document))
+
+
 def _status(evidence, resolution, language):
     status = resolution['status']
     ru = russian(language)
@@ -151,7 +164,8 @@ def _status(evidence, resolution, language):
     return label(status, language) + '; ' + detail
 
 
-def render_source_references(block, claims, evidence, resolutions, sources, language='English', *, document=None):
+def render_source_references(block, claims, evidence, resolutions, sources, language='English', *, document=None,
+                             source_root=None, editor='vscode'):
     """Follow canonical IDs in first-occurrence order; never inspect authored prose."""
     refs, limitations, seen = [], [], set()
     for claim_id in block['claim_ids']:
@@ -164,9 +178,8 @@ def render_source_references(block, claims, evidence, resolutions, sources, lang
             seen.add(identifier)
             entry = _lookup(evidence, identifier, '$.claims.evidence_ids')
             resolution = _lookup(resolutions, identifier, '$.program_checks.evidence')
-            path = _source_path(entry, resolution, sources)
-            reference = link(_code(f"{path}:{entry['start_line']}–{entry['end_line']}"),
-                             fragment=anchor('source', identifier, document))
+            reference = source_reference(identifier, (entry, resolution, sources), document=document,
+                                         source_root=source_root, editor=editor)
             if resolution['status'] != 'RESOLVED':
                 reference += ' (' + _status(entry, resolution, language) + ')'
             refs.append(reference)
@@ -179,7 +192,7 @@ def render_source_references(block, claims, evidence, resolutions, sources, lang
     return '\n\n'.join(out)
 
 
-def render_evidence_index(data, language='English'):
+def render_evidence_index(data, language='English', *, source_root=None, editor='vscode'):
     """Render locator outcomes and pinned identities without exposing source quotes."""
     ru = russian(language)
     resolutions = {entry['id']: entry for entry in data['program_checks']['evidence']}
@@ -192,11 +205,10 @@ def render_evidence_index(data, language='English'):
     for entry in data['evidence']:
         identifier = 'study:' + entry['id']
         resolution = _lookup(resolutions, identifier, '$.program_checks.evidence')
-        path = _source_path(entry, resolution, sources)
         uses = [block_link(block, data, language) for block in data['block_map']
                 if any(identifier in claims[cid]['evidence_ids'] for cid in block['claim_ids'])]
         values = [f'<a id="{anchor("source", identifier, data)}"></a>' + _code(identifier),
-                  _code(f"{path}:{entry['start_line']}–{entry['end_line']}"), _code(entry['source_id']),
+                  source_location((entry, resolution, sources), source_root=source_root, editor=editor), _code(entry['source_id']),
                   cell(_status(entry, resolution, language)), ', '.join(uses) or ('Не используется' if ru else 'Unused')]
         out.append('| ' + ' | '.join(values) + ' |')
     out += ['', '### ' + ('Идентичность источников' if ru else 'Source identities'), '',
@@ -216,7 +228,7 @@ def block_link(block, data, language='English', path=''):
     return link(title, path, anchor('block', block['id'], data))
 
 
-def render_architecture(data, language='English'):
+def render_architecture(data, language='English', *, source_root=None, editor='vscode'):
     """Render fixed headings and evidence beside immutable canonical blocks."""
     headings = section_headings(language)
     validate_materialized(data)
@@ -238,7 +250,8 @@ def render_architecture(data, language='English'):
             locator = block['locator']
             chunks.append(block_marker(block, data))
             chunks.append(''.join(document[locator['start_line'] - 1:locator['end_line']]) + '\n')
-            references = render_source_references(block, claims, evidence, resolutions, sources, language, document=data)
+            references = render_source_references(block, claims, evidence, resolutions, sources, language, document=data,
+                                                  source_root=source_root, editor=editor)
             if references:
                 chunks.append(references + '\n\n')
         if key in missing_diagrams:
@@ -247,7 +260,7 @@ def render_architecture(data, language='English'):
                            if russian(language) else
                            '### Required diagram missing\n\n'
                            'The study is incomplete. See this section and the limitations for the missing checks.\n\n'))
-    chunks.append(render_evidence_index(data, language) + '\n')
+    chunks.append(render_evidence_index(data, language, source_root=source_root, editor=editor) + '\n')
     return ''.join(chunks)
 
 
@@ -301,7 +314,7 @@ def validate_report(stage, data):
         validate_materialized(data)
 
 
-def render_stage(stage, data, language='English', *, study=None, context=None):
+def render_stage(stage, data, language='English', *, study=None, context=None, source_root=None, editor='vscode'):
     """Full technical annotation; primary review and comparison have separate views."""
     validate_report(stage, data)
     ru = russian(language)
@@ -311,8 +324,8 @@ def render_stage(stage, data, language='English', *, study=None, context=None):
                         'Text retained after contract rejection; full policy checks are not complete.') + '\n\n'
     if stage == 'compare':
         from src.reports.comparison import render_comparison
-        return render_comparison(data, language, context)
-    from src.reports.review import bound_study, evidence_context, source_title, review_searches, ordered_findings, finding_location
+        return render_comparison(data, language, context, source_root=source_root, editor=editor)
+    from src.reports.review import bound_study, evidence_context, review_searches, ordered_findings, finding_location
     if stage == 'review':
         study = bound_study(data, study)
     else:
@@ -358,7 +371,7 @@ def render_stage(stage, data, language='English', *, study=None, context=None):
                 result.append(_code(ref) + ' — ' + t('Контекст недоступен', 'Context unavailable'))
             else:
                 uses.setdefault(ref, {})[usage] = title
-                result.append(link(source_title(records[ref]), fragment=anchor('source', ref)))
+                result.append(source_reference(ref, records[ref], source_root=source_root, editor=editor))
         return ', '.join(result) or '—'
     out += ['', '## ' + t('Полный реестр утверждений', 'Full claim registry'), '',
             '| ' + t('ID | Место в документе | Утверждение и область | Классификация автора | Оценка агента | Источники | Ограничения',
@@ -401,7 +414,8 @@ def render_stage(stage, data, language='English', *, study=None, context=None):
         entry, resolution, sources = record
         source = sources.get(entry['source_id'])
         identity = json.dumps(source['identity'], ensure_ascii=False, sort_keys=True) if source else t('Источник отсутствует', 'Source missing')
-        values = [f'<a id="{anchor("source", ref)}"></a>' + _code(ref), source_title(record), cell(_status(entry, resolution, language)),
+        values = [f'<a id="{anchor("source", ref)}"></a>' + _code(ref),
+                  source_location(record, source_root=source_root, editor=editor), cell(_status(entry, resolution, language)),
                   _code(resolution.get('encoding') or '—'), _code(identity),
                   ', '.join(link(title, fragment=usage) for usage, title in uses.get(ref, {}).items()) or '—']
         out += ['| ' + ' | '.join(values) + ' |']

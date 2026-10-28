@@ -117,7 +117,7 @@ class RevisionPipelineTests(FolderFixture):
                     self.assertEqual(revision['study']['review_plan']['coverage_plan'], coverage)
                     self.assertEqual(revision['review']['review_plan']['coverage_plan'], coverage)
                     assert_architecture(self, self.run_dir / revision['directory'], revision['study'],
-                                        revision['study_invocation'], language)
+                                        revision['study_invocation'], language, source_root=self.runner.session.source_path)
                     self.assertEqual(revision['review']['target']['document_sha256'],
                                      revision['study']['review_plan']['document_sha256'])
                 repeated = manifest['revisions'][1]['review']

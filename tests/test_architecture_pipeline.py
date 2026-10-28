@@ -33,7 +33,7 @@ class ArchitectureFolderPipelineTests(FolderFixture):
                                          ['study', 'study', 'review'] if review else ['study', 'study'])
                         study = manifest['study']
                         assert_architecture(self, self.runner.session.run_dir, study,
-                                            manifest['study_invocation'], language)
+                                            manifest['study_invocation'], language, source_root=self.runner.session.source_path)
                         if review:
                             context = self.calls[-1]['context']
                             self.assertEqual(context['architecture_document']['report_markdown'],
@@ -166,6 +166,6 @@ class ArchitectureGitPipelineTests(unittest.TestCase):
                                  ['study', 'study', 'study', 'study', 'compare'])
                 for branch in manifest['branches']:
                     assert_architecture(self, runner.session.run_dir / branch['directory'], branch['study'],
-                                        branch['study_invocation'], language)
+                                        branch['study_invocation'], language, source_root=runner.session.source_path)
                 self.assertEqual(self.repo.symbolic(), 'master')
                 self.assertEqual(self.repo.head(), self.master)

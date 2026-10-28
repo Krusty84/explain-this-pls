@@ -10,6 +10,22 @@ from test_folder import FolderFixture
 
 
 class ConfigTests(FolderFixture):
+    def test_your_editor_defaults_to_vscode_and_accepts_both_editors(self):
+        self.assertEqual(self.config()['your_editor'], 'vscode')
+        for editor in ('vscode', 'zed'):
+            self.value['your_editor'] = editor
+            with self.subTest(editor=editor):
+                self.assertEqual(self.config()['your_editor'], editor)
+
+    def test_invalid_your_editor_fails_before_backend_lookup(self):
+        for editor in (None, '', 'VS Code', 'vim', True, 1, [], {}):
+            self.value['your_editor'] = editor
+            with self.subTest(editor=editor), patch('src.runtime.config.shutil.which') as which:
+                with self.assertRaisesRegex(AuditError, 'your_editor') as caught:
+                    self.config()
+                self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
+                which.assert_not_called()
+
     def test_last_analysis_is_optional_and_resolves_paths_without_requiring_results(self):
         self.assertIsNone(self.config()['last_analysis'])
         self.value['last_analysis'] = None

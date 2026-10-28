@@ -170,7 +170,7 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
             run_dir = Path(manifest['final_report']).parent
             for branch in manifest['branches']:
                 assert_architecture(self, run_dir / branch['directory'], branch['study'],
-                                    branch['study_invocation'], 'Russian')
+                                    branch['study_invocation'], 'Russian', source_root=self.path)
 
     def test_published_submodule_citations_keep_paths_and_pinned_commits(self):
         self.config['output_language'] = 'English'
@@ -195,7 +195,7 @@ class RecursiveCLITests(RecursiveFixture, unittest.TestCase):
         self.assertEqual(calls, ['study', 'study', 'review', 'study', 'study', 'review', 'compare'])
         for branch in manifest['branches']:
             text = assert_architecture(self, runner.session.run_dir / branch['directory'], branch['study'],
-                                       branch['study_invocation'], 'English')
+                                       branch['study_invocation'], 'English', source_root=runner.session.source_path)
             for source in branch['study']['review_plan']['sources'][1:]:
                 self.assertIn(source['root'] + '/app.py', text)
                 self.assertIn(source['identity']['commit'], text)

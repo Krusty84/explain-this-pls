@@ -25,6 +25,8 @@
   // The source directory name and a run ID are appended automatically.
   "reports_dir": "../architecture-reports",
   "output_language": "English",
+  // Source links open the current project files in "vscode" (default) or "zed".
+  "your_editor": "vscode",
 
   // CLI/TUI runs with useful reports update this field; setup checks keep it unchanged.
   // Stores status (COMPLETED/PARTIAL), finished_at (ISO 8601 with timezone), and results_dir (run directory).

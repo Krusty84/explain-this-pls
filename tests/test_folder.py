@@ -693,7 +693,7 @@ class FolderCLIIntegrationTests(FolderFixture):
                                   if mapping['id'] == review_context['review_target_id'])
                     self.assertEqual(target['document_sha256'], manifest['study']['review_plan']['document_sha256'])
                     assert_architecture(self, run, manifest['study'], manifest['study_invocation'],
-                                        self.value.get('output_language', 'Russian'))
+                                        self.value.get('output_language', 'Russian'), source_root=self.source)
                     self.assertEqual(len({call['context']['source_snapshot_id'] for call in invocations}), 1)
                     self.assertEqual(manifest['study_invocation']['stage'], 'study')
                     self.assertNotIn('document', manifest)

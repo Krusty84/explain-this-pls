@@ -3,6 +3,7 @@
 
 """Offline, deterministic report examples; no model or source reads."""
 import copy
+from pathlib import Path
 from unittest.mock import patch
 
 from fixtures.ledger_response import response
@@ -69,11 +70,13 @@ def example(count=1, *, partial=False, multiple=False):
     return manifest, {'path': '/example/Исходный код'}, context
 
 
-def publish_example(root, manifest, source, language='English', mode='folder', comparison_context=None):
+def publish_example(root, manifest, source, language='English', mode='folder', comparison_context=None, *, editor='vscode'):
     """Use production publication, hashes and selected-revision copying."""
     root = root.resolve()
     manifest = copy.deepcopy(manifest)
-    session = SimpleNamespace(mode=mode, run_dir=root, cfg={'output_language': language}, critical_failure=False)
+    source_root = source.get('path' if mode == 'folder' else 'repository', '/example')
+    session = SimpleNamespace(mode=mode, run_dir=root, source_path=Path(source_root),
+        cfg={'output_language': language, 'your_editor': editor}, critical_failure=False)
     publisher = ReportPublisher(session)
     entries = [manifest] if mode == 'folder' else manifest['branches']
     for entry in entries:

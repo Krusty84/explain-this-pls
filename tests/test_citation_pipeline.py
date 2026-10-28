@@ -61,7 +61,8 @@ class CitationPipelineTests(test_folder.FolderFixture):
             validate_materialized(document)
             architecture = (self.runner.session.run_dir / 'ARCHITECTURE.md').read_text()
             assert_architecture(self, self.runner.session.run_dir, document,
-                                manifest['study_invocation'], self.runner.session.cfg['output_language'])
+                                manifest['study_invocation'], self.runner.session.cfg['output_language'],
+                                source_root=self.runner.session.source_path)
             self.assertGreater(len(architecture), len(document['report_markdown']))
             evidence_id = warnings[0]['evidence_id'].split(':', 1)[1]
             self.assertIn(f'](#report-source-study-{evidence_id.lower()})', architecture)
@@ -225,5 +226,5 @@ class CitationGitPipelineTests(unittest.TestCase):
                 self.assertEqual(self.repo.head(), self.master)
                 for branch in manifest['branches']:
                     assert_architecture(self, runner.session.run_dir / branch['directory'], branch['study'],
-                                        branch['study_invocation'], config['output_language'])
+                                        branch['study_invocation'], config['output_language'], source_root=runner.session.source_path)
 

@@ -8,13 +8,13 @@ from src.reports.document_rendering import validate_published_architecture
 from src.reports.presentation import render_architecture
 
 
-def assert_architecture(test, directory, study, invocation, language):
+def assert_architecture(test, directory, study, invocation, language, *, source_root, editor='vscode'):
     published = (directory / 'ARCHITECTURE.md').read_bytes()
     canonical = study['report_markdown'].encode('utf-8')
     validate_published_architecture(published.decode('utf-8'), language, canonical=study)
-    rendered = render_architecture(study, language)
+    rendered = render_architecture(study, language, source_root=source_root, editor=editor)
     test.assertEqual(published, rendered.encode('utf-8'))
-    test.assertEqual(rendered, render_architecture(study, language))
+    test.assertEqual(rendered, render_architecture(study, language, source_root=source_root, editor=editor))
     if study['completion_status'] == 'COMPLETE':
         test.assertTrue(study['program_checks']['diagrams']['complete'])
         test.assertEqual(study['program_checks']['diagrams']['present_sections'],

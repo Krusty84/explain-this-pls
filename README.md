@@ -372,14 +372,21 @@ files for complete technical registries. Earlier revisions remain under
 `revisions/<revision-id>/` inside the source's result directory; the summary links to
 them without copying their contents. A partial review stays with its own revision.
 
-Source labels show paths and lines and link to evidence entries. Return links show
-every architecture block that uses the source. Review evidence uses the frozen
-study of the same revision. Canonical line coordinates name `study.original.md`;
-architecture links use block anchors. These links work in both revision directories
-and selected copies. Local navigation requires a Markdown viewer that supports
-explicit HTML anchors. Source paths are not live-checkout links: a pinned source
-address is required for a direct source link. Comparison uses supplied reports only;
-missing evidence remains an explicit limitation.
+Source labels show paths and line ranges. Click a resolved path to open the first
+line in the editor set by `your_editor`: `"vscode"` (default) or `"zed"`. The adjacent
+evidence ID, such as `review:E-012`, jumps to its source entry in the report.
+Paths in source registries also open in the selected editor. File links are included
+for `RESOLVED` and `QUOTE_MISMATCH` locators, other statuses keep the path as text.
+These links open current project files, which can differ from the inspected commit
+or folder state. The editor choice is fixed when the report is generated.
+
+Return links show every architecture block that uses the source. Review evidence
+uses the frozen study of the same revision. Canonical line coordinates name
+`study.original.md`, architecture links use block anchors. These links work in both
+revision directories and selected copies. Use the VS Code Markdown preview for
+navigation inside reports, it supports the explicit HTML anchors. Zed can be the
+editor used to open source files. Comparison uses supplied reports only, missing
+evidence remains an explicit limitation.
 
 Program labels support Russian and English; author text is unchanged. PlantUML
 diagrams are included as source; use a PlantUML-capable viewer to display them.

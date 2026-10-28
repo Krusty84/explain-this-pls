@@ -20,8 +20,9 @@ from src.analysis.evidence import canonical, sha
 from src.contracts.contracts import ContractError
 from src.reports.document_rendering import validate_published_architecture
 from src.reports.final_report import render_final_report, recoverable_material
-from src.reports.navigation import anchor
-from src.reports.presentation import render_architecture, render_stage, label
+from src.reports.navigation import anchor, editor_link
+from src.reports.presentation import render_architecture, render_stage, source_reference, label
+from src.contracts.saved_contracts import RESOLUTION
 from src.reports.review import render_review
 from src.reports.comparison import render_comparison
 from src.runtime.artifacts import slug
@@ -57,11 +58,102 @@ def assert_links(test, root):
                 test.assertFalse(re.fullmatch(r'L\d+(?:-L?\d+)?', url.fragment), href)
 
 
+class EditorLinkTests(unittest.TestCase):
+    def test_editor_uris_encode_absolute_paths_and_use_first_line(self):
+        root = Path('/Users/Имя с пробелом/100%')
+        path = 'src/a [1](#)|&.py'
+        for editor in ('vscode', 'zed'):
+            with self.subTest(editor=editor):
+                rendered = editor_link('Source', path, 332, 336, 'RESOLVED', source_root=root, editor=editor)
+                href, = Links(rendered).hrefs
+                url = urlsplit(href)
+                self.assertEqual((url.scheme, url.netloc), (editor, 'file'))
+                self.assertEqual(unquote(url.path), str(root / path) + ':332:1')
+                self.assertFalse(url.query or url.fragment)
+                for encoded in ('%20', '%25', '%23', '%5B', '%5D', '%28', '%29', '%7C', '%26'):
+                    self.assertIn(encoded, href)
+
+    def test_unresolved_locators_keep_only_the_source_id_link(self):
+        entry = dict(source_id='source-001', path='app.py', start_line=68, end_line=79)
+        sources = {'source-001': dict(root='.')}
+        for status in RESOLUTION['properties']['status']['enum']:
+            with self.subTest(status=status):
+                rendered = source_reference('review:E-012', (entry, dict(status=status), sources), source_root='/project')
+                hrefs = Links(rendered).hrefs
+                self.assertEqual(hrefs[-1], '#report-source-review-e-012')
+                self.assertEqual(len(hrefs), 2 if status in ('RESOLVED', 'QUOTE_MISMATCH') else 1)
+        rendered = source_reference('review:E-012', (entry, dict(status='UNKNOWN_SOURCE'), {}), source_root='/project')
+        self.assertEqual(Links(rendered).hrefs, ['#report-source-review-e-012'])
+
+    def test_unsafe_paths_invalid_ranges_and_missing_roots_stay_text(self):
+        for path in ('', '/absolute.py', '../outside.py', 'src/../outside.py', 'src/.git/config',
+                     'src//app.py', 'src/./app.py', 'src\\app.py', 'app.py:99', 'app\x00.py'):
+            with self.subTest(path=path):
+                self.assertEqual(editor_link('Source', path, 1, 2, 'RESOLVED', source_root='/project'), 'Source')
+        for start, end in ((0, 2), (2, 1), (True, 2), (1, False), ('1', 2), (1, None)):
+            with self.subTest(start=start, end=end):
+                self.assertEqual(editor_link('Source', 'app.py', start, end, 'RESOLVED', source_root='/project'), 'Source')
+        for root in (None, 'relative/project'):
+            self.assertEqual(editor_link('Source', 'app.py', 1, 2, 'RESOLVED', source_root=root), 'Source')
+
+
 class ReportNavigationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='отчёты с пробелом ')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+
+    def test_source_paths_and_ids_in_all_primary_and_annotated_views(self):
+        source_root = Path('/example/Текущий проект')
+        for folder in (False, True):
+            state, _ = revision(folder=folder, source_path='src/Код [a](b)#%.py')
+            study, review = state['study'], state['review']
+            review['evidence'] = [dict(id='E-001', source_id='source-001', path='review/Другой файл.py',
+                                       start_line=68, end_line=79, quote='')]
+            review['program_checks']['evidence'] = [dict(study['program_checks']['evidence'][0],
+                id='review:E-001', path='review/Другой файл.py', start_line=68, end_line=79)]
+            review['findings'][0]['evidence_ids'].append('review:E-001')
+            before = copy.deepcopy(state)
+            for editor in ('vscode', 'zed'):
+                options = dict(source_root=source_root, editor=editor)
+                with self.subTest(folder=folder, editor=editor), \
+                        patch('src.analysis.evidence.read_confined', side_effect=AssertionError('No source reads')):
+                    for rendered in (render_architecture(study, **options), render_review(review, study=study, **options),
+                                     render_stage('study', study, **options), render_stage('review', review, study=study, **options)):
+                        parsed = Links(rendered)
+                        files = [urlsplit(href) for href in parsed.hrefs if urlsplit(href).scheme]
+                        self.assertGreaterEqual(len(files), 2)
+                        self.assertTrue(all(url.scheme == editor and url.netloc == 'file' for url in files))
+                        self.assertIn(str(source_root / 'src/Код [a](b)#%.py') + ':1:1', [unquote(url.path) for url in files])
+                        for href in parsed.hrefs:
+                            if href.startswith('#report-source-'):
+                                self.assertIn(href[1:], parsed.ids)
+                        self.assertIn('[<code>study:E-001</code>](#report-source-study-e-001)', rendered)
+                        if '#report-source-review-e-001' in rendered:
+                            self.assertIn(str(source_root / 'review/Другой файл.py') + ':68:1', [unquote(url.path) for url in files])
+                            self.assertIn('[<code>review:E-001</code>](#report-source-review-e-001)', rendered)
+                    validate_published_architecture(render_architecture(study, **options), 'English', canonical=study)
+            self.assertEqual(state, before)
+
+    def test_editor_choice_reaches_publication_review_freeze_and_selected_copies(self):
+        for editor in ('vscode', 'zed'):
+            with self.subTest(editor=editor):
+                manifest, source, context = example(multiple=True)
+                directory = (self.root / editor).resolve()
+                saved, publisher = publish_example(directory, manifest, source, editor=editor)
+                publisher.assert_review_files(context, directory / 'revisions/001')
+                for name in ('ARCHITECTURE.md', 'ARCHITECTURE_REVIEW.md', 'study.annotated.md', 'review.annotated.md'):
+                    blob = (directory / name).read_bytes()
+                    self.assertEqual(blob, (directory / 'revisions/001' / name).read_bytes())
+                    files = [urlsplit(href) for href in Links(blob.decode()).hrefs if urlsplit(href).scheme]
+                    self.assertTrue(files)
+                    self.assertTrue(all(url.scheme == editor for url in files))
+                    self.assertTrue(all(unquote(url.path).startswith(source['path'] + '/') for url in files))
+                assert_links(self, directory)
+                publisher.session.cfg['your_editor'] = 'zed' if editor == 'vscode' else 'vscode'
+                with self.assertRaises(AuditError):
+                    publisher.assert_review_files(context, directory / 'revisions/001')
+                publisher.assert_revision_files(saved)
 
     def test_summary_size_is_independent_of_supported_registry_rows(self):
         reports = []
@@ -106,7 +198,7 @@ class ReportNavigationTests(unittest.TestCase):
         data = manifest['study']
         row = next(line for line in architecture.splitlines() if '<a id="report-source-' in line)
         expected = [anchor('block', block['id'], data) for block in data['block_map'] if block['claim_ids']]
-        self.assertEqual(set(Links(row).hrefs), {'#' + item for item in expected})
+        self.assertEqual({href for href in Links(row).hrefs if href.startswith('#')}, {'#' + item for item in expected})
         assert_links(self, self.root)
 
     def test_review_uses_frozen_study_and_distinct_evidence_namespaces(self):
@@ -287,8 +379,14 @@ class ReportNavigationTests(unittest.TestCase):
         original = copy.deepcopy(comparison)
         for language in ('English', 'Russian'):
             path = self.root / language
-            publish_example(path, manifest, {'branches': context['requested_branches']}, language, 'git', context)
+            source = {'repository': '/example/Текущий Git', 'branches': context['requested_branches']}
+            publish_example(path, manifest, source, language, 'git', context, editor='zed')
             rendered = (path / 'comparison/BRANCH_COMPARISON.md').read_text()
+            self.assertEqual(rendered, render_stage('compare', comparison, language, context=context,
+                source_root=source['repository'], editor='zed'))
+            files = [urlsplit(href) for href in Links(rendered).hrefs if urlsplit(href).scheme]
+            self.assertEqual(len(files), 2)
+            self.assertTrue(all(url.scheme == 'zed' and unquote(url.path).startswith(source['repository'] + '/') for url in files))
             for value in ('Uses a worker queue.', 'Runs the worker directly.', wire['differences'][0]['explanation'],
                           '001', '002', 'a' * 40, 'b' * 40):
                 self.assertIn(value, rendered)

@@ -113,13 +113,14 @@ class ReportPublisher:
         def encoded(value):
             return (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
         language = self.session.cfg.get('output_language')
+        navigation = dict(source_root=self.session.source_path, editor=self.session.cfg.get('your_editor', 'vscode'))
         study = (context or {}).get('architecture_document')
         if stage == 'study':
-            report = render_architecture(data, language)
+            report = render_architecture(data, language, **navigation)
         elif stage == 'review':
-            report = render_review(data, language, study)
+            report = render_review(data, language, study, **navigation)
         else:
-            report = render_comparison(data, language, context)
+            report = render_comparison(data, language, context, **navigation)
         if stage == 'study':
             validate_published_architecture(report, self.session.cfg.get('output_language'), canonical=data)
         contents = {ARTIFACTS[stage]: report.encode('utf-8'),
@@ -128,19 +129,20 @@ class ReportPublisher:
         if stage == 'study':
             if data['review_plan']['coverage_plan'] is not None:
                 contents['coverage.plan.json'] = encoded(data['review_plan']['coverage_plan'])
-            contents.update({'study.annotated.md': render_stage(stage, data, self.session.cfg.get('output_language')).encode('utf-8'),
+            contents.update({'study.annotated.md': render_stage(stage, data, language, **navigation).encode('utf-8'),
                              'claim.registry.json': encoded(data['claims']), 'review.plan.json': encoded(data['review_plan'])})
             if data.get('registry_diff') is not None:
                 contents['registry.diff.json'] = encoded(data['registry_diff'])
         elif stage == 'review':
-            contents['review.annotated.md'] = render_stage(stage, data, language, study=study).encode('utf-8')
+            contents['review.annotated.md'] = render_stage(stage, data, language, study=study, **navigation).encode('utf-8')
         return contents
 
     def assert_review_files(self, context, directory):
         expected = {'claim.registry.json': (json.dumps(context['claim_registry'], ensure_ascii=False, indent=2) + '\n').encode(),
             'review.plan.json': (json.dumps(context['review_plan'], ensure_ascii=False, indent=2) + '\n').encode()}
         if context.get('document_strictly_valid'):
-            report = render_architecture(context['architecture_document'], self.session.cfg.get('output_language'))
+            report = render_architecture(context['architecture_document'], self.session.cfg.get('output_language'),
+                source_root=self.session.source_path, editor=self.session.cfg.get('your_editor', 'vscode'))
             validate_published_architecture(report, self.session.cfg.get('output_language'),
                                             canonical=context['architecture_document'])
             expected['ARCHITECTURE.md'] = report.encode('utf-8')

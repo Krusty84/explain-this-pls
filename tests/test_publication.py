@@ -107,7 +107,8 @@ class PublicationTests(FolderFixture):
                     self.assertEqual(meta['status'], 'SUCCEEDED')
                     self.assertTrue(meta['publication_complete'])
                     self.assertEqual((runner.session.run_dir / 'ARCHITECTURE.md').read_text(),
-                                     render_architecture(saved, runner.session.cfg['output_language']))
+                                     render_architecture(saved, runner.session.cfg['output_language'],
+                                         source_root=runner.session.source_path, editor=runner.session.cfg['your_editor']))
 
     def test_invocation_through_parent_symlink_detects_binding_changes(self):
         alias = self.base / 'alias'
@@ -257,6 +258,7 @@ class PublicationTests(FolderFixture):
                 self.assertNotIn('      Report: ', err.getvalue())
 
     def test_document_bytes_plan_and_wire_are_separate(self):
+        self.value['your_editor'] = 'zed'
         runner, context, data = self.prepare()
         # Canonicalize authored CRLF; retain final blank lines.
         data['report_sections'][0]['blocks'][0]['markdown'] += '\r\n'
@@ -265,7 +267,9 @@ class PublicationTests(FolderFixture):
             saved, meta = runner.invoke('study', context, runner.session.run_dir / 'study.logs')
         import hashlib
         architecture = (runner.session.run_dir / 'ARCHITECTURE.md').read_bytes()
-        self.assertEqual(architecture, render_architecture(saved, runner.session.cfg['output_language']).encode())
+        self.assertEqual(architecture, render_architecture(saved, runner.session.cfg['output_language'],
+            source_root=runner.session.source_path, editor=runner.session.cfg['your_editor']).encode())
+        self.assertIn(b'(zed://file', architecture)
         validate_published_architecture(architecture.decode(), runner.session.cfg['output_language'], canonical=saved)
         self.assertEqual((runner.session.run_dir / 'study.original.md').read_bytes(), expected.encode())
         self.assertEqual(saved['report_markdown'], expected)
@@ -308,8 +312,8 @@ class PublicationTests(FolderFixture):
                            'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint']}
                 data = response(context)
 
-                def render(study, language):
-                    published = render_architecture(study, language)
+                def render(study, language, **navigation):
+                    published = render_architecture(study, language, **navigation)
                     diagram = next(block['locator']['quote'] for block in study['block_map']
                                    if block['section_key'] == 'components' and '```plantuml' in block['locator']['quote'])
                     if defect == 'changed':

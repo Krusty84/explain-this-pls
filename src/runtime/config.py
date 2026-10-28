@@ -84,10 +84,13 @@ def load_config(path: Path, *, text: str | None = None) -> dict:
     allowed = {'reports_dir', 'agent', 'stage_agents',
         'output_language', 'priority_scenarios', 'continue_on_error', 'project_description', 'prompts',
         'mode', 'git_mode', 'folder_mode', 'execution', 'result_policy', 'source_decoding',
-        'source_filter', 'source_context', 'source_access', 'last_analysis'}
+        'source_filter', 'source_context', 'source_access', 'last_analysis', 'your_editor'}
     if set(value) - allowed:
         raise AuditError(ui_message('diagnostic.config.unknown_configuration_keys', value=set(value) - allowed))
     try:
+        value.setdefault('your_editor', 'vscode')
+        if value['your_editor'] not in ('vscode', 'zed'):
+            raise ValueError(ui_message('diagnostic.config.your_editor_must_be_vscode_or_zed'))
         if 'execution' in value and value['execution'] is None:
             raise ValueError(ui_message('diagnostic.config.execution_must_be_a_json_object'))
         if 'source_context' in value and value['source_context'] is None:

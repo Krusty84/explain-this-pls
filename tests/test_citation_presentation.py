@@ -57,8 +57,9 @@ class CitationPresentationTests(unittest.TestCase):
             self.assertEqual(data, original)
 
     def test_one_claim_one_evidence_and_registry_definition(self):
-        rendered = render_architecture(presentation_data())
-        self.assertIn('*Sources: [<code>app.py:1–1</code>](#report-source-study-e-001)*', rendered)
+        rendered = render_architecture(presentation_data(), source_root='/example/project')
+        self.assertIn('*Sources: [<code>app.py:1–1</code>](vscode://file/example/project/app.py:1:1) '
+                      '[<code>study:E-001</code>](#report-source-study-e-001)*', rendered)
         self.assertIn('<a id="report-source-study-e-001"></a><code>study:E-001</code>', rendered)
         self.assertIn('<code>app.py:1–1</code>', rendered)
         self.assertIn('Resolved; locator resolved; no quote supplied', rendered)
@@ -180,7 +181,9 @@ class CitationPresentationTests(unittest.TestCase):
         data = presentation_data()
         data['evidence'][0]['source_id'] = 'source-002'
         data['program_checks']['evidence'][0]['source_id'] = 'source-002'
-        rendered = render_architecture(data)
+        rendered = render_architecture(data, source_root='/current/project', editor='zed')
+        self.assertIn('(zed://file/current/project/vendor/worker/app.py:1:1)', rendered)
+        self.assertNotIn('/vendor/worker/vendor/worker/', rendered)
         self.assertIn('<code>vendor/worker/app.py:1–1</code>', rendered)
         self.assertIn('<code>source-002</code>', rendered)
         self.assertIn('b' * 40, rendered)
@@ -203,10 +206,11 @@ class CitationPresentationTests(unittest.TestCase):
         data['program_checks']['evidence'][2]['status'] = 'QUOTE_MISMATCH'
         original = copy.deepcopy(data)
         canonical_hash = hashlib.sha256(data['report_markdown'].encode()).hexdigest()
-        rendered = render_architecture(data)
+        rendered = render_architecture(data, source_root='/example/project')
         golden = fixture.with_suffix('.md').read_bytes()
         self.assertEqual(rendered.encode('utf-8'), golden)
-        self.assertEqual(hashlib.sha256(rendered.encode()).digest(), hashlib.sha256(render_architecture(data).encode()).digest())
+        self.assertEqual(hashlib.sha256(rendered.encode()).digest(),
+                         hashlib.sha256(render_architecture(data, source_root='/example/project').encode()).digest())
         self.assertEqual(data, original)
         self.assertEqual(hashlib.sha256(data['report_markdown'].encode()).hexdigest(), canonical_hash)
         for block in data['block_map']:

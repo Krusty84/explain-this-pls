@@ -54,7 +54,8 @@ class ScopePipelineMixin(optional_fixtures.PipelineMixin):
                     directory = self.run_dir / revision['directory']
                     validate_materialized(json.loads((directory / 'study.json').read_text()))
                     published = assert_architecture(self, directory, study,
-                        revision['study_invocation'], language)
+                        revision['study_invocation'], language,
+                        source_root=cfg[self.mode + '_mode']['repository' if self.mode == 'git' else 'path'])
                     scope_id = next(a['id'] for a in study['review_plan']['omission_areas']
                                     if a['scope'] == 'scope')
                     self.assertIn(scope_id, review['program_checks']['omission_coverage']['expected_ids'])

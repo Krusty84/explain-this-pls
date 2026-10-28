@@ -285,7 +285,8 @@ class NormalizationPipelineTests(FolderFixture):
             self.assertEqual(saved['claims'], materialize_study(assembled)['claims'])
             self.assertEqual(saved['review_plan']['registry_sha256'], sha(canonical(saved['claims'])))
             self.assertEqual(saved['report_markdown'], materialize_study(raw)['report_markdown'])
-            assert_architecture(self, runner.session.run_dir, saved, meta, runner.session.cfg['output_language'])
+            assert_architecture(self, runner.session.run_dir, saved, meta, runner.session.cfg['output_language'],
+                                source_root=runner.session.source_path)
             self.assertTrue(meta['publication_complete'])
             self.assertEqual(saved['program_checks']['semantic_quality'], 'NOT_MEASURED')
             self.assertEqual('study_normalized' in runner.session.reporter.stderr.getvalue(), local)

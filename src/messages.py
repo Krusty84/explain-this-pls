@@ -434,6 +434,7 @@ MESSAGES = {
     'diagnostic.config.unknown_prompt_stage': 'Unknown prompt stage.',
     'diagnostic.config.unknown_stage_override': 'Unknown stage override: {stage}',
     'diagnostic.config.unsupported_backend': 'Unsupported backend: {backend}',
+    'diagnostic.config.your_editor_must_be_vscode_or_zed': 'your_editor must be vscode or zed.',
 
     'diagnostic.config_edit.the_configuration_changed_use_refresh_before_saving': (
         'The configuration changed. Use Refresh before saving.'
