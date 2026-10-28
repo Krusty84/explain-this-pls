@@ -42,6 +42,8 @@ or compare versions before planning changes.
 
 - macOS or Linux.
 - Python 3.11 or newer.
+- Java 11 or newer, available through the `java` command. The installer installs
+  PlantUML automatically.
 - Git 2.34.1 or newer, only for Git mode.
 - An installed and configured Codex CLI.
   Sign in before using explain-this-pls.
@@ -58,8 +60,10 @@ source .venv/bin/activate
 ```
 
 The installer creates or reuses `.venv` beside `explain.py` and installs
-`requirements.txt` into it. Run it again after updating the package. It also prints
-a command to launch the app without activating the environment.
+`requirements.txt` into it. It downloads PlantUML 1.2026.9 from its official release, and creates `.venv/bin/plantuml`. Repeat installation reuses the
+verified download and preserves the environment. Java must already be installed,
+the installer checks that PlantUML can run. Run it again after updating the package.
+It also prints a command to launch the app without activating the environment.
 
 Choose how to provide your source code:
 
@@ -389,7 +393,10 @@ editor used to open source files. Comparison uses supplied reports only, missing
 evidence remains an explicit limitation.
 
 Program labels support Russian and English; author text is unchanged. PlantUML
-diagrams are included as source; use a PlantUML-capable viewer to display them.
+diagrams are included as source, use a PlantUML-capable viewer to display them.
+Before publication, local PlantUML checks every diagram in Study and Revision
+without creating images or contacting a rendering service. Syntax errors trigger
+up to two tool-free correction calls to the study agent within the stage timeout.
 
 The scope separates **Investigated**, **Partially investigated**, **Unverified**
 and **Out of scope**. These are agent

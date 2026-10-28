@@ -52,7 +52,8 @@ assert not any(name.startswith(('textual', 'rich', 'src.runtime')) for name in s
         row = state.rows[('main', 'study', '001')]
         self.assertEqual(row['result'], 'Analyzing project…')
         for phase, expected in [('collect', 'Collecting claims and source evidence.'),
-                                ('write', 'Writing the architecture report.')]:
+                                ('write', 'Writing the architecture report.'),
+                                ('plantuml_repair', 'Correcting PlantUML syntax.')]:
             state.apply('study_phase_started', dict(context, phase=phase))
             self.assertEqual(row['result'], expected)
         for status, expected in [('COMPLETE', 'Architecture report created.'),

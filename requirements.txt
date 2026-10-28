@@ -3,3 +3,4 @@ pathspec==0.12.1
 ast-grep-py==0.50.0
 markdown-it-py==4.2.0
 mcp==1.26.0
+certifi==2026.10.23

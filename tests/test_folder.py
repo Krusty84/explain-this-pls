@@ -25,6 +25,7 @@ from src.runtime.execution import repository_lock
 from test_explain import review
 from fixtures.ledger_response import response as ledger_response
 from fixtures.architecture_checks import assert_architecture
+from fixtures.plantuml import install_plantuml
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -63,6 +64,7 @@ class JSONCTests(unittest.TestCase):
 
 class FolderFixture(unittest.TestCase):
     def setUp(self):
+        self.plantuml_executable = install_plantuml(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name).resolve()
@@ -535,8 +537,8 @@ class FolderCLIIntegrationTests(FolderFixture):
         self.cli.write_text('#!' + sys.executable + '\n' + ('import sys; sys.path.insert(0, ' + repr(str(ROOT / 'tests/fixtures')) + ')' + '\n' + (ROOT / 'tests/fixtures/fake_cli.py').read_text()))
         self.cli.chmod(0o700)
         self.calls = self.base / 'calls.jsonl'
-        # An empty PATH makes any accidental Git invocation fail.
-        self.env = {'HOME': str(home), 'PATH': '', 'PYTHONDONTWRITEBYTECODE': '1',
+        # Only PlantUML is on PATH; accidental Git invocations still fail.
+        self.env = {'HOME': str(home), 'PATH': str(self.plantuml_executable.parent), 'PYTHONDONTWRITEBYTECODE': '1',
             'AUDIT_TEST_CALL_LOG': str(self.calls), 'PYTHONIOENCODING': 'utf-8'}
         self.value['agent']['executable'] = str(self.cli)
         self.value.update(git_mode={'repository': '/missing/repository'},

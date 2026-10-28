@@ -108,7 +108,8 @@ else:
         assert json.loads(Path(args[args.index('--output-schema') + 1]).read_text()) == call['schema']
     stage = context.get('stage') or ('compare' if 'baseline_branch' in context else
                                     'review' if 'architecture_document' in context else 'study')
-    if stage != 'compare' and context.get('phase') != 'write' and context.get('source_mode') == 'git':
+    if (stage != 'compare' and context.get('phase') not in ('write', 'plantuml_repair')
+            and context.get('source_mode') == 'git'):
         inspect_sources(context)
     action(stage)
     sys.path.insert(0, str(Path(__file__).parent))

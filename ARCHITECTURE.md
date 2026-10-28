@@ -7,6 +7,7 @@ It calls Codex and saves Markdown and JSON reports. Model access uses the instal
 
 `folder` mode analyzes a directory. `git` mode analyzes selected local branches.
 Stages and branches run sequentially. `study` is the main stage.
+Initial Study has separate `collect` and `write` calls.
 `execution.review_enabled` enables `review` (default: `true`).
 Document revision uses `study` with the `revise` template.
 Multiple Git branches enable `compare`.
@@ -28,7 +29,8 @@ install-explain.py         .venv setup and dependency installation
 compare_read_context.py    Context preparation experiments
 src/
   cli.py                   Arguments and interface selection
-  runtime/                 Lifecycle, processes, limits, events, metrics
+  messages.py              Shared application and installer messages
+  runtime/                 Lifecycle, config edits, processes, limits, events, metrics
   analysis/                Sources, evidence, coverage, document revisions
   model/                   Context, agent invocation, response validation
   backends/                Codex CLI adapter and model catalog
@@ -36,7 +38,7 @@ src/
   contracts/               Schemas and data consistency checks
   reports/                 Document assembly and publication
   tui/                     Textual interface and audit worker process
-prompts/                   study, review, revise, compare templates
+prompts/                   collect, study, review, revise, compare templates
 schemas/                   Response and saved-artifact JSON Schema files
 tests/                     unittest; tests/fixtures/ contains fake CLIs
 scripts/                   Prompt measurement and log replay
@@ -52,13 +54,18 @@ config.codex.example.jsonc Codex configuration example
 | [Runner](src/runtime/runner.py)                                            | Coordinates source modes, branches, comparison, Git restoration, and final publication.                                    |
 | [RunSession](src/runtime/session.py)                                       | Holds configuration, source state, bindings, prepared context, metrics, and the critical-failure flag.                     |
 | [SourcePipeline](src/runtime/pipeline.py)                                  | Runs study, optional review, and at most one revision round. Selects the published revision.                               |
-| [ModelInvoker](src/model/invocation.py)                                    | Prepares the prompt and schema, calls the backend, records the attempt, validates the response, and requests publication.  |
+| [ModelInvoker](src/model/invocation.py)                                    | Runs initial collection and writing, or one review, revision or compare call. Validates responses and requests publication. |
 | [Repository](src/analysis/repository.py), [Folder](src/analysis/folder.py) | Guard source state. Repository manages the Git hierarchy; Folder builds the inventory and pins file state.                 |
 | [ReportPublisher](src/reports/publication.py)                              | Validates and saves reports, claim registries, review plans, and the selected revision.                                    |
 | [Reporter](src/runtime/reporting.py), [RunMetrics](src/runtime/metrics.py) | Emit events, console output, and `run.log`; aggregate time, attempts, and available model usage.                           |
 
 Packages group responsibilities. Dependencies cross package boundaries:
 `analysis`, `contracts`, and `reports` call each other.
+
+[messages.py](src/messages.py) stores shared application and installer text.
+`message(key, **params)` uses permanent keys and named parameters; it selects no
+locale. Protocol fields, status codes and report content stay in their own modules.
+`output_language` controls reports, not the CLI/TUI language.
 
 The TUI runs the same audit in a separate process through
 [AuditProcess](src/tui/worker.py). A pipe carries events and the result;
@@ -84,9 +91,11 @@ allowance. **Use** requires a successful response. The specific ChatGPT-account
 unsupported-model error marks a model unavailable; other errors leave access
 unverified.
 
-[config_edit.py](src/tui/config_edit.py) atomically updates only the selected model
-field and creates a missing stage section. It preserves JSONC comments, formatting
-and other settings. **Refresh** reloads the file and catalog and clears access
+[TUI config editing](src/tui/config_edit.py) restricts edits to model fields.
+The shared [config editor](src/runtime/config_edit.py) replaces fields without
+serializing the full JSON/JSONC document. It preserves comments, formatting and
+other settings, creates missing sections, checks for external edits, and saves
+atomically. **Refresh** reloads the file and catalog and clears access
 checks; changing the target field also clears them. An external edit requires
 refresh before applying. **Cancel**, Escape or Ctrl+C closes the dialog and stops
 a pending request. Catalog requests time out after 30 seconds; model checks after
@@ -99,6 +108,16 @@ adds diagnostics. With `--tui --check`, **Run** performs setup checks; the Model
 dialog can still make an explicit access-check request. `--trust-repository`
 trusts only the configured Git checkout and verified submodules despite ownership
 mismatches. Explicit `--output text` or `--output json` cannot combine with `--tui`.
+
+### Last Analysis Metadata
+
+After cleanup, `run_audit` updates the config's `last_analysis` only when useful
+material and a saved `FINAL_REPORT.md` exist. The record contains `status`
+(`COMPLETED` or `PARTIAL`), `finished_at` with a timezone, and absolute `results_dir`.
+Setup checks and runs without useful reports keep the previous record.
+The shared config editor saves the record atomically and rejects external edits.
+A save failure emits `LAST_ANALYSIS_NOT_SAVED` without changing the audit result.
+The TUI reads this record; it does not scan old report folders.
 
 ## Data Flow
 
@@ -118,13 +137,15 @@ mismatches. Explicit `--output text` or `--output json` cannot combine with `--t
 4. ModelInvoker combines a `prompts/` template, stage context, and JSON Schema.
    [BindingRegistry](src/model/model_boundary.py) binds responses to the source
    snapshot and review target. The CLI receives the prompt through stdin.
-   Study, review, and revise run in the source directory; compare runs in a
-   temporary directory. The Codex adapter receives the
-   [source navigation index](#full-source-index) when source context is enabled.
+   Native collection, review and revise run in the source directory. Initial
+   writing and compare run in temporary directories without source context.
+   Source-reading calls receive the [source navigation index](#full-source-index)
+   when source context is enabled.
 5. The adapter extracts a completed JSON response. [ResultValidator](src/model/validation.py)
    checks identity, schema, and data consistency. Study/review evidence IDs are
-   normalized; `compromise` also permits local citation repair. Study blocks become
-   Markdown with computed claim coordinates.
+   normalized; `compromise` also permits local citation repair. Initial Study
+   freezes the collected evidence before writing. Python combines the writer's
+   sections with that package, then computes Markdown and claim coordinates.
 6. [prepare_result](src/analysis/ledger.py) resolves evidence against the pinned
    source and computes `program_checks`. The document, claim registry, and review
    plan are frozen before review. A completed study/review pair with `HIGH` or
@@ -193,10 +214,28 @@ directory, including excluded paths, under the CLI's permissions.
 
 ### Initial Study and Coverage
 
-One initial Study runs per Folder source or selected Git branch, with source tools
-enabled. Its pinned, filtered inventory defines scope. Python builds one
-deterministic coverage plan for Study, Review and all revisions. Study returns
-architecture sections, claims, evidence, completion status and limitations.
+One initial Study runs per Folder source or selected Git branch. Its pinned,
+filtered inventory defines scope. Python builds one deterministic coverage plan
+for Study, Review and all revisions.
+
+Initial Study uses two calls with the same Study agent and one stage budget:
+
+1. `collect` uses the fixed [collector prompt](prompts/collect.md) and source tools.
+   Python validates the response, normalizes evidence IDs, applies permitted
+   citation repairs, resolves evidence, and freezes `study.evidence.json`.
+2. `write` uses `prompts.study` and the frozen package. It receives no source index
+   or symbol maps. Native writing disables the shell and ignores user CLI config
+   and rules; MCP writing has no source server. Explicit model and effort settings
+   still apply. Python combines the authored sections with the frozen registry.
+
+[study_phases.py](src/analysis/study_phases.py) combines limitations and selects
+the worse collection/writer status. Unresolved evidence forces at least `PARTIAL`
+under either policy; the writer's original status stays in
+`program_checks.completion_self_assessment`. Collection failure stops writing
+without recovered report material. Attempt hashes protect the frozen package.
+Revision uses one source-reading call with `prompts.revise` and the full Study
+contract; it does not repeat collection and writing.
+
 Component boundaries, relevance and investigation gaps belong in the report;
 classification errors cannot reject a valid document or remove source files.
 Enabled review and revision use the resulting study.
@@ -209,7 +248,7 @@ and next check. Collection stores this information in claims and limitations;
 the writer uses frozen evidence. Revision retains gaps until evidence resolves them.
 Effects, alternative writers, configuration conditions and failure paths use
 source evidence or HYPOTHESIS/UNKNOWN. No runtime configuration or guarantee is
-inferred from a declaration. There is no new pipeline or schema.
+inferred from a declaration.
 
 `coverage.plan.json` groups the filtered inventory by top-level directory and
 source root. Citation diagnostics appear in the consolidated report.
@@ -225,11 +264,11 @@ No counterexample does not establish absence of alternative paths.
 `source_context.mode` accepts `"on-demand"` (default) or `"full"`. Existing configs
 without `mode` use `on-demand`; `full` restores inline delivery of all symbols.
 When disabled, neither map preparation nor export runs. When enabled, the builder
-parses the complete pinned inventory using the decoding rules before each stage;
-on-demand delivery reduces prompt size, not source parsing work. Compare receives
-no prepared source context.
+parses the complete pinned inventory using the decoding rules before each
+source-reading stage. On-demand delivery reduces prompt size, not source parsing
+work. Initial writing and Compare receive no prepared source context.
 
-Study, Review and Revision receive every file's source ID, relative path,
+Study/Collect, Review and Revision receive every file's source ID, relative path,
 parser/version, language, encoding, line count and map status. Unknown values are
 null; parse or read failures stay explicit entries. File order is deterministic;
 the inventory is not truncated. The wire payload retains `mode: "index-only"` and
@@ -248,9 +287,9 @@ multiline `M-000001.json`-style map under the attempt's `source-maps/` directory
 other files have a null reference. Each map contains complete declarations and
 its own value tables, without source bodies. The payload supplies one absolute
 `maps_root`. Agents read maps as needed through native read-only tools,
-then verify claims against original source. Every stage can read every map,
-regardless of earlier agents' selections. A failed map read remains an analysis
-gap; it does not trigger a hidden full-index fallback.
+then verify claims against original source. Each source-reading stage can read
+every map, regardless of earlier agents' selections. A failed map read remains
+an analysis gap; it does not trigger a hidden full-index fallback.
 
 The attempt and maps exist before the final prompt is built. AttemptStore saves
 maps atomically and records their byte sizes and SHA-256 values. Verification
@@ -443,21 +482,26 @@ The normal offline suite does not send this authenticated request.
 Files in `schemas/` match these definitions;
 [test_result_regressions.py](tests/test_result_regressions.py) checks consistency.
 
-Study returns five ordered `report_sections`, blocks linked through `claim_ids`,
-`claims`, `evidence`, status, and limitations. Claims use `FACT`, `HYPOTHESIS`,
-or `UNKNOWN`. Evidence specifies a source, relative path, line range, and quote.
+Initial Study uses `study-collect` and `study-write` wire schemas, with `folder-`
+variants. Collection returns claims and evidence; writing returns five ordered
+`report_sections` with blocks linked through `claim_ids`. Both return identity,
+status and limitations. The full Study schema validates the assembled document
+and source-reading revision responses. Claims use `FACT`, `HYPOTHESIS`, or
+`UNKNOWN`. Evidence specifies a source, relative path, line range, and quote.
 [document_rendering.py](src/reports/document_rendering.py) computes Markdown,
 `block_map`, and `document_locators`; the agent supplies no final document coordinates.
 
 Review receives a frozen claim registry and omission-search plan. The program
-computes the verdict from assessments, findings, and checks.
+computes the verdict from assessments, findings, and checks. The omission plan
+includes `scope` alongside the other four report sections, priority scenarios and
+required coverage areas. Missing required search assessments block acceptance.
 [revisions.py](src/analysis/revisions.py) computes registry changes and selects
 one revision. Acceptance requires study and review from the same revision.
 Without review, branch differences use `REPORTED_UNVERIFIED`.
 
 | Field                  | Meaning                                                                                           |
 | ---------------------- | ------------------------------------------------------------------------------------------------- |
-| `completion_status`    | Agent self-assessment: `COMPLETE`, `PARTIAL`, or `BLOCKED`.                                       |
+| `completion_status`    | `COMPLETE`, `PARTIAL`, or `BLOCKED`; initial Study also reflects collection and evidence checks.    |
 | `program_checks`       | Schema, evidence, and processing-policy checks.                                                   |
 | `accepted`             | Study and its matching review satisfy acceptance checks. Remains `false` when review is disabled. |
 | `workflow_satisfied`   | Enabled stages satisfy strict policy checks.                                                      |
@@ -482,7 +526,7 @@ claims in CLI/TUI output and report tables. `UNRESOLVED` means the citation was 
 verified; `CORRECTED` records a repaired range or common leading indentation.
 Authored blocks and FACT labels stay unchanged. Problem statuses appear beside
 linked architecture blocks; the H3 source index follows all five sections. Detailed
-warning tables stay in `study.annotated.md` and `FINAL_REPORT.md`, without a sixth H2.
+warning tables stay in annotated reports; `FINAL_REPORT.md` links to them.
 Warnings do not make unresolved citations proof. Structurally valid documents
 can be saved with unresolved evidence under either policy. `strict` blocks
 successful processing and continuation. `compromise` can complete when
@@ -496,14 +540,15 @@ unchanged; private attempt files retain corrections and full diffs. No extra mod
 call runs. `structured_output_repair_attempts` is a legacy setting ignored by
 Codex; the orchestrator sends no format-repair request.
 
-### Document Contract Migration
+### Contract Identifiers
 
-Former Catalog stage keys and old artifact formats are unsupported. Remove
-`stage_agents.catalog` and `prompts.catalog`. Custom Study prompts must use the
-current document contract; subsystem, exclusion and coverage arrays are no longer
-required. The artifact format is `architecture-artifacts`.
-Start a new run directory; existing reports remain unchanged. See
-[CONTRACTS.md](CONTRACTS.md) for response, validation and storage contracts.
+Internal contracts, schemas, formats and processing rules have permanent,
+unversioned identifiers. The format names are `evidence-ledger`,
+`architecture-artifacts`, `compact-context`, `dictionary`, `tool-observer` and
+`tool-observer-replay`. Schema changes retain these names and the structure,
+identity, hash and publication checks. Keep one current implementation.
+External tool, protocol, model and parser versions and document revision numbers
+remain separate. See [CONTRACTS.md](CONTRACTS.md) for the detailed contracts.
 
 ## Storage and Publication
 
@@ -515,8 +560,11 @@ UTC timestamp and random suffix.
 | `config.snapshot.json`, `manifest.json`, `run.log`              | Configuration, stage state, diagnostics, metrics, and events.                                                    |
 | `source.inventory.json`, `coverage.plan.json`                   | Pinned source inventory and analysis scope.                                                                      |
 | `revisions/001/`, optional `revisions/002/`                     | Separate study/review revisions in Markdown and JSON.                                                            |
+| `revisions/001/study.evidence.json`                           | Frozen initial collection, evidence checks and correction provenance.                                            |
 | `claim.registry.json`, `review.plan.json`, `registry.diff.json` | Claim registry, review target, and revision changes.                                                             |
-| `study.logs/attempt-001/` and equivalent stage paths            | Prompt, schema, stdout/stderr, extracted and transformed responses, validation, bindings, and tool observations. |
+| `study.logs/attempt-001/`, `study.logs/attempt-002/`            | Separate initial collection and writing attempts: prompts, schemas, responses, validation, bindings and observations. |
+| `study.annotated.md`, `review.annotated.md`                    | Full claim/evidence registries and technical checks.                                                             |
+| `*.original.md`, `study.json`, `review.json`, `compare.json`   | Canonical narratives and structured results, separate from published presentation.                               |
 | `FINAL_REPORT.md`                                               | Consolidated result, selected reports, limitations, and errors.                                                  |
 
 Folder mode publishes selected reports at the run root. Git mode uses
@@ -531,24 +579,18 @@ The file set is not a transaction; the final manifest write records publication.
 
 ### Review, Comparison and Consolidated Reports
 
-`ARCHITECTURE_REVIEW.md` contains review checks, limitations and registered-claim
-counts; individual claim/evidence assessments; source paths and lines; omission
-search; and findings with impact and proposed corrections. Later reviews also
-record whether earlier findings were resolved. The agent's explanation appears
-in `FINAL_REPORT.md` and in `review.original.md` alongside the review.
+`ARCHITECTURE_REVIEW.md` shows policy state, registry counts, limitations and
+findings ordered by severity. Findings show impact and proposed corrections,
+with available statements, evidence and architecture block links. Unchecked or
+disputed claims and omission searches remain visible. Later reviews also show
+whether earlier findings were resolved. `review.annotated.md` holds the full
+technical registry; `review.original.md` holds the agent's narrative.
 
-`BRANCH_COMPARISON.md` uses existing studies and reviews to publish processing
-checks, limitations and reported differences with assessments and rationale.
-The detailed explanation appears in `FINAL_REPORT.md` and
-`comparison/compare.original.md`. It covers:
-
-- Main differences and caveats.
-- Input branches, available reports and coverage gaps.
-- Baseline architecture.
-- Changes, unchanged aspects, consequences and uncertainty for each other branch.
-- A capability/component matrix across branches.
-- Documentation defects distinguished from code differences.
-- Open questions and verification steps.
+`BRANCH_COMPARISON.md` shows statements, classifications, explanations and
+evidence for each reported difference. Links identify both branches and their
+report revisions. Comparison uses supplied studies and reviews only; missing
+inputs remain explicit limitations. The complete narrative stays in
+`comparison/compare.original.md`; `compare.json` stores structured results.
 
 `FINAL_REPORT.md` shows the selected scope blocks, HYPOTHESIS/UNKNOWN claims with
 their missing checks, omission search, pinned coverage plan and citation diagnostics.
@@ -556,16 +598,35 @@ Source results retain the inventory's filter/exclusion records for this view.
 Collection invocation metadata retains its tool observations alongside the writer
 metadata; the report distinguishes observed delivery from unavailable observations.
 These program records do not confirm agent understanding or semantic conclusions.
-The summary also shows revision links, limitations, findings, comparison state and
-run errors. Review outcomes distinguish policy acceptance, material findings,
-incomplete review and explicit disablement in the report, CLI and TUI. Acceptance
-does not establish that code changes are safe. Completed review without overall
-policy acceptance has a separate outcome; it does not imply unfinished review.
+The summary shows severity counts and at most five findings per source, with
+links to the full list. It also shows revision links, limitations, comparison
+state and run errors. Full narratives and registries stay in linked report,
+annotation and JSON files. Review outcomes distinguish policy acceptance,
+material findings, incomplete review and explicit disablement in the report,
+CLI and TUI. Acceptance does not establish that code changes are safe.
+Completed review without overall policy acceptance has a separate outcome;
+it does not imply unfinished review.
 CLI JSON exposes the per-source outcomes and selected revisions in `reviews`.
 
-Normal model use per snapshot increases from two calls to three. A revision and
-repeat review raise the total to five. Explicit review disablement keeps two calls;
-eligible multi-branch comparison adds one call per run. Failures can stop calls early.
+Initial Study uses two model calls per snapshot. Enabled review adds one call.
+A revision and repeat review raise the total to five. Review disablement keeps
+two calls; eligible multi-branch comparison adds one call per run. Failures can
+stop calls early.
+
+### Report Navigation
+
+[navigation.py](src/reports/navigation.py) builds report anchors, relative links
+and source editor links. `your_editor` selects `vscode` (default) or `zed` when
+reports are generated. Checked paths with `RESOLVED` or `QUOTE_MISMATCH` locators
+open at the first referenced line. Other statuses keep the path as text.
+These links open current project files; those files can differ from the pinned
+snapshot. Rendering does not read source files.
+
+Evidence IDs link to source entries; return links identify the blocks that use
+them. Review uses the frozen Study of the same revision. Canonical line ranges
+refer to `study.original.md`; published architecture links use block anchors.
+Links work in revision directories and selected copies. Source paths are escaped
+and encoded before they enter links.
 
 ### Architecture Document Rendering
 
@@ -581,6 +642,14 @@ select published headings. Aliases `ru`, `russian`, `русский`, `en`, `eng
 | System components     | Components, responsibilities, dependencies and a PlantUML overview.      |
 | Startup and execution | Startup and significant execution scenarios.                             |
 | Data and state        | Storage, readers/writers, transactions and a PlantUML data-flow diagram. |
+
+The `scope` section requires one nonempty top-level H3 group for each label:
+Investigated, Partially investigated, Unverified and Out of scope, or their
+supported Russian labels. Missing, duplicate or empty groups fail validation for
+all statuses, including `PARTIAL` and `BLOCKED`. Headings in code, lists, quotes
+or raw HTML do not supply groups. Checks apply to structured sections, materialized
+Markdown, the block map and published output. They check structure only; prompts
+require an explanation when a group has no applicable items.
 
 Each block with linked evidence is followed by compact evidence-ID links to the
 H3 source index at the end of the document. Its four columns show ID, file with
@@ -625,8 +694,9 @@ without publishing it as a valid `ARCHITECTURE.md`.
   [model_context.py](src/model/model_context.py) removes internal metadata and
   duplicates from prompts while preserving substantive text.
 - **The agent authors; Python publishes.** Python assembles documents, computes
-  coordinates, and saves results after CLI exit. Each ModelInvoker call uses one
-  agent run. Citation repair needs no extra model call.
+  coordinates, and saves results after CLI exit. Initial collection and writing
+  use separate agent calls with a frozen package between them. Citation repair
+  needs no extra model call.
 - **Failure policy is explicit.** [Recovery rules](#failure-policy-and-citation-diagnostics)
   distinguish contract warnings from critical failures. Source changes, artifact
   integrity failures, and cleanup errors stop further calls.
@@ -668,7 +738,7 @@ conservative partial metrics.
 
 | Backend                                      | Protocol and boundary                                                                                                                                              |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [Codex](src/backends/codex.py)               | `exec --ephemeral --sandbox read-only --output-schema --json`; final response comes from a separate file. Compare disables the shell tool.                         |
+| [Codex](src/backends/codex.py)               | Native: `exec --ephemeral --sandbox read-only --output-schema --json`; final response comes from a separate file. Initial writing and Compare disable the shell. MCP uses `app-server --stdio`. |
 
 Native source-reading stages use the user's existing CLI configuration.
 The native writer ignores user configuration and rules. The MCP transport
@@ -714,6 +784,9 @@ Tests use temporary sources and fake CLIs. Main checks cover the
 [pipeline](tests/test_model_pipeline.py), [Git and submodules](tests/test_submodules.py),
 [bindings](tests/test_model_boundary.py), [publication](tests/test_publication.py),
 [response conversion](tests/test_conversion_integrity.py), and [TUI](tests/test_tui.py).
+Focused checks cover [Study phases](tests/test_study_phase_pipeline.py),
+[Scope groups](tests/test_scope_sections.py), [report navigation](tests/test_report_navigation.py),
+[messages](tests/test_messages.py), and [last-analysis metadata](tests/test_last_analysis.py).
 
 ### Replay Completed Tool Calls
 

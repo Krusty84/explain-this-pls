@@ -68,7 +68,8 @@ class RunState:
                 row['result'] = ui_message('tui.report_text_recovered_some_checks_did_not_pass')
         elif name == 'study_phase_started':
             row = self.row(context)
-            row.update(phase=context['phase'], result=ui_message(
+            row.update(phase=context['phase'], result=ui_message('run.correcting_plantuml_syntax')
+                       if context['phase'] == 'plantuml_repair' else ui_message(
                 'tui.collecting_claims_and_source_evidence',
             ) if context['phase'] == 'collect'
                        else ui_message('tui.writing_the_architecture_report'))

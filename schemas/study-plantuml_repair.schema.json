@@ -1,0 +1,58 @@
+{
+  "type": "object",
+  "properties": {
+    "task": {
+      "type": "string",
+      "enum": [
+        "plantuml_repair"
+      ]
+    },
+    "repair_id": {
+      "type": "string"
+    },
+    "branch": {
+      "type": "string"
+    },
+    "source_commit": {
+      "type": "string"
+    },
+    "diagrams": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "section_key": {
+            "type": "string",
+            "enum": [
+              "scope",
+              "context",
+              "components",
+              "startup_and_flows",
+              "data_and_state"
+            ]
+          },
+          "block_index": {
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "section_key",
+          "block_index",
+          "source"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "task",
+    "repair_id",
+    "branch",
+    "source_commit",
+    "diagrams"
+  ],
+  "additionalProperties": false
+}

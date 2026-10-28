@@ -256,7 +256,8 @@ CommonMark fence. Backticks and tildes are accepted. The info string is exactly
 `plantuml`, case-insensitive, with no parameters. Lists, blockquotes, inline code,
 ordinary text and other fence languages do not supply a required diagram.
 
-Python applies PlantUML checks only within `components` and `data_and_state`.
+Pure required-diagram inspection applies structural checks within `components`
+and `data_and_state`.
 Other sections remain subject to the common Markdown and claim-link checks.
 It uses the existing Markdown parser, not a fence substring search. It checks
 exactly one `@startuml` before exactly one `@enduml`, nonempty content other than
@@ -269,7 +270,37 @@ Missing diagrams reject COMPLETE. PARTIAL/BLOCKED may omit them with nonempty
 `limitations`; the author must explain the gap and information to verify in its
 section and limitations. Python records the missing sections without keyword
 tests of the explanation. A malformed present required diagram fails the
-contract for every completion status. Python never fixes or generates diagrams.
+contract for every completion status. Python does not invent diagram content.
+
+Before materialization, the orchestrator checks every PlantUML block in Study
+and Revision using local `plantuml -charset UTF-8 -syntax` with stdin and the
+SANDBOX profile. Every diagram block must contain one standalone fence; includes
+and imports remain forbidden. PlantUML >= 1.2020.11 and Java are mandatory;
+install-explain.py installs a checksum-verified PlantUML JAR and launcher in .venv,
+using an existing Java 11+ runtime. Runtime lookup uses the launcher beside the
+running Python first, then PATH, so activation is optional.
+Graphviz is not needed. Preflight records the version and tests valid and invalid
+input. Syntax errors are read from the output protocol, including with exit 0;
+reported source lines are converted from zero-based to one-based coordinates.
+
+At most two additional calls to the study agent correct all currently defective
+diagrams in a batch. Calls use the same stage budget and model settings, with
+tools disabled, and do not consume architectural revision rounds. The internal
+plantuml_repair response echoes the source identity and a request-specific
+repair_id, with diagrams containing section_key, block_index and source. Targets
+must match exactly. Only fence bodies change; claims, evidence, prose and all
+other fields stay fixed. Full contract and syntax validation precede hashing,
+materialization and Review. Schema, identity, integrity and process failures do
+not trigger syntax corrections. Exhaustion uses the existing strict rejection or
+compromise material recovery, with the diagram location in the diagnostic.
+
+Private plantuml-validation.json records each check and validator version.
+plantuml-corrected.json and provenance record replacements without overwriting
+the original extracted, expanded or normalized response. After a successful
+correction, plantuml-normalization.json records the no-op evidence normalization
+of the corrected candidate; the public normalization hash still equals the
+materialization input hash. The initial normalization remains in its original
+journal and private provenance. Public Study/Review schemas are unchanged.
 
 The orchestrator alone writes saved `program_checks.diagrams`:
 `required_sections`, `present_sections`, `missing_sections`, `complete` and
@@ -356,7 +387,8 @@ it has been reconciled against an invoice or includes unreported activity.
 
 Legacy `http_timeout_seconds`, `api_doc_timeout_seconds` and
 `structured_output_repair_attempts` remain accepted configuration keys but have
-no effect on Codex execution. The orchestrator sends no format-repair request.
+no effect on Codex execution. The orchestrator sends no general format-repair
+request. The bounded PlantUML syntax corrections above are independent of these keys.
 
 ## Git source access and lifecycle
 

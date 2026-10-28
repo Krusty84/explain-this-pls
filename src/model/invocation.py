@@ -10,7 +10,8 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path
 from src.messages import message as ui_message
-from src.contracts.contracts import ContractError, strict_json, result_diagnostics, CONTRACT_ID, ARTIFACT_FORMAT
+from src.contracts.contracts import (ContractError, strict_json, result_diagnostics, CONTRACT_ID,
+                                     ARTIFACT_FORMAT, response_error, validate_result)
 from src.runtime.reporting import diagnostic
 from src.runtime.execution import Budget
 from src.runtime.tool_observer import ToolObserver
@@ -19,7 +20,7 @@ from src.backends.codex_capabilities import (MCP_AUXILIARY_TOOLS, MCP_NO_SOURCE_
                                              probe_command, verify_trace, verify_mcp_text_delivery)
 from src.reports.final_report import recoverable_material
 from src.analysis.ledger import prepare_result
-from src.analysis.evidence import source_catalog, resolve_evidence, read_confined, SourceChanged
+from src.analysis.evidence import source_catalog, resolve_evidence, read_confined, SourceChanged, canonical, sha
 from src.analysis.study_phases import freeze_collection
 from src.model.model_context import (CONTEXT_FORMAT, build_model_prompt, input_measurements,
                                      mcp_source_index, on_demand_source_index, serialize_model_input)
@@ -30,6 +31,7 @@ from src.runtime.process import cli_env
 from src.backends.preflight import CLI_ADAPTERS, command, profile_key
 from src.model.attempts import AttemptStore
 from src.model.validation import ResultValidator
+from src.reports.plantuml import PlantUML, diagrams, replace_diagrams
 from src.runtime import artifacts, process as process_runtime
 
 
@@ -46,6 +48,7 @@ class ModelInvoker:
         self.session, self.publisher = session, publisher
         self.attempts = AttemptStore(session)
         self.validator = ResultValidator(session, self.attempts)
+        self.plantuml = PlantUML(session.source_path, session.reporter)
 
     def invoke(self, stage: str, context: dict, destination: Path) -> tuple[dict | None, dict]:
         destination = destination.resolve()
@@ -128,12 +131,18 @@ class ModelInvoker:
                     and exc.failure_kind in ('SCHEMA_ERROR', 'SEMANTIC_ERROR')):
                 invalid = self.attempts.read_attempt_value(attempt, 'expanded.json', attempt_hashes)
                 validation = self.attempts.read_attempt_value(attempt, 'validation.json', attempt_hashes)
-                checked = (self.attempts.read_attempt_value(attempt, 'normalized.json', attempt_hashes)
-                           if validation.get('validated_object') == 'normalized.json' else invalid)
-                candidate = recoverable_material(stage, invalid, context, self.session.mode,
+                checked_name = validation.get('validated_object')
+                correction = meta.get('plantuml_correction_provenance', {})
+                checked = (self.attempts.read_attempt_value(attempt, checked_name, attempt_hashes)
+                           if checked_name in ('normalized.json', 'plantuml-corrected.json', correction.get('candidate'))
+                           else invalid)
+                retained = checked if correction else invalid
+                candidate = recoverable_material(stage, retained, context, self.session.mode,
                     result_diagnostics(stage, checked, context, self.session.mode))
                 if candidate is not None:
                     candidate['contract_failure'] = asdict(diagnostic(exc))
+                    if exc.details.get('code') != 'INVALID_PLANTUML_SYNTAX' and meta.get('plantuml_warnings'):
+                        candidate['contract_failure']['message'] += ' ' + ' '.join(meta['plantuml_warnings'])
                     if meta.get('normalization_provenance'):
                         candidate['normalization_provenance'] = meta['normalization_provenance']
                 candidate_attempt = str(attempt)
@@ -164,9 +173,11 @@ class ModelInvoker:
         agent = self.session.cfg['_agents'][stage]
         phase = context.get('phase') if stage == 'study' else None
         variant = context.get('prompt_variant', stage)
-        template_path = Path(__file__).resolve().parents[2] / 'prompts' / 'collect.md' if phase == 'collect' else Path(self.session.cfg['_prompt_paths'][variant])
+        template_path = (Path(__file__).resolve().parents[2] / 'prompts' /
+                         ('collect.md' if phase == 'collect' else 'plantuml-repair.md')
+                         if phase in ('collect', 'plantuml_repair') else Path(self.session.cfg['_prompt_paths'][variant]))
         template = template_path.read_text()
-        reports_only = stage == 'compare' or phase == 'write'
+        reports_only = stage == 'compare' or phase in ('write', 'plantuml_repair')
         mcp_mode = self.session.cfg.get('source_access', {}).get('mode', 'native') == 'mcp'
         invocation_id = str(uuid.uuid4())
         private_directory(destination)
@@ -308,7 +319,7 @@ class ModelInvoker:
                 try:
                     launch_agent = dict(agent, model=profile['proof']['model']) if mcp_mode else agent
                     cmd = self.command(stage, state, launch_agent, schema_path, env, reports_only=reports_only,
-                                       schema=schema, writer_only=phase == 'write',
+                                       schema=schema, writer_only=phase in ('write', 'plantuml_repair'),
                                        **({'mcp_catalog': mcp_catalog} if mcp_mode else {}),
                                        **({'mcp_manifest': mcp_manifest, 'mcp_manifest_sha256': mcp_manifest_sha256}
                                           if mcp_manifest is not None else {}))
@@ -370,7 +381,7 @@ class ModelInvoker:
                         meta['source_access']['inference_requests'] = actual['inference_requests']
                         meta['model_actual'] = actual['model']
                         meta['model_actual_source'] = ui_message('diagnostic.invocation.verified_trace')
-                    if phase == 'write' and observer.snapshot()['calls']:
+                    if phase in ('write', 'plantuml_repair') and observer.snapshot()['calls']:
                         raise AuditError(ui_message('diagnostic.invocation.the_report_author_used_a_tool_outside_its'),
                                          code='WRITER_TOOL_CALL', failure_layer='execution')
                     output = codex.read_response(schema_path)
@@ -386,7 +397,10 @@ class ModelInvoker:
                     artifacts.save_json(attempt / 'extracted.json', data)
                     self.attempts.assert_binding_files(binding, context, destination.parent, binding_hashes | attempt_hashes)
                     data = self.validator.validate_attempt(stage, data, context, attempt, meta, binding,
-                        expected_files=evidence_pins, expected_metadata=evidence_metadata)
+                        expected_files=evidence_pins, expected_metadata=evidence_metadata,
+                        check_diagrams=lambda value: self._check_diagrams(value, context, destination, attempt, meta,
+                            budget=budget, binding_hashes=binding_hashes, attempt_hashes=attempt_hashes,
+                            evidence_pins=evidence_pins, evidence_metadata=evidence_metadata))
                 finally:
                     observer.finish()
                     meta['tool_observation'] = observer.snapshot()
@@ -423,6 +437,14 @@ class ModelInvoker:
                     meta['source_integrity_verified'] = True
                 budget.check()
             # Publish after the CLI exits and temporary invocation files are removed.
+            if phase == 'plantuml_repair':
+                meta.update(status='SUCCEEDED', finished_at=now(), repair_complete=True,
+                            duration_seconds=round(self.session.reporter.clock() - attempt_started, 3))
+                self.session.record_attempt_metrics(meta, context, attempt_started)
+                artifacts.save_json(attempt / 'invocation.json', meta)
+                artifacts.save_json(destination / 'invocation.json', meta)
+                self.session.reporter.emit('study_phase_completed', **self.session.stage_context(stage, context))
+                return data, meta
             try:
                 if phase == 'collect':
                     resolutions = resolve_evidence('study', data['evidence'], context, evidence_pins,
@@ -510,6 +532,57 @@ class ModelInvoker:
                 artifacts.save_json(attempt / 'invocation.json', meta)
                 artifacts.save_json(destination / 'invocation.json', meta)
             raise
+
+    def _check_diagrams(self, value, context, destination, attempt, meta, *, budget,
+                        binding_hashes, attempt_hashes, evidence_pins, evidence_metadata):
+        if self.plantuml.version is None:
+            self.plantuml.probe(budget)
+        candidate, rounds, repairs = value, [], []
+        for number in range(3):
+            records = diagrams(candidate)
+            checks = [dict(section_key=record['section_key'], block_index=record['block_index'],
+                source_sha256=digest(record['source'].encode('utf-8')),
+                **self.plantuml.check(record['source'], budget)) for record in records]
+            rounds.append(dict(diagrams=checks))
+            self.attempts.save_attempt_value(attempt, f'plantuml-check-{number + 1:03d}.json',
+                dict(version=self.plantuml.version, diagrams=checks), meta)
+            meta['plantuml_validation'] = dict(version=self.plantuml.version,
+                valid=all(check['valid'] for check in checks), rounds=len(rounds))
+            failed = [record for record, check in zip(records, checks) if not check['valid']]
+            meta['plantuml_warnings'] = [ui_message('diagnostic.plantuml.syntax_warning',
+                **{key: check[key] for key in ('section_key', 'block_index', 'line')})
+                for check in checks if not check['valid']]
+            if not failed or number == 2:
+                self.attempts.save_attempt_value(attempt, 'plantuml-validation.json',
+                    dict(version=self.plantuml.version, rounds=rounds), meta)
+            if not failed:
+                return candidate
+            if number == 2:
+                first = failed[0]
+                check = next(check for check in checks if not check['valid'])
+                location = dict(section_key=first['section_key'], block_index=first['block_index'], line=check['line'])
+                raise response_error('SEMANTIC_ERROR', 'semantic',
+                    ui_message('diagnostic.plantuml.syntax_error', **location),
+                    code='INVALID_PLANTUML_SYNTAX', path=first['path'], **location)
+            repair_context = {key: context[key] for key in
+                ('source_directory', 'source_fingerprint', 'branch', 'source_commit', 'revision_id',
+                 'output_language', 'prompt_variant') if key in context}
+            repair_context.update(stage='study', phase='plantuml_repair', repair_id=str(uuid.uuid4()),
+                diagrams=[{key: record[key] for key in ('section_key', 'block_index', 'source')} |
+                    {'diagnostic': {key: check[key] for key in ('line', 'message')}}
+                    for record, check in zip(records, checks) if not check['valid']])
+            repair_binding = self.session.bindings.bind('study', repair_context, self.session.mode)
+            fixed, repair_meta = self._invoke_once('study', repair_context, destination, budget=budget,
+                binding=repair_binding, binding_hashes=binding_hashes, attempt_hashes=attempt_hashes,
+                evidence_pins=evidence_pins, evidence_metadata=evidence_metadata)
+            repairs.append(repair_meta['invocation_id'])
+            candidate = replace_diagrams(candidate, fixed['diagrams'], failed)
+            checked_context = {key: item for key, item in context.items() if key != 'phase'}
+            validate_result('study', candidate, checked_context, self.session.mode)
+            candidate_name = f'plantuml-correction-{number + 1:03d}.json'
+            self.attempts.save_attempt_value(attempt, candidate_name, candidate, meta)
+            meta['plantuml_correction_provenance'] = dict(input_sha256=sha(canonical(value)),
+                corrected_sha256=sha(canonical(candidate)), repair_invocation_ids=list(repairs), candidate=candidate_name)
 
     def command(self, stage, state, agent, schema_path, env, *, reports_only=False, schema=None, writer_only=False,
                 mcp_manifest=None, mcp_manifest_sha256=None, mcp_catalog=None):

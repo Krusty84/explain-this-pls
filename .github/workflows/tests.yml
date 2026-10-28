@@ -22,6 +22,22 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install Python dependencies
         run: python3 -m pip install -r requirements.txt
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install PlantUML with the project installer
+        shell: bash
+        run: |
+          python3 -B install-explain.py
+          mkdir -p "$RUNNER_TEMP/plantuml-bin"
+          ln -s "$GITHUB_WORKSPACE/.venv/bin/plantuml" "$RUNNER_TEMP/plantuml-bin/plantuml"
+          echo "$RUNNER_TEMP/plantuml-bin" >> "$GITHUB_PATH"
+      - name: Real PlantUML syntax integration tests
+        env:
+          EXPLAIN_PLANTUML_INTEGRATION: "1"
+          PYTHONPATH: tests
+        run: python3 -B -m unittest -v test_plantuml.RealPlantUMLTests test_plantuml.RealPlantUMLPipelineTests
       - name: Real root and foreign-owner integration tests
         if: runner.os == 'Linux'
         shell: bash

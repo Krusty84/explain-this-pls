@@ -152,6 +152,9 @@ class Binding:
         self.assert_unchanged()
         if not isinstance(raw, dict):
             raise _error('$')
+        if (self._context.get('phase') == 'plantuml_repair'
+                and raw.get('repair_id') != self._context['repair_id']):
+            raise _error('$.repair_id')
         if ('source_snapshot_id' in raw and self._mode != 'folder'
                 or 'review_target_id' in raw and self._stage != 'review'):
             raise _error('$.binding')

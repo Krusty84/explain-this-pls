@@ -26,6 +26,7 @@ from src.backends import codex
 from src.contracts.contracts import ContractError, review_verdict, strict_json, validate_result
 from fixtures.ledger_response import response
 from fixtures.architecture_checks import assert_architecture
+from fixtures.plantuml import install_plantuml
 from src.analysis.ledger import review_context, prepare_result
 
 BASE = {'completion_status': 'COMPLETE',
@@ -104,6 +105,7 @@ class ContractTests(unittest.TestCase):
 
 class RepoFixture(unittest.TestCase):
     def setUp(self):
+        install_plantuml(self)
         self.tmp=tempfile.TemporaryDirectory()
         self.base=Path(self.tmp.name).resolve()
         self.repo_path=self.base/'repo'; self.repo_path.mkdir()

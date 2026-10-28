@@ -45,6 +45,13 @@ def scope(context):
 
 
 def response(context):
+    if context.get('phase') == 'plantuml_repair':
+        return {key: context[key] for key in
+                ('branch', 'source_commit', 'source_directory', 'source_snapshot_id', 'source_fingerprint')
+                if key in context} | dict(task='plantuml_repair', repair_id=context['repair_id'],
+                    diagrams=[{key: item[key] for key in ('section_key', 'block_index')} |
+                              {'source': item['source'].replace('aass', 'as')}
+                              for item in context['diagrams']])
     stage = context.get('stage') or ('compare' if 'baseline_branch' in context else
                                     'review' if 'architecture_document' in context else 'study')
     data = {'completion_status': 'COMPLETE',

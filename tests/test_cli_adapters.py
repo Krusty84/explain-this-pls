@@ -19,6 +19,7 @@ from src.backends import codex, preflight
 from src.contracts.contracts import ContractError, FOLDER_SCHEMAS, SCHEMAS
 from src.runtime.errors import AuditError
 from src.runtime.runner import Runner
+from fixtures.plantuml import install_plantuml
 
 
 ADAPTERS = {'codex': codex}
@@ -150,6 +151,7 @@ assert 'explain' not in sys.modules
 
 class CLIPreflightTests(unittest.TestCase):
     def setUp(self):
+        self.plantuml = install_plantuml(self)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)
@@ -177,8 +179,10 @@ class CLIPreflightTests(unittest.TestCase):
                 self.assertEqual(process.call_args_list[1].args[0],
                                  ['/configured/agent', *(['exec'] if backend == 'codex' else []), '--help'])
                 key = backend + ':/configured/agent'
-                self.assertEqual(result, {key: {'version': 'fixture 1.0', 'required_flags': flags}})
-                self.assertEqual(runner.session.versions, {key: 'fixture 1.0'})
+                self.assertEqual(result, {key: {'version': 'fixture 1.0', 'required_flags': flags},
+                    'plantuml': {'version': 'PlantUML version 1.2026.9 (fixture)', 'executable': str(self.plantuml)}})
+                self.assertEqual(runner.session.versions,
+                                 {key: 'fixture 1.0', 'plantuml': 'PlantUML version 1.2026.9 (fixture)'})
 
     def test_missing_required_options_still_fail_before_invocation(self):
         for backend in ADAPTERS:

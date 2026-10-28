@@ -117,6 +117,11 @@ when relevant; size alone is not a reason to exclude them.
 
 ## Required PlantUML diagrams
 
+Return syntactically valid PlantUML. Check aliases, quotes, braces and arrow
+syntax before returning. The orchestrator checks every diagram with local
+PlantUML before publication. Syntax defects require a separate correction of
+the affected diagram bodies; report prose, claims and evidence stay fixed.
+
 For COMPLETE, include at least one overview diagram in each required section:
 
 - components: a component diagram showing system boundaries, the main components
@@ -149,8 +154,9 @@ When coverage is partial, show the established portion without inventing compone
 or links. If a meaningful diagram cannot be built from the available evidence, explain
 the specific reason and the information to verify in its section and nonempty
 limitations, and use PARTIAL/BLOCKED. Missing required diagrams prevent COMPLETE.
-Python checks PlantUML structure only in components and data_and_state; malformed
-diagrams there fail the contract for every completion status. The authoring rules
+Python checks the required diagram structure in components and data_and_state;
+the orchestrator also checks syntax in every PlantUML block. Malformed diagrams
+fail for every completion status. The authoring rules
 above also apply to extra diagrams. Do not invent a diagram to pass validation.
 Missing persistent storage alone does not justify
 omitting the data-flow diagram: show applicable inputs, processing, outputs and in-memory state.

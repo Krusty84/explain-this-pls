@@ -49,6 +49,26 @@ class SourceAccessConfigTests(FolderFixture):
 class MCPAttemptTests(FolderFixture):
     run_case = run_case
 
+    def test_plantuml_repair_has_no_source_manifest_or_source_tools(self):
+        def change(runner, context, data):
+            if context.get('phase') == 'write':
+                data['report_sections'][2]['blocks'][-1]['markdown'] = (
+                    '```plantuml\n@startuml\ncomponent "App" aass App\n@enduml\n```')
+
+        manifest, code = self.run_case(large=False, change=change)
+        self.assertEqual(code, 0, manifest.get('diagnostics'))
+        repair = self.calls[-1]
+        self.assertEqual(repair['context']['phase'], 'plantuml_repair')
+        self.assertNotIn('source_context', repair['context'])
+        self.assertNotIn('--manifest', repair['command'])
+        self.assertIn('--catalog', repair['command'])
+        private = next(path for path in self.runner.session.run_dir.rglob('attempt-*/invocation.json')
+                       if json.loads(path.read_text()).get('phase') == 'plantuml_repair')
+        metadata = json.loads(private.read_text())
+        self.assertFalse(metadata['source_tools_enabled'])
+        self.assertFalse(metadata['source_access']['enabled'])
+        self.assertEqual(metadata['tool_observation']['calls'], 0)
+
     def setUp(self):
         super().setUp()
         self.value['source_access'] = {'mode': 'mcp'}

@@ -601,7 +601,9 @@ class Reporter(NullReporter):
                 return []
             return ['[RUN] ' + self.stage_message(c, active)]
         if name == 'study_phase_started':
-            message = ui_message('tui.collecting_claims_and_source_evidence') if c['phase'] == 'collect' else ui_message('run.writing_the_architecture_report_from_the_frozen_evidence')
+            message = ui_message('run.correcting_plantuml_syntax') if c['phase'] == 'plantuml_repair' else (
+                ui_message('tui.collecting_claims_and_source_evidence') if c['phase'] == 'collect' else
+                ui_message('run.writing_the_architecture_report_from_the_frozen_evidence'))
             return ['[RUN] ' + self.stage_message(c, message)]
         if name == 'process_waiting':
             if not self.progress or (self._progress and self._progress_line(self._progress) is not None):

@@ -16,6 +16,7 @@ MODULES = (
     'src.runtime.execution', 'src.runtime.config', 'src.runtime.config_edit', 'src.analysis.repository',
     'src.analysis.folder', 'src.backends.preflight', 'src.runtime.session',
     'src.model.attempts', 'src.model.validation', 'src.reports.publication',
+    'src.reports.plantuml',
     'src.model.invocation', 'src.runtime.pipeline', 'src.runtime.runner',
     'src.runtime.audit', 'src.runtime.context_comparison', 'src.cli',
     'src.tui.config_edit', 'src.tui.settings', 'src.tui.models',

@@ -12,12 +12,14 @@ from unittest.mock import patch
 
 from src.runtime.config import load_config
 from src.runtime.runner import Runner
+from fixtures.plantuml import install_plantuml
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class CodexFixture:
     def setUp(self):
+        install_plantuml(self)
         environment = patch.dict(os.environ, {key: value for key, value in os.environ.items()
                                                if not key.endswith('_API_KEY')}, clear=True)
         environment.start()

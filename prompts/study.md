@@ -109,6 +109,11 @@ the investigated system's own behavior. Do not calculate hashes or write files.
 
 ## PlantUML diagrams
 
+Return syntactically valid PlantUML. Check aliases, quotes, braces and arrow
+syntax before returning. The orchestrator checks every diagram with local
+PlantUML before publication. Syntax defects require a separate correction of
+the affected diagram bodies; report prose, claims and evidence stay fixed.
+
 For COMPLETE include an overview diagram in each section below:
 
 - components: component boundaries, main components and dependencies, plus

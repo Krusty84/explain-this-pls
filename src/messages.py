@@ -9,6 +9,14 @@ report content belong to their existing modules. No locale is selected here.
 """
 
 MESSAGES = {
+    'diagnostic.plantuml.not_installed': 'PlantUML is required. Run install-explain.py and use the installed .venv Python.',
+    'diagnostic.plantuml.process_failed': 'PlantUML did not return a valid syntax-check result. Check its installation and Java runtime.',
+    'diagnostic.plantuml.incompatible': 'PlantUML failed its valid/invalid syntax probes. Check its installation and version.',
+    'diagnostic.plantuml.syntax_error': ('PlantUML syntax error (INVALID_PLANTUML_SYNTAX): {section_key}, '
+        'block {block_index}, diagram line {line}. Two correction requests did not resolve it.'),
+    'diagnostic.plantuml.syntax_warning': ('PlantUML syntax is invalid: {section_key}, '
+        'block {block_index}, diagram line {line}.'),
+    'run.correcting_plantuml_syntax': 'Correcting PlantUML syntax.',
     'cli.add_technical_event_details_to_stderr_never_print': (
         'Add technical event details to stderr, never print prompts, credentials or raw model output.'
     ),
@@ -1041,7 +1049,7 @@ MESSAGES = {
         'installer again.'
     ),
     'installer.creating': 'Creating {environment}',
-    'installer.description': 'Prepare a local virtual environment and install explain-this-pls requirements.',
+    'installer.description': 'Prepare a local virtual environment and install Python requirements and PlantUML.',
     'installer.installation_complete_start_explain_this_pls_with': (
         '\nInstallation complete. Start explain-this-pls with:\n{value}'
     ),
@@ -1053,6 +1061,11 @@ MESSAGES = {
         'Installation requires macOS or Linux and Python 3.11+.'
     ),
     'installer.installing_requirements_from': 'Installing requirements from {requirements}',
+    'installer.java_required': 'Java 11+ is required for PlantUML. Install Java and run the installer again.',
+    'installer.installing_plantuml': 'Installing PlantUML {version} in .venv',
+    'installer.reusing_plantuml': 'Reusing PlantUML {version} in .venv',
+    'installer.plantuml_checksum_mismatch': 'The PlantUML download failed its SHA-256 check. Run the installer again.',
+    'installer.plantuml_check_failed': 'The installed PlantUML failed its syntax check. Check that Java 11+ is available.',
     'installer.python_required': 'The existing .venv needs Python 3.11+. Move it aside and rerun the installer.',
     'installer.requirements_file_is_missing': 'Requirements file is missing: {requirements}',
     'installer.reusing': 'Reusing {environment}',

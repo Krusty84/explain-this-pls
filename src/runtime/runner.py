@@ -28,7 +28,12 @@ class Runner:
         self.pipeline = SourcePipeline(self.session, self.publisher)
 
     def check_cli(self) -> dict:
-        return check_cli(self.session)
+        self.session.reporter.emit('preflight_started', check='plantuml')
+        plantuml = self.invoker.plantuml.probe()
+        self.session.reporter.emit('preflight_completed', check='plantuml')
+        result = check_cli(self.session)
+        self.session.versions['plantuml'] = plantuml['version']
+        return result | {'plantuml': plantuml}
 
     def invoke(self, stage: str, context: dict, destination: Path) -> tuple[dict | None, dict]:
         return self.invoker.invoke(stage, context, destination)

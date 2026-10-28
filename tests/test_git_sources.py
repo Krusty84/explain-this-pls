@@ -23,12 +23,14 @@ from src.runtime.audit import run_audit
 from src.analysis.git_sources import tracked_paths
 from src.analysis.evidence import resolve_evidence
 from src.runtime.reporting import Reporter
+from fixtures.plantuml import install_plantuml
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class GitSourceTests(unittest.TestCase):
     def setUp(self):
+        install_plantuml(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name).resolve()

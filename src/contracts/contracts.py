@@ -126,6 +126,11 @@ FOLDER_STUDY_PHASE_SCHEMAS = {
                   if key not in omitted})
     for phase, omitted in (('collect', ('report_sections',)), ('write', ('evidence', 'claims')))
 }
+for phases, identity in ((STUDY_PHASE_SCHEMAS, ('branch', 'source_commit')),
+                         (FOLDER_STUDY_PHASE_SCHEMAS, ('source_directory', 'source_fingerprint'))):
+    phases['plantuml_repair'] = obj(task=string('plantuml_repair'), repair_id=string(),
+        **{key: string() for key in identity},
+        diagrams=array(obj(section_key=string(*SECTION_KEYS), block_index={'type': 'integer'}, source=string())))
 
 def model_schemas(internal):
     """Backend contracts contain opaque bindings; internal schemas retain hashes."""

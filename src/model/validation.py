@@ -11,6 +11,7 @@ from src.runtime.reporting import diagnostic
 from src.analysis.study_normalization import normalize_evidence, normalization_provenance
 from src.analysis.citation_repair import repair_citations
 from src.reports.document_rendering import materialize_study
+from src.reports.plantuml import validate_replacements
 from src.analysis.evidence import SourceChanged, canonical, sha
 from src.analysis.study_phases import assemble_study
 from src.runtime.errors import AuditError, UnsafeRepository
@@ -20,7 +21,7 @@ class ResultValidator:
         self.session, self.attempts = session, attempts
 
     def validate_attempt(self, stage, data, context, attempt, meta, binding, *,
-                         expected_files=None, expected_metadata=None):
+                         check_diagrams, expected_files=None, expected_metadata=None):
         candidate = data
         phase = context.get('phase') if stage == 'study' else None
         checked_context = {key: value for key, value in context.items() if key != 'phase'} if phase == 'write' else context
@@ -34,7 +35,7 @@ class ResultValidator:
             self.attempts.save_attempt_value(attempt, 'expanded.json', candidate, meta)
             self.attempts.save_binding(binding, data, candidate, attempt, meta)
             validation['validated_object'] = 'expanded.json'
-            validate_schema(document_contract(stage, data), binding.schema)
+            validate_schema(data if phase == 'plantuml_repair' else document_contract(stage, data), binding.schema)
             expanded = candidate
             if phase == 'write':
                 meta['author_completion_self_assessment'] = expanded['completion_status']
@@ -49,7 +50,7 @@ class ResultValidator:
                     meta['normalization_provenance'] | {'changes': []}, meta)
                 validation.update(validated_object='normalized.json',
                     normalization_provenance=meta['normalization_provenance'], assembly_provenance=meta['assembly_provenance'])
-            elif stage in ('study', 'review'):
+            elif stage in ('study', 'review') and phase != 'plantuml_repair':
                 normalization_input = expanded
                 if self.session.compromise:
                     try:
@@ -83,10 +84,29 @@ class ResultValidator:
                 if changes:
                     self.session.reporter.emit(stage + '_normalized', **self.session.stage_context(stage, context),
                                        rule=provenance['rule'], replacement_count=len(changes))
-            validate_result(stage, candidate, checked_context, self.session.mode)
+            if phase == 'plantuml_repair':
+                validate_replacements(candidate, context)
+            else:
+                validate_result(stage, candidate, checked_context, self.session.mode)
+                if stage == 'study' and phase != 'collect':
+                    candidate = check_diagrams(candidate)
+                    if meta.get('plantuml_correction_provenance'):
+                        self.attempts.save_attempt_value(attempt, 'plantuml-corrected.json', candidate, meta)
+                        validation['validated_object'] = 'plantuml-corrected.json'
+                        meta['initial_normalization_provenance'] = meta['normalization_provenance']
+                        meta['normalization_provenance'] = normalization_provenance(candidate, candidate, [])
+                        self.attempts.save_attempt_value(attempt, 'plantuml-normalization.json',
+                            meta['normalization_provenance'] | {'changes': []}, meta)
+                        validation['normalization_provenance'] = meta['normalization_provenance']
+                    validate_result(stage, candidate, checked_context, self.session.mode)
             validation['valid'] = True
         except BaseException as exc:
-            validation.update(result_diagnostics(stage, candidate, checked_context, self.session.mode))
+            if meta.get('plantuml_correction_provenance'):
+                candidate_name = meta['plantuml_correction_provenance']['candidate']
+                candidate = self.attempts.read_attempt_value(attempt, candidate_name, meta['attempt_hashes'])
+                validation['validated_object'] = candidate_name
+            if phase != 'plantuml_repair':
+                validation.update(result_diagnostics(stage, candidate, checked_context, self.session.mode))
             validation['schema_diagnostics'] = schema_diagnostics(document_contract(stage, data), binding.schema, private=True)
             validation['error'] = asdict(diagnostic(exc))
             meta['local_validation'] = False
@@ -94,10 +114,11 @@ class ResultValidator:
             with contextlib.suppress(OSError):
                 self.attempts.save_attempt_value(attempt, 'validation.json', validation, meta)
             raise
-        validation.update(result_diagnostics(stage, candidate, checked_context, self.session.mode))
+        if phase != 'plantuml_repair':
+            validation.update(result_diagnostics(stage, candidate, checked_context, self.session.mode))
         meta['local_validation'] = True
         self.attempts.save_attempt_value(attempt, 'validation.json', validation, meta)
-        if stage == 'study' and phase != 'collect':
+        if stage == 'study' and phase not in ('collect', 'plantuml_repair'):
             try:
                 candidate = materialize_study(candidate)
             except ContractError as exc:
@@ -109,6 +130,10 @@ class ResultValidator:
                 **({'citation_correction': meta['citation_correction_provenance']}
                    if meta.get('citation_correction_provenance') else {}),
                 'normalization': meta['normalization_provenance'],
+                **({'initial_normalization': meta['initial_normalization_provenance']}
+                   if meta.get('initial_normalization_provenance') else {}),
                 **({'assembly': meta['assembly_provenance']} if phase == 'write' else {}),
+                **({'plantuml_correction': meta['plantuml_correction_provenance']}
+                   if meta.get('plantuml_correction_provenance') else {}),
                 'materialization': candidate['materialization_provenance']}, meta)
         return candidate

@@ -21,6 +21,7 @@ from src.runtime.config import load_config
 from fixtures.architecture_checks import assert_architecture
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
+from fixtures.plantuml import install_plantuml
 
 ROOT = Path(__file__).resolve().parents[1]
 CHILD = 'vendor/модуль with spaces'
@@ -50,6 +51,7 @@ def identity(path):
 
 class RecursiveFixture:
     def setUp(self):
+        install_plantuml(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name).resolve()

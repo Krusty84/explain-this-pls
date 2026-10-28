@@ -35,7 +35,7 @@ def run_case(self, *, backend='codex', large=True, change=None, review=False,
         calls.append(dict(context=context, command=command, cwd=cwd, env=env.copy(), prompt=payload.decode(),
                           budget=kwargs.get('budget')))
         data = response(context)
-        if context['stage'] == 'study' and context.get('phase') != 'write':
+        if context['stage'] == 'study' and context.get('phase') not in ('write', 'plantuml_repair'):
             data['evidence'] = [dict(id=f'E-{i + 1:03d}', source_id='source-001',
                 path='app.py' if path == '.' else path, start_line=1, end_line=1, quote='')
                 for i, path in enumerate(selectors)]
