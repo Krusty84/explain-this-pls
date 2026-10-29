@@ -106,7 +106,8 @@ class RunSession:
         started = self.reporter.clock()
         self.active_stage = self.stage_context(stage, context)
         self.metrics.start(self.active_stage)
-        self.reporter.emit('stage_started', _started=started, **self.active_stage)
+        self.reporter.emit('stage_started', _started=started, **self.active_stage,
+                           executable=self.cfg['_agents'].get(stage, {}).get('executable'))
         return started
 
     def stage_finished(self, stage, context, data, started, *, report_path=None):

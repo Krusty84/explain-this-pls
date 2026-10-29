@@ -5,8 +5,11 @@
 from __future__ import annotations
 
 import base64
+from bisect import bisect_right
 import copy
 import errno
+import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -21,6 +24,10 @@ from src.analysis.source_decoding import SourceDecodeError, decode_source, norma
 SERVER_NAME = 'explain_this_pls'
 MAX_RESPONSE_BYTES = 65536
 MAX_SEARCH_LIMIT = 1000
+
+
+def symbol_identifier(snapshot, source_id, path, ordinal, symbol):
+    return sha(canonical([snapshot, source_id, path, ordinal, symbol]))
 
 
 def _unpack_files(index):
@@ -86,11 +93,12 @@ class SourceService:
         if self.metadata is not None:
             self.metadata = {path: tuple(value) for path, value in self.metadata.items()}
         self.decoding = normalize_source_decoding(self.manifest['source_decoding'])
+        self.cursor_key = os.urandom(32)
         inventory = self.manifest['inventory']
         if sha(canonical([inventory, self.manifest['catalog'], self.decoding])) != self.manifest['snapshot_sha256']:
             raise ValueError(ui_message('diagnostic.service.mcp_source_snapshot_identity_is_invalid'))
         entries = {entry['path']: entry for entry in inventory['entries'] if entry['type'] == 'file'}
-        self.files, self.symbols = {}, []
+        self.files, self.symbols, self.symbols_by_id = {}, [], {}
         for file in self.manifest['files']:
             relative = file['relative']
             source = self.catalog[file['source_id']]
@@ -121,12 +129,18 @@ class SourceService:
                     symbols.append(symbol)
             if len(symbols) != file['symbol_count'] or sha(canonical(symbols)) != file['symbols_sha256']:
                 raise ValueError(ui_message('diagnostic.service.mcp_symbol_map_differs_from_the_prepared_declarations'))
-            self.symbols.extend(dict(source_id=key[0], path=key[1], **symbol, map_status=file['map_status'])
-                                for symbol in symbols)
+            for ordinal, symbol in enumerate(symbols):
+                identifier = symbol_identifier(self.manifest['snapshot_sha256'], *key, ordinal, symbol)
+                record = dict(source_id=key[0], path=key[1], **symbol,
+                              map_status=file['map_status'], symbol_id=identifier)
+                self.symbols.append(record)
+                self.symbols_by_id[identifier] = record
         if {file['relative'] for file in self.files.values()} != set(entries):
             raise ValueError(ui_message('diagnostic.service.mcp_files_do_not_match_the_pinned_inventory'))
-        self.symbols.sort(key=lambda symbol: (symbol['source_id'], symbol['path'], symbol['start_line'],
-                                             symbol['end_line'], symbol['name'], symbol['kind'], symbol['parent'] or ''))
+        self.symbols.sort(key=lambda symbol: (symbol['source_id'], symbol['path'],
+            *(symbol[key] if type(symbol[key]) is int else -1 for key in ('start_line', 'end_line')),
+            symbol['name'], symbol['kind'], symbol['parent'] or ''))
+        self.file_list = [self.files[key] for key in sorted(self.files)]
 
     def _artifact(self, path, expected_sha256, size=None):
         if not path.is_absolute() or '..' in path.parts:
@@ -167,8 +181,14 @@ class SourceService:
             self._check_artifacts()
             if name == 'search_symbols':
                 result = self._search_symbols(meta, **arguments)
+            elif name == 'search_text':
+                result = self._search_text(meta, **arguments)
+            elif name == 'list_files':
+                result = self._list_files(meta, **arguments)
             elif name == 'read_source':
                 result = self._read_source(meta, **arguments)
+            elif name == 'read_symbol':
+                result = self._read_symbol(meta, **arguments)
             else:
                 raise PointerError('UNKNOWN_TOOL')
         except SourceChanged:
@@ -210,46 +230,206 @@ class SourceService:
         return self.call_tool('read_source', dict(source_id=source_id, path=path,
                                                 start_line=start_line, end_line=end_line))
 
-    def _search_symbols(self, meta, query, source_id=None, path=None, kind=None, limit=100, cursor=None):
-        if (type(query) is not str or not query or type(limit) is not int or not 1 <= limit <= MAX_SEARCH_LIMIT or
-                source_id is not None and type(source_id) is not str or
-                kind is not None and type(kind) is not str or
-                path is not None and not valid_path(path) or cursor is not None and type(cursor) is not str):
-            raise PointerError('INVALID_ARGUMENT')
-        signature = sha(canonical([self.manifest_sha256, query, source_id, path, kind]))
-        offset = 0
-        if cursor is not None:
-            try:
-                token = json.loads(base64.urlsafe_b64decode(cursor.encode('ascii')))
-                if token['query'] != signature or type(token['offset']) is not int or token['offset'] < 0:
-                    raise ValueError()
-                offset = token['offset']
-            except (ValueError, TypeError, KeyError, UnicodeError):
-                raise PointerError('INVALID_CURSOR') from None
-        matches = [symbol for symbol in self.symbols if query in symbol['name'] and
-                   (source_id is None or symbol['source_id'] == source_id) and
-                   (path is None or symbol['path'] == path or symbol['path'].startswith(path + '/')) and
-                   (kind is None or symbol['kind'] == kind)]
-        # Exact names precede partial matches; all ties keep deterministic source order.
-        matches.sort(key=lambda symbol: symbol['name'] != query)
-        if offset > len(matches):
-            raise PointerError('INVALID_CURSOR')
+    def search_text(self, query, source_id=None, path=None, case_sensitive=True, limit=100, cursor=None):
+        return self.call_tool('search_text', dict(query=query, source_id=source_id, path=path,
+            case_sensitive=case_sensitive, limit=limit, cursor=cursor))
 
+    def list_files(self, source_id=None, path=None, limit=100, cursor=None):
+        return self.call_tool('list_files', dict(source_id=source_id, path=path, limit=limit, cursor=cursor))
+
+    def read_symbol(self, symbol_id, cursor=None):
+        return self.call_tool('read_symbol', dict(symbol_id=symbol_id, cursor=cursor))
+
+    def _scope(self, tool, parameters):
+        return sha(canonical([self.manifest_sha256, self.manifest['snapshot_sha256'], tool, parameters]))
+
+    def _encode_cursor(self, scope, position):
+        token = dict(scope=scope, position=position)
+        token['mac'] = hmac.new(self.cursor_key, canonical(token), hashlib.sha256).hexdigest()
+        return base64.urlsafe_b64encode(canonical(token)).decode('ascii')
+
+    def _decode_cursor(self, cursor, scope, default):
+        if cursor is None:
+            return default
+        try:
+            if type(cursor) is not str or len(cursor) > 4096:
+                raise ValueError()
+            token = json.loads(base64.b64decode(cursor.encode('ascii'), altchars=b'-_', validate=True))
+            if type(token) is not dict or set(token) != {'scope', 'position', 'mac'}:
+                raise ValueError()
+            mac = token.pop('mac')
+            if (token['scope'] != scope or type(mac) is not str or
+                    not hmac.compare_digest(mac, hmac.new(self.cursor_key, canonical(token), hashlib.sha256).hexdigest())):
+                raise ValueError()
+            return token['position']
+        except (ValueError, TypeError, UnicodeError):
+            raise PointerError('INVALID_CURSOR') from None
+
+    def _filters(self, source_id, path, limit):
+        if (type(limit) is not int or not 1 <= limit <= MAX_SEARCH_LIMIT or
+                source_id is not None and type(source_id) is not str or
+                path is not None and not valid_path(path)):
+            raise PointerError('INVALID_ARGUMENT')
+        if source_id is not None and source_id not in self.catalog:
+            raise PointerError('UNKNOWN_SOURCE')
+
+    @staticmethod
+    def _selected(file, source_id, path):
+        return ((source_id is None or file['source_id'] == source_id) and
+                (path is None or file['path'] == path or file['path'].startswith(path + '/')))
+
+    def _page(self, meta, rows, scope, limit, cursor):
+        offset = self._decode_cursor(cursor, scope, 0)
+        if type(offset) is not int or not 0 <= offset <= len(rows):
+            raise PointerError('INVALID_CURSOR')
         def response(count):
-            next_offset = offset + count
-            more = next_offset < len(matches)
-            token = base64.urlsafe_b64encode(canonical(dict(query=signature, offset=next_offset))).decode('ascii') if more else None
-            return dict(results=matches[offset:next_offset], has_more=more, cursor=token, _meta=meta)
-        count = min(limit, len(matches) - offset)
+            following = offset + count
+            more = following < len(rows)
+            return dict(results=rows[offset:following], has_more=more,
+                        cursor=self._encode_cursor(scope, following) if more else None, _meta=meta)
+        count = min(limit, len(rows) - offset)
         result = response(count)
-        while count and len(canonical(result)) > self.max_response_bytes:
-            count -= 1
+        if len(canonical(result)) > self.max_response_bytes:
+            low, high = 0, count - 1
+            while low < high:
+                middle = (low + high + 1) // 2
+                if len(canonical(response(middle))) <= self.max_response_bytes:
+                    low = middle
+                else:
+                    high = middle - 1
+            count = low
             result = response(count)
-        if not count and offset < len(matches):
+        if not count and offset < len(rows):
             raise PointerError('RESULT_TOO_LARGE')
         return result
 
+    def _list_files(self, meta, source_id=None, path=None, limit=100, cursor=None):
+        self._filters(source_id, path, limit)
+        columns = ('source_id', 'path', 'language', 'encoding', 'total_lines',
+                   'map_status', 'map_reason', 'symbol_count')
+        rows = [{key: file[key] for key in columns} for file in self.file_list
+                if self._selected(file, source_id, path)]
+        return self._page(meta, rows, self._scope('list_files', [source_id, path, limit]), limit, cursor)
+
+    def _search_symbols(self, meta, query, source_id=None, path=None, kind=None, limit=100, cursor=None):
+        self._filters(source_id, path, limit)
+        if type(query) is not str or not query or kind is not None and type(kind) is not str:
+            raise PointerError('INVALID_ARGUMENT')
+        matches = [symbol for symbol in self.symbols if query in symbol['name'] and
+                   self._selected(symbol, source_id, path) and
+                   (kind is None or symbol['kind'] == kind)]
+        # Exact names precede partial matches; all ties keep deterministic source order.
+        matches.sort(key=lambda symbol: symbol['name'] != query)
+        return self._page(meta, matches, self._scope('search_symbols', [query, source_id, path, kind, limit]),
+                          limit, cursor)
+
+    def _source_text(self, file):
+        blob, _ = _read_confined(self.root, file['relative'], pinned=self.metadata)
+        if sha(blob) != file['sha256']:
+            raise SourceChanged(ui_message('diagnostic.service.original_source_bytes_differ_from_the_pinned_hash'))
+        text, encoding = decode_source(blob, file['relative'], self.decoding)
+        if '\x00' in text:
+            raise PointerError('BINARY_CONTENT')
+        return text, encoding
+
+    def _text_events(self, files, position, query, case_sensitive):
+        first_file, offset = position
+        for number in range(first_file, len(files)):
+            file = files[number]
+            locator = dict(source_id=file['source_id'], path=file['path'])
+            try:
+                text, encoding = self._source_text(file)
+            except SourceDecodeError as exc:
+                yield 'errors', dict(**locator, code=str(exc), encoding=exc.encoding), [number + 1, 0]
+                continue
+            except (PointerError, OSError) as exc:
+                code = (str(exc) if isinstance(exc, PointerError) else
+                        'UNSAFE_PATH' if exc.errno in (errno.ELOOP, errno.ENOTDIR) else
+                        'NOT_FOUND' if exc.errno == errno.ENOENT else 'READ_ERROR')
+                yield 'errors', dict(**locator, code=code), [number + 1, 0]
+                continue
+            text = text.replace('\r\n', '\n')
+            # Per-character folding preserves a map to original character coordinates.
+            # Unicode casefold can expand characters (e.g. ß -> ss).
+            if case_sensitive:
+                haystack, positions = text, None
+            else:
+                folded, positions = [], []
+                for index, character in enumerate(text):
+                    value = character.casefold()
+                    folded.append(value)
+                    positions.extend([index] * len(value))
+                haystack = ''.join(folded)
+            starts = [0] + [index + 1 for index, char in enumerate(text) if char == '\n']
+            file_offset = offset if number == first_file else 0
+            at = file_offset if case_sensitive else bisect_right(positions, file_offset - 1)
+            while (found := haystack.find(query, at)) >= 0:
+                start = found if positions is None else positions[found]
+                end = found + len(query) if positions is None else positions[found + len(query) - 1] + 1
+                line, last_line = bisect_right(starts, start), bisect_right(starts, end)
+                snippet_start, snippet_end = max(0, start - 60), min(len(text), start + 100)
+                yield 'results', dict(**locator, line=line, column=start - starts[line - 1] + 1,
+                    end_line=last_line, end_column=end - starts[last_line - 1] + 1,
+                    snippet=text[snippet_start:snippet_end],
+                    snippet_truncated=snippet_start > 0 or snippet_end < len(text), encoding=encoding), [number, start + 1]
+                at = start + 1 if positions is None else bisect_right(positions, start)
+
+    def _search_text(self, meta, query, source_id=None, path=None, case_sensitive=True, limit=100, cursor=None):
+        self._filters(source_id, path, limit)
+        if type(query) is not str or not query or type(case_sensitive) is not bool:
+            raise PointerError('INVALID_ARGUMENT')
+        scope = self._scope('search_text', [query, source_id, path, case_sensitive, limit])
+        position = self._decode_cursor(cursor, scope, [0, 0, 0])
+        files = [file for file in self.file_list if self._selected(file, source_id, path)]
+        if (type(position) is not list or len(position) != 3 or
+                any(type(value) is not int or value < 0 for value in position) or position[0] > len(files)):
+            raise PointerError('INVALID_CURSOR')
+        results, errors = [], []
+        following, errors_seen = position[:2], position[2]
+        def response(more):
+            return dict(results=results, errors=errors, incomplete=bool(errors_seen),
+                        complete=not more and not errors_seen, has_more=more,
+                        cursor=self._encode_cursor(scope, [*following, errors_seen]) if more else None, _meta=meta)
+        needle = query.replace('\r\n', '\n')
+        if not case_sensitive:
+            needle = needle.casefold()
+        for kind, row, next_position in self._text_events(files, following, needle, case_sensitive):
+            if len(results) + len(errors) == limit:
+                return response(True)
+            target = errors if kind == 'errors' else results
+            target.append(row)
+            old_following, following = following, next_position
+            errors_seen += kind == 'errors'
+            if len(canonical(response(True))) > self.max_response_bytes:
+                target.pop()
+                following = old_following
+                errors_seen -= kind == 'errors'
+                if not results and not errors:
+                    raise PointerError('RESULT_TOO_LARGE')
+                return response(True)
+        return response(False)
+
+    def _read_symbol(self, meta, symbol_id, cursor=None):
+        if type(symbol_id) is not str:
+            raise PointerError('INVALID_ARGUMENT')
+        symbol = self.symbols_by_id.get(symbol_id)
+        if symbol is None:
+            raise PointerError('SYMBOL_NOT_FOUND')
+        start, end = symbol['start_line'], symbol['end_line']
+        total = self.files[symbol['source_id'], symbol['path']]['total_lines']
+        if (symbol['map_status'] not in ('complete', 'partial') or
+                any(type(value) is not int for value in (start, end, total)) or not 1 <= start <= end <= total):
+            raise PointerError('SYMBOL_RANGE_UNAVAILABLE')
+        scope = self._scope('read_symbol', [symbol_id])
+        following = self._decode_cursor(cursor, scope, start)
+        if type(following) is not int or not start <= following <= end:
+            raise PointerError('INVALID_CURSOR')
+        return self._read_range(meta, symbol['source_id'], symbol['path'], following, end, symbol=symbol, scope=scope)
+
     def _read_source(self, meta, source_id, path, start_line, end_line):
+        return self._read_range(meta, source_id, path, start_line, end_line)
+
+    def _read_range(self, meta, source_id, path, start_line, end_line, *, symbol=None, scope=None):
         if (type(source_id) is not str or not valid_path(path) or type(start_line) is not int or
                 type(end_line) is not int or start_line < 1 or end_line < start_line):
             raise PointerError('INVALID_ARGUMENT')
@@ -258,12 +438,7 @@ class SourceService:
         file = self.files.get((source_id, path))
         if file is None:
             raise PointerError('NOT_IN_INVENTORY')
-        blob, _ = _read_confined(self.root, file['relative'], pinned=self.metadata)
-        if sha(blob) != file['sha256']:
-            raise SourceChanged(ui_message('diagnostic.service.original_source_bytes_differ_from_the_pinned_hash'))
-        text, encoding = decode_source(blob, file['relative'], self.decoding)
-        if '\x00' in text:
-            raise PointerError('BINARY_CONTENT')
+        text, encoding = self._source_text(file)
         source_lines = lines(text)
         total = len(source_lines)
         if not total and start_line == end_line == 1:
@@ -275,9 +450,14 @@ class SourceService:
 
         def response(end, fragment):
             more = end < end_line
-            return dict(source_id=source_id, path=path, start_line=start_line, end_line=end,
+            result = dict(source_id=source_id, path=path, start_line=start_line, end_line=end,
                         total_lines=total, encoding=encoding, sha256=file['sha256'], text=fragment,
                         complete=not more, has_more=more, next_start_line=end + 1 if more else None, _meta=meta)
+            if symbol is not None:
+                result.update(symbol_id=symbol['symbol_id'], declaration_start_line=symbol['start_line'],
+                              declaration_end_line=symbol['end_line'],
+                              cursor=self._encode_cursor(scope, end + 1) if more else None)
+            return result
         fragments, end = [], start_line - 1
         base_size = len(canonical(response(end, '')))
         content_bytes = 0

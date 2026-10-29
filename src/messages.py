@@ -1032,6 +1032,12 @@ MESSAGES = {
     'diagnostic.tool_observer.source_mcp_source_text_does_not_match_its': (
         'Source MCP source text does not match its returned line range.'
     ),
+    'diagnostic.tool_observer.source_mcp_symbol_does_not_match_the_prepared': (
+        'Source MCP symbol does not match the prepared declaration.'
+    ),
+    'diagnostic.tool_observer.source_mcp_symbol_continuation_has_invalid_coordinates': (
+        'Source MCP symbol continuation has invalid coordinates.'
+    ),
     'diagnostic.tool_observer.source_mcp_text_differs_from_its_structured_result': (
         'Source MCP text differs from its structured result.'
     ),
@@ -1243,6 +1249,10 @@ MESSAGES = {
 
     'tui.access_via_api': 'Access via API',
     'tui.access_via_chatgpt': 'Access via ChatGPT',
+    'tui.account_limits': 'Account limits',
+    'tui.account_limits_connection_closed': 'Codex closed the account limits connection.',
+    'tui.account_limits_not_available': 'Account limits are not available.',
+    'tui.account_limits_timeout': 'Reading account limits exceeded {timeout} seconds.',
     'tui.agent_model': 'Agent / model: {value}',
     'tui.analysis_failed': 'Analysis failed.',
     'tui.analysis_interrupted': 'Analysis interrupted.',
@@ -1303,7 +1313,10 @@ MESSAGES = {
     'tui.global': 'global',
     'tui.go': 'Go',
     'tui.invalid': 'Invalid',
+    'tui.invalid_account_limits': 'Codex returned invalid account limits.',
     'tui.item': 'Item',
+    'tui.limit_usage': '{label}: Used {used} | Remaining {remaining} | Resets at {resets}',
+    'tui.loading_account_limits': 'Loading account limits…',
     'tui.loading_codex_model_catalog': 'Loading Codex model catalog…',
     'tui.local_setup_prepared': 'Local setup prepared.',
     'tui.manifest': 'Manifest',
@@ -1338,9 +1351,11 @@ MESSAGES = {
     ),
     'tui.quit': 'Quit',
     'tui.refresh': 'Refresh',
+    'tui.remaining_percent': '5h limit',
     'tui.report': 'Report: {value}',
     'tui.report_text_recovered_some_checks_did_not_pass': 'Report text recovered, some checks did not pass.',
     'tui.reports': 'Reports: {reports_dir}',
+    'tui.resets_at': 'Resets at',
     'tui.result': 'Result',
 
     'tui.result.show_step_details': 'Result: {result}',

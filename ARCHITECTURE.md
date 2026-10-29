@@ -268,7 +268,7 @@ parses the complete pinned inventory using the decoding rules before each
 source-reading stage. On-demand delivery reduces prompt size, not source parsing
 work. Initial writing and Compare receive no prepared source context.
 
-Study/Collect, Review and Revision receive every file's source ID, relative path,
+In native mode, Study/Collect, Review and Revision receive every file's source ID, relative path,
 parser/version, language, encoding, line count and map status. Unknown values are
 null; parse or read failures stay explicit entries. File order is deterministic;
 the inventory is not truncated. The wire payload retains `mode: "index-only"` and
@@ -343,7 +343,7 @@ model-selected native tools. An offline probe uses the same stdio transport and
 a `file:` model provider with zero retries. It opens no model connection or
 listener. Codex must record an actual inference request before the provider
 fails. The verifier checks both `tools` and `input[].additional_tools`, including
-namespaces. Only the two source MCP tools and four auxiliary functions are
+namespaces. Only the five source MCP tools and four auxiliary functions are
 allowed: `list_mcp_resources`, `list_mcp_resource_templates`, `read_mcp_resource`
 and `request_user_input`. Write, Compare and preflight have only
 `request_user_input`, with no MCP server. The source server advertises no resources. Unknown,
@@ -378,13 +378,18 @@ the maps, and searches the loaded declarations without parsing again. Cache use
 does not cross unchecked source identities. Failed and unsupported maps remain
 visible in the complete file list.
 
-The MCP model projection retains every selected file, encoding, line count,
-map status and symbol count. It omits declarations, `maps_root` and `symbols_ref`.
-The full internal index remains available to the orchestrator. The prompt directs
+The MCP model projection contains all source-root IDs, file counts, languages,
+file types, top-directory counts and counts of map, read and decoding failures.
+It contains no file or declaration rows, `maps_root` or `symbols_ref`.
+Directory and type summaries keep at most 20 labels each and aggregate the rest;
+labels are removed if needed to target 8,192 overview bytes. All root IDs remain
+present, so projects with many roots can exceed that target. The full inventory,
+coverage plan and maps remain with the orchestrator. `list_files` can return every
+file regardless of summary size. The prompt directs
 the model to MCP. Temporary Codex `-c` arguments register the required server with
-only these two tools; user `~/.codex/config.toml` is never changed. The SDK marks
-both as read-only, non-destructive and closed-world. Temporary per-tool approval
-overrides approve only these two known tools. Global approval remains `never`;
+only these five tools; user `~/.codex/config.toml` is never changed. The SDK marks
+all as read-only, non-destructive and closed-world. Temporary per-tool approval
+overrides approve only these known tools. Global approval remains `never`;
 unknown interactive requests are denied. The launch path
 uses isolated Python (`-I -B`), a private working directory and disabled shell,
 apps, plugins, hooks, notifications, skills and delegation. It reads effective
@@ -404,8 +409,33 @@ A required server startup failure produces `MCP_STARTUP`, without native fallbac
 
 | Tool | Inputs | Behavior |
 | --- | --- | --- |
-| `search_symbols` | `query`; optional `source_id`, `path`, `kind`, `limit`, `cursor` | Case-sensitive exact names first, then substring matches; deterministic source/path/coordinate order. Returns declaration coordinates and map status, `has_more` and `cursor`. Cursors bind the query and attempt. |
+| `list_files` | Optional `source_id`, `path`, `limit`, `cursor` | Complete inventory pages sorted by source ID and path. Returns language, encoding, line count, map status/reason and declaration count. |
+| `search_text` | `query`; optional `source_id`, `path`, `case_sensitive`, `limit`, `cursor` | Literal substring search over every selected file, including SQL, configuration and failed/unsupported maps. Returns match coordinates, short snippets and explicit file errors. |
+| `search_symbols` | `query`; optional `source_id`, `path`, `kind`, `limit`, `cursor` | Case-sensitive exact names first, then substring matches; deterministic source/path/coordinate order. Returns `symbol_id`, declaration coordinates and map status. |
+| `read_symbol` | `symbol_id`; optional `cursor` | Reads the original declaration range through the same confined reader as `read_source`. Returns source identity, actual page and declaration bounds, encoding, SHA-256, text and continuation. |
 | `read_source` | `source_id`, `path`, `start_line`, `end_line` | Returns original text, actual inclusive coordinates, total lines, encoding, original SHA-256 and explicit continuation fields. |
+
+List and search limits are 1–1,000 records, default 100. `path` selects an exact
+file or directory subtree with component boundaries. Cursors bind the tool,
+snapshot, attempt and all request parameters, including limit. An in-memory HMAC
+key rejects changes; a server restart expires cursors. `symbol_id` hashes the
+snapshot, source ID, path, declaration ordinal and full prepared record. It stays
+stable across attempts for the same snapshot and map; duplicate names and
+overloads remain distinct. Missing symbols return `SYMBOL_NOT_FOUND`; unusable
+coordinates return `SYMBOL_RANGE_UNAVAILABLE`. Missing or changed private maps
+fail integrity checks. Use `read_source` for files without a usable map.
+
+Text search reads and hashes original bytes with the same decoding and path
+checks as source reads. It normalizes CRLF to LF, supports multiline queries and
+overlapping matches, and defaults to case-sensitive search. Case-insensitive
+search uses Unicode casefold while retaining original character coordinates.
+Coordinates are one-based; the end column is exclusive. Snippets contain at most
+160 characters and mark omitted context. Matches and per-file errors share the
+page limit. `errors` names each unreadable, undecodable or binary file;
+`incomplete` stays true on later pages after any error. Search `complete=true`
+requires the final page with no file errors. `SOURCE_CHANGED` aborts the request
+and blocks publication. Search results are navigation and add no source-read lines.
+There is no persistent text index, shell command or parser on the request path.
 
 Read requests must name a file owned by that source ID in the filtered inventory.
 Nested submodule roots cannot be read through their parent source IDs. Reads use
@@ -417,10 +447,11 @@ invalid decoding, unsafe paths and ranges produce structured errors. An empty
 file requested as 1..1 returns text `""`, `total_lines=0`, coordinates 1..0.
 Other out-of-range requests fail.
 
-Each result JSON body is bounded to 65,536 UTF-8 bytes. Search pages contain whole
-declarations; read pages contain whole lines. `complete=true` means the requested
+Each result JSON body is bounded to 65,536 UTF-8 bytes. List/search pages contain
+whole records; read pages contain whole lines. For reads, `complete=true` means the requested
 range was returned in full. A partial page has `has_more=true` and the next line;
-the caller retains the original requested end. A line that cannot fit produces
+`read_symbol` also returns a cursor for the next page within the same declaration.
+For `read_source`, the caller retains the original requested end. A line that cannot fit produces
 `LINE_TOO_LARGE`; it is never cut. MCP text content contains the full result JSON,
 including source text; structured content contains the same value. Client-side
 loss or truncation cannot establish observed delivery.
@@ -440,7 +471,7 @@ model studied it or checked a claim. Existing evidence, citation, report and met
 meanings stay unchanged. The permanent `tool-observer` format supports replay.
 
 Before publication, the orchestrator also checks each completed successful
-`read_source` result against `function_call_output` or `custom_tool_call_output`
+`read_source` and `read_symbol` result against `function_call_output` or `custom_tool_call_output`
 in actual inference requests. The complete JSON result, including source text
 and receipt identity, must be present. Missing, metadata-only or truncated
 results produce `MCP_DELIVERY`. `source_text_delivery_verified` records this
@@ -465,6 +496,8 @@ the permitted tools. The host had Windows Codex and POSIX Python; the test used
 a checked Windows–WSL path/stdio bridge. Only verified deterministic path and
 launcher mappings were canonicalized. Native Linux Codex was not available for
 a separate live run. The bridge is test infrastructure, not a production fallback.
+This historical authenticated run covered the original two tools. It does not
+validate the current five-tool set; the opt-in test now requires all five tools.
 
 Run the separate authenticated test from the project Python environment:
 
@@ -474,6 +507,35 @@ EXPLAIN_TEST_CODEX="$(command -v codex)" python -B -m unittest discover \
 ```
 
 The normal offline suite does not send this authenticated request.
+
+`python -B scripts/measure_prompt_sizes.py --mcp-only` compares the previous
+complete file-list projection with the overview, using the same current templates,
+schemas and instructions. It creates pinned synthetic sources, runs the real SDK
+stdio server, enumerates every file, finds one literal per file, reads one
+declaration and repeats its two lines through `read_source`. It calls no model.
+[Saved measurements](scripts/mcp-context-measurements.json), 2026-10-29:
+
+| Files | Initial context: file list → overview (bytes) | Collect prompt: file list → overview (bytes) | MCP result JSON bytes | Search text, all pages (s) | Read symbol, one call (s) |
+| --- | --- | --- | --- | --- | --- |
+| 1,000 | 37,437 → 765 | 51,241 → 14,569 | 887,684 | 0.999 | 0.151 |
+| 5,000 | 185,437 → 765 | 199,241 → 14,569 | 4,432,424 | 16.209 | 0.730 |
+
+Both runs returned every file and expected match. Each delivered two unique
+source lines and two repeated source lines to the SDK client. The JSON also records Review/Revise
+prompt sizes, list/search/read times, startup time and text-content bytes.
+MCP byte counts include both text and structured content in `CallToolResult`;
+they exclude JSON-RPC envelopes, initialization and tool schemas. Tool times
+include integrity checks and stdio transport. These are single runs without
+cold-cache control. The comparison measures initial projection sizes; tool bytes
+and times describe the current tools. It establishes no token-cost or analysis-quality change.
+
+Search scans selected files and decodes whole files in memory. Continuation can
+reread the current file. Every request still checks all pinned private map
+artifacts; small reads therefore also grow with inventory size. Broad discovery
+can transfer more data than the initial overview. A single line too large for a
+read page returns an explicit error. No text index or integrity-check bypass is used.
+Declaration bounds use the existing maps' inclusive line spans; adjacent syntax
+on the same line can appear in the returned text.
 
 ## Contracts and State
 

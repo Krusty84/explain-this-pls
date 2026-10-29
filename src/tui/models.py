@@ -5,15 +5,16 @@
 import asyncio
 
 from rich.text import Text
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Select, Static
 
 from src.messages import message as ui_message
 from src.runtime.config import STAGES, load_config, resolve_agent
-from src.backends import codex_models
+from src.backends import codex_limits, codex_models
 from src.contracts.contracts import ContractError
 from src.tui.config_edit import save_model
+from src.tui.limits import limit_rows
 
 
 def model_targets(config, path):
@@ -36,8 +37,10 @@ class ModelChooser(ModalScreen):
     ModelChooser { align: center middle; }
     #model-dialog { width: 95%; height: 90%; max-width: 120; border: round $accent; background: $surface; padding: 0 1; }
     #model-file, #model-scope, #model-current { height: auto; max-height: 2; }
+    #model-limits-scroll { height: auto; max-height: 3; }
+    #model-limits { height: auto; }
     #model-table { height: 1fr; min-height: 3; }
-    #model-status { height: 3; }
+    #model-status { height: auto; min-height: 1; max-height: 3; }
     #model-actions { height: 3; }
     #model-actions Button { min-width: 8; margin-right: 1; }
     """
@@ -53,6 +56,8 @@ class ModelChooser(ModalScreen):
         self.selected = None
         self.busy, self.generation = False, 0
         self.tasks = set()
+        self.limit_tasks, self.limits_generation = set(), 0
+        self.limits = None
 
     def literal(self, value):
         return Text(self.app.presenter.display(value))
@@ -65,6 +70,8 @@ class ModelChooser(ModalScreen):
                           for field in self.targets], value=self.target,
                          allow_blank=False, id='model-target')
             yield Static('', id='model-current')
+            with VerticalScroll(id='model-limits-scroll'):
+                yield Static('', id='model-limits')
             yield DataTable(id='model-table', cursor_type='row', zebra_stripes=True)
             yield Static('', id='model-status')
             with Horizontal(id='model-actions'):
@@ -98,6 +105,36 @@ class ModelChooser(ModalScreen):
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
 
+    def cancel_limits(self):
+        self.limits_generation += 1
+        for task in tuple(self.limit_tasks):
+            if not task.cancelling():
+                task.cancel()
+
+    def refresh_limits(self):
+        self.cancel_limits()
+        self.limits = None
+        self.query_one('#model-limits', Static).update(ui_message('tui.loading_account_limits'))
+        task = asyncio.create_task(self.fetch_limits(
+            self.targets[self.target]['executable'], self.limits_generation))
+        self.limit_tasks.add(task)
+        task.add_done_callback(self.limit_tasks.discard)
+
+    async def fetch_limits(self, executable, generation):
+        snapshot = await codex_limits.read_limits(executable)
+        if generation != self.limits_generation:
+            return
+        self.limits = snapshot
+        lines = [ui_message('tui.account_limits') + ' · ' + ui_message('tui.remaining_percent') +
+                 ' | ' + ui_message('tui.resets_at')]
+        windows = limit_rows(snapshot, minutes=300, compact=True)
+        lines += [label + ': ' + remaining + ' | ' + resets for label, remaining, resets in windows]
+        if snapshot['error']:
+            lines.append(ui_message('tui.n_a') + ': ' + snapshot['error'])
+        elif not windows:
+            lines.append(ui_message('tui.n_a'))
+        self.query_one('#model-limits', Static).update(Text('\n').join(self.literal(line) for line in lines))
+
     def show_error(self, exc):
         self.query_one('#model-status', Static).update(self.literal(exc))
         self.update_buttons()
@@ -114,6 +151,7 @@ class ModelChooser(ModalScreen):
             )))
         self.query_one('#model-status', Static).update(ui_message('tui.loading_codex_model_catalog'))
         self.begin(self.fetch_catalog)
+        self.refresh_limits()
 
     async def fetch_catalog(self, generation):
         agent = self.targets[self.target]
@@ -168,9 +206,13 @@ class ModelChooser(ModalScreen):
         table.update_cell(slug, list(table.columns)[-1], {
             'available': ui_message('tui.available'), 'unavailable': ui_message('tui.unavailable'), 'unverified': ui_message('tui.not_verified')}[result['status']])
         self.select_model(slug)
+        self.refresh_limits()
 
     def refresh_models(self):
         self.cancel_operations()
+        self.cancel_limits()
+        self.limits = None
+        self.query_one('#model-limits', Static).update(ui_message('tui.n_a'))
         self.verifications, self.selected, self.busy = {}, None, False
         self.models = []
         self.query_one('#model-table', DataTable).clear()
@@ -215,8 +257,10 @@ class ModelChooser(ModalScreen):
 
     def action_close(self):
         self.cancel_operations()
+        self.cancel_limits()
         self.dismiss(False)
 
     async def on_unmount(self):
         self.cancel_operations()
-        await asyncio.gather(*tuple(self.tasks), return_exceptions=True)
+        self.cancel_limits()
+        await asyncio.gather(*tuple(self.tasks | self.limit_tasks), return_exceptions=True)

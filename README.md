@@ -27,6 +27,8 @@ access and complete response contract.
 - **Report revision**, when review is enabled, allowing one correction round and a new review while retaining earlier versions.
 - **Branch comparison** showing differences from a branch you choose as a baseline.
 - **Folder analysis** for source code that does not need to be in Git.
+- **MCP source tools** for literal text search, complete declaration reads and paged
+  file discovery, with a compact initial overview and pinned source checks.
 - **Shareable results** in Markdown and JSON, in your preferred language.
 - **Usage summaries** with reported tokens, estimated costs, elapsed time and attempts
   for each stage and the whole run.
@@ -252,8 +254,12 @@ The [commented configuration](config.codex.example.jsonc) describes other option
 - **Legacy encodings:** use `source_decoding.rules` for encodings such as CP1251.
 - **Source access:** `source_access.mode` defaults to `"native"`. `"mcp"` requires
   `source_context.enabled: true` and `source_context.mode: "on-demand"`.
+  MCP starts with root, language, directory and error counts. Use `list_files`
+  for the complete inventory, `search_text` for literal matches, and
+  `search_symbols` → `read_symbol` for declarations. `read_source` reads manual
+  ranges. Follow all continuation pages; read original source before citing behavior.
 - **Source navigation:** `source_context.mode` defaults to `"on-demand"`. The
-  prompt lists every file; agents read symbol maps as needed from the supplied
+  native prompt lists every file; agents read symbol maps as needed from the supplied
   attempt directory. All files are still parsed before the stage starts. Set
   `"full"` to send all symbols in the prompt, or `source_context.enabled: false`
   to disable map preparation and export. Map reads do not count as source evidence.

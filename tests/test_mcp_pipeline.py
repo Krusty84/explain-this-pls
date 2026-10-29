@@ -10,6 +10,8 @@ from src.analysis.evidence import SourceChanged, sha
 from src.analysis.source_context import parse_symbols
 from src.mcp.service import SourceService
 from src.model.model_context import MCP_SOURCE_INDEX_INSTRUCTION, SOURCE_INDEX_INSTRUCTION
+from src.backends.codex_capabilities import verify_mcp_text_delivery
+from src.mcp import SOURCE_TOOLS
 from src.runtime.errors import AuditError
 from src.runtime.runner import Runner
 from test_folder import FolderFixture
@@ -129,9 +131,11 @@ class MCPAttemptTests(FolderFixture):
             index = call['source_context']
             self.assertEqual(index['delivery'], 'mcp')
             self.assertNotIn('maps_root', index)
-            self.assertNotIn('symbols_ref', index['file_columns'])
+            self.assertNotIn('file_columns', index)
             self.assertNotIn('symbol_columns', index)
-            self.assertEqual(len(index['files']), 3)
+            self.assertNotIn('files', index)
+            self.assertEqual(index['summary']['files'], 3)
+            self.assertEqual(index['summary']['indexing_errors'], 1)
             self.assertTrue(any(Path(arg).name == 'codex_mcp.py' for arg in cmd))
             self.assertIn('--manifest', cmd)
             self.assertIn('--sha256', cmd)
@@ -232,6 +236,63 @@ class MCPAttemptTests(FolderFixture):
         meta = json.loads(next(self.runner.session.run_dir.rglob('study.logs/invocation.json')).read_text())
         self.assertEqual(meta['error']['code'], 'MCP_DELIVERY')
         self.assertFalse((self.runner.session.run_dir / 'ARCHITECTURE.md').exists())
+
+    def test_collect_write_review_use_new_tools_and_verify_symbol_delivery(self):
+        for truncated in (False, True):
+            runner = Runner(self.config(), self.base / ('symbol-delivery-' + str(truncated)))
+            self.verify_mcp_text_delivery.side_effect = verify_mcp_text_delivery
+            def process(command, cwd, env, payload, *, observer, **kwargs):
+                context = prompt_context(payload)
+                result = cli_result(command, response(context))
+                if '--manifest' not in command:
+                    return result
+                path = Path(command[command.index('--manifest') + 1])
+                service = SourceService(path, sha(path.read_bytes()))
+                events, inputs = [], []
+                arguments = [('list_files', {}), ('search_text', {'query': 'return 42'}),
+                             ('search_symbols', {'query': 'main'})]
+                for tool, values in arguments:
+                    served = service.call_tool(tool, values)
+                    if tool == 'search_symbols':
+                        identifier = served['results'][0]['symbol_id']
+                    event = {'type': 'item.completed', 'item': {'id': tool, 'type': 'mcp_tool_call',
+                        'server': 'explain_this_pls', 'tool': tool, 'arguments': values, 'status': 'completed',
+                        'result': {'content': [{'type': 'text', 'text': json.dumps(served)}]}}}
+                    events.append(event)
+                served = service.read_symbol(identifier)
+                events.append({'type': 'item.completed', 'item': {'id': 'read_symbol', 'type': 'mcp_tool_call',
+                    'server': 'explain_this_pls', 'tool': 'read_symbol', 'arguments': {'symbol_id': identifier, 'cursor': None},
+                    'status': 'completed', 'result': {'content': [{'type': 'text', 'text': json.dumps(served)}]}}})
+                for event in events:
+                    observer.event(event)
+                    text = event['item']['result']['content'][0]['text']
+                    if truncated and event['item']['tool'] == 'read_symbol':
+                        text = json.dumps(dict(served, text=''))
+                    inputs.append({'type': 'function_call_output', 'output': text})
+                trace = Path(env['CODEX_ROLLOUT_TRACE_ROOT'])
+                (trace / 'request.json').write_text(json.dumps({'model': 'fixture', 'input': inputs}))
+                (trace / 'trace.jsonl').write_text(json.dumps({'payload': {'type': 'inference_started',
+                    'request_payload': {'path': 'request.json'}}}) + '\n')
+                result['stdout'] = ('\n'.join(json.dumps(event) for event in events) + '\n').encode()
+                return result
+            with self.subTest(truncated=truncated), patch.object(runner, 'check_cli', return_value={}), \
+                    patch('src.runtime.process.process', side_effect=process):
+                manifest, code = runner.run()
+            if truncated:
+                self.assertNotEqual(code, 0)
+                meta = json.loads(next(runner.session.run_dir.rglob('study.logs/invocation.json')).read_text())
+                self.assertEqual(meta['error']['code'], 'MCP_DELIVERY')
+            else:
+                self.assertEqual(code, 0, manifest.get('diagnostics'))
+                for path in runner.session.run_dir.rglob('attempt-*/invocation.json'):
+                    meta = json.loads(path.read_text())
+                    if meta['source_access']['enabled']:
+                        self.assertEqual(meta['source_access']['delivered_read_results'], 1)
+                        self.assertEqual(meta['tool_observation']['mcp']['read_symbol_calls'], 1)
+                        self.assertEqual(meta['tool_observation']['unique_lines'], 1)
+                source_calls = [call for call in self.probe_command.call_args_list if '--manifest' in call.args[0]]
+                for call in source_calls:
+                    self.assertTrue({'mcp__explain_this_pls__' + tool for tool in SOURCE_TOOLS} <= call.kwargs['expected_tools'])
 
     def test_completed_codex_event_counts_full_text_only(self):
         for full_text in (True, False):

@@ -9,6 +9,7 @@ import unittest
 
 from src.backends.codex_capabilities import probe_command, verify_mcp_text_delivery, verify_trace
 from src.runtime.errors import AuditError
+from src.mcp import SOURCE_TOOLS
 
 
 class CodexCapabilityTests(unittest.TestCase):
@@ -43,7 +44,7 @@ class CodexCapabilityTests(unittest.TestCase):
         return {'type': 'function', 'name': name, 'parameters': {'type': 'object'}}
 
     def test_flat_and_namespace_schemas_match_the_same_mcp_names(self):
-        names = {'mcp__explain_this_pls__read_source', 'mcp__explain_this_pls__search_symbols'}
+        names = {'mcp__explain_this_pls__' + tool for tool in SOURCE_TOOLS}
         self.request({'model': 'selected', 'input': [], 'tools': [self.function(name) for name in names]})
         flat = verify_trace(self.root, names)
         self.assertEqual(flat['tools'], sorted(names))
@@ -51,7 +52,7 @@ class CodexCapabilityTests(unittest.TestCase):
         self.assertFalse(flat['native_fallback'])
         self.request({'model': 'selected', 'input': [{'type': 'additional_tools', 'tools': [
             {'type': 'namespace', 'name': 'mcp__explain_this_pls',
-             'tools': [self.function('read_source'), self.function('search_symbols')]}]}]}, trace='trace-two')
+             'tools': [self.function(tool) for tool in SOURCE_TOOLS]}]}]}, trace='trace-two')
         self.assertEqual(verify_trace(self.root, names)['inference_requests'], 2)
 
     def test_additional_tools_cannot_hide_native_readers(self):
@@ -263,16 +264,44 @@ class CodexCapabilityTests(unittest.TestCase):
                 self.assertEqual(error.details['reason'], diagnostic['details']['reason'])
                 self.assertFalse(error.details['native_fallback'])
 
-    def source_result(self, identifier='source-read'):
+    def source_result(self, identifier='source-read', tool='read_source'):
         payload = {'source_id': 'source-001', 'path': 'probe.py', 'start_line': 1, 'end_line': 2,
                    'total_lines': 2, 'encoding': 'utf-8', 'sha256': 'a' * 64,
                    'text': 'def probe():\n    return "случайная строка"\n',
                    '_meta': {'request_id': identifier, 'state': 'SERVED', 'attempt_id': 'attempt'}}
         text = json.dumps(payload, ensure_ascii=False)
         event = {'type': 'item.completed', 'item': {
-            'id': identifier, 'type': 'mcp_tool_call', 'server': 'explain_this_pls', 'tool': 'read_source',
+            'id': identifier, 'type': 'mcp_tool_call', 'server': 'explain_this_pls', 'tool': tool,
             'status': 'completed', 'result': {'content': [{'type': 'text', 'text': text}]}}}
         return payload, text, event
+
+    def test_every_symbol_page_requires_full_text_in_model_tool_input(self):
+        payload, text, first = self.source_result('page-one', tool='read_symbol')
+        _, following, second = self.source_result('page-two', tool='read_symbol')
+        first['item']['result']['structuredContent'] = payload
+        self.request({'model': 'selected', 'input': [
+            {'type': 'function_call_output', 'output': text}], 'tools': []})
+        stdout = (json.dumps(first) + '\n' + json.dumps(second)).encode()
+        with self.assertRaises(AuditError) as caught:
+            verify_mcp_text_delivery(self.root, stdout)
+        self.assertEqual(caught.exception.code, 'MCP_DELIVERY')
+        self.assertEqual(caught.exception.details['missing_read_results'], 1)
+        self.request({'model': 'selected', 'input': [
+            {'type': 'custom_tool_call_output', 'output': following}], 'tools': []})
+        delivery = verify_mcp_text_delivery(self.root, stdout)
+        self.assertEqual(delivery['delivered_read_results'], 2)
+        self.assertEqual(delivery['text_utf8_bytes'], 2 * len(payload['text'].encode()))
+
+    def test_symbol_metadata_or_truncated_text_is_not_delivery(self):
+        payload, text, event = self.source_result(tool='read_symbol')
+        self.request({'model': 'selected', 'tools': [], 'input': [
+            {'type': 'custom_tool_call_output', 'output': dict(payload, text=payload['text'][:-1])}]})
+        with self.assertRaises(AuditError) as caught:
+            verify_mcp_text_delivery(self.root, json.dumps(event).encode())
+        self.assertEqual(caught.exception.code, 'MCP_DELIVERY')
+        event['item']['result'] = {'content': [], 'structuredContent': payload}
+        with self.assertRaises(AuditError):
+            verify_mcp_text_delivery(self.root, json.dumps(event).encode())
 
     def test_full_source_result_is_verified_in_actual_model_tool_input(self):
         payload, text, event = self.source_result()

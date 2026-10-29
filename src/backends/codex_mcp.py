@@ -24,6 +24,7 @@ from src.backends.codex_catalog import sanitize_catalog
 from src.analysis.evidence import read_confined
 from src.contracts.contracts import ContractError, strict_json
 from src.runtime.errors import AuditError
+from src.mcp import SOURCE_TOOLS
 
 
 DISABLED_FEATURES = ('shell_tool', 'view_image', 'multi_agent', 'multi_agent_v2', 'apps', 'plugins',
@@ -155,7 +156,7 @@ def check_config(config, args):
                 or server.get('args') != json.loads(expected_settings[root + 'args'])
                 or server.get('cwd') != str(args.manifest.parent)
                 or server.get('startup_timeout_sec') != 30 or server.get('tool_timeout_sec') != 30
-                or server.get('enabled_tools') != ['search_symbols', 'read_source']):
+                or server.get('enabled_tools') != list(SOURCE_TOOLS)):
             raise failure(ui_message('diagnostic.codex_mcp.codex_changed_the_required_private_source_mcp_configuration'))
         allowed = {'command', 'args', 'cwd', 'env', 'env_vars', 'environment_id', 'enabled', 'required',
                    'startup_timeout_sec', 'tool_timeout_sec', 'enabled_tools', 'tools'}
@@ -163,7 +164,7 @@ def check_config(config, args):
                 or not empty_settings(server.get('env')) or not empty_settings(server.get('env_vars'))
                 or server.get('environment_id') not in (None, 'local')
                 or server.get('tools') != {name: {'output_token_limit': 1000000, 'approval_mode': 'approve'}
-                                           for name in ('read_source', 'search_symbols')}):
+                                           for name in SOURCE_TOOLS}):
             raise failure(ui_message('diagnostic.codex_mcp.codex_retained_unsafe_source_mcp_environment_transport_or'))
 
 
@@ -249,7 +250,7 @@ class Connection:
         kind = item.get('type')
         if kind == 'mcpToolCall':
             if (not self.args.manifest or item.get('server') != MCP_SERVER_NAME
-                    or item.get('tool') not in ('search_symbols', 'read_source')):
+                    or item.get('tool') not in SOURCE_TOOLS):
                 raise failure(ui_message('diagnostic.codex_mcp.codex_called_a_tool_outside_the_private_source'))
             normalized = {key: item.get(key) for key in ('id', 'server', 'tool', 'arguments', 'result', 'error', 'status')}
             normalized['type'] = 'mcp_tool_call'

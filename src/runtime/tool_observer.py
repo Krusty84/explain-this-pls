@@ -19,6 +19,9 @@ import time
 
 from src.messages import message as ui_message
 from src.analysis.evidence import lines, source_catalog, valid_path
+from src.analysis.source_decoding import normalize_source_decoding
+from src.mcp import SOURCE_TOOLS
+from src.mcp.service import symbol_identifier
 
 REPEAT_CALLS = 50
 REPEAT_SECONDS = 120
@@ -81,6 +84,7 @@ class ToolObserver:
         self.mcp_counts = Counter()
         self.mcp_errors = Counter()
         self.mcp_receipts = set()
+        self.mcp_symbols = None
 
     def _reset(self):
         self.streak, self.streak_started = 0, None
@@ -206,7 +210,7 @@ class ToolObserver:
                                   status, output, complete, self.session_id)]
         if tool == 'mcp_tool_call':
             if (item.get('server') == self.mcp_access.get('server') and
-                    item.get('tool') in ('search_symbols', 'read_source')):
+                    item.get('tool') in SOURCE_TOOLS):
                 return [self._source_mcp(item)]
             return [CompletedTool(item.get('id'), str(item.get('server')) + '/' + str(item.get('tool')),
                                   item.get('arguments'), 'error' if item.get('error') else 'success',
@@ -223,6 +227,7 @@ class ToolObserver:
         tool, arguments, result = item['tool'], item.get('arguments'), item.get('result')
         observation = {'tool': tool, 'request': arguments, 'delivery_state': 'UNVERIFIED',
                        'inspection_state': 'INSPECTED_UNVERIFIED', 'text_utf8_bytes': 0,
+                       'result_utf8_bytes': 0,
                        'returned': None, 'error': None}
         call = CompletedTool(item.get('id'), item['server'] + '/' + tool, arguments,
                              'error' if item.get('error') or item.get('status') == 'failed' else 'success',
@@ -267,14 +272,15 @@ class ToolObserver:
                     break
             if not receipt_found:
                 raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_result_has_no_matching_private_served'))
-            observation.update(request_id=meta['request_id'], manifest_sha256=meta['manifest_sha256'])
+            observation.update(request_id=meta['request_id'], manifest_sha256=meta['manifest_sha256'],
+                               result_utf8_bytes=len(content[0]['text'].encode('utf-8')))
             if isinstance(payload.get('error'), dict):
                 observation['error'] = str(payload['error'].get('code', 'TOOL_ERROR'))
                 observation['delivery_state'] = 'DELIVERED_OBSERVED'
                 call.status, call.complete = 'error', True
             elif result.get('isError') or result.get('is_error'):
                 raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_result_has_an_unexplained_protocol_error'))
-            elif tool == 'read_source':
+            elif tool in ('read_source', 'read_symbol'):
                 self._source_mcp_lines(call, payload)
                 observation['delivery_state'] = 'DELIVERED_OBSERVED'
             else:
@@ -290,7 +296,26 @@ class ToolObserver:
 
     def _source_mcp_lines(self, call, payload):
         arguments = call.arguments
-        sid, path = arguments.get('source_id'), arguments.get('path')
+        symbol = None
+        if call.mcp['tool'] == 'read_symbol':
+            if self.mcp_symbols is None:
+                snapshot = digest([self.context.get('_inventory'), self.sources,
+                                   normalize_source_decoding(self.context.get('source_decoding'))])
+                self.mcp_symbols = {}
+                for file in self.context.get('source_context', {}).get('files', []):
+                    for ordinal, declaration in enumerate(file['symbols']):
+                        identifier = symbol_identifier(snapshot, file['source_id'], file['path'], ordinal, declaration)
+                        self.mcp_symbols[identifier] = dict(source_id=file['source_id'], path=file['path'], **declaration)
+            symbol = self.mcp_symbols.get(arguments.get('symbol_id'))
+            if (symbol is None or payload.get('symbol_id') != arguments.get('symbol_id') or
+                    payload.get('declaration_start_line') != symbol['start_line'] or
+                    payload.get('declaration_end_line') != symbol['end_line'] or
+                    (payload.get('has_more') and not isinstance(payload.get('cursor'), str)) or
+                    (not payload.get('has_more') and payload.get('cursor') is not None)):
+                raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_symbol_does_not_match_the_prepared'))
+            sid, path = symbol['source_id'], symbol['path']
+        else:
+            sid, path = arguments.get('source_id'), arguments.get('path')
         source = next((source for source in self.sources if source['id'] == sid), None)
         if source is None or not valid_path(path):
             raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_returned_an_unknown_source_locator'))
@@ -304,6 +329,13 @@ class ToolObserver:
             raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_result_differs_from_the_pinned_inventory'))
         start, end = payload.get('start_line'), payload.get('end_line')
         requested_start, requested_end = arguments.get('start_line'), arguments.get('end_line')
+        if symbol is not None:
+            requested_start, requested_end = symbol['start_line'], symbol['end_line']
+            if arguments.get('cursor') is not None:
+                if (not isinstance(arguments['cursor'], str) or not arguments['cursor'] or
+                        type(start) is not int or not requested_start <= start <= requested_end):
+                    raise ValueError(ui_message('diagnostic.tool_observer.source_mcp_symbol_continuation_has_invalid_coordinates'))
+                requested_start = start
         total, text = payload.get('total_lines'), payload.get('text')
         complete, more, following = payload.get('complete'), payload.get('has_more'), payload.get('next_start_line')
         if (any(type(number) is not int for number in (start, end, requested_start, requested_end, total)) or
@@ -368,11 +400,12 @@ class ToolObserver:
             self.mcp_counts['unverified_results'] += observation['delivery_state'] != 'DELIVERED_OBSERVED'
             self.mcp_counts['incomplete_results'] += not call.complete
             self.mcp_counts['text_utf8_bytes'] += observation['text_utf8_bytes']
+            self.mcp_counts['result_utf8_bytes'] += observation.get('result_utf8_bytes', 0)
             self.mcp_counts['unique_lines'] += sum(row['end_line'] - row['start_line'] + 1 for row in observation['new_ranges'])
             self.mcp_counts['repeated_lines'] += sum(row['end_line'] - row['start_line'] + 1 for row in observation['repeated_ranges'])
             if observation.get('error'):
                 self.mcp_errors[observation['error']] += 1
-                self.mcp_counts['read_errors'] += observation['tool'] == 'read_source'
+                self.mcp_counts['read_errors'] += observation['tool'] in ('read_source', 'read_symbol')
                 self.mcp_counts['decoding_errors'] += observation['error'] in ('DECODE_ERROR', 'ENCODING_MISMATCH', 'BINARY_CONTENT')
         signature = digest([call.tool, call.arguments, call.result])
         exact = signature in self.exact
@@ -397,7 +430,7 @@ class ToolObserver:
         if call.source_lines:
             self.counts['reads_with_coordinates'] += 1
         elif (call.tool.lower() in ('read', 'command_execution') or
-              call.mcp is not None and call.mcp['tool'] == 'read_source' and call.mcp['returned'] is None):
+              call.mcp is not None and call.mcp['tool'] in ('read_source', 'read_symbol') and call.mcp['returned'] is None):
             self.counts['reads_without_coordinates'] += 1
         if new and repeated:
             self.counts['mixed_reads'] += 1
@@ -500,8 +533,10 @@ class ToolObserver:
         }
         if self.mcp_counts['calls']:
             result['mcp'] = {key: self.mcp_counts[key] for key in (
-                'calls', 'search_symbols_calls', 'read_source_calls', 'delivered_observed', 'unverified_results',
-                'read_errors', 'decoding_errors', 'incomplete_results', 'text_utf8_bytes', 'unique_lines', 'repeated_lines')}
+                'calls', 'search_symbols_calls', 'search_text_calls', 'list_files_calls',
+                'read_source_calls', 'read_symbol_calls', 'delivered_observed', 'unverified_results',
+                'read_errors', 'decoding_errors', 'incomplete_results', 'text_utf8_bytes', 'result_utf8_bytes',
+                'unique_lines', 'repeated_lines')}
             result['mcp'].update(errors=dict(sorted(self.mcp_errors.items())),
                                  delivery_state='DELIVERED_OBSERVED' if self.mcp_counts['delivered_observed'] else 'UNVERIFIED',
                                  inspection_state='INSPECTED_UNVERIFIED',

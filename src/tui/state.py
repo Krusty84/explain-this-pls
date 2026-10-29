@@ -66,6 +66,10 @@ class RunState:
                            else ui_message('tui.no_architecture_report_available'))
             else:
                 row['result'] = ui_message('tui.report_text_recovered_some_checks_did_not_pass')
+        elif name == 'stage_rate_limits':
+            row = self.row(context)
+            if row['status'] not in ('SKIPPED', 'INTERRUPTED') and 'rate_limits' not in row:
+                row['rate_limits'] = context['rate_limits']
         elif name == 'study_phase_started':
             row = self.row(context)
             row.update(phase=context['phase'], result=ui_message('run.correcting_plantuml_syntax')
@@ -88,6 +92,8 @@ class RunState:
                 if context.get('metrics'):
                     row['metrics'] = context['metrics']
                     row['duration_seconds'] = context['metrics']['duration_seconds']
+                if row['status'] == 'INTERRUPTED':
+                    row.pop('rate_limits', None)
         elif name == 'last_analysis_warning':
             self.diagnostics.append(context)
         elif name in ('root_warning', 'description_missing'):
@@ -102,6 +108,7 @@ class RunState:
             row.update(metrics=metrics, status=metrics['status'], duration_seconds=metrics['duration_seconds'])
             if interrupted and row['status'] in ('FAILED', 'RUNNING'):
                 row['status'] = 'INTERRUPTED'
+                row.pop('rate_limits', None)
         self.end_preparation('COMPLETE' if result['exit_code'] in (0, 2) else 'INTERRUPTED' if interrupted else 'FAILED')
         for row in self.rows.values():
             if row['status'] == 'RUNNING':

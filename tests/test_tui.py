@@ -17,7 +17,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from rich.console import Group
 from rich.rule import Rule
@@ -28,7 +28,9 @@ from src.cli import main
 from src.contracts.contracts import jsonc
 from src.runtime.config import load_config
 from src.runtime.metrics import usage
+from src.backends.codex_limits import parse_limits
 from src.runtime.reporting import Reporter
+from src.runtime.session import RunSession
 from src.tui.app import ExplainApp, FolderChooser, WorkerMessage
 from src.tui.settings import config_files, read_settings, save_settings
 from src.tui.state import RunState
@@ -108,6 +110,35 @@ class TuiRoutingTests(unittest.TestCase):
 
 
 class RunStateTests(unittest.TestCase):
+    def test_quota_snapshots_are_per_stage_and_survive_final_metrics(self):
+        state = RunState()
+        contexts = [dict(branch=branch, stage=stage, revision_id=revision)
+                    for branch, stage, revision in (('main', 'study', '001'), ('main', 'review', '001'),
+                                                   ('other', 'study', '001'), ('main', 'revise', '002'))]
+        snapshots = []
+        for index, context in enumerate(contexts):
+            state.apply('stage_completed', dict(context, status='COMPLETE'))
+            snapshot = parse_limits({'rateLimits': {'primary': {'usedPercent': index * 10}}})
+            snapshots.append(snapshot)
+            state.apply('stage_rate_limits', dict(context, rate_limits=snapshot))
+        state.apply('stage_rate_limits', dict(contexts[0], rate_limits=snapshots[-1]))
+        state.finish({'result': {'status': 'COMPLETE', 'exit_code': 0,
+                                'metrics': {'stages': [measured(context) for context in contexts]}}})
+        for context, snapshot in zip(contexts, snapshots):
+            self.assertEqual(state.rows[(context['branch'], context['stage'], context['revision_id'])]['rate_limits'], snapshot)
+        self.assertNotIn('rate_limits', state.preparation)
+
+    def test_skipped_and_interrupted_steps_have_no_quota(self):
+        state = RunState()
+        context = dict(branch='folder', stage='study', revision_id='001')
+        state.apply('stage_skipped', context)
+        state.apply('stage_rate_limits', dict(context, rate_limits={'windows': [], 'error': 'unavailable'}))
+        self.assertNotIn('rate_limits', state.rows[('folder', 'study', '001')])
+        state.apply('stage_started', context)
+        state.apply('error', dict(context, code='INTERRUPTED'))
+        state.apply('stage_rate_limits', dict(context, rate_limits={'windows': [], 'error': 'unavailable'}))
+        self.assertNotIn('rate_limits', state.rows[('folder', 'study', '001')])
+
     def test_metadata_warning_is_retained_without_failing_completed_steps(self):
         state = RunState()
         context = dict(branch='folder', stage='study', revision_id='001')
@@ -167,6 +198,72 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
 
     def app(self, config=None, **changes):
         return ExplainApp(options(config, **changes), settings_path=self.settings)
+
+    async def test_quota_columns_use_multiline_rows_and_keep_history_and_cursor(self):
+        app = self.app(self.path, no_progress=True)
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.state = RunState()
+            app.query_one('#picker').display = False
+            app.query_one('#dashboard').display = True
+            context = dict(branch='main', stage='study', revision_id='001', backend='codex')
+            app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'stage_completed',
+                                               'context': dict(context, status='COMPLETE', metrics=measured(context))}))
+            table = app.query_one('#stages', DataTable)
+            self.assertEqual([column.label.plain for column in table.columns.values()][6:],
+                             ['Cost', '5h limit', 'Resets at', 'Result'])
+            self.assertEqual([cell.plain for cell in table.get_row_at(1)[7:9]], ['n/a', 'n/a'])
+            table.move_cursor(row=1)
+            await pilot.pause()
+            table.scroll_to(x=100, animate=False, force=True)
+            snapshot = parse_limits({'rateLimitsByLimitId': {
+                'codex': {'primary': {
+                    'usedPercent': 25.5, 'windowDurationMins': 300, 'resetsAt': 1793286000},
+                    'secondary': {'usedPercent': 100, 'windowDurationMins': 10080, 'resetsAt': 1793804400}},
+                'other': {'primary': {
+                    'usedPercent': 50, 'windowDurationMins': 300, 'resetsAt': 1793286000}}}})
+            app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'stage_rate_limits',
+                                               'context': dict(context, rate_limits=snapshot)}))
+            await pilot.pause()
+            self.assertEqual(table.cursor_row, 1)
+            self.assertEqual(table.scroll_x, 100)
+            self.assertEqual(table.rows['1'].height, 2)
+            self.assertEqual(table.get_row_at(1)[7].plain, '74.5%\n50%')
+            self.assertEqual(len(table.get_row_at(1)[8].plain.splitlines()), 2)
+            self.assertNotIn(' / ', table.get_row_at(1)[8].plain)
+            self.assertNotIn('\\n', table.get_row_at(1)[7].plain)
+            details = app.query_one('#step-details', Static).content.plain
+            self.assertIn('codex / 5h: Used 25.5% | Remaining 74.5%', details)
+            self.assertIn('codex / 7d: Used 100% | Remaining 0%', details)
+            original = [cell.plain for cell in table.get_row_at(1)[7:9]]
+            review = dict(context, stage='review')
+            app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'stage_completed',
+                                               'context': dict(review, status='COMPLETE')}))
+            app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'stage_rate_limits',
+                'context': dict(review, rate_limits=parse_limits({'rateLimits': {'primary': {
+                    'usedPercent': 90, 'windowDurationMins': 300}}}))}))
+            app.complete({'result': {'status': 'COMPLETE', 'exit_code': 0,
+                                    'metrics': dict(measured(context), stages=[measured(context), measured(review)])}})
+            await pilot.pause()
+            await pilot.resize_terminal(120, 40)
+            await pilot.resize_terminal(80, 24)
+            self.assertEqual([cell.plain for cell in table.get_row_at(1)[7:9]], original)
+            self.assertIn('10%', table.get_row_at(2)[7].plain)
+
+    async def test_quota_error_is_in_step_details_without_failing_the_step(self):
+        app = self.app(self.path, no_progress=True)
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.state = RunState()
+            context = dict(branch='folder', stage='study', revision_id='001')
+            for event, changes in (('stage_completed', {'status': 'COMPLETE'}),
+                                   ('stage_rate_limits', {'rate_limits': {'windows': [], 'error': 'Sign in [bold]\x1b'}})):
+                app.on_worker_message(WorkerMessage({'type': 'event', 'event': event, 'context': context | changes}))
+            table = app.query_one('#stages', DataTable)
+            table.move_cursor(row=1)
+            app.show_step_details()
+            self.assertEqual(table.get_row_at(1)[2].plain, 'COMPLETE')
+            self.assertEqual([cell.plain for cell in table.get_row_at(1)[7:9]], ['n/a', 'n/a'])
+            self.assertIn('Account limits: Sign in [bold]\\x1b', app.query_one('#step-details', Static).content.plain)
+            self.assertEqual(app.state.diagnostics, [])
 
     async def test_first_launch_folder_persistence_and_no_automatic_run(self):
         app = self.app()
@@ -639,6 +736,23 @@ class LiveTuiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD').strip(), 'master')
                 self.assertEqual(app.query_one('#run-tabs', TabbedContent).active, 'summary-tab')
 
+    async def test_cancel_during_quota_read_reaps_the_server(self):
+        self.prepare('folder')
+        marker = self.base / 'limits-process.json'
+        self.env.update(AUDIT_TEST_LIMITS_DELAY='60', AUDIT_TEST_LIMITS_MARKER=str(marker))
+        app = ExplainApp(options(self.config_path), settings_path=self.base / 'explain.config')
+        with patch.dict(os.environ, self.env, clear=True):
+            async with app.run_test(size=(80, 24)) as pilot:
+                await pilot.click('#run')
+                await self.wait_for(pilot, marker.exists)
+                child = json.loads(marker.read_text())
+                await pilot.press('ctrl+c')
+                await self.wait_for(pilot, lambda: not app.running)
+                self.assertEqual(app.last_exit_code, 130)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(child['pid'], 0)
+                self.assertTrue(all('rate_limits' not in row for row in app.state.rows.values()))
+
     async def test_quit_waits_for_worker_cleanup_and_returns_interrupted_code(self):
         self.prepare('folder')
         marker = self.base / 'agent-process.json'
@@ -652,6 +766,72 @@ class LiveTuiTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.click('#quit-run')
                 await self.wait_for(pilot, lambda: not app.running)
                 self.assertEqual(app.return_value, 130)
+
+
+class WorkerQuotaTests(unittest.TestCase):
+    setUp = TuiTests.setUp
+
+    def reporter(self):
+        messages = []
+        connection = Mock()
+        connection.send.side_effect = messages.append
+        reporter = PipeReporter(connection)
+        self.addCleanup(reporter.close)
+        return reporter, messages
+
+    def test_terminal_events_get_one_snapshot_for_each_stage_identity(self):
+        reporter, messages = self.reporter()
+        contexts = [dict(branch=branch, stage=stage, revision_id=revision, backend='codex')
+                    for branch, stage, revision in (('main', 'study', '001'), ('main', 'review', '001'),
+                                                   ('other', 'study', '001'), ('main', 'revise', '002'))]
+        with patch('src.tui.worker.read_limits', new_callable=AsyncMock,
+                   return_value={'windows': [], 'error': 'Optional failure'}) as read:
+            for index, context in enumerate(contexts):
+                reporter.emit('stage_started', **context, executable='/configured/codex')
+                reporter.emit('study_phase_completed', **context)
+                if index == 1:
+                    reporter.emit('error', **context, phase='stage', code='CLI_FAILED', message='Failed')
+                else:
+                    reporter.emit('stage_completed', **context, status='COMPLETE', elapsed_seconds=1)
+                reporter.emit('error', **context, phase='stage', code='CLI_FAILED', message='Duplicate terminal event')
+            self.assertEqual(read.await_count, 4)
+            self.assertTrue(all(call.args == ('/configured/codex',) for call in read.call_args_list))
+        quotas = [message['context'] for message in messages if message.get('event') == 'stage_rate_limits']
+        self.assertEqual([(item['branch'], item['stage'], item['revision_id']) for item in quotas],
+                         [(item['branch'], item['stage'], item['revision_id']) for item in contexts])
+        self.assertTrue(all(item['rate_limits']['error'] == 'Optional failure' for item in quotas))
+
+    def test_skipped_interrupted_local_and_preflight_events_do_not_read_limits(self):
+        reporter, messages = self.reporter()
+        with patch('src.tui.worker.read_limits', new_callable=AsyncMock) as read:
+            for stage, terminal, changes in (('review', 'stage_skipped', {}),
+                                             ('study', 'error', {'code': 'INTERRUPTED', 'phase': 'stage', 'message': 'Stopped'}),
+                                             ('compare', 'stage_completed', {'generated_by': 'orchestrator',
+                                                                             'status': 'COMPLETE', 'elapsed_seconds': 1})):
+                context = dict(branch='main', stage=stage, revision_id='001', backend='codex')
+                reporter.emit('stage_started', **context, executable='/configured/codex')
+                reporter.emit(terminal, **context, **changes)
+            reporter.emit('error', phase='preflight', code='IO_ERROR', message='Failed')
+            read.assert_not_called()
+        self.assertFalse(any(message.get('event') == 'stage_rate_limits' for message in messages))
+
+    def test_native_and_mcp_stage_events_keep_quota_out_of_saved_metrics(self):
+        for mode in ('native', 'mcp'):
+            with self.subTest(mode=mode):
+                reporter, messages = self.reporter()
+                config = load_config(self.path)
+                config['source_access'] = {'mode': mode}
+                session = RunSession(config, self.base / ('run-' + mode), reporter=reporter)
+                context = dict(branch='folder', revision_id='001')
+                with patch('src.tui.worker.read_limits', new_callable=AsyncMock,
+                           return_value=parse_limits({'rateLimits': {'primary': {'usedPercent': 25}}})) as read:
+                    started = session.stage_started('study', context)
+                    session.stage_finished('study', context, {'completion_status': 'COMPLETE'}, started)
+                    read.assert_awaited_once_with(config['_agents']['study']['executable'])
+                event = next(message for message in messages if message.get('event') == 'stage_started')
+                self.assertEqual(event['context']['executable'], config['_agents']['study']['executable'])
+                self.assertNotIn('executable', session.metrics.snapshot()['stages'][0])
+                self.assertNotIn('rate_limits', json.dumps(session.metrics.snapshot()))
 
 
 class WorkerIntegrationTests(unittest.TestCase):
@@ -690,12 +870,17 @@ class WorkerIntegrationTests(unittest.TestCase):
         events = [message['event'] for message in messages if message['type'] == 'event']
         self.assertIn('stage_started', events)
         self.assertIn('stage_completed', events)
+        completed = [index for index, message in enumerate(messages) if message.get('event') == 'stage_completed']
+        for index in completed:
+            self.assertEqual(messages[index + 1]['event'], 'stage_rate_limits')
+            self.assertIsNone(messages[index + 1]['context']['rate_limits']['error'])
         payload = next(message for message in messages if message['type'] == 'result')
         self.assertEqual(payload['result']['status'], 'COMPLETE')
         self.assertEqual(messages[-1], {'type': 'exit', 'exit_code': 0})
         self.assertTrue(all(Path(path).is_file() for label, path in payload['paths']))
         self.assertGreater(len(payload['result']['metrics']['stages']), 1)
         self.assertIn('completed and accepted', payload['reviews'][0][1])
+        self.assertNotIn('rate_limits', json.dumps(payload))
 
     def test_cancel_before_ready_and_during_analysis_preserves_exit_130(self):
         for immediate in (True, False):

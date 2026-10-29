@@ -169,7 +169,17 @@ Never modify files or switch, initialize, update, or fetch Git checkouts.
 
 ## Prepared source context
 
-source_context uses index_format "dictionary" and fragments: []. It lists all
+With delivery "mcp", source_context is an overview, without file or symbol lists.
+Use list_files for the complete inventory, with source_id and path prefix filters.
+Use search_text to find literal text, including files without usable maps.
+Search snippets and maps are navigation, never evidence or proof of absence.
+Read declarations through search_symbols -> symbol_id -> read_symbol; use
+read_source for manual ranges. Follow has_more and cursor with unchanged
+parameters; read_source uses next_start_line and the original end_line.
+Search errors are paged with matches. Keep all read/map errors and incomplete
+searches as gaps. SOURCE_CHANGED blocks the run. Check claims against source.
+
+For native delivery, source_context uses index_format "dictionary" and fragments: []. It lists all
 pinned files, including map errors and unavailable metadata. Decode rows using
 the supplied columns and value tables; table indexes start at zero, and values
 follow first occurrence. Preserve null, empty values and original source lines.

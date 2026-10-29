@@ -21,11 +21,12 @@ from textual.widgets import Button, DataTable, OptionList, Select, Static
 
 from src.runtime.config import load_config
 from src.cli import main
-from src.backends import codex_models
+from src.backends import codex_limits, codex_models
 from src.contracts.contracts import jsonc
 from src.tui.app import ExplainApp
 from src.tui.config_edit import replace_model, save_model
 from src.tui.models import ModelChooser, model_targets
+from src.tui.limits import limit_rows
 
 ROOT = Path(__file__).resolve().parents[1]
 MODELS = [dict(slug='public-model', display_name='Public', visibility='list', supported_in_api=False),
@@ -280,6 +281,110 @@ class ModelBackendTests(ModelFixture, unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(not result.stdout.strip() or result.stdout.strip().startswith('Z'), result.stdout)
 
 
+class AccountLimitTests(ModelFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_read_initializes_and_reads_without_a_model_request(self):
+        rpc = self.base / 'rpc.jsonl'
+        self.write_state(rpc_log=str(rpc), limits_notification=True)
+        snapshot = await codex_limits.read_limits(str(self.cli))
+        self.assertIsNone(snapshot['error'])
+        self.assertEqual([row[1] for row in limit_rows(snapshot)], ['75%', '50%'])
+        self.assertEqual([window['window_minutes'] for window in snapshot['windows']], [300, 10080])
+        self.assertEqual([call['args'] for call in self.calls()], [['app-server', '--stdio']])
+        self.assertNotEqual(self.calls()[0]['cwd'], str(self.base))
+        self.assertEqual([json.loads(line)['method'] for line in rpc.read_text().splitlines()],
+                         ['initialize', 'initialized', 'account/rateLimits/read'])
+
+    def test_remaining_percent_handles_zero_full_fractional_and_missing_usage(self):
+        for used, expected in ((0, '100%'), (100, '0%'), (25.5, '74.5%'), (120, '0%'),
+                               (None, 'n/a'), ('25', 'n/a'), (True, 'n/a'), (-1, 'n/a'),
+                               (float('inf'), 'n/a'), (float('nan'), 'n/a'), (10 ** 500, 'n/a')):
+            with self.subTest(used=used):
+                snapshot = codex_limits.parse_limits({'rateLimits': {'primary': {'usedPercent': used}}})
+                row, = limit_rows(snapshot)
+                self.assertEqual(row, ('codex / primary', expected, 'n/a'))
+
+    def test_multiple_buckets_take_precedence_and_keep_names(self):
+        snapshot = codex_limits.parse_limits({'rateLimits': {'primary': {'usedPercent': 99}},
+            'rateLimitsByLimitId': {
+                'codex': {'primary': {'usedPercent': 0, 'windowDurationMins': 300}, 'secondary': None},
+                'other': {'limitName': 'Other [bold]', 'primary': {'usedPercent': 70, 'windowDurationMins': 90},
+                          'secondary': {'usedPercent': 50, 'windowDurationMins': 10080}}}})
+        self.assertEqual([row[:2] for row in limit_rows(snapshot)],
+                         [('codex / 5h', '100%'), ('Other [bold] (other) / 90m', '30%'),
+                          ('Other [bold] (other) / 7d', '50%')])
+        self.assertTrue(codex_limits.parse_limits({'rateLimitsByLimitId': {}})['error'])
+
+    def test_reset_date_uses_local_timezone_and_unavailable_fields_stay_unknown(self):
+        try:
+            with patch.dict(os.environ, {'TZ': 'Etc/GMT-3'}):
+                time.tzset()
+                snapshot = codex_limits.parse_limits({'rateLimits': {'primary': {
+                    'usedPercent': 25, 'windowDurationMins': 60, 'resetsAt': 0}}})
+                self.assertEqual(limit_rows(snapshot)[0], ('codex / 1h', '75%', '1970-01-01 03:00'))
+                for resets in (None, '123', True, -1, 10 ** 500):
+                    snapshot = codex_limits.parse_limits({'rateLimits': {'primary': {
+                        'windowDurationMins': '300', 'resetsAt': resets}}})
+                    self.assertEqual(limit_rows(snapshot)[0], ('codex / primary', 'n/a', 'n/a'))
+        finally:
+            time.tzset()
+
+    async def test_protocol_auth_and_empty_limit_errors_are_optional(self):
+        for changes in ({'limits_error': 'Sign in with ChatGPT'}, {'limits_output': 'not JSON'},
+                        {'limits_output': '[]'}, {'limits_exit': True}, {'limits': {}},
+                        {'limits': {'rateLimitsByLimitId': []}},
+                        {'limits': {'rateLimitsByLimitId': {'codex': []}}},
+                        {'limits': {'rateLimits': {'limitId': ['invalid'], 'primary': {}}}},
+                        {'limits': {'rateLimits': {'primary': []}}}):
+            with self.subTest(changes=changes):
+                self.state = {'models': MODELS} | changes
+                self.write_state()
+                snapshot = await codex_limits.read_limits(str(self.cli))
+                self.assertEqual(snapshot['windows'], [])
+                self.assertTrue(snapshot['error'])
+        self.assertTrue((await codex_limits.read_limits(str(self.base / 'missing')))['error'])
+
+    async def test_timeout_and_cancel_stop_process_groups(self):
+        marker = self.base / 'process.json'
+        self.write_state(delay_limits=60, marker=str(marker), spawn_child=True)
+        snapshot = await codex_limits.read_limits(str(self.cli), timeout=.3)
+        self.assertIn('exceeded', snapshot['error'])
+        self.assertTrue(marker.exists())
+        ModelBackendTests.assert_process_stopped(self, json.loads(marker.read_text()))
+        marker.unlink()
+        task = asyncio.create_task(codex_limits.read_limits(str(self.cli)))
+        for _ in range(500):
+            if marker.exists():
+                break
+            await asyncio.sleep(.01)
+        self.assertTrue(marker.exists())
+        processes = json.loads(marker.read_text())
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        ModelBackendTests.assert_process_stopped(self, processes)
+
+    async def test_cancel_during_spawn_reaps_the_child(self):
+        create, children = asyncio.create_subprocess_exec, []
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def spawn(*args, **kwargs):
+            child = await create(*args, **kwargs)
+            children.append(child)
+            started.set()
+            await release.wait()
+            return child
+
+        with patch('src.backends.codex_limits.asyncio.create_subprocess_exec', side_effect=spawn):
+            task = asyncio.create_task(codex_limits.read_limits(str(self.cli)))
+            await asyncio.wait_for(started.wait(), 3)
+            task.cancel()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.assertEqual(len(children), 1)
+        self.assertIsNotNone(children[0].returncode)
+
+
 class ModelConfigTests(unittest.TestCase):
     def test_model_edit_preserves_effort_in_shared_and_stage_sections(self):
         for field in ('agent.model', 'stage_agents.study.model',
@@ -377,6 +482,141 @@ class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
         self.fail('Model operation did not finish: ' + str(screen.query_one('#model-status', Static).content)
                   + ' | Tasks: ' + repr(screen.tasks) + ' | Calls: ' + repr(self.calls()))
 
+    async def limits_ready(self, pilot, screen):
+        deadline = time.monotonic() + 5
+        while screen.limits is None and time.monotonic() < deadline:
+            await pilot.pause(.01)
+        self.assertIsNotNone(screen.limits)
+        await pilot.pause()
+
+    async def test_limits_refresh_on_open_refresh_target_change_and_access_check(self):
+        rpc = self.base / 'rpc.jsonl'
+        self.write_state(rpc_log=str(rpc))
+        app = self.app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.click('#models')
+            screen = app.screen
+            await self.ready(pilot, screen)
+            await self.limits_ready(pilot, screen)
+            block = screen.query_one('#model-limits', Static)
+            self.assertIn('Account limits · 5h limit | Resets at', block.content.plain)
+            self.assertIn('codex / 5h: 75%', block.content.plain)
+            self.assertNotIn('codex / 7d', block.content.plain)
+            for used, trigger in ((60, 'refresh'), (80, 'target'), (90, 'check')):
+                self.write_state(limits={'rateLimits': {'primary': {
+                    'usedPercent': used, 'windowDurationMins': 300, 'resetsAt': 0}}})
+                if trigger == 'target':
+                    screen.query_one('#model-target', Select).value = 'stage_agents.review.model'
+                else:
+                    await pilot.click('#model-refresh' if trigger == 'refresh' else '#model-check')
+                await pilot.pause()
+                await self.ready(pilot, screen)
+                await self.limits_ready(pilot, screen)
+                self.assertIn(f'codex / 5h: {100 - used}%', block.content.plain)
+            self.assertEqual([json.loads(line)['method'] for line in rpc.read_text().splitlines()].count(
+                'account/rateLimits/read'), 4)
+            self.assertFalse(screen.query_one('#model-apply', Button).disabled)
+        self.assertFalse((self.base / 'reports').exists())
+
+    async def test_limit_and_catalog_errors_do_not_block_each_other(self):
+        app = self.app()
+        self.write_state(limits_error='Sign in with ChatGPT')
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.click('#models')
+            screen = app.screen
+            await self.ready(pilot, screen)
+            await self.limits_ready(pilot, screen)
+            self.assertIn('n/a: Sign in with ChatGPT', screen.query_one('#model-limits', Static).content.plain)
+            self.assertEqual(screen.query_one('#model-table', DataTable).row_count, 1)
+            self.assertFalse(screen.query_one('#model-check', Button).disabled)
+            self.write_state(limits_error=None, catalog_output='broken')
+            await pilot.click('#model-refresh')
+            await self.ready(pilot, screen)
+            await self.limits_ready(pilot, screen)
+            self.assertIn('codex / 5h: 75%', screen.query_one('#model-limits', Static).content.plain)
+            self.assertIn('invalid model catalog', str(screen.query_one('#model-status', Static).content))
+
+    async def test_multiple_quota_groups_scroll_without_hiding_actions(self):
+        self.write_state(limits={'rateLimitsByLimitId': {name: {
+            slot: {'usedPercent': 25, 'windowDurationMins': minutes, 'resetsAt': 1793286000}
+            for slot, minutes in (('primary', 300), ('secondary', 10080))}
+            for name in ('codex', 'another', 'third')}})
+        app = self.app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.click('#models')
+            screen = app.screen
+            await self.ready(pilot, screen)
+            await self.limits_ready(pilot, screen)
+            block = screen.query_one('#model-limits', Static)
+            self.assertIn('third / 5h: 75%', block.content.plain)
+            self.assertTrue(screen.query_one('#model-dialog').content_region.contains_region(
+                screen.query_one('#model-actions').region))
+            viewport = screen.query_one('#model-limits-scroll')
+            self.assertGreater(viewport.max_scroll_y, 0)
+            viewport.scroll_end(animate=False)
+            await pilot.pause()
+            self.assertGreater(viewport.scroll_y, 0)
+
+    async def test_slow_limits_do_not_block_catalog_and_closing_reaps_them(self):
+        marker = self.base / 'process.json'
+        self.write_state(delay_limits=60, marker=str(marker), spawn_child=True)
+        app = self.app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.click('#models')
+            screen = app.screen
+            await self.ready(pilot, screen)
+            self.assertIsNone(screen.limits)
+            self.assertEqual(screen.query_one('#model-table', DataTable).row_count, 1)
+            self.assertFalse(screen.query_one('#model-check', Button).disabled)
+            self.assertTrue(marker.exists())
+            await pilot.press('escape')
+            await pilot.pause()
+        ModelBackendTests.assert_process_stopped(self, json.loads(marker.read_text()))
+
+    async def test_limits_load_while_catalog_waits(self):
+        marker = self.base / 'process.json'
+        self.write_state(delay_catalog=60, marker=str(marker))
+        app = self.app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.click('#models')
+            screen = app.screen
+            await self.limits_ready(pilot, screen)
+            self.assertTrue(screen.busy)
+            self.assertIn('codex / 5h: 75%', screen.query_one('#model-limits', Static).content.plain)
+            await pilot.press('escape')
+            await pilot.pause()
+        ModelBackendTests.assert_process_stopped(self, json.loads(marker.read_text()))
+
+    async def test_stale_limit_result_cannot_replace_changed_target(self):
+        started, release = asyncio.Event(), asyncio.Event()
+        count = 0
+
+        async def read(executable):
+            nonlocal count
+            count += 1
+            first = count == 1
+            if first:
+                started.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    await release.wait()
+            return codex_limits.parse_limits({'rateLimits': {'primary': {
+                'usedPercent': 1 if first else 80, 'windowDurationMins': 300}}})
+
+        app = self.app()
+        with patch('src.tui.models.codex_limits.read_limits', new=read):
+            async with app.run_test(size=(80, 24)) as pilot:
+                await pilot.click('#models')
+                screen = app.screen
+                await asyncio.wait_for(started.wait(), 3)
+                screen.query_one('#model-target', Select).value = 'stage_agents.review.model'
+                await pilot.pause()
+                await self.limits_ready(pilot, screen)
+                release.set()
+                await pilot.pause()
+                self.assertIn('codex / 5h: 20%', screen.query_one('#model-limits', Static).content.plain)
+
     async def test_slow_catalog_load_and_cancel_keep_ui_responsive(self):
         marker = self.base / 'process.json'
         self.write_state(delay_catalog=1.2, marker=str(marker))
@@ -414,7 +654,8 @@ class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
             screen = app.screen
             self.assertIsInstance(screen, ModelChooser)
             await self.ready(pilot, screen)
-            self.assertEqual([call['args'] for call in self.calls()], [['debug', 'models']])
+            self.assertEqual([call['args'] for call in self.calls() if call['args'][0] != 'app-server'],
+                             [['debug', 'models']])
             table = screen.query_one('#model-table', DataTable)
             self.assertEqual(table.row_count, 1)
             self.assertEqual([column.label.plain for column in table.columns.values()],
@@ -465,7 +706,7 @@ class ModelTUITests(ModelFixture, unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(screen.query_one('#model-check', Button).disabled)
                 self.assertTrue(screen.query_one('#model-apply', Button).disabled)
         self.assertEqual(self.path.read_bytes(), original)
-        self.assertTrue(all(call['args'] == ['debug', 'models'] for call in self.calls()))
+        self.assertTrue(all(call['args'] in (['debug', 'models'], ['app-server', '--stdio']) for call in self.calls()))
 
     async def test_apply_creates_inactive_review_and_compare_without_enabling_them(self):
         for stage in ('review', 'compare'):

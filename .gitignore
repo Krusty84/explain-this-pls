@@ -10,3 +10,4 @@ input/*
 architecture-reports/*
 bench_codex.py
 !/AGENTS.md
+scripts/mcp-context-measurements.json

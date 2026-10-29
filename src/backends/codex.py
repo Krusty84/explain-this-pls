@@ -10,6 +10,7 @@ from src.messages import message as ui_message
 from src.contracts.contracts import ContractError, response_error, strict_json
 from src.runtime.metrics import codex_usage
 from src.runtime.errors import AuditError
+from src.mcp import SOURCE_TOOLS
 
 MCP_SERVER_NAME = 'explain_this_pls'
 
@@ -46,12 +47,10 @@ def _mcp_overrides(manifest: Path, sha256: str) -> list[str]:
     settings = {'command': sys.executable,
                 'args': ['-I', '-B', str(server), '--manifest', str(manifest), '--sha256', sha256],
                 'cwd': str(manifest.parent), 'required': True,
-                'enabled_tools': ['search_symbols', 'read_source'],
+                'enabled_tools': list(SOURCE_TOOLS),
                 'startup_timeout_sec': 30, 'tool_timeout_sec': 30,
-                'tools.search_symbols.approval_mode': 'approve',
-                'tools.read_source.approval_mode': 'approve',
-                'tools.search_symbols.output_token_limit': 1000000,
-                'tools.read_source.output_token_limit': 1000000}
+                **{'tools.' + tool + '.approval_mode': 'approve' for tool in SOURCE_TOOLS},
+                **{'tools.' + tool + '.output_token_limit': 1000000 for tool in SOURCE_TOOLS}}
     result = []
     for key, value in settings.items():
         result += ['-c', 'mcp_servers.' + MCP_SERVER_NAME + '.' + key + '=' + json.dumps(value, ensure_ascii=False)]

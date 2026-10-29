@@ -210,7 +210,8 @@ def verify_mcp_text_delivery(root: Path, stdout: bytes) -> dict:
         item = event.get('item') if isinstance(event, dict) else None
         if (not isinstance(item, dict) or event.get('type') != 'item.completed'
                 or item.get('type') != 'mcp_tool_call' or item.get('server') != MCP_SERVER_NAME
-                or item.get('tool') != 'read_source' or item.get('status') != 'completed' or item.get('error')):
+                or item.get('tool') not in ('read_source', 'read_symbol')
+                or item.get('status') != 'completed' or item.get('error')):
             continue
         result = item.get('result')
         content = result.get('content') if isinstance(result, dict) else None

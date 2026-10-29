@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 """An isolated audit process; only sanitized presentation data crosses its pipe."""
+import asyncio
 import contextlib
 import multiprocessing
 from pathlib import Path
@@ -10,7 +11,9 @@ import sys
 import threading
 
 from src.messages import message as ui_message
+from src.backends.codex_limits import read_limits
 from src.runtime.audit import run_audit
+from src.runtime.metrics import RunMetrics
 from src.runtime.reporting import Reporter, existing_file
 from src.reports.review import review_summary
 
@@ -19,6 +22,7 @@ class PipeReporter(Reporter):
     def __init__(self, connection, *, verbose=False):
         self.connection = connection
         self.disconnected = False
+        self.stage_executables, self.limit_snapshots = {}, set()
         super().__init__(mode='json', verbose=verbose, progress=False, event_sink=self.send_event)
 
     def send(self, message):
@@ -33,6 +37,21 @@ class PipeReporter(Reporter):
 
     def send_event(self, event):
         self.send({'type': 'event', 'event': event.event, 'context': event.context})
+        context = event.context
+        if not context.get('stage'):
+            return
+        key = RunMetrics.key(context)
+        if event.event == 'stage_started' and context.get('backend') == 'codex':
+            self.stage_executables[key] = context.get('executable')
+        executable = self.stage_executables.get(key)
+        if (event.event == 'stage_completed' or event.event == 'error' and context.get('phase') == 'stage'):
+            if (not executable or key in self.limit_snapshots or self.stopping
+                    or context.get('code') == 'INTERRUPTED' or context.get('generated_by') == 'orchestrator'):
+                return
+            self.limit_snapshots.add(key)
+            snapshot = asyncio.run(read_limits(executable))
+            self.send({'type': 'event', 'event': 'stage_rate_limits', 'context': {
+                'branch': key[0], 'stage': key[1], 'revision_id': key[2], 'rate_limits': snapshot}})
 
     def _write(self, stream, text):
         # The parent owns the terminal; the existing private log remains active.

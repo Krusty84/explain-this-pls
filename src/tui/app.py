@@ -29,6 +29,7 @@ from src.runtime.reporting import Reporter, diagnostic, duration, metric_value, 
 from src.reports.review import review_summary
 from src.tui.settings import config_directory, config_files, read_settings, save_settings
 from src.tui.models import ModelChooser
+from src.tui.limits import limit_rows
 from src.tui.state import RunState
 from src.tui.worker import AuditProcess
 
@@ -236,7 +237,9 @@ class ExplainApp(App[int]):
         self.query_one('#configs', DataTable).add_columns(ui_message('tui.config.on_mount'), ui_message('tui.mode'), ui_message('tui.source'), ui_message('cli.model'), ui_message('tui.effort'), ui_message('tui.results'))
         table = self.query_one('#stages', DataTable)
         for name, width in ((ui_message('tui.source'), 20), (ui_message('tui.step_revision'), 18), (ui_message('tui.status'), 12), (ui_message('tui.elapsed'), 8),
-                            (ui_message('tui.attempts'), 8), (ui_message('tui.tokens'), 22), (ui_message('tui.cost'), 22), (ui_message('tui.result'), 55)):
+                            (ui_message('tui.attempts'), 8), (ui_message('tui.tokens'), None), (ui_message('tui.cost'), None),
+                            (ui_message('tui.remaining_percent'), None), (ui_message('tui.resets_at'), None),
+                            (ui_message('tui.result'), 55)):
             table.add_column(name, width=width)
         self.query_one('#summary', DataTable).add_columns(ui_message('tui.item'), ui_message('tui.result'))
         self.query_one('#run-tabs', TabbedContent).disable_tab('summary-tab')
@@ -487,6 +490,13 @@ class ExplainApp(App[int]):
     def render_stages(self):
         table = self.query_one('#stages', DataTable)
         columns = list(table.columns)
+        heights = [max(1, len(limit_rows(row.get('rate_limits'), minutes=300))) for row in self.state.rows.values()]
+        if any(table.rows[str(index)].height != height for index, height in enumerate(heights)
+               if index < table.row_count):
+            cursor, scroll = table.cursor_coordinate, table.scroll_offset
+            table.clear()
+            self.call_after_refresh(table.move_cursor, row=cursor.row, column=cursor.column, scroll=False)
+            self.call_after_refresh(table.scroll_to, x=scroll.x, y=scroll.y, animate=False, force=True)
         for index, row in enumerate(self.state.rows.values()):
             metrics = row['metrics']
             usage = metrics.get('usage', {})
@@ -495,14 +505,18 @@ class ExplainApp(App[int]):
                       row['status'], duration(self.state.elapsed(row)), metrics.get('attempts', '—'),
                       metric_value(usage, 'total_tokens'), metric_value(usage, 'cost_usd'), row['result']]
             cells = [self.literal(value) for value in values]
+            windows = limit_rows(row.get('rate_limits'), minutes=300, compact=True)
+            cells[7:7] = [Text('\n').join(self.literal(window[column])
+                                        for window in windows) if windows else self.literal(ui_message('tui.n_a'))
+                          for column in (1, 2)]
             cells[2].stylize({'COMPLETE': 'green', 'COMPLETE_WITH_WARNINGS': 'yellow', 'FAILED': 'red', 'PARTIAL': 'yellow', 'BLOCKED': 'yellow',
                               'INTERRUPTED': 'yellow', 'SKIPPED': 'dim', 'RUNNING': 'cyan'}.get(row['status'], ''))
             key = str(index)
             if index >= table.row_count:
-                table.add_row(*cells, key=key)
+                table.add_row(*cells, key=key, height=heights[index])
             else:
                 for column, cell in zip(columns, cells):
-                    table.update_cell(key, column, cell)
+                    table.update_cell(key, column, cell, update_width=column in columns[5:9])
         self.show_step_details()
 
     def diagnostic_lines(self, item):
@@ -537,6 +551,20 @@ class ExplainApp(App[int]):
                  ui_message('tui.report', value=s(row.get('report_path') or ui_message('tui.no_report_available')))]
         if metrics:
             lines += self.presenter.metric_lines(metrics)
+        snapshot = row.get('rate_limits')
+        if snapshot:
+            lines.append(ui_message('tui.account_limits'))
+            for minutes, period in ((300, '5h'), (10080, '7d')):
+                windows = [window for window in snapshot['windows'] if window['window_minutes'] == minutes]
+                if not windows:
+                    lines.append(period + ': ' + ui_message('tui.n_a'))
+                for window, (label, remaining, resets) in zip(windows, limit_rows(snapshot, minutes=minutes, compact=True)):
+                    used = window['used_percent']
+                    lines.append(ui_message('tui.limit_usage', label=s(label),
+                        used=f'{used:g}%' if used is not None else ui_message('tui.n_a'),
+                        remaining=remaining, resets=resets))
+            if snapshot['error']:
+                lines.append(ui_message('tui.account_limits') + ': ' + s(snapshot['error']))
         for item in row['diagnostics']:
             lines += self.diagnostic_lines(item)
         self.query_one('#step-details', Static).update(Text('\n'.join(lines)))

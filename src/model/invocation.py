@@ -224,7 +224,7 @@ class ModelInvoker:
             self.attempts.save_attempt_value(attempt, 'mcp/manifest.json', manifest, meta)
             mcp_manifest = attempt / 'mcp' / 'manifest.json'
             mcp_manifest_sha256 = attempt_hashes[str(mcp_manifest.relative_to(destination.parent))]['sha256']
-            projected['source_context'] = mcp_source_index(projected['source_context'])
+            projected['source_context'] = mcp_source_index(projected['source_context'], manifest['catalog'])
         context_json = serialize_model_input(projected)
         schema = binding.schema
         schema_json = serialize_model_input(schema)
@@ -328,7 +328,7 @@ class ModelInvoker:
                         if mcp_manifest is not None:
                             expected_tools.update(MCP_AUXILIARY_TOOLS)
                             expected_tools.update('mcp__' + codex.MCP_SERVER_NAME + '__' + tool
-                                                  for tool in ('search_symbols', 'read_source'))
+                                                  for tool in codex.SOURCE_TOOLS)
                         proof = probe_command(cmd, state, env, expected_tools=expected_tools,
                                               process_fn=process_runtime.process,
                                               reporter=self.session.reporter, budget=budget)

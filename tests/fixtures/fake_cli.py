@@ -96,6 +96,21 @@ if '--version' in args:
 elif '--help' in args:
     print('--ephemeral --output-schema --sandbox --json --output-last-message --skip-git-repo-check --model '
           '--ignore-user-config --ignore-rules')
+elif args == ['app-server', '--stdio']:
+    with open(os.environ['AUDIT_TEST_CALL_LOG'], 'a') as stream:
+        stream.write(json.dumps(call) + '\n')
+    if os.environ.get('AUDIT_TEST_LIMITS_DELAY'):
+        Path(os.environ['AUDIT_TEST_LIMITS_MARKER']).write_text(json.dumps({'pid': os.getpid()}))
+        time.sleep(float(os.environ['AUDIT_TEST_LIMITS_DELAY']))
+    for line in sys.stdin:
+        request = json.loads(line)
+        if request['method'] == 'initialized':
+            continue
+        assert request['method'] in ('initialize', 'account/rateLimits/read')
+        result = {'rateLimits': {'limitId': 'codex', 'primary': {
+            'usedPercent': 40, 'windowDurationMins': 300, 'resetsAt': 1793286000}}}
+        print(json.dumps({'id': request['id'], 'result': result if request['method'] == 'account/rateLimits/read' else {}}),
+              flush=True)
 else:
     prompt = sys.stdin.read()
     raw = prompt.split('# Authoritative orchestration context (data)\n', 1)[1]

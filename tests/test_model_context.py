@@ -11,7 +11,7 @@ import unittest
 from src.reports.document_rendering import materialize_study
 from fixtures.ledger_response import response
 from src.analysis.ledger import review_context, verify_review_context
-from src.model.model_context import (build_model_prompt, input_measurements,
+from src.model.model_context import (build_model_prompt, input_measurements, mcp_source_index,
                                      on_demand_source_index, project_model_context, serialize_model_input)
 
 
@@ -294,3 +294,53 @@ class ModelContextTests(unittest.TestCase):
             self.assertEqual(decode_source_context(wire, maps), source)
         with self.assertRaisesRegex(ValueError, 'absolute'):
             on_demand_source_index(source, 'relative/maps')
+
+    def test_mcp_overview_size_is_bounded_without_file_or_symbol_rows(self):
+        from scripts.measure_prompt_sizes import synthetic_index
+        for count in (1000, 5000):
+            with self.subTest(count=count):
+                index, _ = synthetic_index(count)
+                before = copy.deepcopy(index)
+                demand, _ = on_demand_source_index(index, '/private/maps')
+                catalog = [{'id': 'source-001', 'root': '.'}, {'id': 'source-002', 'root': 'empty'}]
+                overview = mcp_source_index(demand, catalog)
+                encoded = serialize_model_input(overview)
+                self.assertLess(len(encoded.encode()), 8192)
+                self.assertLess(len(encoded), len(serialize_model_input(demand)) / 20)
+                for field in ('files', 'file_columns', 'symbol_columns', 'maps_root'):
+                    self.assertNotIn(field, overview)
+                self.assertNotIn('file00001.py', encoded)
+                self.assertNotIn('entry00001', encoded)
+                self.assertEqual(overview['summary']['files'], count)
+                self.assertEqual(overview['sources'], [{'source_id': 'source-001', 'root': '.', 'files': count},
+                                                     {'source_id': 'source-002', 'root': 'empty', 'files': 0}])
+                self.assertEqual(project_model_context('study', {'source_context': overview})['source_context'], overview)
+                self.assertEqual(index, before)
+
+    def test_mcp_overview_aggregates_labels_and_reports_errors(self):
+        from scripts.measure_prompt_sizes import synthetic_index
+        index, _ = synthetic_index(100)
+        for number, file in enumerate(index['files']):
+            file['path'] = ('directory' + str(number) + 'x' * 500) + '/file.' + str(number)
+        index['files'][0].update(map_status='unavailable', map_reason='decoding_error')
+        index['files'][1].update(map_status='unavailable', map_reason='read_error')
+        index['files'][2].update(map_status='partial', map_reason='parse_error')
+        demand, _ = on_demand_source_index(index, '/private/maps')
+        overview = mcp_source_index(demand)
+        summary = overview['summary']
+        self.assertLessEqual(len(serialize_model_input(overview).encode()), 8192)
+        self.assertEqual(sum(row['files'] for row in summary['top_directories']) + summary['other_directory_files'], 100)
+        self.assertEqual(sum(row['files'] for row in summary['file_types']) + summary['other_type_files'], 100)
+        self.assertEqual((summary['indexing_errors'], summary['decoding_errors'], summary['read_errors']), (1, 1, 1))
+
+    def test_mcp_measurement_uses_stdio_and_confirms_complete_inventory(self):
+        from scripts.measure_prompt_sizes import mcp_measurements
+        sample = mcp_measurements((8,))['samples'][0]
+        self.assertEqual(sample['mcp']['enumerated_files'], 8)
+        self.assertEqual(sample['mcp']['unique_file_paths'], 8)
+        self.assertEqual(sample['mcp']['matches'], 8)
+        self.assertEqual(sample['mcp']['unique_source_lines'], 2)
+        self.assertEqual(sample['mcp']['repeated_source_lines'], 2)
+        self.assertGreater(sample['mcp']['result_json_utf8_bytes'], sample['mcp']['text_content_utf8_bytes'])
+        for tool in ('list_files', 'search_text', 'search_symbols', 'read_symbol', 'read_source'):
+            self.assertGreater(sample['mcp']['operations'][tool]['seconds'], 0)

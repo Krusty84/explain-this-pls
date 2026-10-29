@@ -538,13 +538,13 @@ Generated reports, prompts, registries and plans retain their artifact hashes.
 ## Prepared source navigation
 
 Enabled source context uses `mode: "index-only"` and `fragments: []`. Study,
-Review and Revision receive every regular file from the pinned, filtered inventory
+Review and Revision prepare every regular file from the pinned, filtered inventory
 and every declaration found by the selected parser. File entries identify the
 source, relative path, parser version, language, encoding, line count and map
 status; unavailable values are null. Unknown languages, partial parses and read
 failures remain visible. Comparison receives no source map.
 
-The model view uses `file_columns` in this order: `source_id`, `path`, `parser`,
+The native full model view uses `file_columns` in this order: `source_id`, `path`, `parser`,
 `language`, `encoding`, `total_lines`, `map_status`, `map_reason`, `symbols`.
 `files` contains rows of values in that order. Each `symbols` value contains rows
 in `symbol_columns` order: `name`, `kind`, `parent`, `start_line`, `end_line`.
@@ -557,10 +557,72 @@ The manifest records completeness, reasons, preparation time and transfer size;
 `transmitted_text_bytes` is zero. A full map can be larger than the source text.
 
 The map provides navigation, not source implementations or proof of inspection.
-Agents must read implementations with native read-only tools, check relationships
+Agents must read implementations with the selected source tools, check relationships
 and cite source. Index-only delivery adds no read or delivered source lines to
 tool-observation metrics. Backend capacity failures remain explicit without
 silent truncation.
+
+### MCP navigation and source delivery
+
+MCP uses the same complete prepared index and saved maps. Its initial
+`source_context` keeps `mode: "index-only"`, `index_format: "dictionary"`,
+`delivery: "mcp"` and `fragments: []`. It contains source IDs/roots, counts,
+bounded directory/type summaries, language counts, map/read/decoding failure
+counts and tool instructions. It has no file or declaration rows. Aggregated
+summary labels never remove files from the inventory. The full index, coverage
+plan and maps stay with the orchestrator. Native and full delivery are unchanged.
+
+Only `search_symbols`, `search_text`, `list_files`, `read_source` and
+`read_symbol` are source tools. Registration, temporary approval settings,
+effective configuration and actual inference tool schemas must agree on this
+set. Native shell, write, network and project execution tools remain forbidden.
+The source server advertises no resources and starts no external process.
+
+`list_files` returns every regular inventory file, ordered by source ID and path,
+with language, encoding, total lines, map status/reason and declaration count.
+Unknown metadata is null. `source_id` and `path` filter by source and exact
+file/directory subtree. List/search limits are 1–1,000 records, default 100.
+Every page has `has_more` and `cursor`. No count or byte limit silently drops rows.
+
+`search_text` finds literal substrings in all selected text files regardless of
+AST status. It uses strict configured/BOM decoding and LF/CRLF rules, including
+legacy encodings. Case sensitivity defaults to true; false uses Unicode casefold.
+Multiline and overlapping matches are supported. Results are ordered by source
+ID, path and original character offset. Each result includes source ID, path,
+one-based line/column and end line/column (exclusive), encoding and a snippet of
+at most 160 characters with `snippet_truncated`. Snippets are navigation.
+Matches and errors share the page limit. `errors` identifies failed files and
+codes; `incomplete` persists across continuation pages after any error.
+Search `complete` requires the last page and no file errors. No matches in an
+incomplete search do not prove absence. `SOURCE_CHANGED` aborts and blocks the run.
+
+`search_symbols` adds `symbol_id` without changing stored maps. The ID hashes the
+snapshot, source ID, path, declaration ordinal and prepared declaration record.
+It is stable for the same snapshot/map and separates duplicate names and overloads.
+`read_symbol(symbol_id, cursor?)` reads the original pinned file through the
+shared `read_source` mechanism. Each page contains `symbol_id`, source ID/path,
+actual `start_line`/`end_line`, `declaration_start_line`/`declaration_end_line`,
+`total_lines`, encoding, raw-file SHA-256, text, `complete`, `has_more`,
+`next_start_line` and `cursor`. It never reads past the declaration's inclusive
+bounds. `complete` means that the declaration end was reached; previous pages
+are still necessary. Whole lines are returned. `LINE_TOO_LARGE` is explicit.
+Missing symbols, unavailable coordinates and map integrity failures are errors;
+manual reading remains available through `read_source`. No request reparses AST.
+
+All result JSON bodies retain the 65,536-byte limit. Cursors bind the tool,
+snapshot, attempt and complete parameter set, including limit. An in-memory HMAC
+key rejects modified cursors; restart expires them. Use unchanged parameters
+for continuation. Reads always check the raw source SHA-256, inventory ownership,
+pinned metadata and symlink confinement. Source changes remain blocking.
+
+All five tools use exact `SERVED` receipts. ToolObserver checks completed text
+results against receipts. Only `read_source` and `read_symbol` add source lines;
+symbol reads also check identity and bounds against the prepared map. Source
+delivery keeps `INSPECTED_UNVERIFIED`. Full successful read results, including
+every symbol page, must also occur in actual model tool-output input. Missing,
+metadata-only or truncated text fails with `MCP_DELIVERY`. Search/AST metadata
+does not establish reading, understanding or architectural evidence. Existing
+evidence and publication checks remain unchanged.
 
 ## Evidence ID normalization and diagnostics
 

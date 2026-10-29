@@ -105,6 +105,18 @@ class MCPObserverTests(unittest.TestCase):
         self.assertIsNone(metrics['unique_lines'])
         self.assertIsNone(metrics['delivery']['unique_lines'])
 
+    def test_text_snippets_and_file_metadata_do_not_count_source_reading(self):
+        for number, tool in enumerate(('search_text', 'list_files')):
+            self.observer.event(self.event(number, tool=tool, arguments={'query': 'one'} if number == 0 else {},
+                payload={'results': [{'source_id': 'source-001', 'path': 'unit.py', 'line': 1, 'snippet': 'one'}],
+                         'has_more': False, 'cursor': None}))
+        metrics = self.observer.snapshot()
+        self.assertEqual(metrics['mcp']['delivered_observed'], 2)
+        self.assertEqual(metrics['mcp']['search_text_calls'], 1)
+        self.assertEqual(metrics['mcp']['list_files_calls'], 1)
+        self.assertEqual(metrics['mcp']['text_utf8_bytes'], 0)
+        self.assertIsNone(metrics['unique_lines'])
+
     def test_structured_content_without_text_does_not_establish_delivery(self):
         for content in ([], [{'type': 'text', 'text': '{"source_id":"source-001"}'}],
                         [{'type': 'text', 'text': '{"text":"one'}]):
@@ -262,6 +274,45 @@ class MCPObserverTests(unittest.TestCase):
         self.assertEqual(observer.snapshot()['mcp']['delivered_observed'], 1)
         self.assertEqual(observer.snapshot()['mcp']['text_utf8_bytes'], len(self.text.encode()))
         self.assertEqual(observer.snapshot()['unique_lines'], 3)
+
+    def test_symbol_pages_share_source_delivery_and_repeated_line_accounting(self):
+        from test_mcp_server import SourceServiceTests
+        fixture = SourceServiceTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        text = 'def large():\n' + ('    # large body\n' * 100) + '    return 1\n'
+        context = fixture.context({'unit.py': text})
+        service = fixture.service(context, max_response_bytes=1500)
+        context['source_context'], _ = SourceContextBuilder().prepare('study', context)
+        context['_mcp_source_access'] = {'server': 'explain_this_pls', 'attempt_id': 'attempt-test',
+            'manifest_sha256': fixture.manifest_sha256, 'receipts_path': str(service.receipts_path)}
+        saved = []
+        observer = ToolObserver('codex', context=context, event_sink=saved.append)
+        identifier = service.search_symbols('large')['results'][0]['symbol_id']
+        cursor, pages = None, 0
+        with patch('src.analysis.source_context.parse_symbols', side_effect=AssertionError('Reparsed source')):
+            while True:
+                arguments = {'symbol_id': identifier, 'cursor': cursor}
+                payload = service.call_tool('read_symbol', arguments)
+                observer.event({'type': 'item.completed', 'item': {
+                    'id': 'symbol-' + str(pages), 'type': 'mcp_tool_call', 'server': 'explain_this_pls',
+                    'tool': 'read_symbol', 'arguments': arguments, 'status': 'completed',
+                    'result': {'content': [{'type': 'text', 'text': canonical(payload)}]}}})
+                pages += 1
+                if not payload['has_more']:
+                    break
+                cursor = payload['cursor']
+        self.assertGreater(pages, 1)
+        metrics = observer.snapshot()
+        self.assertEqual(metrics['mcp']['delivered_observed'], pages)
+        self.assertEqual(metrics['mcp']['read_symbol_calls'], pages)
+        self.assertEqual(metrics['mcp']['text_utf8_bytes'], len(text.encode()))
+        self.assertEqual(metrics['unique_lines'], 102)
+        self.assertEqual(metrics['repeated_lines'], 0)
+        observer.event({'type': 'turn.completed'})
+        path = fixture.directory / 'events.jsonl'
+        path.write_text('\n'.join(canonical(row) for row in saved))
+        self.assertEqual(replay(path, 'codex')['metrics'], observer.finish())
 
 
 if __name__ == '__main__':
