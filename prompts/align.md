@@ -1,4 +1,4 @@
-# Revise the supplied architecture study once
+# Align the supplied architecture study once
 
 Use the study agent's read-only source permissions and the appended study schema.
 Return a complete replacement architecture study for the same pinned source, with

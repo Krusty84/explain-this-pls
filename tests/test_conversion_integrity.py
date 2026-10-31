@@ -34,7 +34,7 @@ class PrivateChainRecoveryTests(FolderFixture):
                 runner = Runner(self.config() | {'result_policy': 'compromise'}, self.base / filename)
                 context = {'source_directory': str(self.source),
                            'source_fingerprint': Folder(self.source).snapshot()['source_fingerprint'],
-                           'prompt_variant': 'revise'}
+                           'prompt_variant': 'align'}
                 original = runner.invoker.validator.validate_attempt
                 changed = []
                 def process(command, cwd, env, payload, **kwargs):

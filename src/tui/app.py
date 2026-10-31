@@ -352,7 +352,7 @@ class ExplainApp(App[int]):
                      ui_message('tui.config.select_config', selected=s(self.selected)),
                      ui_message('tui.reports', reports_dir=s(config['_reports_dir'])),
                      ui_message('tui.review', value=(
-                         ui_message('tui.enabled_may_revise_and_review_again') if config['execution']['review_enabled'] else
+                         ui_message('tui.enabled_may_align_and_review_again') if config['execution']['review_enabled'] else
                          ui_message('tui.disabled_no_separate_review')))]
             analysis = config['last_analysis']
             if analysis:

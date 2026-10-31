@@ -75,7 +75,7 @@ class RevisionPipelineTests(FolderFixture):
         return manifest, code
 
     def stages(self):
-        return ['revise' if c.get('prompt_variant') == 'revise' else c.get('phase', c['stage']) for c in self.calls]
+        return ['align' if c.get('prompt_variant') == 'align' else c.get('phase', c['stage']) for c in self.calls]
 
     def assert_selected_aliases(self, revision_id, *, review=True):
         self.assertEqual(self.manifest['selected_revision'], revision_id)
@@ -94,7 +94,7 @@ class RevisionPipelineTests(FolderFixture):
             self.assertEqual(self.manifest['review']['claim_registry'], self.manifest['study']['claims'])
         self.assertEqual(json.loads((self.run_dir / 'manifest.json').read_text())['selected_revision'], revision_id)
 
-    def test_initial_pass_and_low_findings_do_not_revise(self):
+    def test_initial_pass_and_low_findings_do_not_align(self):
         for severity in (None, 'LOW'):
             with self.subTest(severity=severity):
                 change = None if severity is None else lambda s, c, d: initial_finding(s, c, d, severity)
@@ -109,7 +109,7 @@ class RevisionPipelineTests(FolderFixture):
             with self.subTest(severity=severity, language=language):
                 manifest, code = self.run_case(lambda s, c, d: initial_finding(s, c, d, severity), language=language)
                 self.assertEqual((code, manifest['status'], manifest['accepted']), (0, 'COMPLETE', True))
-                self.assertEqual(self.stages(), ['collect', 'write', 'review', 'revise', 'review'])
+                self.assertEqual(self.stages(), ['collect', 'write', 'review', 'align', 'review'])
                 self.assertEqual(len(manifest['revisions']), 2)
                 self.assert_selected_aliases('002')
                 coverage = json.loads((self.run_dir / 'coverage.plan.json').read_text())
@@ -125,7 +125,7 @@ class RevisionPipelineTests(FolderFixture):
                     'status': 'RESOLVED', 'explanation': 'The revised fixture addresses this finding.'}])
                 second = self.run_dir / 'revisions' / '002'
                 self.assertTrue((second / 'registry.diff.json').is_file())
-                self.assertEqual(manifest['study_invocation']['prompt_variant'], 'revise')
+                self.assertEqual(manifest['study_invocation']['prompt_variant'], 'align')
                 self.assertEqual(self.calls[-1]['review_plan']['required_claim_ids'],
                                  [c['id'] for c in manifest['study']['claims']])
 
@@ -155,7 +155,7 @@ class RevisionPipelineTests(FolderFixture):
                                       'review': {'reasoning_effort': 'low'}}
         manifest, code = self.run_case(initial_finding)
         self.assertEqual(code, 0)
-        self.assertEqual(self.stages(), ['collect', 'write', 'review', 'revise', 'review'])
+        self.assertEqual(self.stages(), ['collect', 'write', 'review', 'align', 'review'])
         for command, effort in zip(self.commands, ('high', 'high', 'low', 'high', 'low')):
             self.assertIn('model_reasoning_effort=' + json.dumps(effort), command)
         for revision in manifest['revisions']:
@@ -186,7 +186,7 @@ class RevisionPipelineTests(FolderFixture):
         self.assertEqual([line for line in err.getvalue().splitlines() if line.startswith('      Report: ')],
                          ['      Report: ' + str(path) for path in paths])
         self.assertIn('[WARN] source / Report review may be incomplete.', err.getvalue())
-        self.assertIn('[OK] source / Revised architecture report created.', err.getvalue())
+        self.assertIn('[OK] source / Aligned architecture report created.', err.getvalue())
 
     def test_partial_initial_review_and_recovered_study_never_trigger_revision(self):
         for defect in ('partial_review', 'recovered_study'):
@@ -242,7 +242,7 @@ class RevisionPipelineTests(FolderFixture):
                     self.assertIsNone(revised['study'])
                 else:
                     self.assertIsNotNone(revised['study'])
-                expected = ['collect', 'write', 'review', 'revise'] + ([] if failed_stage == 'study' else ['review'])
+                expected = ['collect', 'write', 'review', 'align'] + ([] if failed_stage == 'study' else ['review'])
                 self.assertEqual(self.stages(), expected)
                 self.assertEqual(manifest['review']['revision_id'], '001')
                 self.assertTrue(manifest['revision_history'][0]['review_complete'])
@@ -257,7 +257,7 @@ class RevisionPipelineTests(FolderFixture):
         manifest, code = self.run_case(change)
         self.assertEqual(code, 2)
         self.assert_selected_aliases('001')
-        self.assertEqual(self.stages(), ['collect', 'write', 'review', 'revise', 'review'])
+        self.assertEqual(self.stages(), ['collect', 'write', 'review', 'align', 'review'])
         revised = manifest['revisions'][1]
         self.assertEqual(revised['study']['revision_id'], '002')
         self.assertEqual(revised['review']['revision_id'], '002')
@@ -295,7 +295,7 @@ class RevisionPipelineTests(FolderFixture):
                 manifest, code = self.run_case(change, policy=policy)
                 self.assertNotEqual(code, 0)
                 self.assertFalse(manifest['accepted'])
-                self.assertEqual(self.stages(), ['collect', 'write', 'review', 'revise'])
+                self.assertEqual(self.stages(), ['collect', 'write', 'review', 'align'])
                 self.assert_selected_aliases('001')
                 revised = manifest['revisions'][1]
                 self.assertIsNone(revised['study'])
@@ -322,7 +322,7 @@ class RevisionPipelineTests(FolderFixture):
                 manifest, code = self.run_case(change)
                 self.assertEqual((code, manifest['accepted']), (2, False))
                 self.assert_selected_aliases('002')
-                self.assertEqual(self.stages(), ['collect', 'write', 'review', 'revise', 'review'])
+                self.assertEqual(self.stages(), ['collect', 'write', 'review', 'align', 'review'])
                 self.assertEqual(len(manifest['revisions']), 2)
 
     def test_no_complete_review_selects_last_usable_study_without_old_review_alias(self):

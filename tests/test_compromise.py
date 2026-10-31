@@ -451,7 +451,7 @@ class CompromiseNative(unittest.TestCase):
 
         def revised(runner, stage, context, destination):
             if stage == 'study':
-                context = dict(context, prompt_variant='revise')
+                context = dict(context, prompt_variant='align')
             return invoke(runner, stage, context, destination)
 
         with patch.object(Runner, 'invoke', revised):

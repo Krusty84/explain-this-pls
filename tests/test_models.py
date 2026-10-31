@@ -425,7 +425,7 @@ class ModelConfigTests(unittest.TestCase):
                         self.assertIn('"backend": "codex"' + comma + ' // keep with backend', updated)
                     if '/* trailing comma */' in text:
                         self.assertIn('/* trailing comma */', updated)
-        for field in ('agent.backend', 'stage_agents.revise.model'):
+        for field in ('agent.backend', 'stage_agents.align.model'):
             with self.assertRaises(ValueError):
                 replace_model(texts[0], field, 'selected')
 

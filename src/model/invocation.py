@@ -55,7 +55,7 @@ class ModelInvoker:
         context = dict(context)
         context['stage'] = stage
         context['result_policy'] = 'compromise' if self.session.compromise else 'strict'
-        initial_study = stage == 'study' and not context.get('previous_revision') and context.get('prompt_variant') != 'revise'
+        initial_study = stage == 'study' and not context.get('previous_revision') and context.get('prompt_variant') != 'align'
         if initial_study:
             context['phase'] = 'collect'
         self.publisher.assert_coverage_file(context)

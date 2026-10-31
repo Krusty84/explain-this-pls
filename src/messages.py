@@ -687,7 +687,7 @@ MESSAGES = {
     'diagnostic.pipeline.review_skipped_no_usable_architecture_document': (
         'Review skipped: no usable architecture document.'
     ),
-    'diagnostic.pipeline.revised_study_unavailable': 'No usable strictly valid revised study.',
+    'diagnostic.pipeline.aligned_study_unavailable': 'No usable strictly valid aligned study.',
     'diagnostic.pipeline.stopped_after_retaining_unvalidated_material_continue_on_error': (
         'Stopped after retaining unvalidated material (continue_on_error=false).'
     ),
@@ -1112,7 +1112,7 @@ MESSAGES = {
     ),
     'run.analyzing_project': 'Analyzing project…',
     'run.architecture_report_created': 'Architecture report created.',
-    'run.architecture_revision': 'Architecture revision',
+    'run.architecture_alignment': 'Architecture alignment',
     'run.branch': 'Branch {branch}: ',
 
     'run.branch.finish': 'Branch {branch}: {value}',
@@ -1214,8 +1214,8 @@ MESSAGES = {
     ),
     'run.review_response_saved_see_acceptance_and_findings': 'Review response saved. See acceptance and findings.',
     'run.reviewing_report': 'Reviewing report…',
-    'run.revised_architecture_report_created': 'Revised architecture report created.',
-    'run.revising_architecture_report': 'Revising architecture report…',
+    'run.aligned_architecture_report_created': 'Aligned architecture report created.',
+    'run.aligning_architecture_report': 'Aligning architecture report…',
     'run.running_with_administrator_privileges': '[WARN] Running with administrator privileges.',
     'run.skipped_no_architecture_report_available': '{title} skipped: no architecture report available.',
     'run.snapshot': 'Snapshot',
@@ -1304,7 +1304,7 @@ MESSAGES = {
     'tui.disabled_no_separate_review': 'Disabled; no separate review.',
     'tui.effort': 'Effort',
     'tui.elapsed': 'Elapsed',
-    'tui.enabled_may_revise_and_review_again': 'Enabled; may revise and review again.',
+    'tui.enabled_may_align_and_review_again': 'Enabled; may align and review again.',
     'tui.enter_a_config_folder_path': 'Enter a config folder path.',
     'tui.explain_config_must_contain_a_config_dir_path': 'explain.config must contain a config_dir path.',
     'tui.final_report': 'Final report',
@@ -1415,8 +1415,8 @@ def message(key: str, **params) -> str:
 STAGE_MESSAGES = {
     'study': (message('run.analyzing_project'), message('run.project_analysis'),
               message('run.architecture_report_created')),
-    'revise': (message('run.revising_architecture_report'), message('run.architecture_revision'),
-               message('run.revised_architecture_report_created')),
+    'align': (message('run.aligning_architecture_report'), message('run.architecture_alignment'),
+              message('run.aligned_architecture_report_created')),
     'review': (message('run.reviewing_report'), message('run.report_review'),
                message('run.review_response_saved_see_acceptance_and_findings')),
     'compare': (message('run.comparing_branch_reports'), message('run.branch_report_comparison'),

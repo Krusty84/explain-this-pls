@@ -190,7 +190,7 @@ class ModeConfigTests(FolderFixture):
         cfg = self.config()
         self.assertEqual(cfg['folder_mode']['path'], str(self.source))
         self.assertEqual(set(cfg['_agents']), {'study', 'review'})
-        self.assertEqual(set(cfg['_prompt_paths']), {'study', 'review', 'revise'})
+        self.assertEqual(set(cfg['_prompt_paths']), {'study', 'review', 'align'})
 
     def test_git_sections_are_required(self):
         git = {'repository': './source', 'branches': ['master', 'customer'], 'baseline_branch': 'master'}
@@ -555,7 +555,7 @@ class FolderCLIIntegrationTests(FolderFixture):
     def test_explicitly_disabled_review_in_cli_json_for_codex(self):
         self.value['execution'] = {'review_enabled': False}
         self.value['stage_agents']['review'] = {'executable': '/missing/review-cli'}
-        self.value['prompts'].update(review='/missing/review-prompt', revise='/missing/revise-prompt')
+        self.value['prompts'].update(review='/missing/review-prompt', align='/missing/align-prompt')
         backend = 'codex'
         self.value['agent']['backend'] = backend
         self.env['AUDIT_TEST_CLI_VERSION'] = 'fixture-cli 1.0'

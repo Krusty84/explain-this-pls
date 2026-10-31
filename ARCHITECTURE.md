@@ -9,7 +9,7 @@ It calls Codex and saves Markdown and JSON reports. Model access uses the instal
 Stages and branches run sequentially. `study` is the main stage.
 Initial Study has separate `collect` and `write` calls.
 `execution.review_enabled` enables `review` (default: `true`).
-Document revision uses `study` with the `revise` template.
+Document revision uses `study` with the `align` template.
 Multiple Git branches enable `compare`.
 With review disabled, revisions and review/revision prompts and review-agent
 settings are inactive. Reports explicitly state that no separate review ran.
@@ -38,7 +38,7 @@ src/
   contracts/               Schemas and data consistency checks
   reports/                 Document assembly and publication
   tui/                     Textual interface and audit worker process
-prompts/                   collect, study, review, revise, compare templates
+prompts/                   collect, study, review, align, compare templates
 schemas/                   Response and saved-artifact JSON Schema files
 tests/                     unittest; tests/fixtures/ contains fake CLIs
 scripts/                   Prompt measurement and log replay
@@ -137,7 +137,7 @@ The TUI reads this record; it does not scan old report folders.
 4. ModelInvoker combines a `prompts/` template, stage context, and JSON Schema.
    [BindingRegistry](src/model/model_boundary.py) binds responses to the source
    snapshot and review target. The CLI receives the prompt through stdin.
-   Native collection, review and revise run in the source directory. Initial
+   Native collection, review and align run in the source directory. Initial
    writing and compare run in temporary directories without source context.
    Source-reading calls receive the [source navigation index](#full-source-index)
    when source context is enabled.
@@ -233,7 +233,7 @@ the worse collection/writer status. Unresolved evidence forces at least `PARTIAL
 under either policy; the writer's original status stays in
 `program_checks.completion_self_assessment`. Collection failure stops writing
 without recovered report material. Attempt hashes protect the frozen package.
-Revision uses one source-reading call with `prompts.revise` and the full Study
+Revision uses one source-reading call with `prompts.align` and the full Study
 contract; it does not repeat collection and writing.
 
 Component boundaries, relevance and investigation gaps belong in the report;
@@ -479,7 +479,7 @@ transport check with result and UTF-8 byte counts; it does not establish inspect
 or any architectural fact. Zero read results mean no source text was verified.
 
 Offline tests cover the service, real SDK stdio exchange, observer, capability
-and delivery traces, and mocked Collect/Write/Review/Revise orchestration. The
+and delivery traces, and mocked Collect/Write/Review/Align orchestration. The
 installed-CLI test probes compatibility without a model connection. The separate
 authenticated test requires `EXPLAIN_TEST_CODEX` to name the executable. It checks
 the complete source result in both Codex events and actual model input, then
@@ -521,7 +521,7 @@ declaration and repeats its two lines through `read_source`. It calls no model.
 | 5,000 | 185,437 → 765 | 199,241 → 14,569 | 4,432,424 | 16.209 | 0.730 |
 
 Both runs returned every file and expected match. Each delivered two unique
-source lines and two repeated source lines to the SDK client. The JSON also records Review/Revise
+source lines and two repeated source lines to the SDK client. The JSON also records Review/Align
 prompt sizes, list/search/read times, startup time and text-content bytes.
 MCP byte counts include both text and structured content in `CallToolResult`;
 they exclude JSON-RPC envelopes, initialization and tool schemas. Tool times

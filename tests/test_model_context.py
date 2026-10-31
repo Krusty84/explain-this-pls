@@ -135,7 +135,7 @@ class ModelContextTests(unittest.TestCase):
         context = {'source_context': source, 'priority_scenarios': ['Сценарий 🐍'],
                    'source_decoding': {'rules': []}}
         before = copy.deepcopy(context)
-        for stage, variant in (('study', 'study'), ('study', 'revise'), ('review', 'review')):
+        for stage, variant in (('study', 'study'), ('study', 'align'), ('review', 'review')):
             with self.subTest(stage=stage, variant=variant):
                 current = context | {'prompt_variant': variant}
                 projected = project_model_context(stage, current)

@@ -190,9 +190,9 @@ def load_config(path: Path, *, text: str | None = None) -> dict:
         agent.update(value['stage_agents'].get(stage, {}))
         value['_agents'][stage] = resolve_agent(agent, path)
     value['_prompt_paths'] = {}
-    if set(value['prompts']) - (set(STAGES) | {'revise'}):
-        raise AuditError(ui_message('diagnostic.config.unknown_prompt_stage'))
-    for stage in (*stages, *(('revise',) if value['execution']['review_enabled'] and value['execution']['max_revision_rounds'] else ())):
+    if set(value['prompts']) - (set(STAGES) | {'align'}):
+        raise AuditError(ui_message('diagnostic.config.unknown_prompt_stage'), code='INVALID_CONFIG')
+    for stage in (*stages, *(('align',) if value['execution']['review_enabled'] and value['execution']['max_revision_rounds'] else ())):
         prompt_path = value['prompts'].get(stage, str(ROOT / 'prompts' / (stage + '.md')))
         if not isinstance(prompt_path, str) or not prompt_path.strip():
             raise AuditError(ui_message('diagnostic.config.prompts_must_be_a_nonempty_path_string', stage=stage))

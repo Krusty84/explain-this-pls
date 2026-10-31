@@ -312,7 +312,7 @@ class PlantUMLPipelineTests(FolderFixture):
     def test_revision_uses_the_same_syntax_repair_without_an_extra_architecture_revision(self):
         def change(stage, context, data):
             revisions.initial_finding(stage, context, data)
-            if context.get('prompt_variant') == 'revise' and context.get('phase') != 'plantuml_repair':
+            if context.get('prompt_variant') == 'align' and context.get('phase') != 'plantuml_repair':
                 data['report_sections'][2]['blocks'][-1]['markdown'] = BAD
             return data
 

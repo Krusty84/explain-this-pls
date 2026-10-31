@@ -73,7 +73,7 @@ The writer receives the package and task context without a source index or symbo
 maps. It uses a neutral directory, disabled source shell, and no user CLI config
 or rules. Explicit agent model and effort settings still apply; null settings use
 the isolated CLI defaults. `prompts.study` controls this authoring call;
-`prompts.revise` retains the full source-reading revision contract.
+`prompts.align` retains the full source-reading revision contract.
 
 Python copies the frozen registry into the authored Study, unions limitations,
 and chooses the worse collection/author status. Unresolved evidence forces at
@@ -356,7 +356,7 @@ The run manifest and final stdout JSON contain the same `metrics` snapshot:
 - `by_backend` and `by_model`: usage breakdowns. Model entries distinguish
   `model_actual` from `model_requested`; an unknown actual model stays null.
 - `stages`: ordered stage records with branch/folder, revision, stage, status,
-  wall duration, attempts and usage breakdowns. Revised study is named `revise`.
+  wall duration, attempts and usage breakdowns. Revised study is named `align`.
   Skipped reviews and locally generated blocked comparisons consume no model tokens.
 
 Attempts are registered once by `invocation_id`. All revisions, all branches,
@@ -1057,7 +1057,7 @@ execution.max_revision_rounds is 0 or 1, default 1. Revision starts only after a
 published, strictly valid study and review, when review completion_status is
 COMPLETE and there are HIGH/MEDIUM findings. LOW-only findings, incomplete review,
 transport failures and recovered contract-invalid material do not trigger it.
-prompts.revise supplies a separate prompt to the existing study agent; no revision
+prompts.align supplies a separate prompt to the existing study agent; no revision
 backend profile is introduced. Each stage has its own budget; initial collection
 and writing share the Study budget. Analysis has at most four stage runs per
 snapshot: study and, when enabled, review plus one revision and repeat review.

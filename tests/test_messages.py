@@ -63,6 +63,15 @@ assert not any(name.startswith(('textual', 'rich', 'src.runtime')) for name in s
             state.apply('stage_completed', dict(context, status=status))
             self.assertEqual(row['result'], expected)
 
+    def test_align_stage_uses_alignment_messages(self):
+        state = RunState()
+        context = dict(branch='main', stage='align', revision_id='002')
+        state.apply('stage_started', context)
+        row = state.rows[('main', 'align', '002')]
+        self.assertEqual(row['result'], 'Aligning architecture report…')
+        state.apply('stage_completed', dict(context, status='COMPLETE'))
+        self.assertEqual(row['result'], 'Aligned architecture report created.')
+
     def test_citation_warning_keeps_optional_original_lines_and_punctuation(self):
         warning = dict(evidence_id='study:E-001', source_id='source-001', path='a {draft}.py',
                        start_line=1, end_line=2, reason='QUOTE_MISMATCH', action='UNRESOLVED',

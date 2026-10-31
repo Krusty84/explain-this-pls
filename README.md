@@ -269,7 +269,7 @@ The [commented configuration](config.codex.example.jsonc) describes other option
 #### Custom prompts
 
 The included prompts are ready to use. To customize them, copy an existing
-[study](prompts/study.md), [revision](prompts/revise.md),
+[study](prompts/study.md), [alignment](prompts/align.md),
 [review](prompts/review.md), or [comparison](prompts/compare.md)
 template, keep its required response format, and set its path in `prompts`.
 Store custom templates outside the source directory. See the
@@ -279,7 +279,7 @@ Store custom templates outside the source directory. See the
 and metadata, with claim links from the supplied package; it must not return
 claims or evidence. Adapt older study templates to this contract. The bundled
 [collector](prompts/collect.md) prompt is fixed and has no configuration override.
-`prompts.revise` still returns the complete report, claims and evidence.
+`prompts.align` still returns the complete report, claims and evidence.
 
 ### Run explain-this-pls
 

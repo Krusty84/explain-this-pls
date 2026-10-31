@@ -139,7 +139,7 @@ class RepoFixture(unittest.TestCase):
             'output_language':'Russian','project_description':'ERP-система 1995 года.',
             'priority_scenarios':[],'continue_on_error':True,
             '_agents':{s:dict(agent) for s in ('study','review','compare')},
-            '_prompt_paths':{s:str(Path(__file__).resolve().parents[1]/'prompts'/f'{s}.md') for s in ('study','review','revise','compare')}}
+            '_prompt_paths':{s:str(Path(__file__).resolve().parents[1]/'prompts'/f'{s}.md') for s in ('study','review','align','compare')}}
     def test_grouped_git_configuration_runs_and_restores(self):
         cfg=self.config()
         cfg['folder_mode']={'path':'/missing/inactive/folder'}
@@ -387,7 +387,7 @@ class ConfigTests(unittest.TestCase):
             prompts={'compare':'/missing/prompt'})
         cfg=self.load()
         self.assertEqual(set(cfg['_agents']),{'study','review'})
-        self.assertEqual(set(cfg['_prompt_paths']),{'study','review','revise'})
+        self.assertEqual(set(cfg['_prompt_paths']),{'study','review','align'})
     def test_git_branches_and_baseline_validation(self):
         for branches,baseline in (([],'master'),(['master','master'],'master'),
                 ([''],'master'),([None],'master'),('master','master'),

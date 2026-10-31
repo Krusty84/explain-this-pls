@@ -71,7 +71,7 @@ class ModelBoundaryTests(unittest.TestCase):
 
     def test_direct_study_and_revision_still_require_model_registries(self):
         for mode in ('git', 'folder'):
-            for variant in ('study', 'revise'):
+            for variant in ('study', 'align'):
                 context = (self.folder() if mode == 'folder' else {'branch': 'main', 'source_commit': 'abc'}) | {'prompt_variant': variant}
                 binding = BindingRegistry().bind('study', context, mode)
                 wire = response(binding.project())

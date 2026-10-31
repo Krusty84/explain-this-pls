@@ -46,7 +46,7 @@ class MCPCommandTests(unittest.TestCase):
         self.assertNotIn('mcp add', ' '.join(command))
 
     def test_source_stages_require_manifest_and_writer_compare_refuse_it(self):
-        for stage in ('study', 'review', 'revise'):
+        for stage in ('study', 'review', 'align'):
             with self.subTest(stage=stage), self.assertRaises(AuditError) as caught:
                 self.command(stage, mcp_mode=True)
             self.assertEqual(caught.exception.code, 'MCP_STARTUP')

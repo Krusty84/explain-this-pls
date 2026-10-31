@@ -354,16 +354,16 @@ class ContextTests(unittest.TestCase):
         for stage, extra in [('compare', {}), ('repair', {})]:
             self.assertIsNone(SourceContextBuilder().prepare(stage, context | extra)[0])
 
-    def test_review_and_revise_keep_same_index_and_never_execute_source(self):
+    def test_review_and_align_keep_same_index_and_never_execute_source(self):
         context = self.context({'a.py': 'raise RuntimeError("must not execute")\n' * 400})
         builder = SourceContextBuilder()
         expected, _ = builder.prepare('study', context)
         context['study'] = {'evidence': [dict(source_id='source-001', path='a.py', start_line=390, end_line=392)]}
-        for stage in ('review', 'revise'):
+        for stage in ('review', 'align'):
             payload, manifest = builder.prepare(stage, context)
             self.assertEqual(payload, expected)
             self.assert_complete_index(payload, manifest)
-        context['prompt_variant'] = 'revise'
+        context['prompt_variant'] = 'align'
         self.assertEqual(builder.prepare('study', context)[0], expected)
 
     def test_large_symbol_does_not_hide_small_later_symbol(self):

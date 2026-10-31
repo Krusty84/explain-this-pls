@@ -114,7 +114,7 @@ class RunStateTests(unittest.TestCase):
         state = RunState()
         contexts = [dict(branch=branch, stage=stage, revision_id=revision)
                     for branch, stage, revision in (('main', 'study', '001'), ('main', 'review', '001'),
-                                                   ('other', 'study', '001'), ('main', 'revise', '002'))]
+                                                   ('other', 'study', '001'), ('main', 'align', '002'))]
         snapshots = []
         for index, context in enumerate(contexts):
             state.apply('stage_completed', dict(context, status='COMPLETE'))
@@ -152,7 +152,7 @@ class RunStateTests(unittest.TestCase):
     def test_sources_revisions_partial_skip_error_and_final_metrics(self):
         state = RunState(clock=lambda: 10)
         contexts = [dict(branch=branch, stage=stage, revision_id=revision, backend='codex')
-                    for branch, stage, revision in (('main', 'study', '001'), ('main', 'revise', '002'),
+                    for branch, stage, revision in (('main', 'study', '001'), ('main', 'align', '002'),
                                                    ('other', 'study', '001'), ('main', 'review', '002'))]
         for context in contexts[:3]:
             state.apply('stage_started', context)
@@ -166,7 +166,7 @@ class RunStateTests(unittest.TestCase):
                                 'metrics': {'stages': [measured(contexts[0], 'PARTIAL')]}}, 'diagnostics': []})
         self.assertEqual(len(state.rows), 6)
         self.assertEqual(state.rows[('main', 'study', '001')]['status'], 'PARTIAL')
-        self.assertEqual(state.rows[('main', 'revise', '002')]['report_path'], '/tmp/[report].md')
+        self.assertEqual(state.rows[('main', 'align', '002')]['report_path'], '/tmp/[report].md')
         self.assertEqual(state.rows[('main', 'review', '002')]['status'], 'SKIPPED')
         self.assertEqual(state.rows[('all branches', 'compare', None)]['status'], 'FAILED')
 
@@ -214,7 +214,9 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([cell.plain for cell in table.get_row_at(1)[7:9]], ['n/a', 'n/a'])
             table.move_cursor(row=1)
             await pilot.pause()
-            table.scroll_to(x=100, animate=False, force=True)
+            scroll_x = table.max_scroll_x // 2
+            self.assertGreater(scroll_x, 0)
+            table.scroll_to(x=scroll_x, animate=False, force=True)
             snapshot = parse_limits({'rateLimitsByLimitId': {
                 'codex': {'primary': {
                     'usedPercent': 25.5, 'windowDurationMins': 300, 'resetsAt': 1793286000},
@@ -225,7 +227,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                                                'context': dict(context, rate_limits=snapshot)}))
             await pilot.pause()
             self.assertEqual(table.cursor_row, 1)
-            self.assertEqual(table.scroll_x, 100)
+            self.assertEqual(table.scroll_x, scroll_x)
             self.assertEqual(table.rows['1'].height, 2)
             self.assertEqual(table.get_row_at(1)[7].plain, '74.5%\n50%')
             self.assertEqual(len(table.get_row_at(1)[8].plain.splitlines()), 2)
@@ -297,7 +299,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             preview = pilot.app.query_one('#config-preview', Static)
             self.assertIsInstance(preview.content, Group)
             self.assertIn('Reports: ' + str(self.base / 'reports' / 'source'), preview.content.renderables[-1].plain)
-            self.assertIn('Review: Enabled; may revise and review again.', preview.content.renderables[-1].plain)
+            self.assertIn('Review: Enabled; may align and review again.', preview.content.renderables[-1].plain)
             for width in (60, 100):
                 await pilot.resize_terminal(width, 24)
                 await pilot.pause()
@@ -353,7 +355,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(separator.style, 'dim')
                 self.assertEqual(files.plain.splitlines()[:4],
                     ['Config: ' + str(self.path), 'Reports: ' + str(self.base / 'reports' / repository.name),
-                     'Review: Enabled; may revise and review again.',
+                     'Review: Enabled; may align and review again.',
                      'Results: COMPLETED'])
                 self.assertFalse(app.query_one('#run', Button).disabled)
                 self.assertFalse(app.query_one('#check', Button).disabled)
@@ -783,7 +785,7 @@ class WorkerQuotaTests(unittest.TestCase):
         reporter, messages = self.reporter()
         contexts = [dict(branch=branch, stage=stage, revision_id=revision, backend='codex')
                     for branch, stage, revision in (('main', 'study', '001'), ('main', 'review', '001'),
-                                                   ('other', 'study', '001'), ('main', 'revise', '002'))]
+                                                   ('other', 'study', '001'), ('main', 'align', '002'))]
         with patch('src.tui.worker.read_limits', new_callable=AsyncMock,
                    return_value={'windows': [], 'error': 'Optional failure'}) as read:
             for index, context in enumerate(contexts):

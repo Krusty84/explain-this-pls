@@ -318,7 +318,7 @@ class NormalizationPipelineTests(FolderFixture):
     def test_large_string_claims_retained_without_conversion_or_acceptance(self):
         for policy in ('strict', 'compromise'):
             runner, context, data = self.prepare(policy=policy)
-            context['prompt_variant'] = 'revise'
+            context['prompt_variant'] = 'align'
             data['claims'] = '[{"secret":"' + 'x' * 21295
             if policy == 'strict':
                 with self.assertRaises(ContractError) as caught: self.invoke(runner, context, data)

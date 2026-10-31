@@ -67,16 +67,16 @@ def measurements():
         index, source_bytes = synthetic_index(count, symbols_per_file, name_length)
         paths = [file['path'] for file in index['files']]
         stages = {}
-        for stage in ('study', 'revise', 'review'):
-            task = 'study' if stage == 'revise' else stage
+        for stage in ('study', 'align', 'review'):
+            task = 'study' if stage == 'align' else stage
             context = {'stage': task, 'source_mode': 'folder', 'source_directory': '/synthetic/source',
                        'source_snapshot_id': 'synthetic-snapshot', 'output_language': 'English',
                        'priority_scenarios': [], '_inventory': [{'path': path} for path in paths],
                        'source_context': index,
                        'coverage_plan': {'areas': [{'id': 'S-001', 'paths': ['src'],
                            'entry_paths': paths, 'file_paths': paths}], 'exclusions': []}}
-            if stage == 'revise':
-                context['prompt_variant'] = 'revise'
+            if stage == 'align':
+                context['prompt_variant'] = 'align'
             if stage == 'study':
                 context['inventory_summary'] = {'files': count, 'symlinks': 0, 'directory_count': 2,
                     'empty_directories': 0, 'directories': [
@@ -208,15 +208,15 @@ def mcp_measurements(counts=(1000, 5000)):
             file_list['delivery'] = 'mcp'
             overview = mcp_source_index(packed, manifest['catalog'])
             stages = {}
-            for stage in ('collect', 'review', 'revise'):
+            for stage in ('collect', 'review', 'align'):
                 task = 'review' if stage == 'review' else 'study'
                 prompt_context = dict(stage=task, source_mode='folder', source_directory='/synthetic/source',
                     source_snapshot_id='measurement', output_language='English', priority_scenarios=[],
                     coverage_plan={'areas': [{'id': 'S-001', 'paths': ['src'], 'entry_count': count, 'file_count': count}]})
                 if stage == 'collect':
                     prompt_context['phase'] = 'collect'
-                if stage == 'revise':
-                    prompt_context['prompt_variant'] = 'revise'
+                if stage == 'align':
+                    prompt_context['prompt_variant'] = 'align'
                 schema = MODEL_FOLDER_STUDY_PHASE_SCHEMAS['collect'] if stage == 'collect' else MODEL_FOLDER_SCHEMAS[task]
                 schema_json = serialize_model_input(schema)
                 template = (ROOT / 'prompts' / (stage + '.md')).read_text(encoding='utf-8')

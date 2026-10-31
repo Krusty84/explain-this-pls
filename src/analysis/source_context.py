@@ -315,7 +315,7 @@ class SourceContextBuilder:
         started = time.monotonic()
         manifest = dict(stage=stage, enabled=self.settings['enabled'], mode='index-only', files=[],
                         prepared_bytes=0, transmitted_bytes=0, transmitted_text_bytes=0, duration_seconds=0)
-        if (not self.settings['enabled'] or stage not in ('study', 'review', 'revise') or
+        if (not self.settings['enabled'] or stage not in ('study', 'review', 'align') or
                 context.get('correction_prompt')):
             manifest['reason'] = 'disabled' if not self.settings['enabled'] else 'stage_without_sources'
             return None, manifest

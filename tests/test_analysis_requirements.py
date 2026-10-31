@@ -22,7 +22,7 @@ import test_mcp_observer as observer_fixtures
 class AnalysisPromptTests(unittest.TestCase):
     def test_all_stages_preserve_boundaries_and_evidence_limits(self):
         root = Path(__file__).resolve().parents[1]
-        for stage in ('collect', 'study', 'review', 'revise'):
+        for stage in ('collect', 'study', 'review', 'align'):
             prompt = ' '.join((root / 'prompts' / (stage + '.md')).read_text().split())
             with self.subTest(stage=stage):
                 for text in ('Investigated', 'Partially investigated', 'Unverified',
@@ -35,7 +35,7 @@ class AnalysisPromptTests(unittest.TestCase):
 
     def test_behavior_checks_do_not_require_fabricated_guarantees(self):
         root = Path(__file__).resolve().parents[1]
-        for stage in ('collect', 'study', 'review', 'revise'):
+        for stage in ('collect', 'study', 'review', 'align'):
             prompt = ' '.join((root / 'prompts' / (stage + '.md')).read_text().split())
             with self.subTest(stage=stage):
                 for text in ('effects', 'shared state', 'writers', 'feature flags',

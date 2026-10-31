@@ -185,8 +185,24 @@ class ConfigTests(FolderFixture):
         self.assertEqual(config['_agents']['study']['reasoning_effort'], 'low')
         self.assertEqual(config['_agents']['review']['model'], 'shared')
         self.assertEqual(config['_agents']['review']['reasoning_effort'], 'high')
-        self.assertNotIn('revise', config['_agents'])
-        self.assertTrue(config['_prompt_paths']['revise'].endswith('revise.md'))
+        self.assertNotIn('align', config['_agents'])
+        self.assertTrue(config['_prompt_paths']['align'].endswith('align.md'))
+
+    def test_align_prompt_accepts_custom_template(self):
+        template = self.base / 'custom-align.md'
+        template.write_text('Align the supplied architecture study once.\n')
+        self.value['prompts'] = {'align': './custom-align.md'}
+        self.assertEqual(self.config()['_prompt_paths']['align'], str(template))
+
+    def test_old_prompt_name_is_rejected_even_when_inactive(self):
+        base = copy.deepcopy(self.value)
+        for execution in ({}, {'review_enabled': False}, {'max_revision_rounds': 0}):
+            self.value = copy.deepcopy(base) | {'execution': execution,
+                'prompts': {'revise': './unused.md'}}
+            with self.subTest(execution=execution):
+                with self.assertRaisesRegex(AuditError, 'Unknown prompt stage') as caught:
+                    self.config()
+                self.assertEqual(caught.exception.code, 'INVALID_CONFIG')
 
     def test_reasoning_effort_is_optional_and_preserves_native_values(self):
         self.value['agent']['model'] = 'chosen-model'
@@ -270,11 +286,11 @@ class ConfigTests(FolderFixture):
 
     def test_study_prompt_is_checked_and_revision_prompt_is_checked_when_enabled(self):
         base = copy.deepcopy(self.value)
-        for stage in ('study', 'revise'):
+        for stage in ('study', 'align'):
             self.value = copy.deepcopy(base) | {'prompts': {stage: './missing-prompt.md'}}
             with self.subTest(stage=stage), self.assertRaises(AuditError):
                 self.config()
         self.value = base | {'execution': {'max_revision_rounds': 0},
-                             'prompts': {'revise': './missing-inactive-prompt.md'}}
+                             'prompts': {'align': './missing-inactive-prompt.md'}}
         config = self.config()
-        self.assertNotIn('revise', config['_prompt_paths'])
+        self.assertNotIn('align', config['_prompt_paths'])

@@ -45,11 +45,11 @@ def hashed_payloads():
 class FolderHashingTests(FolderFixture):
     def test_one_pass_for_preflight_stages_and_revisions(self):
         blob = (self.source / 'app.py').read_bytes()
-        for check, review, revise in ((True, False, False), (False, False, False),
+        for check, review, align in ((True, False, False), (False, False, False),
                                       (False, True, False), (False, True, True)):
-            with self.subTest(check=check, review=review, revise=revise):
-                self.value['execution'] = {'review_enabled': review, 'max_revision_rounds': int(revise)}
-                runner = Runner(self.config(), self.base / f'run-{check}-{review}-{revise}')
+            with self.subTest(check=check, review=review, align=align):
+                self.value['execution'] = {'review_enabled': review, 'max_revision_rounds': int(align)}
+                runner = Runner(self.config(), self.base / f'run-{check}-{review}-{align}')
                 stages = []
 
                 def process(command, cwd, env, payload, **kwargs):
@@ -57,7 +57,7 @@ class FolderHashingTests(FolderFixture):
                                          .split('\n\n# Required final JSON Schema')[0])
                     stages.append(context['stage'])
                     data = response(context)
-                    if revise:
+                    if align:
                         initial_finding(context['stage'], context, data)
                     return cli_result(command, data)
 
@@ -68,7 +68,7 @@ class FolderHashingTests(FolderFixture):
                 self.assertEqual(code, 0, manifest['errors'])
                 self.assertEqual(snapshots.call_count, 1)
                 self.assertEqual(hashes[blob], 1)
-                self.assertEqual(len(stages), 0 if check else 5 if revise else 3 if review else 2)
+                self.assertEqual(len(stages), 0 if check else 5 if align else 3 if review else 2)
                 for revision in manifest.get('revisions', []):
                     for stage in ('study', 'review'):
                         for evidence in (revision.get(stage) or {}).get('program_checks', {}).get('evidence', []):

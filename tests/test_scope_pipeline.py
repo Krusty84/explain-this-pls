@@ -48,7 +48,7 @@ class ScopePipelineMixin(optional_fixtures.PipelineMixin):
                 self.assertTrue(workflow_satisfied(item))
                 self.assertEqual(item['selected_revision'], '002')
                 self.assertEqual([c.get('prompt_variant', c.get('phase', c['stage'])) for c in self.calls],
-                                 ['collect', 'write', 'review', 'revise', 'review'])
+                                 ['collect', 'write', 'review', 'align', 'review'])
                 for revision in item['revisions']:
                     study, review = revision['study'], revision['review']
                     directory = self.run_dir / revision['directory']

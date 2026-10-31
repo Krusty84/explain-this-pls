@@ -172,7 +172,7 @@
     // Initial writer only: sections/metadata and claim links, no claims/evidence registry.
     // "study": "./custom-prompts/study.md",
     // Revision retains its complete report/claims/evidence contract and source access.
-    // "revise": "./custom-prompts/revise.md",
+    // "align": "./custom-prompts/align.md",
     // "review": "./custom-prompts/review.md",
     // "compare": "./custom-prompts/compare.md", // Git mode with two or more branches only.
   },

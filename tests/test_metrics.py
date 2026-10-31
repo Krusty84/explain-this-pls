@@ -92,7 +92,7 @@ class PipelineMetricsTests(FolderFixture):
         metrics = manifest['metrics']
         self.assertEqual(metrics['attempts'], 5)
         self.assertEqual(metrics['usage']['total_tokens'], 600)
-        self.assertEqual([r['stage'] for r in metrics['stages']], ['study', 'review', 'revise', 'review'])
+        self.assertEqual([r['stage'] for r in metrics['stages']], ['study', 'review', 'align', 'review'])
         self.assertEqual(err.getvalue().count('Tokens: 240'), 1)
         self.assertEqual(err.getvalue().count('Tokens: 120'), 3)
         self.assertEqual(json.loads((runner.session.run_dir / 'manifest.json').read_text())['metrics'], metrics)

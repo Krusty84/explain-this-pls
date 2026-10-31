@@ -159,7 +159,7 @@ class SourcePipeline:
                 current = context | {'revision_id': revision_id}
                 if previous:
                     current.update(revision_inputs(previous))
-                    current['prompt_variant'] = 'revise'
+                    current['prompt_variant'] = 'align'
                 run_stage('study', revision, current, revision_dir)
                 if not review_enabled:
                     skip_context = self.session.stage_context('review', current)
@@ -180,7 +180,7 @@ class SourcePipeline:
                     run_stage('review', revision, review_input, revision_dir)
                 else:
                     revision['review_skipped'] = ui_message(
-                        'diagnostic.pipeline.revised_study_unavailable',
+                        'diagnostic.pipeline.aligned_study_unavailable',
                     ) if previous else ui_message('diagnostic.pipeline.study_unavailable')
                     self.session.metrics.finish_stage(self.session.stage_context('review', current), 'SKIPPED')
                     self.session.reporter.emit('stage_skipped', **self.session.stage_context('review', current))

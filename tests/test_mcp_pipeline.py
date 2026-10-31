@@ -94,7 +94,7 @@ class MCPAttemptTests(FolderFixture):
             setattr(self, name, patched.start())
             self.addCleanup(patched.stop)
 
-    def test_collect_review_and_revise_have_private_independent_manifests(self):
+    def test_collect_review_and_align_have_private_independent_manifests(self):
         self.value['source_filter'] = {'exclude_paths': ['excluded.py']}
         (self.source / 'excluded.py').write_text('def excluded(): pass\n')
         (self.source / 'notes.txt').write_text('No parser.\n')

@@ -32,13 +32,13 @@ class OptionalReviewConfigTests(FolderFixture):
         self.assertTrue(cfg['execution']['review_enabled'])
         self.assertIn('review', cfg['_agents'])
         self.assertIn('review', cfg['_prompt_paths'])
-        self.assertIn('revise', cfg['_prompt_paths'])
+        self.assertIn('align', cfg['_prompt_paths'])
         for enabled in (False, True):
             self.value['execution'] = {'review_enabled': enabled}
             cfg = self.load()
             self.assertEqual('review' in cfg['_agents'], enabled)
             self.assertEqual('review' in cfg['_prompt_paths'], enabled)
-            self.assertEqual('revise' in cfg['_prompt_paths'], enabled)
+            self.assertEqual('align' in cfg['_prompt_paths'], enabled)
         for value in (None, 0, 1, 'false', [], {}):
             self.value['execution'] = {'review_enabled': value}
             with self.subTest(value=value), self.assertRaisesRegex(AuditError, 'review_enabled must be boolean'):
@@ -55,18 +55,18 @@ class OptionalReviewConfigTests(FolderFixture):
     def test_inactive_review_agent_and_prompts_are_not_resolved(self):
         self.value.update(execution={'review_enabled': False},
                           stage_agents={'review': {'backend': 'codex', 'executable': '/missing/cli'}},
-                          prompts={'review': '/missing/review', 'revise': '/missing/revise'})
+                          prompts={'review': '/missing/review', 'align': '/missing/align'})
         self.assertNotIn('review', self.load()['_agents'])
         self.value['execution'] = {'review_enabled': True}
         with self.assertRaises(AuditError):
             self.load()
         self.value['stage_agents'] = {}
-        for prompts in ({'review': '/missing/review'}, {'revise': '/missing/revise'}):
+        for prompts in ({'review': '/missing/review'}, {'align': '/missing/align'}):
             self.value['prompts'] = prompts
             with self.subTest(prompts=prompts), self.assertRaises(AuditError):
                 self.load()
         self.value['execution']['max_revision_rounds'] = 0
-        self.assertNotIn('revise', self.load()['_prompt_paths'])
+        self.assertNotIn('align', self.load()['_prompt_paths'])
 
     def test_all_examples_explicitly_enable_review(self):
         paths = list(Path(__file__).resolve().parents[1].glob('config*.example.jsonc'))
@@ -140,7 +140,7 @@ class DefaultReviewPipelineTests(PipelineMixin, FolderFixture):
             lambda context, data: initial_finding(context['stage'], context, data))
         self.assertEqual((code, manifest['accepted'], manifest['selected_revision']), (0, True, '002'))
         self.assertEqual([c.get('prompt_variant', c.get('phase', c['stage'])) for c in self.calls],
-                         ['collect', 'write', 'review', 'revise', 'review'])
+                         ['collect', 'write', 'review', 'align', 'review'])
         self.assertEqual(manifest['metrics']['attempts'], 5)
         self.assertEqual(manifest['study']['review_plan']['coverage_plan'], manifest['coverage_plan'])
         self.assertEqual(manifest['review']['target']['document_sha256'],
@@ -292,7 +292,7 @@ class OptionalReviewGitTests(PipelineMixin, unittest.TestCase):
         cfg['git_mode']['branches'] = branches or ['master', 'test01']
         cfg['_agents'].pop('review')
         cfg['_prompt_paths'].pop('review')
-        cfg['_prompt_paths'].pop('revise')
+        cfg['_prompt_paths'].pop('align')
         return cfg
 
     @staticmethod

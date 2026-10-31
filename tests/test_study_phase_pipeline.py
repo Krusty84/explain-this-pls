@@ -268,12 +268,12 @@ class StudyPhasePipelineTests(FolderFixture):
         self.assertEqual([(call['context']['stage'], call['context'].get('phase')) for call in self.calls],
                          [('study', 'collect'), ('study', 'write'), ('review', None),
                           ('study', None), ('review', None)])
-        revise = self.calls[3]
-        self.assertEqual(revise['context']['prompt_variant'], 'revise')
-        self.assertIn('source_context', revise['context'])
-        self.assertNotIn('evidence_package', revise['context'])
-        self.assertEqual(revise['cwd'], self.source)
-        self.assertNotIn('features.shell_tool=false', revise['command'])
-        schema = json.loads(revise['prompt'].split('# Required final JSON Schema\n', 1)[1])
+        align = self.calls[3]
+        self.assertEqual(align['context']['prompt_variant'], 'align')
+        self.assertIn('source_context', align['context'])
+        self.assertNotIn('evidence_package', align['context'])
+        self.assertEqual(align['cwd'], self.source)
+        self.assertNotIn('features.shell_tool=false', align['command'])
+        schema = json.loads(align['prompt'].split('# Required final JSON Schema\n', 1)[1])
         self.assertTrue({'report_sections', 'claims', 'evidence'} <= set(schema['properties']))
         self.assertEqual(manifest['selected_revision'], '002')
