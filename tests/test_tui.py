@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from rich.console import Group
 from rich.rule import Rule
+from textual.containers import VerticalScroll
 from textual.geometry import Region
 from textual.widgets import Button, DataTable, Input, Static, TabbedContent
 
@@ -199,7 +200,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
     def app(self, config=None, **changes):
         return ExplainApp(options(config, **changes), settings_path=self.settings)
 
-    async def test_quota_columns_use_multiline_rows_and_keep_history_and_cursor(self):
+    async def test_quota_details_keep_stage_history_and_table_cursor(self):
         app = self.app(self.path, no_progress=True)
         async with app.run_test(size=(80, 24)) as pilot:
             app.state = RunState()
@@ -209,9 +210,9 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'stage_completed',
                                                'context': dict(context, status='COMPLETE', metrics=measured(context))}))
             table = app.query_one('#stages', DataTable)
-            self.assertEqual([column.label.plain for column in table.columns.values()][6:],
-                             ['Cost', '5h limit', 'Resets at', 'Result'])
-            self.assertEqual([cell.plain for cell in table.get_row_at(1)[7:9]], ['n/a', 'n/a'])
+            self.assertEqual([column.label.plain for column in table.columns.values()],
+                             ['Source', 'Step/revision', 'Status', 'Elapsed', 'Attempts', 'Tokens', 'Result'])
+            original_row = [cell.plain for cell in table.get_row_at(1)]
             table.move_cursor(row=1)
             await pilot.pause()
             scroll_x = table.max_scroll_x // 2
@@ -228,15 +229,27 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(table.cursor_row, 1)
             self.assertEqual(table.scroll_x, scroll_x)
-            self.assertEqual(table.rows['1'].height, 2)
-            self.assertEqual(table.get_row_at(1)[7].plain, '74.5%\n50%')
-            self.assertEqual(len(table.get_row_at(1)[8].plain.splitlines()), 2)
-            self.assertNotIn(' / ', table.get_row_at(1)[8].plain)
-            self.assertNotIn('\\n', table.get_row_at(1)[7].plain)
+            self.assertEqual(table.rows['1'].height, 1)
+            self.assertEqual([cell.plain for cell in table.get_row_at(1)], original_row)
             details = app.query_one('#step-details', Static).content.plain
-            self.assertIn('codex / 5h: Used 25.5% | Remaining 74.5%', details)
-            self.assertIn('codex / 7d: Used 100% | Remaining 0%', details)
-            original = [cell.plain for cell in table.get_row_at(1)[7:9]]
+            self.assertEqual([line.split(':', 1)[0] for line in details.splitlines()],
+                             ['Source', 'Step', 'Result', 'Report'])
+            metrics = app.query_one('#step-metrics', Static).content.plain
+            for text in ('Tokens: 42', 'Input:', 'Output:', 'Cache read/write:', 'Reasoning:',
+                         'Agent-estimated cost: $0.01', 'Attempts: 1', 'codex: example (requested)',
+                         '5h: Used 25.5%', 'other / 5h: Used 50%', '7d: Used 100%', 'Resets at'):
+                self.assertIn(text, metrics)
+            self.assertNotIn('codex /', metrics)
+            for text in ('        5h: Remaining 74.5% | Resets at',
+                         '        other / 5h: Remaining 50% | Resets at',
+                         '        7d: Remaining 0% | Resets at'):
+                self.assertIn(text, metrics)
+            aligned = [line for line in metrics.splitlines() if any(label in line for label in
+                       ('Tokens:', 'Cache read/write:', 'Agent-estimated cost:', 'Account limits:'))]
+            self.assertEqual([len(line) - len(line.lstrip()) for line in aligned], [6, 6, 6, 6])
+            limits = metrics.split('      Account limits:\n', 1)[1].splitlines()
+            self.assertTrue(all(line.startswith('        ') and not line.startswith('         ') for line in limits))
+            original = metrics
             review = dict(context, stage='review')
             app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'stage_completed',
                                                'context': dict(review, status='COMPLETE')}))
@@ -248,8 +261,19 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             await pilot.resize_terminal(120, 40)
             await pilot.resize_terminal(80, 24)
-            self.assertEqual([cell.plain for cell in table.get_row_at(1)[7:9]], original)
-            self.assertIn('10%', table.get_row_at(2)[7].plain)
+            self.assertEqual(app.query_one('#step-metrics', Static).content.plain, original)
+            self.assertEqual(table.rows['1'].height, 1)
+            self.assertEqual(table.rows['2'].height, 1)
+            app.query_one('#run-tabs', TabbedContent).active = 'steps-tab'
+            table.move_cursor(row=2)
+            await pilot.pause()
+            self.assertIn('Remaining 10%', app.query_one('#step-metrics', Static).content.plain)
+            table.move_cursor(row=1)
+            await pilot.pause()
+            self.assertEqual(app.query_one('#step-metrics', Static).content.plain, original)
+            table.move_cursor(row=0)
+            await pilot.pause()
+            self.assertEqual(app.query_one('#step-metrics', Static).content.plain, '')
 
     async def test_quota_error_is_in_step_details_without_failing_the_step(self):
         app = self.app(self.path, no_progress=True)
@@ -263,9 +287,71 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             table.move_cursor(row=1)
             app.show_step_details()
             self.assertEqual(table.get_row_at(1)[2].plain, 'COMPLETE')
-            self.assertEqual([cell.plain for cell in table.get_row_at(1)[7:9]], ['n/a', 'n/a'])
-            self.assertIn('Account limits: Sign in [bold]\\x1b', app.query_one('#step-details', Static).content.plain)
+            self.assertEqual(len(table.columns), 7)
+            metrics = app.query_one('#step-metrics', Static).content.plain
+            self.assertIn('      Account limits:\n', metrics)
+            self.assertIn('        5h: Used n/a | 7d: Used n/a\n', metrics)
+            self.assertIn('        Remaining n/a | Resets at n/a\n', metrics)
+            self.assertIn('        Account limits: Sign in [bold]\\x1b', metrics)
             self.assertEqual(app.state.diagnostics, [])
+
+    async def test_detail_columns_wrap_and_share_scroll_with_weekly_limits_and_diagnostics(self):
+        app = self.app(self.path, no_progress=True)
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.state = RunState()
+            app.query_one('#picker').display = False
+            app.query_one('#dashboard').display = True
+            context = dict(branch='main', stage='review', revision_id='002', backend='codex')
+            report = '/tmp/' + 'длинный_путь_深い[report]/' * 12 + 'ARCHITECTURE.md'
+            app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'stage_completed',
+                'context': dict(context, status='COMPLETE', metrics=measured(context), report_path=report)}))
+            app.state.rows[('main', 'review', '002')]['diagnostics'].append(
+                {'message': '[bold] diagnostic ' + 'details ' * 30 + 'end-of-diagnostic'})
+            snapshot = parse_limits({'rateLimits': {'primary': {
+                'usedPercent': 6, 'windowDurationMins': 10080, 'resetsAt': 1793815356}}})
+            app.on_worker_message(WorkerMessage({'type': 'event', 'event': 'stage_rate_limits',
+                                               'context': dict(context, rate_limits=snapshot)}))
+            table = app.query_one('#stages', DataTable)
+            table.move_cursor(row=1)
+            await pilot.pause()
+            left = app.query_one('#step-details', Static)
+            right = app.query_one('#step-metrics', Static)
+            diagnostics = app.query_one('#step-diagnostics', Static)
+            scroll = app.query_one('#detail-scroll', VerticalScroll)
+            self.assertIn(report, left.content.plain)
+            self.assertNotIn('Account limits', left.content.plain)
+            self.assertNotIn('Agent / model', left.content.plain)
+            resets = dt.datetime.fromtimestamp(1793815356, dt.timezone.utc).astimezone().strftime('%d.%m %H:%M')
+            self.assertEqual(right.content.plain.splitlines()[-3:], ['      Account limits:',
+                '        5h: Used n/a | 7d: Used 6%', '        Remaining 94% | Resets at ' + resets])
+            self.assertNotIn('[bold] diagnostic', left.content.plain + right.content.plain)
+            self.assertIn('[bold] diagnostic', diagnostics.content.plain)
+            for width, height in ((80, 24), (120, 40), (80, 24)):
+                with self.subTest(size=(width, height)):
+                    await pilot.resize_terminal(width, height)
+                    await pilot.pause()
+                    viewport = scroll.scrollable_content_region
+                    self.assertEqual(scroll.region.height, 8)
+                    self.assertEqual(left.region.y, right.region.y)
+                    self.assertLessEqual(abs(left.region.width - right.region.width), 1)
+                    self.assertEqual(right.region.x - left.region.right, 2)
+                    self.assertLessEqual(right.region.right, viewport.right)
+                    self.assertGreater(left.region.height, len(left.content.plain.splitlines()))
+                    rendered = ''.join(strip.text.rstrip() for strip in left.render_lines(
+                        Region(0, 0, left.size.width, left.size.height)))
+                    self.assertIn('ARCHITECTURE.md', rendered)
+                    self.assertGreaterEqual(diagnostics.region.y, max(left.region.bottom, right.region.bottom))
+                    self.assertEqual(diagnostics.region.width, viewport.width)
+                    self.assertEqual(scroll.max_scroll_x, 0)
+                    self.assertGreater(scroll.max_scroll_y, 0)
+                    scroll.scroll_end(animate=False)
+                    await pilot.pause()
+                    self.assertEqual(scroll.scroll_y, scroll.max_scroll_y)
+                    self.assertLessEqual(diagnostics.region.bottom, viewport.bottom)
+                    self.assertGreater(diagnostics.region.bottom, viewport.y)
+            table.move_cursor(row=0)
+            await pilot.pause()
+            self.assertFalse(diagnostics.display)
 
     async def test_first_launch_folder_persistence_and_no_automatic_run(self):
         app = self.app()
@@ -298,8 +384,9 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.settings.exists())
             preview = pilot.app.query_one('#config-preview', Static)
             self.assertIsInstance(preview.content, Group)
-            self.assertIn('Reports: ' + str(self.base / 'reports' / 'source'), preview.content.renderables[-1].plain)
-            self.assertIn('Review: Enabled; may align and review again.', preview.content.renderables[-1].plain)
+            files = preview.content.renderables[-1].columns[0]._cells[0].plain
+            self.assertIn('Reports: ' + str(self.base / 'reports' / 'source'), files)
+            self.assertIn('Review: Enabled; may align and review again.', files)
             for width in (60, 100):
                 await pilot.resize_terminal(width, 24)
                 await pilot.pause()
@@ -314,7 +401,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
         self.path.write_text(json.dumps(value))
         async with self.app(self.path).run_test() as pilot:
             preview = pilot.app.query_one('#config-preview', Static)
-            self.assertIn('Review: Disabled; no separate review.', preview.content.renderables[-1].plain)
+            self.assertIn('Review: Disabled; no separate review.', preview.content.renderables[-1].columns[0]._cells[0].plain)
 
     async def test_reselection_reloads_external_changes_in_preview_row_and_buttons(self):
         value = jsonc(self.path.read_text())
@@ -343,8 +430,9 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                     await pilot.pause()
                     reader.assert_called_once_with(self.path)
                 self.assertEqual(app.selected, self.path)
+                finished = dt.datetime.fromisoformat(value['last_analysis']['finished_at']).astimezone()
                 self.assertEqual([cell.plain for cell in table.get_row(str(self.path))],
-                    [self.path.name, 'git', str(repository), model, 'high', 'COMPLETED'])
+                    [self.path.name, 'git', str(repository), model, 'high', 'COMPLETED', finished.strftime('%d.%m %H:%M')])
                 self.assertGreater(list(table.columns.values())[3].content_width, old_width)
                 self.assertGreaterEqual(list(table.columns.values())[3].content_width, len(model))
                 project, separator, files = app.query_one('#config-preview', Static).content.renderables
@@ -353,10 +441,12 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(separator, Rule)
                 self.assertEqual(separator.characters, '─')
                 self.assertEqual(separator.style, 'dim')
-                self.assertEqual(files.plain.splitlines()[:4],
+                self.assertEqual(files.columns[0]._cells[0].plain.splitlines(),
                     ['Config: ' + str(self.path), 'Reports: ' + str(self.base / 'reports' / repository.name),
-                     'Review: Enabled; may align and review again.',
-                     'Results: COMPLETED'])
+                     'Review: Enabled; may align and review again.'])
+                self.assertEqual(files.columns[1]._cells[0].plain.splitlines(),
+                    ['Results: COMPLETED', 'Finished: ' + finished.strftime('%Y-%m-%d %H:%M:%S'),
+                     'Results directory: ' + str(results)])
                 self.assertFalse(app.query_one('#run', Button).disabled)
                 self.assertFalse(app.query_one('#check', Button).disabled)
                 self.assertFalse(app.query_one('#models', Button).disabled)
@@ -416,7 +506,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                             await pilot.pause()
                         row = [cell.plain for cell in table.get_row(str(self.path))]
                         self.assertEqual(row[1], 'Invalid')
-                        self.assertEqual(row[3:], ['—', '—', '—'])
+                        self.assertEqual(row[3:], ['—', '—', '—', '—'])
                         self.assertIn('Cannot start: ' + row[2], app.query_one('#config-preview', Static).content.plain)
                         for name in ('run', 'check', 'models'):
                             self.assertTrue(app.query_one('#' + name, Button).disabled)
@@ -425,7 +515,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                         await pilot.pause()
                         self.assertEqual(table.get_row(str(self.path))[1].plain, 'folder')
                         self.assertNotIn('Cannot start:',
-                                         app.query_one('#config-preview', Static).content.renderables[-1].plain)
+                                         app.query_one('#config-preview', Static).content.renderables[-1].columns[0]._cells[0].plain)
                         for name in ('run', 'check', 'models'):
                             self.assertFalse(app.query_one('#' + name, Button).disabled)
                 worker.assert_not_called()
@@ -466,7 +556,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(80, 24)) as pilot:
             table = app.query_one('#configs', DataTable)
             self.assertEqual([column.label.plain for column in table.columns.values()],
-                             ['Config', 'Mode', 'Source', 'Model', 'Effort', 'Results'])
+                             ['Config', 'Mode', 'Source', 'Model', 'Effort', 'Results', 'Finished'])
             for agent, stages, model, effort in cases:
                 with self.subTest(agent=agent, stages=stages):
                     updated = value | {'agent': value['agent'] | agent, 'stage_agents': stages}
@@ -474,7 +564,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                     app.refresh_configs()
                     await pilot.pause()
                     row = [cell.plain for cell in table.get_row_at(0)]
-                    self.assertEqual(row, [self.path.name, 'folder', str(self.base / 'source'), model, effort, '—'])
+                    self.assertEqual(row, [self.path.name, 'folder', str(self.base / 'source'), model, effort, '—', '—'])
 
     async def test_results_survive_reopen_and_show_time_path_and_missing_directory(self):
         directory = self.base / 'reports' / 'saved [bold]'
@@ -486,9 +576,11 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
         async with self.app(self.path).run_test(size=(80, 24)) as pilot:
             table = pilot.app.query_one('#configs', DataTable)
             self.assertEqual(table.get_row_at(0)[5].plain, 'COMPLETED')
-            preview = pilot.app.query_one('#config-preview', Static).content.renderables[-1].plain
-            finished = dt.datetime.fromisoformat(record['finished_at']).astimezone().isoformat(sep=' ', timespec='seconds')
-            self.assertIn('Finished: ' + finished, preview)
+            preview = pilot.app.query_one('#config-preview', Static).content.renderables[-1].columns[1]._cells[0].plain
+            finished = dt.datetime.fromisoformat(record['finished_at']).astimezone()
+            self.assertEqual(table.get_row_at(0)[6].plain, finished.strftime('%d.%m %H:%M'))
+            self.assertIn('Finished: ' + finished.strftime('%Y-%m-%d %H:%M:%S'), preview)
+            self.assertNotIn(finished.strftime('%z'), preview)
             self.assertIn('Results directory: ' + str(directory), preview)
         value['last_analysis']['status'] = 'PARTIAL'
         self.path.write_text(json.dumps(value))
@@ -502,14 +594,70 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             app.refresh_configs()
             await pilot.pause()
             self.assertEqual(table.get_row_at(0)[5].plain, 'Missing')
+            self.assertEqual(table.get_row_at(0)[6].plain, finished.strftime('%d.%m %H:%M'))
             self.assertIn('Results: PARTIAL (Missing)',
-                          app.query_one('#config-preview', Static).content.renderables[-1].plain)
+                          app.query_one('#config-preview', Static).content.renderables[-1].columns[1]._cells[0].plain)
             self.assertFalse(app.query_one('#run', Button).disabled)
             self.assertEqual(self.path.read_bytes(), before)
             value['last_analysis'] = None
             self.path.write_text(json.dumps(value))
             app.refresh_configs()
             self.assertEqual(table.get_row_at(0)[5].plain, '—')
+            self.assertEqual(table.get_row_at(0)[6].plain, '—')
+            self.assertEqual(app.query_one('#config-preview', Static).content.renderables[-1].columns[1]._cells[0].plain, '')
+
+    async def test_finished_uses_local_time_and_preview_omits_timezone(self):
+        value = jsonc(self.path.read_text()) | {'last_analysis': {
+            'status': 'PARTIAL', 'finished_at': '2026-10-17T01:23:45+09:00',
+            'results_dir': str(self.base / 'missing-results')}}
+        self.path.write_text(json.dumps(value))
+        try:
+            with patch.dict(os.environ, {'TZ': 'Etc/GMT-3'}):
+                time.tzset()
+                async with self.app(self.path).run_test() as pilot:
+                    row = pilot.app.query_one('#configs', DataTable).get_row_at(0)
+                    self.assertEqual(row[5].plain, 'Missing')
+                    self.assertEqual(row[6].plain, '16.10 19:23')
+                    results = pilot.app.query_one('#config-preview', Static).content.renderables[-1].columns[1]._cells[0].plain
+                    self.assertEqual(results.splitlines(), ['Results: PARTIAL (Missing)',
+                        'Finished: 2026-10-16 19:23:45', 'Results directory: ' + str(self.base / 'missing-results')])
+        finally:
+            time.tzset()
+
+    async def test_config_preview_columns_wrap_and_share_scroll(self):
+        results = self.base / ('saved_深い[bold]' * 5) / ('results_' * 8) / 'end-of-results'
+        results.mkdir(parents=True)
+        value = jsonc(self.path.read_text()) | {'project_description': 'Project [bold]',
+            'last_analysis': {'status': 'PARTIAL', 'finished_at': '2026-10-17T15:00:00+03:00',
+                              'results_dir': str(results)}}
+        self.path.write_text(json.dumps(value))
+        async with self.app(self.path).run_test(size=(80, 24)) as pilot:
+            preview = pilot.app.query_one('#config-preview', Static)
+            scroll = pilot.app.query_one('#preview-scroll', VerticalScroll)
+            for width, height in ((80, 24), (120, 40), (80, 24)):
+                with self.subTest(size=(width, height)):
+                    await pilot.resize_terminal(width, height)
+                    await pilot.pause()
+                    self.assertEqual(scroll.region.height, 8)
+                    rendered = preview.render_lines(Region(0, 0, *preview.size))
+                    size = preview.content_size.width
+                    separator = next(index for index, strip in enumerate(rendered) if strip.text.startswith('─'))
+                    self.assertEqual(rendered[separator].text, '─' * size)
+                    body = rendered[separator + 1:]
+                    left = ''.join(strip.crop(0, size // 2 - 1).text.rstrip() for strip in body)
+                    right = ''.join(strip.crop(size // 2 + 1, size).text.rstrip() for strip in body)
+                    self.assertTrue(body[0].text.startswith('Config:'))
+                    self.assertTrue(body[0].crop(size // 2 + 1, size).text.startswith('Results:'))
+                    self.assertIn('Review: Enabled;', left)
+                    self.assertNotIn('Results:', left)
+                    self.assertIn('end-of-results', right)
+                    self.assertNotIn('Config:', right)
+                    self.assertEqual(scroll.max_scroll_x, 0)
+                    self.assertGreater(scroll.max_scroll_y, 0)
+                    scroll.scroll_end(animate=False)
+                    await pilot.pause()
+                    self.assertEqual(scroll.scroll_y, scroll.max_scroll_y)
+                    self.assertEqual(preview.region.bottom, scroll.scrollable_content_region.bottom)
 
     async def test_discovery_validation_refresh_and_removed_selection(self):
         save_settings(self.settings, self.directory)

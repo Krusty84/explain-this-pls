@@ -13,6 +13,7 @@ import sys
 
 from rich.console import Group
 from rich.rule import Rule
+from rich.table import Table
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -120,7 +121,9 @@ class ExplainApp(App[int]):
     #config-location, #run-status { height: auto; max-height: 3; margin: 1 0; }
     #configs { height: 1fr; min-height: 4; }
     #preview-scroll { height: 8; border-top: solid $primary; }
-    #config-preview, #step-details { height: auto; }
+    #config-preview, #detail-columns, #step-details, #step-metrics, #step-diagnostics { height: auto; }
+    #step-details, #step-metrics { width: 1fr; }
+    #step-metrics { margin-left: 2; }
     .actions { height: 3; margin-top: 1; }
     .actions Button { min-width: 8; margin-right: 1; }
     
@@ -222,7 +225,10 @@ class ExplainApp(App[int]):
                 with TabPane('Steps', id='steps-tab'):
                     yield DataTable(id='stages', cursor_type='row', zebra_stripes=True, fixed_columns=2)
                     with VerticalScroll(id='detail-scroll'):
-                        yield Static('', id='step-details')
+                        with Horizontal(id='detail-columns'):
+                            yield Static('', id='step-details')
+                            yield Static('', id='step-metrics')
+                        yield Static('', id='step-diagnostics')
                 with TabPane(ui_message('tui.final_result'), id='summary-tab'):
                     yield DataTable(id='summary', cursor_type='row')
             with Horizontal(classes='actions'):
@@ -234,11 +240,10 @@ class ExplainApp(App[int]):
     def on_mount(self):
         self._set_pointer_shape("default")
         self.query_one('#run', Button).display = not self.args.check
-        self.query_one('#configs', DataTable).add_columns(ui_message('tui.config.on_mount'), ui_message('tui.mode'), ui_message('tui.source'), ui_message('cli.model'), ui_message('tui.effort'), ui_message('tui.results'))
+        self.query_one('#configs', DataTable).add_columns(ui_message('tui.config.on_mount'), ui_message('tui.mode'), ui_message('tui.source'), ui_message('cli.model'), ui_message('tui.effort'), ui_message('tui.results'), ui_message('tui.finished_column'))
         table = self.query_one('#stages', DataTable)
         for name, width in ((ui_message('tui.source'), 20), (ui_message('tui.step_revision'), 18), (ui_message('tui.status'), 12), (ui_message('tui.elapsed'), 8),
-                            (ui_message('tui.attempts'), 8), (ui_message('tui.tokens'), None), (ui_message('tui.cost'), None),
-                            (ui_message('tui.remaining_percent'), None), (ui_message('tui.resets_at'), None),
+                            (ui_message('tui.attempts'), 8), (ui_message('tui.tokens'), None),
                             (ui_message('tui.result'), 55)):
             table.add_column(name, width=width)
         self.query_one('#summary', DataTable).add_columns(ui_message('tui.item'), ui_message('tui.result'))
@@ -281,16 +286,17 @@ class ExplainApp(App[int]):
             effort = agent.get('reasoning_effort')
             effort = effort or ui_message('tui.cli_default')
             analysis = config['last_analysis']
-            results = '—'
+            results = finished = '—'
             if analysis:
                 results = analysis['status'] if Path(analysis['results_dir']).is_dir() else ui_message('tui.missing')
+                finished = dt.datetime.fromisoformat(analysis['finished_at']).astimezone().strftime('%d.%m %H:%M')
             error = ''
         except (OSError, ValueError, RuntimeError, ContractError) as exc:
             config, mode, source = None, ui_message('tui.invalid'), self.presenter.display(diagnostic(exc).message)
-            model, effort, results = '—', '—', '—'
+            model, effort, results, finished = '—', '—', '—', '—'
             error = source
         self.configs[str(path)] = (path, config, error)
-        return [self.literal(value) for value in (path.name, mode, source, model, effort, results)]
+        return [self.literal(value) for value in (path.name, mode, source, model, effort, results, finished)]
 
     def refresh_configs(self):
         self.configs.clear()
@@ -356,7 +362,7 @@ class ExplainApp(App[int]):
                          ui_message('tui.disabled_no_separate_review')))]
             analysis = config['last_analysis']
             if analysis:
-                finished = dt.datetime.fromisoformat(analysis['finished_at']).astimezone().isoformat(sep=' ', timespec='seconds')
+                finished = dt.datetime.fromisoformat(analysis['finished_at']).astimezone().strftime('%Y-%m-%d %H:%M:%S')
                 lines += [ui_message(
                     'tui.results.select_config',
                     status=s(analysis['status']),
@@ -370,9 +376,14 @@ class ExplainApp(App[int]):
                               results_dir=s(analysis['results_dir']),
                           )]
         lines = [Text.assemble(line) for line in lines]
-        content = (Group(Text('\n').join(lines[:2]), Rule(characters='─', style='dim'),
-                         Text('\n').join(lines[2:]), fit=False)
-                   if config is not None else Text('\n').join(lines))
+        if config is not None:
+            details = Table.grid(expand=True, padding=(0, 1), collapse_padding=False)
+            details.add_column(ratio=1, overflow='fold')
+            details.add_column(ratio=1, overflow='fold')
+            details.add_row(Text('\n').join(lines[2:5]), Text('\n').join(lines[5:]))
+            content = Group(Text('\n').join(lines[:2]), Rule(characters='─', style='dim'), details, fit=False)
+        else:
+            content = Text('\n').join(lines)
         self.query_one('#config-preview', Static).update(content)
 
     def on_data_table_row_highlighted(self, event):
@@ -490,33 +501,22 @@ class ExplainApp(App[int]):
     def render_stages(self):
         table = self.query_one('#stages', DataTable)
         columns = list(table.columns)
-        heights = [max(1, len(limit_rows(row.get('rate_limits'), minutes=300))) for row in self.state.rows.values()]
-        if any(table.rows[str(index)].height != height for index, height in enumerate(heights)
-               if index < table.row_count):
-            cursor, scroll = table.cursor_coordinate, table.scroll_offset
-            table.clear()
-            self.call_after_refresh(table.move_cursor, row=cursor.row, column=cursor.column, scroll=False)
-            self.call_after_refresh(table.scroll_to, x=scroll.x, y=scroll.y, animate=False, force=True)
         for index, row in enumerate(self.state.rows.values()):
             metrics = row['metrics']
             usage = metrics.get('usage', {})
             values = [row.get('source_name') or row.get('branch') or ui_message('tui.run'),
                       row['stage'] + (' #' + row['revision_id'] if row.get('revision_id') else ''),
                       row['status'], duration(self.state.elapsed(row)), metrics.get('attempts', '—'),
-                      metric_value(usage, 'total_tokens'), metric_value(usage, 'cost_usd'), row['result']]
+                      metric_value(usage, 'total_tokens'), row['result']]
             cells = [self.literal(value) for value in values]
-            windows = limit_rows(row.get('rate_limits'), minutes=300, compact=True)
-            cells[7:7] = [Text('\n').join(self.literal(window[column])
-                                        for window in windows) if windows else self.literal(ui_message('tui.n_a'))
-                          for column in (1, 2)]
             cells[2].stylize({'COMPLETE': 'green', 'COMPLETE_WITH_WARNINGS': 'yellow', 'FAILED': 'red', 'PARTIAL': 'yellow', 'BLOCKED': 'yellow',
                               'INTERRUPTED': 'yellow', 'SKIPPED': 'dim', 'RUNNING': 'cyan'}.get(row['status'], ''))
             key = str(index)
             if index >= table.row_count:
-                table.add_row(*cells, key=key, height=heights[index])
+                table.add_row(*cells, key=key)
             else:
                 for column, cell in zip(columns, cells):
-                    table.update_cell(key, column, cell, update_width=column in columns[5:9])
+                    table.update_cell(key, column, cell, update_width=column == columns[5])
         self.show_step_details()
 
     def diagnostic_lines(self, item):
@@ -542,32 +542,36 @@ class ExplainApp(App[int]):
         ),
                  ui_message('tui.step', value=s(row['stage'] + (' #' + row['revision_id'] if row.get('revision_id') else ''))),
                  ui_message('tui.result.show_step_details', result=s(row['result'])),
-                 ui_message(
-                     'tui.agent_model',
-                     value=self.presenter.metric_models(metrics) if metrics else s(row.get('backend') or ui_message(
-                         'tui.not_reported_yet',
-                     )),
-                 ),
                  ui_message('tui.report', value=s(row.get('report_path') or ui_message('tui.no_report_available')))]
-        if metrics:
-            lines += self.presenter.metric_lines(metrics)
+        metric_lines = self.presenter.metric_lines(metrics) if metrics else []
         snapshot = row.get('rate_limits')
         if snapshot:
-            lines.append(ui_message('tui.account_limits'))
+            metric_lines.append('      ' + ui_message('tui.account_limits') + ':')
+            used_rows, remaining_rows = [], []
             for minutes, period in ((300, '5h'), (10080, '7d')):
                 windows = [window for window in snapshot['windows'] if window['window_minutes'] == minutes]
                 if not windows:
-                    lines.append(period + ': ' + ui_message('tui.n_a'))
+                    used_rows.append(ui_message('tui.limit_usage', label=period, used=ui_message('tui.n_a')))
                 for window, (label, remaining, resets) in zip(windows, limit_rows(snapshot, minutes=minutes, compact=True)):
+                    label = period if window['limit_id'] == 'codex' else s(label)
                     used = window['used_percent']
-                    lines.append(ui_message('tui.limit_usage', label=s(label),
-                        used=f'{used:g}%' if used is not None else ui_message('tui.n_a'),
-                        remaining=remaining, resets=resets))
+                    used_rows.append(ui_message('tui.limit_usage', label=label,
+                        used=f'{used:g}%' if used is not None else ui_message('tui.n_a')))
+                    remaining_rows.append((label, ui_message('tui.limit_remaining', remaining=remaining, resets=resets)))
+            metric_lines.append('        ' + ' | '.join(used_rows))
+            if not remaining_rows:
+                remaining_rows.append(('', ui_message('tui.limit_remaining',
+                    remaining=ui_message('tui.n_a'), resets=ui_message('tui.n_a'))))
+            metric_lines += ['        ' + (label + ': ' if len(remaining_rows) > 1 else '') + value
+                             for label, value in remaining_rows]
             if snapshot['error']:
-                lines.append(ui_message('tui.account_limits') + ': ' + s(snapshot['error']))
-        for item in row['diagnostics']:
-            lines += self.diagnostic_lines(item)
+                metric_lines.append('        ' + ui_message('tui.account_limits') + ': ' + s(snapshot['error']))
+        diagnostics = [line for item in row['diagnostics'] for line in self.diagnostic_lines(item)]
         self.query_one('#step-details', Static).update(Text('\n'.join(lines)))
+        self.query_one('#step-metrics', Static).update(Text('\n'.join(metric_lines)))
+        block = self.query_one('#step-diagnostics', Static)
+        block.update(Text('\n'.join(diagnostics)))
+        block.display = bool(diagnostics)
 
     def complete(self, payload):
         self.pending_result = payload
