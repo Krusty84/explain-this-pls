@@ -83,6 +83,7 @@ def main(argv=None) -> int:
         ui_message('cli.in_command_line_mode_stdout_contains_one_result'))
     parser.add_argument('--config', type=Path, help=ui_message('cli.path_to_a_json_or_jsonc_configuration_required'))
     parser.add_argument('--tui', action='store_true', help=ui_message('cli.open_the_interactive_config_picker_and_dashboard_also'))
+    parser.add_argument('--demo', action='store_true', help=ui_message('cli.demo_help'))
     parser.add_argument('--check', action='store_true', help=ui_message(
         'cli.check_configuration_source_state_and_cli_capabilities_no',
     ))
@@ -98,15 +99,20 @@ def main(argv=None) -> int:
     ))
     argv = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(argv)
+    if args.demo and (args.config is not None or args.check or args.models or args.trust_repository or args.output != 'auto'):
+        parser.error(ui_message('cli.demo_conflicting_arguments'))
     if args.models and (args.check or args.tui):
         parser.error(ui_message('cli.models_cannot_be_combined_with_check_or_tui'))
-    if not argv or args.tui:
+    if not argv or args.tui or args.demo:
         if args.output != 'auto':
             parser.error(ui_message('cli.tui_cannot_be_combined_with_output_text_or'))
         if not sys.stdin.isatty() or not sys.stdout.isatty() or os.environ.get('TERM') == 'dumb':
             parser.error(ui_message('cli.the_tui_needs_an_interactive_terminal_use_config'))
         try:
-            from src.tui.app import launch
+            if args.demo:
+                from src.tui.demo import launch_demo as launch
+            else:
+                from src.tui.app import launch
         except ModuleNotFoundError as exc:
             if exc.name not in ('textual', 'rich'):
                 raise

@@ -385,7 +385,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             preview = pilot.app.query_one('#config-preview', Static)
             self.assertIsInstance(preview.content, Group)
             files = preview.content.renderables[-1].columns[0]._cells[0].plain
-            self.assertIn('Reports: ' + str(self.base / 'reports' / 'source'), files)
+            self.assertNotIn('Reports:', files)
             self.assertIn('Review: Enabled; may align and review again.', files)
             for width in (60, 100):
                 await pilot.resize_terminal(width, 24)
@@ -442,7 +442,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(separator.characters, '─')
                 self.assertEqual(separator.style, 'dim')
                 self.assertEqual(files.columns[0]._cells[0].plain.splitlines(),
-                    ['Config: ' + str(self.path), 'Reports: ' + str(self.base / 'reports' / repository.name),
+                    ['Config: ' + str(self.path),
                      'Review: Enabled; may align and review again.'])
                 self.assertEqual(files.columns[1]._cells[0].plain.splitlines(),
                     ['Results: COMPLETED', 'Finished: ' + finished.strftime('%Y-%m-%d %H:%M:%S'),
@@ -653,7 +653,8 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn('end-of-results', right)
                     self.assertNotIn('Config:', right)
                     self.assertEqual(scroll.max_scroll_x, 0)
-                    self.assertGreater(scroll.max_scroll_y, 0)
+                    self.assertEqual(scroll.max_scroll_y > 0,
+                                     preview.region.height > scroll.scrollable_content_region.height)
                     scroll.scroll_end(animate=False)
                     await pilot.pause()
                     self.assertEqual(scroll.scroll_y, scroll.max_scroll_y)

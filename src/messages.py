@@ -28,6 +28,11 @@ MESSAGES = {
         'Codex model catalogs. Account access has not been checked.'
     ),
     'cli.config_is_required_unless_using_tui': '--config is required unless using --tui.',
+    'cli.demo_help': 'Open the TUI with static demo data; no model or Codex CLI is required.',
+    'cli.demo_conflicting_arguments': (
+        '--demo cannot be combined with --config, --check, --models, --trust-repository, '
+        '--output text or --output json.'
+    ),
     'cli.description': (
         'Sequential architecture auditing with configured coding-agent CLIs.\n\nmacOS or Linux, Python '
         '3.11+, and one or more authenticated coding-agent CLIs.\nGit >= 2.34.1 is required only for git '
@@ -1340,6 +1345,7 @@ MESSAGES = {
     'tui.not_reported_yet': 'Not reported yet',
     'tui.not_verified': 'Not verified',
     'tui.outcome': 'Outcome',
+    'tui.path_missing': 'File or directory is missing: {path}',
     'tui.preparation_stopped': 'Preparation stopped.',
     'tui.preparing': 'Preparing {name}…',
 
@@ -1356,7 +1362,6 @@ MESSAGES = {
     'tui.remaining_percent': '5h limit',
     'tui.report': 'Report: {value}',
     'tui.report_text_recovered_some_checks_did_not_pass': 'Report text recovered, some checks did not pass.',
-    'tui.reports': 'Reports: {reports_dir}',
     'tui.resets_at': 'Resets at',
     'tui.result': 'Result',
 

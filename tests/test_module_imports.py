@@ -20,7 +20,7 @@ MODULES = (
     'src.model.invocation', 'src.runtime.pipeline', 'src.runtime.runner',
     'src.runtime.audit', 'src.runtime.context_comparison', 'src.cli',
     'src.tui.config_edit', 'src.tui.settings', 'src.tui.models',
-    'src.tui.worker', 'src.tui.app',
+    'src.tui.worker', 'src.tui.app', 'src.tui.demo',
 )
 
 

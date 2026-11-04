@@ -10,6 +10,7 @@ from pathlib import Path
 import signal
 import os
 import sys
+from urllib.parse import quote
 
 from rich.console import Group
 from rich.rule import Rule
@@ -31,6 +32,7 @@ from src.reports.review import review_summary
 from src.tui.settings import config_directory, config_files, read_settings, save_settings
 from src.tui.models import ModelChooser
 from src.tui.limits import limit_rows
+from src.tui.paths import PathStatic, PathText, PathTooltip
 from src.tui.state import RunState
 from src.tui.worker import AuditProcess
 
@@ -108,6 +110,24 @@ class WorkerMessage(Message):
     def __init__(self, payload):
         super().__init__()
         self.payload = payload
+
+
+class SummaryTable(PathTooltip, DataTable):
+    def on_resize(self):
+        self.fit_paths()
+
+    def fit_paths(self):
+        columns = list(self.columns.values())
+        if len(columns) != 2:
+            return
+        rows = [(key, self.get_row(key)) for key in self.rows]
+        label_width = max([columns[0].label.cell_len, *(row[0].cell_len for _, row in rows)])
+        value_width = max(1, self.scrollable_content_region.width - label_width - 4 * self.cell_padding)
+        for key, row in rows:
+            cell = row[1]
+            if isinstance(cell, PathText) and cell.max_width != value_width:
+                cell.max_width = value_width
+                self.update_cell(key, columns[1].key, cell, update_width=True)
 
 
 class ExplainApp(App[int]):
@@ -201,6 +221,7 @@ class ExplainApp(App[int]):
         self.pending_result = None
         self.exit_when_finished = False
         self.last_exit_code = 0
+        self.editor = 'vscode'
 
     def literal(self, value):
         return Text(self.presenter.display(value))
@@ -211,7 +232,7 @@ class ExplainApp(App[int]):
             yield Static('', id='config-location')
             yield DataTable(id='configs', cursor_type='row', zebra_stripes=True)
             with VerticalScroll(id='preview-scroll'):
-                yield Static(ui_message('tui.select_a_configuration'), id='config-preview')
+                yield PathStatic(ui_message('tui.select_a_configuration'), id='config-preview')
             with Horizontal(classes='actions'):
                 yield Button(ui_message('tui.run'), id='run', variant='primary', disabled=True)
                 yield Button(ui_message('tui.check_config'), id='check', disabled=True)
@@ -226,11 +247,11 @@ class ExplainApp(App[int]):
                     yield DataTable(id='stages', cursor_type='row', zebra_stripes=True, fixed_columns=2)
                     with VerticalScroll(id='detail-scroll'):
                         with Horizontal(id='detail-columns'):
-                            yield Static('', id='step-details')
+                            yield PathStatic('', id='step-details')
                             yield Static('', id='step-metrics')
                         yield Static('', id='step-diagnostics')
                 with TabPane(ui_message('tui.final_result'), id='summary-tab'):
-                    yield DataTable(id='summary', cursor_type='row')
+                    yield SummaryTable(id='summary', cursor_type='row')
             with Horizontal(classes='actions'):
                 yield Button(ui_message('tui.cancel'), id='cancel-run', variant='warning')
                 yield Button(ui_message('tui.configs'), id='back', disabled=True)
@@ -349,6 +370,7 @@ class ExplainApp(App[int]):
         if config is None:
             lines = [ui_message('tui.config.select_config', selected=s(self.selected)), ui_message('tui.cannot_start', error=error)]
         else:
+            self.editor = config['your_editor']
             source = config[config['mode'] + '_mode']
             description = (ui_message('tui.project_description', project_description=s(config['project_description']))
                            if config['project_description'] else
@@ -356,7 +378,6 @@ class ExplainApp(App[int]):
             lines = [description,
                      ui_message('tui.source.select_config', path=s(source.get('path', source.get('repository')))),
                      ui_message('tui.config.select_config', selected=s(self.selected)),
-                     ui_message('tui.reports', reports_dir=s(config['_reports_dir'])),
                      ui_message('tui.review', value=(
                          ui_message('tui.enabled_may_align_and_review_again') if config['execution']['review_enabled'] else
                          ui_message('tui.disabled_no_separate_review')))]
@@ -371,16 +392,16 @@ class ExplainApp(App[int]):
                           ui_message(
                               'tui.finished',
                               finished=finished,
-                          ), ui_message(
-                              'tui.results_directory',
-                              results_dir=s(analysis['results_dir']),
                           )]
         lines = [Text.assemble(line) for line in lines]
         if config is not None:
             details = Table.grid(expand=True, padding=(0, 1), collapse_padding=False)
             details.add_column(ratio=1, overflow='fold')
             details.add_column(ratio=1, overflow='fold')
-            details.add_row(Text('\n').join(lines[2:5]), Text('\n').join(lines[5:]))
+            results = (PathText(analysis['results_dir'], self.editor,
+                       prefix=Text('\n').join(lines[4:]).plain + '\n' +
+                       ui_message('tui.results_directory', results_dir='')) if analysis else Text(''))
+            details.add_row(Text('\n').join(lines[2:4]), results)
             content = Group(Text('\n').join(lines[:2]), Rule(characters='─', style='dim'), details, fit=False)
         else:
             content = Text('\n').join(lines)
@@ -395,6 +416,14 @@ class ExplainApp(App[int]):
     def on_data_table_row_selected(self, event):
         if event.data_table.id == 'configs':
             self.select_config(event.row_key.value)
+
+    def action_open_path(self, path, editor):
+        target = Path(path)
+        if not target.exists():
+            self.notify(ui_message('tui.path_missing', path=safe_text(path)), severity='warning')
+            return
+        suffix = '/' if target.is_dir() else ''
+        self.open_url(editor + '://file' + quote(target.as_posix(), safe='/.-') + suffix)
 
     def on_button_pressed(self, event):
         name = event.button.id
@@ -567,13 +596,15 @@ class ExplainApp(App[int]):
             if snapshot['error']:
                 metric_lines.append('        ' + ui_message('tui.account_limits') + ': ' + s(snapshot['error']))
         diagnostics = [line for item in row['diagnostics'] for line in self.diagnostic_lines(item)]
-        self.query_one('#step-details', Static).update(Text('\n'.join(lines)))
+        details = (PathText(row['report_path'], self.editor, prefix='\n'.join(lines[:3]) + '\n' +
+                   ui_message('tui.report', value='')) if row.get('report_path') else Text('\n'.join(lines)))
+        self.query_one('#step-details', Static).update(details)
         self.query_one('#step-metrics', Static).update(Text('\n'.join(metric_lines)))
         block = self.query_one('#step-diagnostics', Static)
         block.update(Text('\n'.join(diagnostics)))
         block.display = bool(diagnostics)
 
-    def complete(self, payload):
+    def complete(self, payload, *, show_summary=True):
         self.pending_result = payload
         result = payload['result']
         self.last_exit_code = result['exit_code']
@@ -595,15 +626,19 @@ class ExplainApp(App[int]):
                    for i, item in enumerate(self.state.diagnostics)]
         table = self.query_one('#summary', DataTable)
         table.clear()
+        paths = dict(payload.get('paths', []))
         for label, value in values:
-            table.add_row(self.literal(label), self.literal(value))
+            cell = PathText(value, self.editor) if label in paths else self.literal(value)
+            table.add_row(self.literal(label), cell)
+        table.fit_paths()
         tabs = self.query_one('#run-tabs', TabbedContent)
         tabs.enable_tab('summary-tab')
         self.query_one('#cancel-run', Button).disabled = True
         self.query_one('#back', Button).disabled = False
         # Enabling a tab also enables its pane through a queued Textual message.
         # Wait for that transition before moving focus out of the steps table.
-        self.call_after_refresh(self.show_summary)
+        if show_summary:
+            self.call_after_refresh(self.show_summary)
         if self.exit_when_finished:
             self.exit(self.last_exit_code)
 
@@ -638,8 +673,8 @@ class ExplainApp(App[int]):
         self.presenter.close()
 
 
-def launch(args):
-    app = ExplainApp(args)
+def launch(args, *, app=None):
+    app = app if app is not None else ExplainApp(args)
     old_handler = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, lambda signum, frame: app.call_later(app.action_quit))
     try:
