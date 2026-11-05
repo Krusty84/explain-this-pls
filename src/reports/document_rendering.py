@@ -69,6 +69,39 @@ def _markdown_tokens(markdown):
     return parser.parse(markdown)
 
 
+def summary_paragraph(markdown):
+    """Keep a short prose block portable when it moves to the run summary."""
+    tokens = _markdown_tokens(markdown)
+    paragraph = ['paragraph_open', 'inline', 'paragraph_close']
+    if [token.type for token in tokens] not in (paragraph, paragraph * 2):
+        return ''
+    inline = tokens[1::3]
+    if sum(token.map[1] - token.map[0] for token in inline) != sum(bool(line.strip()) for line in markdown.splitlines()):
+        return ''
+    portable = {'text', 'code_inline', 'softbreak', 'em_open', 'em_close', 'strong_open', 'strong_close'}
+    if any(child.type not in portable for token in inline for child in token.children):
+        return ''
+    text = ' '.join(token.content for token in inline)
+    if len(text) > 650:
+        return ''
+    if len(inline) == 2:
+        # Joining historical paragraphs must not change inline markup across their boundary.
+        joined = _markdown_tokens(text)
+        if [token.type for token in joined] != paragraph:
+            return ''
+        def signature(children):
+            return [(child.type, child.content) for child in children]
+
+        left, right = (signature(token.children) for token in inline)
+        if left and right and left[-1][0] == right[0][0] == 'text':
+            expected = left[:-1] + [('text', left[-1][1] + ' ' + right[0][1])] + right[1:]
+        else:
+            expected = left + [('text', ' ')] + right
+        if signature(joined[1].children) != expected:
+            return ''
+    return text
+
+
 def _is_plantuml(token):
     info = token.info.split()
     return token.type == 'fence' and bool(info) and info[0].lower() == 'plantuml'

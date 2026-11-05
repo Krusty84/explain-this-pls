@@ -363,7 +363,7 @@ Each run saves results in `reports_dir/<source-name>/<run-id>/`, for example
 
 | Report                                    | Contents                                                                                                                                                    |
 | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FINAL_REPORT.md`                         | Start here: selected revision, review outcome, scenario boundaries, source scope/exclusions, unknowns and next checks, omission search, findings and links. |
+| `FINAL_REPORT.md`                         | Architecture overview, selected revision, review outcome, key findings and links to details.                                                              |
 | `ARCHITECTURE.md`                         | Five ordered sections, author blocks and diagrams; contents, source labels and return links.                                                                |
 | `ARCHITECTURE_REVIEW.md`                  | Findings first: claim, problem, impact, correction, evidence status and architecture block; then unchecked claims and review limits.                        |
 | `BRANCH_COMPARISON.md`                    | Both statements, category, explanation, confirmation status and evidence for each compared branch and revision.                                             |
@@ -377,10 +377,12 @@ and `ARCHITECTURE_REVIEW.md` are under `branches/<branch-id>/`, and the comparis
 when applicable, is under `comparison/`. In folder mode, the architecture report
 and review are directly in the run folder.
 
-Read `FINAL_REPORT.md`, then the selected architecture and review. Open the annotated
-files for complete technical registries. Earlier revisions remain under
-`revisions/<revision-id>/` inside the source's result directory; the summary links to
-them without copying their contents. A partial review stays with its own revision.
+Read `FINAL_REPORT.md`, then the selected architecture and review. The architecture
+report contains the study scope. The annotated reports contain the full registries,
+open questions, coverage and citation checks. The manifest retains source filters,
+tool observations and revision history. Earlier reports remain under
+`revisions/<revision-id>/` inside the source's result directory. A partial review
+stays with its own revision.
 
 Source labels show paths and line ranges. Click a resolved path to open the first
 line in the editor set by `your_editor`: `"vscode"` (default) or `"zed"`. The adjacent

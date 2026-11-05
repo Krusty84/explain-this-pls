@@ -71,10 +71,12 @@ class HashlessMarkdownTests(unittest.TestCase):
         manifest = dict(status='PARTIAL', branch='main', study=self.study, review=self.review,
             selected_revision='001', revisions=[dict(revision_id='002', study=other, review=None)])
         markdown, _ = render_final_report(dict(status='PARTIAL', branches=[manifest]),
-                                          {'branches': ['main']}, 'git', 'English')
+            {'branches': ['main']}, 'git', 'English',
+            available_files={'ARCHITECTURE.md', 'revisions/002/ARCHITECTURE.md', 'manifest.json'})
         self.assert_no_service_hashes(markdown)
-        self.assertIn('Other revision 002', markdown)
-        self.assertIn(self.narrative, markdown)
+        self.assertIn('](ARCHITECTURE.md#report-section-context)', markdown)
+        self.assertIn('](revisions/002/ARCHITECTURE.md)', markdown)
+        self.assertNotIn(self.narrative, markdown)
         self.assertNotIn('Unselected architecture text.', markdown)
         from src.reports.presentation import render_architecture
         self.assertIn(self.narrative, render_architecture(self.study))

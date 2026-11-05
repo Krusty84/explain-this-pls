@@ -166,10 +166,51 @@ class ReportNavigationTests(unittest.TestCase):
             self.assertNotIn('Full claim registry', report)
             self.assertNotIn('```plantuml', report)
             self.assertNotIn('Existing statement 100', report)
-            self.assertIn('HIGH: 1', report)
+            self.assertIn('HIGH — The documented entry point is wrong.', report)
             assert_links(self, directory)
         self.assertEqual(reports[0], reports[1])
         self.assertLess(len(reports[1].splitlines()), 80)
+
+    def test_summary_uses_complete_claim_linked_context_and_links_to_its_block(self):
+        context = 'The `worker` reads queued requests.\n\nIt writes the processed result when a job succeeds.'
+        state, _ = revision(folder=True, context_blocks=[
+            dict(markdown=context, claim_ids=['C-001']),
+            dict(markdown='This later context belongs in the architecture report.', claim_ids=['C-001']),
+        ])
+        manifest = dict(state, directory='.', selected_revision='001', revisions=[state],
+                        selection_publication_complete=True, status='PARTIAL')
+        publish_example(self.root, manifest, {'path': 'example'})
+        report = (self.root / 'FINAL_REPORT.md').read_text()
+        architecture = (self.root / 'ARCHITECTURE.md').read_text()
+        self.assertIn('The `worker` reads queued requests. It writes the processed result when a job succeeds.', report)
+        self.assertIn(context, architecture)
+        self.assertNotIn('This later context belongs', report)
+        self.assertIn('ARCHITECTURE.md#report-block-b-002-001', Links(report).hrefs)
+        self.assertLess(report.index('ARCHITECTURE.md'), report.index('Study — Complete'))
+        assert_links(self, self.root)
+        unpublished, _ = render_final_report(manifest, {'path': 'example'}, 'folder', 'English', available_files=set())
+        self.assertNotIn('reads queued requests', unpublished)
+        self.assertFalse(Links(unpublished).hrefs)
+
+    def test_summary_falls_back_to_system_context_without_a_usable_opening_block(self):
+        examples = [
+            dict(markdown='Claim-free context.', claim_ids=[]),
+            dict(markdown='Oversized context. ' * 40, claim_ids=['C-001']),
+            dict(markdown='- Context in a list.', claim_ids=['C-001']),
+            dict(markdown='Context with a [local link](extra.md).', claim_ids=['C-001']),
+            dict(markdown='A *begins here.\n\nOne ends* here.', claim_ids=['C-001']),
+        ]
+        for first in examples:
+            with self.subTest(markdown=first['markdown'][:25]):
+                state, _ = revision(folder=True, context_blocks=[
+                    first, dict(markdown='Later context cannot replace the opening.', claim_ids=['C-001']),
+                ])
+                manifest = dict(state, selected_revision='001', status='PARTIAL')
+                report, _ = render_final_report(manifest, {'path': 'example'}, 'folder', 'English',
+                    available_files={'revisions/001/ARCHITECTURE.md'})
+                self.assertIn('revisions/001/ARCHITECTURE.md#report-section-context', Links(report).hrefs)
+                self.assertNotIn(first['markdown'][:25].strip(), report)
+                self.assertNotIn('Later context cannot replace', report)
 
     def test_findings_are_sorted_and_keep_context_together(self):
         state, _ = revision()
@@ -247,7 +288,7 @@ class ReportNavigationTests(unittest.TestCase):
                                      context={'architecture_document': state['study']})
 
     def test_incomplete_disabled_and_recovered_results_are_explicit(self):
-        for language, warning in (('English', 'Review is incomplete'), ('Russian', 'Ревью не завершено')):
+        for language, warning in (('English', 'Review — Partial'), ('Russian', 'Ревью — частичное')):
             manifest, source, _ = example(partial=True)
             path = self.root / language
             publish_example(path, manifest, source, language)
@@ -258,13 +299,28 @@ class ReportNavigationTests(unittest.TestCase):
         manifest['review_enabled'] = False
         manifest['review'] = None
         report, _ = render_final_report(manifest, source, 'folder')
-        self.assertIn('Ревью отключено', report)
+        self.assertIn('Ревью — отключено', report)
         material = recoverable_material('study', response(dict(source_directory='/example', source_fingerprint='f')),
                                        dict(source_directory='/example', source_fingerprint='f'), 'folder', {})
         manifest.update(study=None, study_material=material, revisions=[], status='PARTIAL')
         report, _ = render_final_report(manifest, source, 'folder')
-        self.assertLess(report.index('Есть восстановленные результаты'), report.index('## '))
-        self.assertIn('проверки политики не завершены', report)
+        self.assertEqual(report.count('результат восстановлен после ошибки'), 1)
+        self.assertIn('Приёмка — не пройдена', report)
+
+    def test_complete_review_document_with_unchecked_claim_is_reported_as_incomplete(self):
+        manifest, source, context = example()
+        wire = response(context)
+        wire['evidence'] = []
+        wire['claims'][0].update(outcome='NOT_CHECKED', evidence_ids=[], limitation='Source check was skipped.')
+        manifest['revisions'][0]['review'] = prepare_result('review', wire, context)
+        saved, _ = publish_example(self.root, manifest, source)
+        self.assertEqual(saved['review']['completion_status'], 'COMPLETE')
+        self.assertEqual(saved['review']['findings'], [])
+        report = (self.root / 'FINAL_REPORT.md').read_text()
+        self.assertIn('Review — Incomplete', report)
+        self.assertIn('Acceptance — Not passed', report)
+        self.assertIn('ARCHITECTURE_REVIEW.md', Links(report).hrefs)
+        assert_links(self, self.root)
 
     def test_canonical_data_and_hashes_survive_both_languages(self):
         state, _ = revision(100)
@@ -323,13 +379,17 @@ class ReportNavigationTests(unittest.TestCase):
     def test_failed_selection_publication_links_the_frozen_revision(self):
         manifest, source, _ = example()
         saved, _ = publish_example(self.root, manifest, source)
-        saved.update(selection_publication_complete=False, critical_failure=True)
+        saved.update(selection_publication_complete=False, critical_failure=True, diagnostics=[
+            dict(phase='integrity', code='ARTIFACT_CHANGED', message='Published review hash differs from the record.'),
+        ])
         report, _ = render_final_report(saved, source, 'folder', 'English',
             available_files={str(p.relative_to(self.root)) for p in self.root.rglob('*') if p.is_file()})
-        self.assertIn('Run acceptance failed due to a critical error.', report)
-        self.assertIn('[Architecture](revisions/001/ARCHITECTURE.md)', report)
+        self.assertEqual(report.count('Critical run failure.'), 1)
+        self.assertIn('Acceptance — Not passed', report)
+        self.assertIn('ARTIFACT_CHANGED — Published review hash differs from the record.', report)
+        self.assertIn('[Architecture](revisions/001/ARCHITECTURE.md#report-section-context)', report)
         self.assertIn('revisions/001/ARCHITECTURE_REVIEW.md#report-finding-f-001', report)
-        self.assertNotIn('[Architecture](ARCHITECTURE.md)', report)
+        self.assertNotIn('[Architecture](ARCHITECTURE.md', report)
         (self.root / 'FINAL_REPORT.md').write_text(report)
         assert_links(self, self.root)
 
@@ -381,6 +441,12 @@ class ReportNavigationTests(unittest.TestCase):
             path = self.root / language
             source = {'repository': '/example/Текущий Git', 'branches': context['requested_branches']}
             publish_example(path, manifest, source, language, 'git', context, editor='zed')
+            final = (path / 'FINAL_REPORT.md').read_text()
+            method = {'English': 'Method — static analysis of source code.',
+                      'Russian': 'Метод — статический анализ исходников.'}[language]
+            self.assertEqual(final.count(method), 1)
+            self.assertIn('comparison/BRANCH_COMPARISON.md', Links(final).hrefs)
+            self.assertLess(final.index('## main'), final.index('## ветка / проверка'))
             rendered = (path / 'comparison/BRANCH_COMPARISON.md').read_text()
             self.assertEqual(rendered, render_stage('compare', comparison, language, context=context,
                 source_root=source['repository'], editor='zed'))
@@ -406,7 +472,7 @@ class ReportNavigationTests(unittest.TestCase):
         report, _ = render_final_report(manifest, source, 'folder')
         self.assertLess(report.index('Impact 3'), report.index('Impact 2'))
         self.assertNotIn('Impact 4', report)
-        self.assertIn('Остальные замечания: 2', report)
+        self.assertIn('Ещё замечаний — 2.', report)
 
     def test_anchor_collisions_and_special_paths_are_safe(self):
         state, _ = revision(folder=True, source_path='src/Пример [a](b)#_`&.py',
@@ -468,9 +534,35 @@ class ReportNavigationTests(unittest.TestCase):
         data['target']['plan_sha256'] = data['review_plan']['plan_sha256']
         self.assertIn('| components |', render_review(data, 'Russian', study))
         manifest, source, _ = example()
-        manifest['study']['program_checks']['citation_warnings'] = [warning]
+        manifest['revisions'][0]['study']['program_checks']['citation_warnings'] = [warning]
         report, _ = render_final_report(manifest, source, 'folder')
-        self.assertLess(report.index('Есть предупреждения о цитатах'), report.index('## '))
+        self.assertEqual(report.count('предупреждения о цитатах (1)'), 1)
+
+    def test_summary_omits_previous_revision_citation_warnings_and_limitations(self):
+        manifest, source, _ = example(multiple=True)
+        previous = manifest['revisions'][1]
+        previous['study']['program_checks']['citation_warnings'] = [
+            dict(evidence_id='study:E-001', source_id='source-001', path='src/Заказы и счета.py',
+                 start_line=1, end_line=1, reason='QUOTE_MISMATCH', action='UNRESOLVED', claim_ids=['C-001']),
+        ]
+        current_error = dict(branch='folder', revision_id='001', stage='study', code='CURRENT',
+                             message='Diagnostic for the selected revision.')
+        old_error = dict(current_error, revision_id='002', code='PREVIOUS',
+                         message='Diagnostic for the other revision.')
+        manifest['diagnostics'] = [current_error, dict(current_error), old_error]
+        publish_example(self.root, manifest, source)
+        final = (self.root / 'FINAL_REPORT.md').read_text()
+        self.assertNotIn('citation warnings', final)
+        self.assertNotIn('Review was interrupted.', final)
+        self.assertNotIn('More findings', final)
+        self.assertNotIn('## Comparison', final)
+        self.assertEqual(final.count(current_error['message']), 1)
+        self.assertNotIn(old_error['message'], final)
+        self.assertIn(old_error, json.loads((self.root / 'manifest.json').read_text())['diagnostics'])
+        self.assertIn('revisions/002/ARCHITECTURE.md', Links(final).hrefs)
+        old = self.root / 'revisions' / '002'
+        self.assertIn('Citation warnings', (old / 'study.annotated.md').read_text())
+        self.assertIn('Review was interrupted.', (old / 'ARCHITECTURE_REVIEW.md').read_text())
 
 
 if __name__ == '__main__':

@@ -3,6 +3,7 @@
 
 """Static-analysis instructions and frozen uncertainty use the existing contracts."""
 import copy
+import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -10,7 +11,7 @@ from unittest.mock import patch
 from fixtures.cli_response import cli_result
 from fixtures.ledger_response import prompt_context, response
 from fixtures.study_runner import run_case
-from src.reports.final_report import investigation_boundaries, render_final_report
+from src.reports.final_report import render_final_report
 from src.reports.presentation import render_stage
 from src.runtime.runner import Runner
 from src.runtime.tool_observer import ToolObserver
@@ -102,16 +103,17 @@ class AnalysisUncertaintyPipelineTests(FolderFixture):
                                      render_stage('study', study, language=language))
                     self.assertEqual(study, before)
                 self.assertEqual(manifest['study']['registry_diff']['unchanged_ids'], ['C-001', 'C-002'])
-                final = (self.runner.session.run_dir / 'FINAL_REPORT.md').read_text()
-                for text in ('Investigated', 'Partially investigated', 'Unverified', 'Out of scope',
-                             'UNKNOWN', unknown['uncertainty'], 'runtime verification'):
-                    self.assertIn(text, final)
-                for text in (('Границы исследования — оценки агента', 'Фильтр исходников — данные программы',
-                              'Область исходников — зафиксированный список', 'Доставка исходного текста — наблюдения программы')
-                             if language == 'Russian' else
-                             ('Investigation boundaries — agent reports', 'Source filter — program records',
-                              'Source scope — pinned inventory', 'Source text delivery — program observations')):
-                    self.assertIn(text, final)
+                directory = self.runner.session.run_dir
+                final = (directory / 'FINAL_REPORT.md').read_text()
+                architecture = (directory / 'ARCHITECTURE.md').read_text()
+                annotated = (directory / 'study.annotated.md').read_text()
+                self.assertIn(scope, architecture)
+                self.assertIn(unknown['statement'], annotated)
+                self.assertIn(unknown['uncertainty'], annotated)
+                self.assertNotIn(scope, final)
+                self.assertNotIn(unknown['uncertainty'], final)
+                self.assertIn('](ARCHITECTURE.md#report-section-context)', final)
+                self.assertIn('](study.annotated.md)', final)
                 source = self.runner.session.cfg['folder_mode']
                 before = copy.deepcopy(manifest)
                 rendered = render_final_report(manifest, source, 'folder', language)
@@ -126,21 +128,15 @@ class AnalysisUncertaintyPipelineTests(FolderFixture):
         study = manifest['study']
         uncited = study['program_checks']['coverage']['not_cited_ids']
         self.assertTrue(uncited)
-        for observation, observed in (({}, False), ({'delivery': {'unique_lines': 1}}, True),
-                                      ({'mcp': {'delivered_observed': 1}}, False),
-                                      ({'mcp': {'text_utf8_bytes': 1}}, True)):
-            entry = copy.deepcopy(manifest)
-            entry['study_invocation']['phase_invocations'] = [dict(phase='collect', tool_observation=observation)]
-            before = copy.deepcopy(entry)
-            with self.subTest(observation=observation):
-                final = '\n'.join(investigation_boundaries(entry, entry['study'], None, 'English'))
-                self.assertIn('study / collect: ' + ('source text delivery observed; INSPECTED_UNVERIFIED.'
-                              if observed else 'source text delivery is not established by retained observations; inspection UNVERIFIED.'), final)
-                self.assertIn('NOT_CITED does not mean NOT_INSPECTED.', final)
-                self.assertIn('Text delivery does not prove understanding.', final)
-                for area in uncited:
-                    self.assertIn('| ' + area + ' | Not cited | Unverified |', final)
-                self.assertEqual(entry, before)
+        source = self.runner.session.cfg['folder_mode']
+        summary = render_final_report(manifest, source, 'folder', 'English')
+        manifest['study_invocation']['phase_invocations'] = [
+            dict(phase='collect', tool_observation={'delivery': {'unique_lines': 1}})]
+        self.assertEqual(render_final_report(manifest, source, 'folder', 'English'), summary)
+        annotated = render_stage('study', study)
+        self.assertIn('NOT_CITED does not mean NOT_INSPECTED.', annotated)
+        for area in uncited:
+            self.assertIn('| ' + area + ' | Not cited | Unverified |', annotated)
 
     def test_folder_filter_and_exclusions_are_visible_in_publication(self):
         self.value.update(output_language='English',
@@ -152,13 +148,18 @@ class AnalysisUncertaintyPipelineTests(FolderFixture):
         (self.source / '.gitignore').write_text('ignored/\n')
         manifest, code = self.run_case(large=False)
         self.assertEqual(code, 0)
-        final = (self.runner.session.run_dir / 'FINAL_REPORT.md').read_text()
-        self.assertIn('follow_gitignore: true', final)
-        self.assertIn('User exclusions: excluded.', final)
-        self.assertIn('| excluded | CONFIG |', final)
-        self.assertIn('| ignored | GITIGNORE |', final)
-        self.assertIn('kept', final)
-        plan = manifest['study']['review_plan']['coverage_plan']
+        directory = self.runner.session.run_dir
+        final = (directory / 'FINAL_REPORT.md').read_text()
+        saved = json.loads((directory / 'manifest.json').read_text())
+        settings = saved['source_filter']
+        self.assertTrue(settings['follow_gitignore'])
+        self.assertEqual(settings['exclude_paths'], ['excluded'])
+        self.assertEqual({record['path']: record['origin'] for record in settings['exclusions']},
+                         {'excluded': 'CONFIG', 'ignored': 'GITIGNORE'})
+        self.assertIn('](manifest.json)', final)
+        self.assertNotIn('Source scope — pinned inventory', final)
+        self.assertIn('Source scope — pinned inventory', (directory / 'study.annotated.md').read_text())
+        plan = saved['study']['review_plan']['coverage_plan']
         included = {path for area in plan['areas'] for path in area['file_paths']}
         self.assertIn('kept/worker.py', included)
         self.assertFalse({'excluded/private.py', 'ignored/cache.py'} & included)
@@ -176,11 +177,14 @@ class AnalysisUncertaintyPipelineTests(FolderFixture):
         with patch.object(ToolObserver, 'snapshot', snapshot):
             manifest, code = self.run_case(large=False)
         self.assertEqual(code, 0)
-        phases = manifest['study_invocation']['phase_invocations']
+        directory = self.runner.session.run_dir
+        saved = json.loads((directory / 'manifest.json').read_text())
+        phases = saved['study_invocation']['phase_invocations']
         self.assertEqual([(p['phase'], p['tool_observation']['delivery']['unique_lines']) for p in phases],
                          [('collect', 1)])
-        final = (self.runner.session.run_dir / 'FINAL_REPORT.md').read_text()
-        self.assertIn('study / collect: source text delivery observed; INSPECTED_UNVERIFIED.', final)
+        final = (directory / 'FINAL_REPORT.md').read_text()
+        self.assertIn('](manifest.json)', final)
+        self.assertNotIn('Source text delivery — program observations', final)
 
 
 class AnalysisMCPDeliveryTests(unittest.TestCase):
@@ -202,14 +206,9 @@ class AnalysisMCPDeliveryTests(unittest.TestCase):
             observer = ToolObserver('codex', context=self.context)
             observer.event(event)
             observation = observer.snapshot()
-            entry = {'study_invocation': {'phase_invocations': [dict(phase='collect',
-                                                                    tool_observation=observation)]}}
             with self.subTest(tool=event['item']['tool'], request=event['item']['id']):
                 self.assertEqual(observation['mcp']['delivered_observed'], 1)
                 self.assertEqual(observation['mcp']['text_utf8_bytes'] > 0, delivered)
-                final = '\n'.join(investigation_boundaries(entry, None, None, 'English'))
-                self.assertIn('study / collect: ' + ('source text delivery observed; INSPECTED_UNVERIFIED.'
-                              if delivered else 'source text delivery is not established by retained observations; inspection UNVERIFIED.'), final)
 
 
 class AnalysisGitBoundaryTests(unittest.TestCase):
@@ -239,10 +238,17 @@ class AnalysisGitBoundaryTests(unittest.TestCase):
         branch = manifest['branches'][0]
         self.assertEqual(branch['source_commit'], pinned)
         final = (run_dir / 'FINAL_REPORT.md').read_text()
-        for text in (pinned, 'Source scope — pinned inventory', 'User exclusions: excluded.py.',
-                     '| excluded.py | CONFIG |', 'Git mode also applies Git rules.'):
-            self.assertIn(text, final)
-        plan = branch['study']['review_plan']['coverage_plan']
+        self.assertIn(pinned, final)
+        self.assertIn('](manifest.json)', final)
+        self.assertNotIn('Source scope — pinned inventory', final)
+        saved = json.loads((run_dir / 'manifest.json').read_text())['branches'][0]
+        settings = saved['source_filter']
+        self.assertEqual(settings['exclude_paths'], ['excluded.py'])
+        self.assertEqual({record['path']: record['origin'] for record in settings['exclusions']},
+                         {'excluded.py': 'CONFIG'})
+        annotated = (run_dir / saved['directory'] / 'study.annotated.md').read_text()
+        self.assertIn('Source scope — pinned inventory', annotated)
+        plan = saved['study']['review_plan']['coverage_plan']
         self.assertEqual({path for area in plan['areas'] for path in area['file_paths']}, {'app.py'})
         before = copy.deepcopy(manifest)
         self.assertEqual(render_final_report(manifest, cfg['git_mode'], 'git', 'English'),

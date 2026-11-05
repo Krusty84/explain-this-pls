@@ -42,6 +42,12 @@ when inspection cannot be established. Missing citations do not mean NOT_INSPECT
 Preserve the section keys, in order: scope, context, components, startup_and_flows,
 data_and_state.
 
+Open context with a standalone block of two to four short sentences for the run
+summary. Explain the system's purpose, main components and main flow where the
+evidence supports them. Link the block to the relevant claim IDs and include any
+conditions or uncertainty needed to read it on its own. Use one prose paragraph
+of at most 650 characters with inline code as needed.
+
 Preserve four explicit scope groups: Investigated (paths you report tracing),
 Partially investigated (incomplete execution chains), Unverified (material
 behavior not established), and Out of scope (user exclusions or unselected

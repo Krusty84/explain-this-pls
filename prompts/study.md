@@ -42,6 +42,11 @@ your titles do not override them.
    to fill a group; do not infer complete coverage. Passing this structural check
    does not establish semantic truth or completeness.
 2. context: purpose, system boundaries, processes and external integrations.
+   Open with a standalone block of two to four short sentences for the run
+   summary. Explain the system's purpose, main components and main flow where
+   the evidence supports them. Link the block to the relevant claim IDs and
+   include any conditions or uncertainty needed to read it on its own. Use
+   one prose paragraph of at most 650 characters with inline code as needed.
 3. components: responsibilities, code locations, interfaces, entry points and
    important dependencies.
 4. startup_and_flows: triggers, registered paths, activation conditions, state,

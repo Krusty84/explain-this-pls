@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 
 def revision(count=1, *, branch='main', revision_id='001', folder=False, partial=False,
-             source_path='src/Заказы и счета.py', prose=None):
+             source_path='src/Заказы и счета.py', prose=None, context_blocks=None):
     context = ({'source_directory': '/example/Исходный код', 'source_fingerprint': 'f' * 64} if folder else
                {'branch': branch, 'source_commit': ('a' if branch == 'main' else 'b') * 40})
     context['revision_id'] = revision_id
@@ -25,6 +25,8 @@ def revision(count=1, *, branch='main', revision_id='001', folder=False, partial
     wire['evidence'][0]['path'] = source_path
     if prose is not None:
         wire['report_sections'][0]['blocks'][0]['markdown'] = prose
+    if context_blocks is not None:
+        next(section for section in wire['report_sections'] if section['key'] == 'context')['blocks'] = context_blocks
     wire['claims'] = [wire['claims'][0] | {'id': f'C-{i:03d}', 'statement': f'Existing statement {i}.'}
                       for i in range(1, count + 1)]
     for section in wire['report_sections']:

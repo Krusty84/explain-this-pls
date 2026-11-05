@@ -627,7 +627,7 @@ UTC timestamp and random suffix.
 | `study.logs/attempt-001/`, `study.logs/attempt-002/`            | Separate initial collection and writing attempts: prompts, schemas, responses, validation, bindings and observations. |
 | `study.annotated.md`, `review.annotated.md`                    | Full claim/evidence registries and technical checks.                                                             |
 | `*.original.md`, `study.json`, `review.json`, `compare.json`   | Canonical narratives and structured results, separate from published presentation.                               |
-| `FINAL_REPORT.md`                                               | Consolidated result, selected reports, limitations, and errors.                                                  |
+| `FINAL_REPORT.md`                                             | Architecture overview, review outcome, key findings and report links.                                           |
 
 Folder mode publishes selected reports at the run root. Git mode uses
 `branches/<branch-id>/` per source and `comparison/` for comparison.
@@ -654,20 +654,16 @@ report revisions. Comparison uses supplied studies and reviews only; missing
 inputs remain explicit limitations. The complete narrative stays in
 `comparison/compare.original.md`; `compare.json` stores structured results.
 
-`FINAL_REPORT.md` shows the selected scope blocks, HYPOTHESIS/UNKNOWN claims with
-their missing checks, omission search, pinned coverage plan and citation diagnostics.
-Source results retain the inventory's filter/exclusion records for this view.
-Collection invocation metadata retains its tool observations alongside the writer
-metadata; the report distinguishes observed delivery from unavailable observations.
-These program records do not confirm agent understanding or semantic conclusions.
-The summary shows severity counts and at most five findings per source, with
-links to the full list. It also shows revision links, limitations, comparison
-state and run errors. Full narratives and registries stay in linked report,
-annotation and JSON files. Review outcomes distinguish policy acceptance,
-material findings, incomplete review and explicit disablement in the report,
-CLI and TUI. Acceptance does not establish that code changes are safe.
-Completed review without overall policy acceptance has a separate outcome;
-it does not imply unfinished review.
+The [final report renderer](src/reports/final_report.py) uses the selected
+Study's opening context block as a brief overview when eligible. It links to the
+published architecture and review, highlights key findings and reports
+citation warnings, comparison status when applicable, and execution errors.
+The full scope, open questions, omission search and citation checks are in the
+linked architecture, review and annotated reports. The manifest retains source
+filters, coverage plans, tool observations and revision history. The final report,
+CLI and TUI distinguish policy acceptance, completed review with material
+findings, completed review without acceptance, incomplete review and disabled
+review.
 CLI JSON exposes the per-source outcomes and selected revisions in `reviews`.
 
 Initial Study uses two model calls per snapshot. Enabled review adds one call.

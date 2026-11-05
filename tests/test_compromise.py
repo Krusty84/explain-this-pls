@@ -151,13 +151,14 @@ class CompromiseFolder(folder_fixtures.FolderFixture):
             self.assertFalse((self.run_dir / 'review.json').exists())
             self.assertFalse((self.run_dir / 'ARCHITECTURE_REVIEW.md').exists())
             text = Path(manifest['final_report']).read_text()
-            self.assertIn('Ревью не завершено', text)
+            self.assertIn('Приёмка — не пройдена', text)
             self.assertIn('review.material.json', text)
             material = manifest['revisions'][0]['review_material']
             claim = material['review_observations']['claims'][0]
             self.assertEqual(claim['id'], 'C-001')
             self.assertEqual(claim['limitation'], 'Static inspection is insufficient.')
-            self.assertIn('Operational evidence was unavailable.', text)
+            self.assertNotIn('Operational evidence was unavailable.', text)
+            self.assertIn('Operational evidence was unavailable.', material['limitations'])
             self.assertEqual(claim['outcome'], 'UNVERIFIABLE')
             attempt = Path(manifest['study_invocation']['artifact_directory'])
             expanded = json.loads((attempt / 'assembled.json').read_text())
@@ -412,7 +413,7 @@ class CompromiseGit(unittest.TestCase):
                 self.assertTrue(item['revisions'][0].get('review_material'))
         report = Path(manifest['final_report']).read_text()
         self.assertIn('INVALID_JSON', report)
-        self.assertIn('не означает отсутствия различий', report)
+        self.assertIn('Сравнение недоступно', report)
 
     def test_single_branch_and_stop_after_recovered_review(self):
         manifest, code, calls = self.pipeline(single=True, cont=False)

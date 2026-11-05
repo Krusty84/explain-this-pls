@@ -169,9 +169,9 @@ inventory before Study. Each Study publication hashes its plan copy; the common
 source-level plan remains immutable across Study, Review and Revision. Model
 classifications and relevance observations cannot change its membership.
 
-The final report places limitations and assessments before narrative,
-and keeps contradictory assessments visible. It summarizes the selected architecture
-revision and its corresponding review when that optional stage is enabled.
+The final report gives an overview of the selected architecture and the outcome
+of its corresponding review when that optional stage is enabled. It distinguishes
+study status, review status and acceptance.
 Generated Markdown evidence tables include ID, source, path and lines, resolution
 status and encoding, without service hash columns or values. JSON keeps the pinned
 file hashes. Prompts prohibit service fingerprints, hashes and binding IDs in narrative;
@@ -227,9 +227,9 @@ Reference status comes from the existing resolver results. `RESOLVED` means the
 file/range locator resolved; an empty quote does not establish quote verification.
 `QUOTE_MISMATCH` carries an explicit warning. `OUT_OF_RANGE`, `NOT_FOUND` and
 other resolution failures display their status without claiming verified support.
-Detailed citation-warning tables remain in `study.annotated.md` and
-`FINAL_REPORT.md`. Architecture warnings stay beside their blocks or under H3
-inside the relevant section; they never add an H2.
+Detailed citation-warning tables remain in the annotated reports. The final
+report flags citation warnings and links to the available details. Architecture
+warnings stay beside their blocks or under H3 inside the relevant section.
 
 A pinned CommonMark parser validates every authored block and the final document.
 Blocks may contain H3–H6, paragraphs, lists, tables, inline code, links, quotes
@@ -1030,13 +1030,14 @@ Source-tool observations can establish text delivery, not understanding.
 verification. Absence of a found counterexample does not establish absence of an
 alternative path. No citation count establishes full path coverage.
 
-`FINAL_REPORT.md` renders the selected revision's scope blocks, HYPOTHESIS/UNKNOWN
-claims and their uncertainty/checks, review omission search, frozen coverage plan
-and citation diagnostics. Source result metadata retains the pinned inventory's
-`source_filter` settings and exclusion records. The summary labels these as program
-records and keeps them distinct from author/reviewer assessments. Initial Study
-metadata retains collection `tool_observation` and `source_access` in
-`phase_invocations`; unavailable observations do not establish that no read occurred.
+`FINAL_REPORT.md` uses the selected Study's first context block when it is bound
+to claims and contains one or two portable prose paragraphs of at most 650
+characters combined. It links to that block, or to the context section when
+the excerpt is unavailable. The linked study and review
+retain the scope, HYPOTHESIS/UNKNOWN claims and their checks, omission search and
+citation diagnostics. The manifest retains the frozen coverage plan, pinned
+source filters and exclusion records. Initial Study metadata retains collection
+`tool_observation` and `source_access` in `phase_invocations`.
 Rendering does not alter claims, source locators, hashes or acceptance checks.
 
 `program_checks.coverage.metadata_verified_empty_paths` records regular files
